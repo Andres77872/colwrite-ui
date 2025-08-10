@@ -1,0 +1,21 @@
+.stack { display: flex; flex-direction: column; gap: var(--sp-3); }
+.row { display: flex; align-items: center; gap: var(--sp-3); }
+.grow { flex: 1; }
+.sticky { position: sticky; top: var(--sp-3); z-index: 5; }
+
+.btn { padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: #fff; }
+.btn:hover { background: var(--color-elev); }
+.btn:active { transform: translateY(0.5px); }
+.btn.primary { background: var(--color-accent); color: #fff; border-color: var(--color-accent); }
+.btn.primary:hover { background: var(--color-accent-ink); }
+.btn.ghost { background: transparent; }
+/* Danger style for destructive actions */
+.btn.danger { background: var(--color-danger); color: #fff; border-color: var(--color-danger); }
+.btn.danger:hover { filter: brightness(0.9); }
+/* Disabled state */
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.input, .select, .textarea { border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: #fff; }
+.input:focus, .select:focus, .textarea:focus { outline: 2px solid rgba(59,130,246,0.25); outline-offset: 1px; }
+
+.divider { height: 1px; background: var(--color-border); margin: var(--sp-3) 0; }

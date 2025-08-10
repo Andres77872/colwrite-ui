@@ -1,0 +1,2 @@
+.counter-block { border: 1px dashed var(--color-border); padding: var(--sp-3); border-radius: var(--radius-md); display: inline-flex; align-items: center; gap: var(--sp-3); background: var(--color-elev); }
+.counter-block .value { min-width: 24px; text-align: center; }
