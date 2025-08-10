@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import './Editable.css';
 import { useEditor } from '../../../editor';
+import { useLayoutEffect } from 'react';
 
 export function Editable({
   id,
@@ -15,14 +16,48 @@ export function Editable({
   className?: string;
   style?: CSSProperties;
 }) {
-  const { addBlockAfter, removeBlock, updateHtml, refs, setActive } = useEditor();
+  const { addBlockAfter, removeBlock, updateHtml, refs, setActive, activeId } = useEditor();
+
+  // Keep DOM content in sync only when NOT actively editing this block.
+  // When becoming active (focus), ensure content is restored if a re-render replaced the node.
+  useLayoutEffect(() => {
+    const el = refs.current[id];
+    if (!el) return;
+    const next = html || '';
+    if (activeId !== id) {
+      if (el.innerHTML !== next) el.innerHTML = next;
+    } else {
+      // Active: if DOM got replaced and is empty, restore from state.
+      if (!el.innerHTML && next) el.innerHTML = next;
+      // If selection is not inside this element (e.g., after re-render), move caret to end.
+      const sel = window.getSelection();
+      const within = !!sel && sel.rangeCount > 0 && el.contains(sel.anchorNode);
+      if (!within) {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+      }
+    }
+  }, [html, activeId, id, refs]);
   return (
     <div
       className={['editable', className].filter(Boolean).join(' ')}
       ref={(el) => { refs.current[id] = el; }}
       contentEditable
       suppressContentEditableWarning
-      onFocus={() => setActive(id)}
+      onFocus={(e) => {
+        setActive(id);
+        const el = e.currentTarget as HTMLDivElement;
+        if (!el.innerHTML && (html ?? '') !== '') {
+          el.innerHTML = html || '';
+        }
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        const sel = window.getSelection();
+        if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+      }}
       onClick={() => setActive(id)}
       onBlur={() => setActive(null)}
       onInput={(e) => updateHtml(id, (e.target as HTMLDivElement).innerHTML)}
@@ -39,7 +74,7 @@ export function Editable({
       }}
       data-placeholder={placeholder}
       style={style}
-      dangerouslySetInnerHTML={{ __html: html || '' }}
+      /* Initial content is set via useLayoutEffect to avoid caret resets */
     />
   );
 }
