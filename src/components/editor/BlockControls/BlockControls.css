@@ -1,5 +1,5 @@
-.block-controls { position: relative; width: 90px; display: inline-flex; gap: 6px; opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
-.block-row:hover .block-controls, .block-row.active .block-controls { opacity: 1; pointer-events: auto; }
+.block-controls { position: static; width: 90px; display: inline-flex; gap: 6px; opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.block-row:hover .block-controls, .block-row.active .block-controls, .block-controls.open { opacity: 1; pointer-events: auto; }
 .block-controls .icon { border: 1px solid var(--color-border); background: #fff; border-radius: var(--radius-sm); width: 30px; height: 30px; display: grid; place-items: center; box-shadow: var(--shadow-sm); }
 .block-controls .icon:hover { background: var(--color-elev); }
 .block-controls .icon.danger { color: var(--color-danger); border-color: var(--color-danger); }
@@ -55,3 +55,75 @@
 /* Drag handle affordance */
 .block-controls .drag-handle { cursor: grab; }
 .block-controls .drag-handle:active { cursor: grabbing; }
+
+/* --- Bottom inline add (Jupyter-like) --- */
+/* Position centered at the bottom of the entire block row */
+.block-add-inline { 
+  position: absolute; 
+  left: 50%; 
+  bottom: -14px; 
+  transform: translateX(-50%); 
+  display: grid; 
+  place-items: center; 
+  opacity: 0; 
+  pointer-events: none; 
+  z-index: 20;
+}
+.block-row:hover .block-add-inline, 
+.block-row.active .block-add-inline, 
+.block-add-inline.open { 
+  opacity: 1; 
+  pointer-events: auto; 
+}
+
+/* Circular add button like Jupyter */
+.block-add-inline .add-inline-btn { 
+  border-radius: 999px; 
+  width: 28px; 
+  height: 28px; 
+  line-height: 1; 
+  font-size: 18px; 
+  box-shadow: var(--shadow-sm);
+}
+.block-add-inline .add-inline-btn:hover { box-shadow: var(--shadow-md); }
+
+/* Reposition the popover above the inline add button, centered */
+.block-add-inline .block-menu { 
+  position: absolute; 
+  top: calc(var(--btn-size) + 8px); 
+  bottom: auto; 
+  left: 50%; 
+  transform: translateX(-50%); 
+  transform-origin: top center; 
+  min-width: 200px; 
+  z-index: 1000;
+  animation: bc-pop 120ms ease-out both;
+}
+.block-add-inline .block-menu::before { 
+  content: ""; 
+  position: absolute; 
+  top: -6px; 
+  bottom: auto; 
+  left: 50%; 
+  transform: translateX(-50%);
+  width: 0; 
+  height: 0; 
+  border-left: 6px solid transparent; 
+  border-right: 6px solid transparent; 
+  border-bottom: 6px solid var(--color-border); 
+  border-top: none;
+}
+.block-add-inline .block-menu::after { 
+  content: ""; 
+  position: absolute; 
+  top: -5px; 
+  bottom: auto; 
+  left: 50%; 
+  transform: translateX(-50%);
+  width: 0; 
+  height: 0; 
+  border-left: 5px solid transparent; 
+  border-right: 5px solid transparent; 
+  border-bottom: 5px solid #fff; 
+  border-top: none;
+}

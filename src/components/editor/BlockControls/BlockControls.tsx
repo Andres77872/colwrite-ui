@@ -56,7 +56,7 @@ export function BlockControls({ id }: { id: string }) {
   };
 
   return (
-    <div className="block-controls" ref={ref}>
+    <div className={["block-controls", open ? "open" : ""].filter(Boolean).join(" ")} ref={ref}>
       <button
         className="icon drag-handle"
         title="Drag to reorder"
@@ -78,38 +78,41 @@ export function BlockControls({ id }: { id: string }) {
       >
         ⋮⋮
       </button>
-      <button
-        ref={addBtnRef}
-        className="icon"
-        title="Add block"
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen(v => !v)}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowDown' && !open) {
-            setOpen(true);
-            e.preventDefault();
-          } else if (e.key === 'Escape' && open) {
-            setOpen(false);
-            e.preventDefault();
-          }
-        }}
-      >
-        ＋
-      </button>
       <button className="icon" title="Move up" type="button" aria-label="Move block up" onClick={() => moveBlock(id, -1)}>↑</button>
       <button className="icon" title="Move down" type="button" aria-label="Move block down" onClick={() => moveBlock(id, 1)}>↓</button>
       <button className="icon danger" title="Delete" type="button" aria-label="Delete block" onClick={() => removeBlock(id)}>🗑</button>
-      {open && (
-        <div className="block-menu" role="menu" ref={menuRef} onKeyDown={onAddKeyDown}>
-          <button role="menuitem" onClick={() => add('paragraph')}><span className="mi">✍️</span> Text</button>
-          <button role="menuitem" onClick={() => add('heading')}><span className="mi">🔠</span> Heading</button>
-          <button role="menuitem" onClick={() => add('todo')}><span className="mi">☑️</span> Todo</button>
-          <button role="menuitem" onClick={() => add('counter')}><span className="mi">🔢</span> Counter</button>
-          <button role="menuitem" onClick={() => add('divider')}><span className="mi">━</span> Divider</button>
-        </div>
-      )}
+      {/* Inline bottom-centered add control (Jupyter-like) */}
+      <div className={["block-add-inline", open ? "open" : ""].filter(Boolean).join(" ")}>
+        <button
+          ref={addBtnRef}
+          className="icon add-inline-btn"
+          title="Add block"
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => setOpen(v => !v)}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown' && !open) {
+              setOpen(true);
+              e.preventDefault();
+            } else if (e.key === 'Escape' && open) {
+              setOpen(false);
+              e.preventDefault();
+            }
+          }}
+        >
+          ＋
+        </button>
+        {open && (
+          <div className="block-menu" role="menu" ref={menuRef} onKeyDown={onAddKeyDown}>
+            <button role="menuitem" onClick={() => add('paragraph')}><span className="mi">✍️</span> Text</button>
+            <button role="menuitem" onClick={() => add('heading')}><span className="mi">🔠</span> Heading</button>
+            <button role="menuitem" onClick={() => add('todo')}><span className="mi">☑️</span> Todo</button>
+            <button role="menuitem" onClick={() => add('counter')}><span className="mi">🔢</span> Counter</button>
+            <button role="menuitem" onClick={() => add('divider')}><span className="mi">━</span> Divider</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
