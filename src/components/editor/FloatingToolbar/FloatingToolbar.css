@@ -1,0 +1,4 @@
+.floating-toolbar { position: fixed; transform: translate(-50%, -8px); display: inline-flex; gap: 6px; padding: 6px; background: #fff; border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-md); z-index: 100; }
+.floating-toolbar button { border: 0; background: transparent; padding: 6px 8px; border-radius: var(--radius-sm); font-weight: 600; }
+.floating-toolbar button:hover { background: var(--color-elev); }
+.floating-toolbar button.active { color: var(--color-accent); }

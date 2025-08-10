@@ -15,13 +15,16 @@ export function Editable({
   className?: string;
   style?: CSSProperties;
 }) {
-  const { addBlockAfter, removeBlock, updateHtml, refs } = useEditor();
+  const { addBlockAfter, removeBlock, updateHtml, refs, setActive } = useEditor();
   return (
     <div
       className={['editable', className].filter(Boolean).join(' ')}
       ref={(el) => { refs.current[id] = el; }}
       contentEditable
       suppressContentEditableWarning
+      onFocus={() => setActive(id)}
+      onClick={() => setActive(id)}
+      onBlur={() => setActive(null)}
       onInput={(e) => updateHtml(id, (e.target as HTMLDivElement).innerHTML)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' && !e.shiftKey) {

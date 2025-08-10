@@ -8,11 +8,11 @@ import { CounterBlock } from '../blocks/CounterBlock';
 import { DividerBlock } from '../blocks/DividerBlock';
 
 export function Canvas() {
-  const { blocks, addBlockAfter } = useEditor();
+  const { blocks, activeId, setActive } = useEditor();
   return (
     <div className="canvas">
       {blocks.map((b) => (
-        <div key={b.id} className="row block-row">
+        <div key={b.id} className={["row block-row", b.id === activeId ? 'active' : ''].join(' ')} onClick={() => setActive(b.id)}>
           <BlockControls id={b.id} />
           <div className="grow">
             {b.type === 'paragraph' && <ParagraphBlock block={b} />}
@@ -20,14 +20,6 @@ export function Canvas() {
             {b.type === 'todo' && <TodoBlock block={b} />}
             {b.type === 'counter' && <CounterBlock block={b} />}
             {b.type === 'divider' && <DividerBlock />}
-
-            <div className="row quick-add">
-              <button className="btn" onClick={() => addBlockAfter(b.id, 'paragraph')}>Add text</button>
-              <button className="btn" onClick={() => addBlockAfter(b.id, 'heading')}>Add heading</button>
-              <button className="btn" onClick={() => addBlockAfter(b.id, 'todo')}>Add todo</button>
-              <button className="btn" onClick={() => addBlockAfter(b.id, 'counter')}>Add counter</button>
-              <button className="btn" onClick={() => addBlockAfter(b.id, 'divider')}>Add divider</button>
-            </div>
           </div>
         </div>
       ))}

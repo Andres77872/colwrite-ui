@@ -9,6 +9,8 @@ export type EditorContextValue = {
   blocks: Block[];
   refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
   documentId: string | null;
+  activeId: string | null;
+  setActive: (id: string | null) => void;
   addBlockAfter: (afterId: string, type: Block['type']) => string;
   moveBlock: (id: string, dir: -1 | 1) => void;
   removeBlock: (id: string) => void;
@@ -37,7 +39,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     version: 1,
     blocks: [
       { id: uid(), type: 'heading', level: 2, html: 'Your document' },
-      { id: uid(), type: 'paragraph', html: 'Write something here. Use the toolbar for formatting.' },
+      { id: uid(), type: 'paragraph', html: 'Write something here. Select text to format. Use the + to insert blocks.' },
     ],
   });
 
@@ -46,6 +48,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const refs = useRef<Record<string, HTMLDivElement | null>>({});
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [documentId, setDocumentId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   // Auto-save
   useEffect(() => {
@@ -159,6 +162,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     blocks,
     refs,
     documentId,
+    activeId,
+    setActive: setActiveId,
     addBlockAfter,
     moveBlock,
     removeBlock,

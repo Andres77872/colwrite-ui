@@ -1,4 +1,53 @@
-.block-controls { width: 90px; display: inline-flex; gap: 6px; }
-.block-controls .icon { border: 1px solid var(--color-border); background: #fff; border-radius: var(--radius-sm); width: 30px; height: 30px; display: grid; place-items: center; }
+.block-controls { position: relative; width: 90px; display: inline-flex; gap: 6px; opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.block-row:hover .block-controls, .block-row.active .block-controls { opacity: 1; pointer-events: auto; }
+.block-controls .icon { border: 1px solid var(--color-border); background: #fff; border-radius: var(--radius-sm); width: 30px; height: 30px; display: grid; place-items: center; box-shadow: var(--shadow-sm); }
 .block-controls .icon:hover { background: var(--color-elev); }
 .block-controls .icon.danger { color: var(--color-danger); border-color: var(--color-danger); }
+
+.block-controls .block-menu { position: absolute; top: 36px; left: 0; background: #fff; border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-md); padding: 6px; display: grid; gap: 4px; z-index: 50; }
+.block-controls .block-menu button { text-align: left; border: 0; background: transparent; padding: 6px 8px; border-radius: var(--radius-sm); }
+.block-controls .block-menu button:hover { background: var(--color-elev); }
+
+/* --- Enhancements / overrides --- */
+/* Make width fluid and set size token for buttons */
+.block-controls { width: auto; --btn-size: 30px; }
+
+/* Improve button feel: transitions, focus-ring, and active state */
+.block-controls .icon { 
+  width: var(--btn-size); 
+  height: var(--btn-size); 
+  transition: background 120ms ease, transform 80ms ease, box-shadow 120ms ease;
+}
+.block-controls .icon:hover { box-shadow: var(--shadow-md); }
+.block-controls .icon:active { transform: translateY(1px) scale(0.98); }
+.block-controls .icon:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,0.35); }
+.block-controls .icon.danger:hover { background: #fff5f5; }
+
+/* Popover refinements: spacing, arrow, and animation */
+.block-controls .block-menu { 
+  top: calc(var(--btn-size) + 6px); 
+  padding: 8px; 
+  min-width: 180px; 
+  transform-origin: top left; 
+  animation: bc-pop 120ms ease-out both;
+}
+.block-controls .block-menu::before { 
+  content: ""; position: absolute; top: -6px; left: 14px; width: 0; height: 0; 
+  border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 6px solid var(--color-border);
+}
+.block-controls .block-menu::after { 
+  content: ""; position: absolute; top: -5px; left: 15px; width: 0; height: 0; 
+  border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 5px solid #fff;
+}
+
+.block-controls .block-menu button { 
+  display: flex; align-items: center; gap: 8px; min-height: 32px; 
+  transition: background 120ms ease;
+}
+.block-controls .block-menu button:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(59,130,246,0.25) inset; }
+.block-controls .block-menu button .mi { width: 1.25em; text-align: center; opacity: .8; }
+
+@keyframes bc-pop {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}

@@ -1,1 +1,2 @@
-.editable { outline: none; min-height: 24px; padding: 6px 8px; border-radius: var(--radius-sm); }
+.editable { outline: none; min-height: 24px; padding: 6px 8px; border-radius: var(--radius-sm); transition: background 120ms ease, box-shadow 120ms ease; }
+.editable:focus { background: #fff; box-shadow: inset 0 0 0 1px var(--color-border); }

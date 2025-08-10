@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useEditor } from '../../../editor';
 
 export function Toolbar() {
-  const { exec, saveRemote, deleteRemote, newLocal, lastSavedAt, documentId } = useEditor();
+  const { saveRemote, deleteRemote, newLocal, lastSavedAt, documentId } = useEditor();
   const [loading, setLoading] = useState<null | 'save' | 'delete'>(null);
 
   const onNew = () => {
@@ -37,12 +37,6 @@ export function Toolbar() {
   };
   return (
     <div className="toolbar">
-      <div className="toolbar-group">
-        <button className="btn" onMouseDown={(e) => { e.preventDefault(); exec('bold'); }}>B</button>
-        <button className="btn" onMouseDown={(e) => { e.preventDefault(); exec('italic'); }}>I</button>
-        <button className="btn" onMouseDown={(e) => { e.preventDefault(); exec('underline'); }}>U</button>
-        <button className="btn" onMouseDown={(e) => { e.preventDefault(); exec('strikeThrough'); }}>S</button>
-      </div>
       <div className="spacer" />
       <div className="toolbar-group">
         <button className="btn" title="New document" onClick={onNew} disabled={loading !== null}>New</button>
