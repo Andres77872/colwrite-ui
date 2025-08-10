@@ -58,6 +58,27 @@ export function BlockControls({ id }: { id: string }) {
   return (
     <div className="block-controls" ref={ref}>
       <button
+        className="icon drag-handle"
+        title="Drag to reorder"
+        type="button"
+        aria-label="Drag to reorder"
+        draggable
+        data-drag-handle="true"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.preventDefault()}
+        onDragStart={(e) => {
+          e.dataTransfer.setData('text/plain', id);
+          e.dataTransfer.setData('application/x-block-id', id);
+          e.dataTransfer.effectAllowed = 'move';
+          // Optional: use the handle itself as drag image
+          if (e.currentTarget) {
+            e.dataTransfer.setDragImage(e.currentTarget as Element, 8, 8);
+          }
+        }}
+      >
+        ⋮⋮
+      </button>
+      <button
         ref={addBtnRef}
         className="icon"
         title="Add block"

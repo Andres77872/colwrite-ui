@@ -13,6 +13,7 @@ export type EditorContextValue = {
   setActive: (id: string | null) => void;
   addBlockAfter: (afterId: string, type: Block['type']) => string;
   moveBlock: (id: string, dir: -1 | 1) => void;
+  reorderBlock: (id: string, toIndex: number) => void;
   removeBlock: (id: string) => void;
   updateHtml: (id: string, html: string) => void;
   toggleTodo: (id: string) => void;
@@ -83,6 +84,16 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const out = [...prev];
     const [blk] = out.splice(idx, 1);
     out.splice(j, 0, blk);
+    return out;
+  });
+
+  const reorderBlock = (id: string, toIndex: number) => setBlocks(prev => {
+    const fromIndex = prev.findIndex(b => b.id === id);
+    if (fromIndex < 0) return prev;
+    const out = [...prev];
+    const [blk] = out.splice(fromIndex, 1);
+    const clamped = Math.max(0, Math.min(toIndex, out.length));
+    out.splice(clamped, 0, blk);
     return out;
   });
 
@@ -166,6 +177,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     setActive: setActiveId,
     addBlockAfter,
     moveBlock,
+    reorderBlock,
     removeBlock,
     updateHtml,
     toggleTodo,
