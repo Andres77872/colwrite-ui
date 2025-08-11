@@ -68,14 +68,17 @@ export function Editable({
         const anchorEl = (anchor && (anchor.nodeType === 1 ? (anchor as HTMLElement) : (anchor as Node).parentElement)) as HTMLElement | null;
         const inAi = !!anchorEl?.closest('.ai-suggest');
         if (inAi) return;
-        if (e.key === 'Enter' && !e.shiftKey) {
+        if (e.key === 'Enter' && e.ctrlKey) {
           e.preventDefault();
           const newId = addBlockAfter(id, 'paragraph');
           queueMicrotask(() => refs.current[newId]?.focus());
         }
         if (e.key === 'Backspace') {
-          const text = (e.currentTarget as HTMLDivElement).innerText.trim();
-          if (!text) { e.preventDefault(); removeBlock(id); }
+          const html = (e.currentTarget as HTMLDivElement).innerHTML.trim();
+          // Only delete the block when it is truly empty (no lines),
+          // not when it has only newline wrappers like <div><br></div>.
+          const isTrulyEmpty = html === '' || /^<br\s*\/?>(?:\s*)?$/i.test(html);
+          if (isTrulyEmpty) { e.preventDefault(); removeBlock(id); }
         }
       }}
       data-placeholder={placeholder}
