@@ -9,29 +9,159 @@ export function FloatingToolbar() {
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const [states, setStates] = useState({ bold: false, italic: false, underline: false, strike: false });
+  const [hasSelection, setHasSelection] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const onSelection = () => {
       const sel = document.getSelection();
-      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) { setVisible(false); return; }
-      const range = sel.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      if (!rect || (rect.width === 0 && rect.height === 0)) { setVisible(false); return; }
-      // ensure selection is inside our editor
+      if (!sel || sel.rangeCount === 0) { setHasSelection(false); setVisible(false); return; }
+
+      // ensure selection is inside our editor and capture the editable element
       let node: Node | null = sel.anchorNode;
       let inside = false;
+      let editableEl: HTMLElement | null = null;
       while (node) {
-        if ((node as HTMLElement).classList && (node as HTMLElement).classList.contains('editable')) { inside = true; break; }
+        if ((node as HTMLElement).classList && (node as HTMLElement).classList.contains('editable')) { inside = true; editableEl = node as HTMLElement; break; }
         node = (node as Node).parentNode;
       }
-      if (!inside) { setVisible(false); return; }
+      if (!inside || !editableEl) { setHasSelection(false); setVisible(false); return; }
 
-      setPos({
-        top: rect.top - 44,
-        left: rect.left + rect.width / 2,
-      });
+      const range = sel.getRangeAt(0);
+      if (!sel.isCollapsed) {
+        // Normal non-collapsed selection: show toolbar and enable AI
+        let rect = range.getBoundingClientRect();
+        if (!rect || (rect.width === 0 && rect.height === 0)) { setHasSelection(false); setVisible(false); return; }
+        setPos({ top: rect.top - 44, left: rect.left + rect.width / 2 });
+        try {
+          setStates({
+            bold: document.queryCommandState('bold'),
+            italic: document.queryCommandState('italic'),
+            underline: document.queryCommandState('underline'),
+            strike: document.queryCommandState('strikeThrough'),
+          });
+        } catch { /* no-op */ }
+        setHasSelection(true);
+        setVisible(true);
+        return;
+      }
+
+      // Collapsed caret: show only if caret is on an empty line (ignoring whitespace and <br>)
+      // Determine the line at caret even when caret is at the editable boundary.
+      const sc = range.startContainer as Node;
+      const so = range.startOffset;
+      const isNodeEmpty = (n: Node | null): boolean => {
+        if (!n) return true;
+        if (n.nodeType === Node.ELEMENT_NODE) {
+          const el = n as HTMLElement;
+          if ((el.tagName || '').toUpperCase() === 'BR') return true;
+          const t = (el.textContent || '').replace(/\u00A0/g, ' ').trim();
+          const h = el.innerHTML || '';
+          return t.length === 0 || /^\s*(?:<br\s*\/?>(?:\s*)?)?$/i.test(h);
+        }
+        if (n.nodeType === Node.TEXT_NODE) {
+          return ((n as Text).data || '').replace(/\u00A0/g, ' ').trim().length === 0;
+        }
+        return true;
+      };
+      // Find the element that represents the current line.
+      let lineNode: Node | null = null;
+      if (sc === editableEl) {
+        // Caret is between children of editable; inspect neighbors.
+        const prev = (so > 0) ? editableEl.childNodes[so - 1] : null;
+        const next = editableEl.childNodes[so] || null;
+        // Prefer the previous node (line above). If not present, use next. If neither, treat as empty position.
+        lineNode = prev || next || editableEl;
+        // Consider this an empty line if prev is empty OR the immediate next is an explicit break or empty container.
+        const prevEmpty = isNodeEmpty(prev);
+        const nextEmpty = isNodeEmpty(next);
+        const isEmptyLine = prevEmpty || nextEmpty || lineNode === editableEl;
+        if (!isEmptyLine) { setHasSelection(false); setVisible(false); return; }
+      } else {
+        // Ascend to nearest child of editable.
+        let cur: Node | null = sc;
+        while (cur && cur !== editableEl && cur.parentNode !== editableEl) {
+          cur = cur.parentNode as Node | null;
+        }
+        lineNode = (cur && cur.parentNode === editableEl) ? cur : editableEl;
+        const prevSibling = lineNode ? (lineNode as Node).previousSibling : null;
+        // Are we at the very start of this line/node?
+        let atStartOfLine = false;
+        try {
+          const startRange = document.createRange();
+          if (lineNode) { startRange.selectNodeContents(lineNode); startRange.collapse(true); }
+          atStartOfLine = range.compareBoundaryPoints(Range.START_TO_START, startRange) === 0;
+        } catch {}
+        const prevIsBreakOrEmpty = !!prevSibling && (((prevSibling as Node).nodeName || '').toUpperCase() === 'BR' || isNodeEmpty(prevSibling));
+        const isEmptyLine = isNodeEmpty(lineNode) || (atStartOfLine && prevIsBreakOrEmpty);
+        if (!isEmptyLine) { setHasSelection(false); setVisible(false); return; }
+      }
+
+      // Compute caret rect for collapsed selection; if zero, use neighbor rects or a temporary marker
+      let rect = (range.getClientRects()[0] as DOMRect | undefined) || range.getBoundingClientRect();
+      const zeroRect = (r: DOMRect | undefined | null) => !r || (r.width === 0 && r.height === 0);
+      const rectFromNode = (n: Node | null): DOMRect | null => {
+        if (!n) return null;
+        if (n.nodeType === Node.ELEMENT_NODE) {
+          const el = n as HTMLElement;
+          const r1 = el.getBoundingClientRect();
+          if (!zeroRect(r1)) return r1;
+          // Try content rect
+          try {
+            const r = document.createRange();
+            r.selectNodeContents(el);
+            const r2 = r.getBoundingClientRect();
+            if (!zeroRect(r2)) return r2;
+          } catch {}
+          return null;
+        }
+        if (n.nodeType === Node.TEXT_NODE) {
+          try {
+            const r = document.createRange();
+            r.selectNode(n);
+            const r2 = r.getBoundingClientRect();
+            return zeroRect(r2) ? null : r2;
+          } catch { return null; }
+        }
+        return null;
+      };
+      if (zeroRect(rect)) {
+        if (sc === editableEl) {
+          const next = editableEl.childNodes[so] || null;
+          const prev = so > 0 ? editableEl.childNodes[so - 1] : null;
+          rect = rectFromNode(next) || rectFromNode(prev) || rect;
+        } else {
+          // Use the lineNode determined above and its neighbors
+          const ln = lineNode as (Node | null);
+          rect = rectFromNode(ln) || rectFromNode(ln ? ln.previousSibling : null) || rectFromNode(ln ? ln.nextSibling : null) || rect;
+        }
+      }
+      if (zeroRect(rect)) {
+        try {
+          const marker = document.createElement('span');
+          marker.setAttribute('data-caret-marker', '1');
+          marker.style.display = 'inline-block';
+          marker.style.width = '1px';
+          marker.style.height = '1em';
+          marker.style.opacity = '0';
+          marker.style.pointerEvents = 'none';
+          marker.textContent = '\u200b';
+          range.insertNode(marker);
+          rect = marker.getBoundingClientRect();
+          // Restore caret after marker and remove it
+          const r2 = document.createRange();
+          r2.setStartAfter(marker);
+          r2.collapse(true);
+          const s2 = window.getSelection();
+          s2?.removeAllRanges();
+          s2?.addRange(r2);
+          marker.parentNode?.removeChild(marker);
+        } catch { /* ignore */ }
+      }
+      if (zeroRect(rect)) { setHasSelection(false); setVisible(false); return; }
+
+      setPos({ top: rect.top - 44, left: rect.left + rect.width / 2 });
       try {
         setStates({
           bold: document.queryCommandState('bold'),
@@ -39,9 +169,8 @@ export function FloatingToolbar() {
           underline: document.queryCommandState('underline'),
           strike: document.queryCommandState('strikeThrough'),
         });
-      } catch {
-        // no-op
-      }
+      } catch { /* no-op */ }
+      setHasSelection(false);
       setVisible(true);
     };
     document.addEventListener('selectionchange', onSelection);
@@ -318,7 +447,7 @@ export function FloatingToolbar() {
       <button className={states.underline ? 'active' : ''} onMouseDown={onFormat('underline')} title="Underline"><u>U</u></button>
       <button className={states.strike ? 'active' : ''} onMouseDown={onFormat('strikeThrough')} title="Strikethrough"><s>S</s></button>
       <div className="sep" />
-      <AIActionMenu onAction={(action: AiAction, e: React.MouseEvent) => onAi(action)(e)} />
+      <AIActionMenu disabled={!hasSelection} onAction={(action: AiAction, e: React.MouseEvent) => onAi(action)(e)} />
     </div>
   );
 }

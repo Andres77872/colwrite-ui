@@ -6,7 +6,6 @@ import { BlockControls } from '../BlockControls';
 import { ParagraphBlock } from '../blocks/ParagraphBlock';
 import { HeadingBlock } from '../blocks/HeadingBlock';
 import { TodoBlock } from '../blocks/TodoBlock';
-import { CounterBlock } from '../blocks/CounterBlock';
 import { DividerBlock } from '../blocks/DividerBlock';
 
 export function Canvas() {
@@ -118,7 +117,6 @@ export function Canvas() {
               {b.type === 'paragraph' && <ParagraphBlock block={b} />}
               {b.type === 'heading' && <HeadingBlock block={b} />}
               {b.type === 'todo' && <TodoBlock block={b} />}
-              {b.type === 'counter' && <CounterBlock block={b} />}
               {b.type === 'divider' && <DividerBlock />}
             </div>
           </div>

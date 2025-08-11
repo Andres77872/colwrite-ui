@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
-import type { Block, CounterBlock, Doc } from './types';
+import type { Block, Doc } from './types';
 import { loadDoc, saveDoc } from './storage';
 import { createDocument as apiCreateDocument, saveDocument as apiSaveDocument, loadDocument as apiLoadDocument, deleteDocument as apiDeleteDocument, listDocuments as apiListDocuments } from '../services';
 import { uid } from '../lib/uid';
@@ -18,7 +18,6 @@ export type EditorContextValue = {
   updateHtml: (id: string, html: string) => void;
   toggleTodo: (id: string) => void;
   setHeadingLevel: (id: string, level: 1 | 2 | 3) => void;
-  bumpCounter: (id: string, delta: number) => void;
   exec: (cmd: string) => void;
   getJSON: () => string;
   setFromJSON: (json: string) => void;
@@ -67,7 +66,6 @@ export function EditorProvider({ children }: { children: ReactNode }) {
         type === 'paragraph' ? { id: newId, type: 'paragraph', html: '' } :
         type === 'heading' ? { id: newId, type: 'heading', level: 2, html: '' } :
         type === 'todo' ? { id: newId, type: 'todo', checked: false, html: '' } :
-        type === 'counter' ? { id: newId, type: 'counter', count: 0 } :
         { id: newId, type: 'divider' };
       const out = [...prev];
       out.splice(idx + 1, 0, next);
@@ -109,10 +107,6 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
   const setHeadingLevel = (id: string, level: 1 | 2 | 3) => setBlocks(prev => prev.map(b => (
     b.id === id && b.type === 'heading' ? ({ ...b, level }) : b
-  )));
-
-  const bumpCounter = (id: string, delta: number) => setBlocks(prev => prev.map(b => (
-    b.id === id && b.type === 'counter' ? ({ ...b as CounterBlock, count: Math.max(0, (b as CounterBlock).count + delta) }) : b
   )));
 
   const exec = (cmd: string) => document.execCommand(cmd, false);
@@ -182,7 +176,6 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     updateHtml,
     toggleTodo,
     setHeadingLevel,
-    bumpCounter,
     exec,
     getJSON,
     setFromJSON,
