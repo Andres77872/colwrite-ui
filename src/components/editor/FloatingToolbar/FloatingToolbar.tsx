@@ -99,6 +99,8 @@ export function FloatingToolbar() {
 
     const original = document.createElement('span');
     original.className = 'ai-original';
+    // Do not allow editing of the original snapshot
+    original.contentEditable = 'false';
     const generated = document.createElement('span');
     generated.className = 'ai-generated';
     generated.contentEditable = 'true';
@@ -161,47 +163,97 @@ export function FloatingToolbar() {
     // Keep document updated when user edits generated content manually
     generated.addEventListener('input', () => schedulePersist());
 
-    // Stream content
+    // Streaming helpers: stop -> regenerate flow
     let stopped = false;
-    stopBtn.onclick = () => { stopped = true; abortRef.current?.abort(); };
-    const onChunk = (delta: string) => {
-      if (stopped) return;
-      // Append text node to generated
-      if (delta) {
-        const last = generated.lastChild;
-        if (last && last.nodeType === Node.TEXT_NODE) {
-          (last as Text).data += delta;
-        } else {
-          generated.append(document.createTextNode(delta));
+    const setStopMode = () => {
+      stopBtn.className = 'ai-stop';
+      stopBtn.title = 'Stop generating';
+      stopBtn.textContent = '⏹';
+      stopBtn.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); stopped = true; abortRef.current?.abort(); };
+    };
+    const setRegenMode = () => {
+      stopBtn.className = 'ai-regenerate';
+      stopBtn.title = 'Regenerate';
+      stopBtn.textContent = '🔄';
+      stopBtn.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); runStream(); };
+    };
+
+    const runStream = async () => {
+      // Prepare fresh state
+      stopped = false;
+      wrapper.setAttribute('data-generating', '1');
+      wrapper.removeAttribute('data-error');
+      // clear previous suggestion
+      while (generated.firstChild) generated.removeChild(generated.firstChild);
+      // ensure caret is in the generated area
+      try {
+        const r = document.createRange();
+        r.selectNodeContents(generated);
+        r.collapse(false);
+        const s = window.getSelection();
+        s?.removeAllRanges();
+        s?.addRange(r);
+      } catch {}
+      setStopMode();
+      // cancel previous and create fresh controller
+      abortRef.current?.abort();
+      abortRef.current = new AbortController();
+      const onChunk = (delta: string) => {
+        if (stopped) return;
+        if (delta) {
+          const last = generated.lastChild;
+          if (last && last.nodeType === Node.TEXT_NODE) {
+            (last as Text).data += delta;
+          } else {
+            generated.append(document.createTextNode(delta));
+          }
+          schedulePersist();
         }
-        schedulePersist();
+      };
+      try {
+        await streamAiAction({ message: selectedText, action }, { signal: abortRef.current.signal, onChunk });
+      } catch (err) {
+        if (!stopped) wrapper.setAttribute('data-error', '1');
+      } finally {
+        wrapper.removeAttribute('data-generating');
+        // after finishing (natural or aborted), allow regeneration
+        setRegenMode();
       }
     };
 
-    try {
-      await streamAiAction({ message: selectedText, action }, { signal: abortRef.current.signal, onChunk });
-    } catch (err) {
-      // Optional: mark error state unless user intentionally stopped
-      if (!stopped) wrapper.setAttribute('data-error', '1');
-    }
-    wrapper.removeAttribute('data-generating');
+    // kick off initial generation
+    await runStream();
 
     // Controls handlers
     const replaceWithFragment = (frag: DocumentFragment) => {
       const parent = wrapper.parentNode;
       if (!parent) return;
-      parent.replaceChild(frag, wrapper);
+      // Robustly replace wrapper with frag's children to avoid issues with
+      // replaceChild(DocumentFragment) in some environments.
+      const marker = document.createTextNode('');
+      parent.insertBefore(marker, wrapper);
+      while (frag.firstChild) {
+        parent.insertBefore(frag.firstChild, marker);
+      }
+      parent.removeChild(wrapper);
+      parent.removeChild(marker);
       schedulePersist();
     };
 
-    acceptBtn.onclick = (ev) => {
+    acceptBtn.onmousedown = (ev) => {
       ev.preventDefault(); ev.stopPropagation();
       stopped = true; abortRef.current?.abort();
       const frag = document.createDocumentFragment();
       // clone generated children into frag (move nodes)
       while (generated.firstChild) frag.appendChild(generated.firstChild);
+      // If there is no generated content (e.g. early accept), fall back to original
+      if (!frag.firstChild) {
+        while (original.firstChild) frag.appendChild(original.firstChild);
+      }
       const lastInserted = frag.lastChild as (Node | null);
       replaceWithFragment(frag);
+      // Persist immediately to ensure state matches DOM
+      updateHtml(blockId, editable.innerHTML);
       // Place caret at end of inserted content
       try {
         if (lastInserted) {
@@ -222,13 +274,15 @@ export function FloatingToolbar() {
         }
       } catch {}
     };
-    rejectBtn.onclick = (ev) => {
+    rejectBtn.onmousedown = (ev) => {
       ev.preventDefault(); ev.stopPropagation();
       stopped = true; abortRef.current?.abort();
       const frag = document.createDocumentFragment();
       while (original.firstChild) frag.appendChild(original.firstChild);
       const lastInserted = frag.lastChild as (Node | null);
       replaceWithFragment(frag);
+      // Persist immediately to ensure state matches DOM
+      updateHtml(blockId, editable.innerHTML);
       // Place caret at end of restored content
       try {
         if (lastInserted) {
