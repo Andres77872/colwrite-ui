@@ -62,6 +62,12 @@ export function Editable({
       onBlur={() => setActive(null)}
       onInput={(e) => updateHtml(id, (e.target as HTMLDivElement).innerHTML)}
       onKeyDown={(e) => {
+        // If caret is inside an AI suggestion wrapper, allow normal editing (including Enter)
+        const sel = window.getSelection();
+        const anchor = sel && sel.anchorNode;
+        const anchorEl = (anchor && (anchor.nodeType === 1 ? (anchor as HTMLElement) : (anchor as Node).parentElement)) as HTMLElement | null;
+        const inAi = !!anchorEl?.closest('.ai-suggest');
+        if (inAi) return;
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           const newId = addBlockAfter(id, 'paragraph');
