@@ -19,7 +19,7 @@ export function AppShell({
   ].filter(Boolean).join(' ');
   return (
     <div className="app-shell">
-      {header && <header className="app-header card">{header}</header>}
+      {header && <header className="app-header">{header}</header>}
       <div className={bodyClass}>
         {left && <nav className="app-left card">{left}</nav>}
         <main className="app-main card">{main}</main>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import './Topbar.css';
 import { login, setSessionTokenCookie, clearSessionTokenCookie } from '../../../services';
 
@@ -52,12 +53,7 @@ export function Topbar() {
         </div>
       </a>
 
-      <nav className="nav" aria-label="Primary">
-        <a className="nav-link" href="#">Editor</a>
-        <a className="nav-link" href="#">Projects</a>
-        <a className="nav-link" href="#">Docs</a>
-        <a className="nav-link" href="#">Help</a>
-      </nav>
+      {/* Primary navigation intentionally removed for now */}
 
       <div className="grow" />
 
@@ -137,8 +133,8 @@ function AuthDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (u: 
     onSubmit(u);
   };
 
-  return (
-    <div className="auth-backdrop" onClick={onClose}>
+  return createPortal((
+    <div className="auth-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
       <div className="auth-modal card" onClick={(e) => e.stopPropagation()}>
         <div className="auth-head">
           <div className="brand-logo">CW</div>
@@ -147,28 +143,6 @@ function AuthDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (u: 
         <div className="auth-tabs" role="tablist" aria-label="Authentication">
           <button role="tab" aria-selected={mode === 'signin'} className={`auth-tab${mode === 'signin' ? ' active' : ''}`} onClick={() => setMode('signin')}>Sign in</button>
           <button role="tab" aria-selected={mode === 'register'} className={`auth-tab${mode === 'register' ? ' active' : ''}`} onClick={() => setMode('register')}>Create account</button>
-        </div>
-
-        <div className="stack">
-          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            <button className="provider-btn" type="button" title="Coming soon" disabled>
-              <span className="provider-icn">G</span>
-              <span>Continue with Google</span>
-            </button>
-            <button className="provider-btn" type="button" title="Coming soon" disabled>
-              <span className="provider-icn"></span>
-              <span>Apple</span>
-            </button>
-            <button className="provider-btn" type="button" title="Coming soon" disabled>
-              <span className="provider-icn">GH</span>
-              <span>GitHub</span>
-            </button>
-            <button className="provider-btn" type="button" onClick={() => onSubmit({ name: 'Guest', email: 'guest@local' })}>
-              <span className="provider-icn">👤</span>
-              <span>Continue as guest</span>
-            </button>
-          </div>
-          <div className="divider" />
         </div>
 
         <form className="stack" onSubmit={submit}>
@@ -202,9 +176,13 @@ function AuthDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (u: 
           </div>
         </form>
         <div className="muted" style={{ fontSize: '12px', marginTop: 6 }}>By continuing you agree to the Terms and Privacy Policy.</div>
+        <div className="alpha-notice">
+          <div className="alpha-title">Alpha Version Notice</div>
+          <div className="alpha-text">This project is currently in alpha development. Login and registration functionality may change in future updates. User accounts and data may be deleted without prior notification during development phases.</div>
+        </div>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 

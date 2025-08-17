@@ -1,5 +1,5 @@
 .app-shell { height: 100dvh; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
-.app-header { padding: var(--sp-2) var(--sp-3); display: flex; align-items: center; gap: var(--sp-3); }
+.app-header { padding: 0; display: block; width: 100%; align-self: stretch; background: transparent; border: none; box-shadow: none; z-index: 20; }
 .app-body { display: grid; grid-template-columns: 1fr; gap: var(--sp-3); flex: 1; min-height: 0; }
 .app-body.has-right { grid-template-columns: 1fr 380px; }
 .app-body.has-left { grid-template-columns: 260px 1fr; }
