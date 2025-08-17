@@ -77,7 +77,18 @@ export function Editable({
         if (sel) { sel.removeAllRanges(); sel.addRange(range); }
       }}
       onClick={() => setActive(id)}
-      onBlur={() => setActive(null)}
+      onBlur={(e) => {
+        const el = e.currentTarget as HTMLDivElement;
+        const row = el.closest('[data-block-id]') as HTMLElement | null;
+        const explicitNext = (e.relatedTarget as HTMLElement | null) || null;
+        if (row && explicitNext && row.contains(explicitNext)) return; // focus moved inside same block
+        // Defer to allow focus to settle (e.relatedTarget can be null on mousedown)
+        queueMicrotask(() => {
+          const next = document.activeElement as HTMLElement | null;
+          if (row && next && row.contains(next)) return;
+          setActive(null);
+        });
+      }}
       onInput={(e) => {
         const target = e.currentTarget as HTMLDivElement;
         const serialized = serializeEditableHtml(target);

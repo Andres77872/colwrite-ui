@@ -16,6 +16,7 @@ export type EditorContextValue = {
   reorderBlock: (id: string, toIndex: number) => void;
   removeBlock: (id: string) => void;
   updateHtml: (id: string, html: string) => void;
+  setParagraphColumns: (id: string, columns: number) => void;
   // Paragraph children helpers
   addParagraphChild: (blockId: string, child: ParagraphChild) => string;
   updateParagraphChild: (blockId: string, childId: string, next: Partial<ParagraphChild>) => void;
@@ -43,7 +44,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     version: 1,
     blocks: [
       { id: uid(), type: 'heading', level: 2, html: 'Your document' },
-      { id: uid(), type: 'paragraph', html: 'Write something here. Select text to format. Use the + to insert blocks.', children: [] },
+      { id: uid(), type: 'paragraph', html: 'Write something here. Select text to format. Use the + to insert blocks.', children: [], columns: 1 },
     ],
   });
 
@@ -97,7 +98,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     setBlocks(prev => {
       const idx = prev.findIndex(b => b.id === afterId);
       const next: Block =
-        type === 'paragraph' ? { id: newId, type: 'paragraph', html: '', children: [] } :
+        type === 'paragraph' ? { id: newId, type: 'paragraph', html: '', children: [], columns: 1 } :
         type === 'heading' ? { id: newId, type: 'heading', level: 2, html: '' } :
         type === 'todo' ? { id: newId, type: 'todo', checked: false, html: '' } :
         { id: newId, type: 'divider' };
@@ -140,6 +141,12 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     out[idx] = { ...b, html } as Block;
     return out;
   });
+
+  const setParagraphColumns = (id: string, columns: number) => setBlocks(prev => prev.map(b => (
+    b.id === id && b.type === 'paragraph'
+      ? ({ ...(b as any), columns: Math.max(1, Math.min(6, Math.floor(columns || 1))) })
+      : b
+  )));
 
   const addParagraphChild: EditorContextValue['addParagraphChild'] = (blockId, child) => {
     setBlocks(prev => prev.map(b => {
@@ -255,6 +262,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     reorderBlock,
     removeBlock,
     updateHtml,
+    setParagraphColumns,
     addParagraphChild,
     updateParagraphChild,
     removeParagraphChild,

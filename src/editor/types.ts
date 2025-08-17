@@ -10,7 +10,7 @@ export type AiBeatChild = {
 
 export type ParagraphChild = AiBeatChild; // future: union of more child types
 
-export type ParagraphBlock = { id: string; type: 'paragraph'; html: string; children?: ParagraphChild[] };
+export type ParagraphBlock = { id: string; type: 'paragraph'; html: string; children?: ParagraphChild[]; columns?: number };
 export type HeadingBlock = { id: string; type: 'heading'; level: 1 | 2 | 3; html: string };
 export type TodoBlock = { id: string; type: 'todo'; checked: boolean; html: string };
 export type DividerBlock = { id: string; type: 'divider' };
