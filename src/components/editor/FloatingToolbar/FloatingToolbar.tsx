@@ -13,6 +13,20 @@ export function FloatingToolbar() {
   const [hasSelection, setHasSelection] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const slashOpenRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    // Listen for slash menu visibility changes to avoid flicker/toggle when typing '/'
+    const onSlashVisibility = (e: Event) => {
+      const ce = e as CustomEvent<{ visible: boolean }>;
+      slashOpenRef.current = !!ce.detail?.visible;
+      if (slashOpenRef.current) {
+        setVisible(false);
+      }
+    };
+    window.addEventListener('colwrite:slash-menu-visibility', onSlashVisibility as EventListener);
+    return () => window.removeEventListener('colwrite:slash-menu-visibility', onSlashVisibility as EventListener);
+  }, []);
 
   useEffect(() => {
     const onSelection = () => {
@@ -28,6 +42,9 @@ export function FloatingToolbar() {
         node = (node as Node).parentNode;
       }
       if (!inside || !editableEl) { setHasSelection(false); setVisible(false); return; }
+
+      // If slash menu is open, suppress toolbar visibility regardless of selection state
+      if (slashOpenRef.current) { setHasSelection(false); setVisible(false); return; }
 
       const range = sel.getRangeAt(0);
       if (!sel.isCollapsed) {
@@ -142,7 +159,7 @@ export function FloatingToolbar() {
         });
       } catch { /* no-op */ }
       setHasSelection(false);
-      setVisible(true);
+      if (!slashOpenRef.current) setVisible(true);
     };
     document.addEventListener('selectionchange', onSelection);
     window.addEventListener('scroll', onSelection, true);

@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import './Editable.css';
 import { useEditor } from '../../../editor';
 import { useLayoutEffect } from 'react';
-import { openSlashMenu } from '../../editor/SlashMenu/SlashMenu';
+import { openSlashMenu, isSlashMenuOpen } from '../../editor/SlashMenu/SlashMenu';
 
 export function serializeEditableHtml(root: HTMLDivElement): string {
   const clone = root.cloneNode(true) as HTMLDivElement;
@@ -81,11 +81,14 @@ export function Editable({
         const el = e.currentTarget as HTMLDivElement;
         const row = el.closest('[data-block-id]') as HTMLElement | null;
         const explicitNext = (e.relatedTarget as HTMLElement | null) || null;
+        // If the slash menu is open, do not clear active block when focus appears to move elsewhere
+        if (isSlashMenuOpen()) return;
         if (row && explicitNext && row.contains(explicitNext)) return; // focus moved inside same block
         // Defer to allow focus to settle (e.relatedTarget can be null on mousedown)
         queueMicrotask(() => {
           const next = document.activeElement as HTMLElement | null;
           if (row && next && row.contains(next)) return;
+          if (isSlashMenuOpen()) return;
           setActive(null);
         });
       }}

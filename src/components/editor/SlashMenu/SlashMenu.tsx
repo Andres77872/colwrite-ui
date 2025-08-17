@@ -7,12 +7,22 @@ import { serializeEditableHtml } from '../../common/Editable/Editable';
 import type { SlashContext, SlashItem } from './types';
 
 export const SLASH_MENU_EVENT = 'colwrite:open-slash-menu';
+export const SLASH_MENU_VISIBILITY_EVENT = 'colwrite:slash-menu-visibility';
+
+// Lightweight module-level flag so other components can detect current visibility synchronously
+let slashMenuOpen = false;
+export function isSlashMenuOpen(): boolean { return slashMenuOpen; }
 
 type OpenDetail = { blockId: string };
 
 export function openSlashMenu(blockId: string) {
   const ev = new CustomEvent<OpenDetail>(SLASH_MENU_EVENT as any, { detail: { blockId } as any } as any);
   window.dispatchEvent(ev);
+  // Proactively broadcast visibility to suppress other floating UI immediately
+  try {
+    const visEv = new CustomEvent<{ visible: boolean }>(SLASH_MENU_VISIBILITY_EVENT as any, { detail: { visible: true } as any } as any);
+    window.dispatchEvent(visEv);
+  } catch {}
 }
 
 export function SlashMenu() {
@@ -98,6 +108,15 @@ export function SlashMenu() {
     return () => window.removeEventListener(SLASH_MENU_EVENT, openListener as EventListener);
   }, []);
 
+  // Broadcast visibility so other floating UIs (e.g., FloatingToolbar) can suspend while the slash menu is open
+  useEffect(() => {
+    slashMenuOpen = visible;
+    try {
+      const ev = new CustomEvent<{ visible: boolean }>(SLASH_MENU_VISIBILITY_EVENT as any, { detail: { visible } as any } as any);
+      window.dispatchEvent(ev);
+    } catch {}
+  }, [visible]);
+
   const items = useMemo(() => {
     const base: SlashItem[] = [aiBeatItem, tableItem];
     return base;
@@ -116,7 +135,12 @@ export function SlashMenu() {
 
   useEffect(() => {
     if (!visible) return;
-    const onDocClick = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setVisible(false); };
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      const inside = !!ref.current && !!target && ref.current.contains(target);
+      const isControl = !!target?.closest?.('.floating-toolbar');
+      if (!inside && !isControl) setVisible(false);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { setVisible(false); e.preventDefault(); return; }
       if (e.key === 'ArrowDown') { setActiveIndex(i => Math.min(i + 1, filteredItems.length - 1)); e.preventDefault(); }
@@ -141,11 +165,8 @@ export function SlashMenu() {
     };
   }, [visible, filteredItems, activeIndex, query]);
 
-  // Focus menu for keyboard nav when opened
-  useEffect(() => {
-    if (!visible) return;
-    ref.current?.focus();
-  }, [visible]);
+  // Do not move focus away from the editable when opening the slash menu.
+  // We capture keys at the document level for navigation/filtering.
 
   const context = (): SlashContext => ({ blockId: blockId!, refs, updateHtml: (id) => updateHtml(id, serializeEditableHtml(refs.current[id]!)), addParagraphChild, documentId, createRemote });
 
