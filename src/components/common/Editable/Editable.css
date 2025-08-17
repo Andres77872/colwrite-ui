@@ -2,3 +2,5 @@
 .editable:focus { background: #fff; box-shadow: inset 0 0 0 1px var(--color-border); }
 /* Ensure inputs inside AIBeat widget are fully editable and not interfered by contentEditable */
 .editable :where(.ai-beat-widget, .ai-beat-widget *) { -webkit-user-modify: read-write-plaintext-only; }
+/* Placeholder inline blocks for children */
+.editable [data-child-id] { display: inline-block; vertical-align: top; }

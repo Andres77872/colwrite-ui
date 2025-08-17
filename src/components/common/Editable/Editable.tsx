@@ -4,6 +4,19 @@ import { useEditor } from '../../../editor';
 import { useLayoutEffect } from 'react';
 import { openSlashMenu } from '../../editor/SlashMenu/SlashMenu';
 
+export function serializeEditableHtml(root: HTMLDivElement): string {
+  const clone = root.cloneNode(true) as HTMLDivElement;
+  // Clear rendered contents of child component placeholders
+  const clearNode = (n: Element) => { while (n.firstChild) n.removeChild(n.firstChild); };
+  clone.querySelectorAll('[data-child-id]').forEach((el) => {
+    const elh = el as HTMLElement;
+    elh.setAttribute('contenteditable', 'false');
+    clearNode(elh);
+  });
+  // Do not try to serialize rendered internals for AI; they are represented via placeholders.
+  return clone.innerHTML;
+}
+
 export function Editable({
   id,
   html,
@@ -65,14 +78,21 @@ export function Editable({
       }}
       onClick={() => setActive(id)}
       onBlur={() => setActive(null)}
-      onInput={(e) => updateHtml(id, (e.target as HTMLDivElement).innerHTML)}
+      onInput={(e) => {
+        const target = e.currentTarget as HTMLDivElement;
+        const serialized = serializeEditableHtml(target);
+        if (target.getAttribute('data-serialized') !== serialized) {
+          target.setAttribute('data-serialized', serialized);
+          updateHtml(id, serialized);
+        }
+      }}
       onKeyDown={(e) => {
         // If caret or focus is inside an AI UI wrapper, allow normal editing and do not intercept '/'
         const sel = window.getSelection();
         const anchor = sel && sel.anchorNode;
         const anchorEl = (anchor && (anchor.nodeType === 1 ? (anchor as HTMLElement) : (anchor as Node).parentElement)) as HTMLElement | null;
         const inAiSuggest = !!anchorEl?.closest('.ai-suggest');
-        const inAiBeat = !!(document.activeElement as HTMLElement | null)?.closest?.('.ai-beat-widget') || !!anchorEl?.closest('.ai-beat-widget');
+        const inAiBeat = !!(document.activeElement as HTMLElement | null)?.closest?.('.ai-beat-widget') || !!anchorEl?.closest('[data-child-id] .ai-beat-widget');
         if (inAiSuggest || inAiBeat) return;
         if (e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
           // Open slash menu and prevent literal '/'

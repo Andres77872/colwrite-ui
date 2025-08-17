@@ -1,1 +1,4 @@
 .paragraph-block { margin: 0; }
+
+/* Placeholder host for child components */
+.paragraph-block [data-child-id] { display: inline-block; vertical-align: top; }
