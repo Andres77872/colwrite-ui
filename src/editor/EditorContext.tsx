@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import type { Block, Doc, ParagraphChild } from './types';
-import { loadDoc, saveDoc } from './storage';
+import { loadDoc, saveDoc, loadDocumentId, saveDocumentId } from './storage';
 import { createDocument as apiCreateDocument, saveDocument as apiSaveDocument, loadDocument as apiLoadDocument, deleteDocument as apiDeleteDocument, listDocuments as apiListDocuments } from '../services';
 import { uid } from '../lib/uid';
 
@@ -56,7 +56,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const blocks = doc.blocks;
   const refs = useRef<Record<string, HTMLDivElement | null>>({});
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
-  const [documentId, setDocumentId] = useState<string | null>(null);
+  const [documentId, setDocumentId] = useState<string | null>(() => loadDocumentId());
   const [activeId, setActiveId] = useState<string | null>(null);
 
   // Auto-save
@@ -64,6 +64,11 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const raf = requestAnimationFrame(() => saveDoc(doc));
     return () => cancelAnimationFrame(raf);
   }, [doc]);
+
+  // Persist current document id
+  useEffect(() => {
+    saveDocumentId(documentId);
+  }, [documentId]);
 
   // One-time migration: convert inline AIBeat markup embedded in paragraph HTML
   // into paragraph children and placeholder spans.
@@ -260,6 +265,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
   const save = () => {
     saveDoc(doc);
+    saveDocumentId(documentId);
     setLastSavedAt(Date.now());
   };
 
