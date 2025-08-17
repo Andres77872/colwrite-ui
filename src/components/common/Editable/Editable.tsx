@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import './Editable.css';
 import { useEditor } from '../../../editor';
 import { useLayoutEffect } from 'react';
+import { openSlashMenu } from '../../editor/SlashMenu/SlashMenu';
 
 export function Editable({
   id,
@@ -48,6 +49,10 @@ export function Editable({
       suppressContentEditableWarning
       onFocus={(e) => {
         setActive(id);
+        // If focus originated inside an AI widget, do not steal focus or move caret
+        const origin = e.target as HTMLElement;
+        const insideAi = !!origin.closest?.('.ai-suggest, .ai-beat-widget');
+        if (insideAi) return;
         const el = e.currentTarget as HTMLDivElement;
         if (!el.innerHTML && (html ?? '') !== '') {
           el.innerHTML = html || '';
@@ -62,12 +67,19 @@ export function Editable({
       onBlur={() => setActive(null)}
       onInput={(e) => updateHtml(id, (e.target as HTMLDivElement).innerHTML)}
       onKeyDown={(e) => {
-        // If caret is inside an AI suggestion wrapper, allow normal editing (including Enter)
+        // If caret or focus is inside an AI UI wrapper, allow normal editing and do not intercept '/'
         const sel = window.getSelection();
         const anchor = sel && sel.anchorNode;
         const anchorEl = (anchor && (anchor.nodeType === 1 ? (anchor as HTMLElement) : (anchor as Node).parentElement)) as HTMLElement | null;
-        const inAi = !!anchorEl?.closest('.ai-suggest');
-        if (inAi) return;
+        const inAiSuggest = !!anchorEl?.closest('.ai-suggest');
+        const inAiBeat = !!(document.activeElement as HTMLElement | null)?.closest?.('.ai-beat-widget') || !!anchorEl?.closest('.ai-beat-widget');
+        if (inAiSuggest || inAiBeat) return;
+        if (e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          // Open slash menu and prevent literal '/'
+          e.preventDefault();
+          openSlashMenu(id);
+          return;
+        }
         if (e.key === 'Enter' && e.ctrlKey) {
           e.preventDefault();
           const newId = addBlockAfter(id, 'paragraph');
