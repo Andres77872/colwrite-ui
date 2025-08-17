@@ -3,3 +3,4 @@ export * from './aiActions';
 export * from './aiBeat';
 export * from './auth';
 export * from './arxiv';
+export * from './colpali';

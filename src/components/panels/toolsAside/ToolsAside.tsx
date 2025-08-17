@@ -2,6 +2,7 @@ import './toolsAside.css';
 import { usePanels } from '../panelsContext';
 import { JsonPanel } from '../JsonPanel';
 import { ArxivPanel } from '../ArxivPanel';
+import { ColpaliPanel } from '../ColpaliPanel';
 
 function Placeholder({ title, description }: { title: string; description?: string }) {
   return (
@@ -21,9 +22,7 @@ export function ToolsAside() {
     <div className="tools-aside">
       {activeTool === 'json' && <JsonPanel />}
       {activeTool === 'arxiv' && <ArxivPanel />}
-      {activeTool === 'colpali' && (
-        <Placeholder title="ColPali search" description="Coming soon: semantic search with ColPali." />
-      )}
+      {activeTool === 'colpali' && <ColpaliPanel />}
       {activeTool === 'library' && (
         <Placeholder title="Library" description="Coming soon: your saved papers and datasets." />
       )}
