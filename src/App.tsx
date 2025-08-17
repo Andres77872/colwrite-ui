@@ -1,18 +1,19 @@
 import { EditorProvider } from './editor'
 import { AppShell } from './components/layout/AppShell'
-import { Toolbar } from './components/editor/Toolbar'
+// Header actions moved into DocumentHeader within Canvas
 import { Canvas } from './components/editor/Canvas'
 import { FloatingToolbar } from './components/editor/FloatingToolbar/FloatingToolbar'
 import { SlashMenu } from './components/editor/SlashMenu'
 import { JsonPanel } from './components/panels/JsonPanel'
-import { DocumentsMenu } from './components/editor/DocumentsMenu'
+import { Sidebar } from './components/layout/Sidebar'
+import { Topbar } from './components/layout/Topbar'
 
 function App() {
   return (
     <EditorProvider>
       <AppShell
-        header={<Toolbar />}
-        left={<DocumentsMenu />}
+        header={<Topbar />}
+        left={<Sidebar />}
         main={<>
           <Canvas />
           <FloatingToolbar />

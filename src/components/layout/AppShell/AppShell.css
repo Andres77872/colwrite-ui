@@ -1,12 +1,13 @@
 .app-shell { height: 100dvh; padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
 .app-header { padding: var(--sp-2) var(--sp-3); display: flex; align-items: center; gap: var(--sp-3); }
-.app-body { display: grid; grid-template-columns: 1fr; gap: var(--sp-3); height: calc(100dvh - 84px); }
+.app-body { display: grid; grid-template-columns: 1fr; gap: var(--sp-3); flex: 1; min-height: 0; }
 .app-body.has-right { grid-template-columns: 1fr 380px; }
 .app-body.has-left { grid-template-columns: 260px 1fr; }
 .app-body.has-left.has-right { grid-template-columns: 260px 1fr 380px; }
-.app-left { padding: var(--sp-3); overflow: auto; }
+.app-left { overflow: hidden; }
 .app-main { padding: var(--sp-3); overflow: auto; }
 .app-aside { padding: var(--sp-3); overflow: auto; }
+.app-left .sidebar { height: 100%; }
 @media (max-width: 980px) {
   .app-body,
   .app-body.has-right,

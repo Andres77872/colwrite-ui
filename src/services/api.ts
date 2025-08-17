@@ -26,7 +26,7 @@ async function handleJson<T>(res: Response): Promise<T> {
 }
 
 export async function get<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(buildUrl(path), { method: 'GET', ...init });
+  const res = await fetch(buildUrl(path), { method: 'GET', credentials: 'include', ...init });
   return handleJson<T>(res);
 }
 
@@ -35,6 +35,7 @@ export async function post<T>(path: string, body?: unknown, init?: RequestInit):
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    credentials: path.startsWith('/auth/') ? 'omit' : 'include',
     ...init,
   });
   return handleJson<T>(res);
@@ -45,12 +46,13 @@ export async function put<T>(path: string, body?: unknown, init?: RequestInit): 
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    credentials: 'include',
     ...init,
   });
   return handleJson<T>(res);
 }
 
 export async function del<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(buildUrl(path), { method: 'DELETE', ...init });
+  const res = await fetch(buildUrl(path), { method: 'DELETE', credentials: 'include', ...init });
   return handleJson<T>(res);
 }

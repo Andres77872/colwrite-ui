@@ -1,0 +1,6 @@
+.doc-header { position: sticky; top: 0; z-index: 2; background: var(--color-panel); border-bottom: 1px solid var(--color-border); padding: var(--sp-2) var(--sp-3); margin: calc(-1 * var(--sp-3)) calc(-1 * var(--sp-3)) var(--sp-3); border-top-left-radius: var(--radius-lg); border-top-right-radius: var(--radius-lg); }
+.doc-header, .doc-actions { display: flex; align-items: center; gap: var(--sp-2); }
+.doc-title { display: flex; align-items: baseline; gap: var(--sp-3); }
+.doc-title-text { font-size: var(--fs-xl); font-weight: 600; }
+.doc-id { color: var(--color-muted); font-size: var(--fs-sm); padding: 2px 6px; border: 1px dashed var(--color-border); border-radius: var(--radius-sm); background: var(--color-elev); }
+

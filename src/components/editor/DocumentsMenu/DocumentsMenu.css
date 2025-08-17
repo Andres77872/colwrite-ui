@@ -1,8 +1,8 @@
 .documents-menu { display: flex; flex-direction: column; gap: 8px; }
 .list { display: flex; flex-direction: column; gap: 4px; }
 .doc-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
-.doc-row:hover { background: rgba(0,0,0,0.04); }
-.doc-row.active { border-color: rgba(0,0,0,0.12); background: rgba(0,0,0,0.03); }
+.doc-row:hover { background: var(--color-elev); }
+.doc-row.active { border-color: var(--color-border); background: rgba(59,130,246,0.06); }
 .doc-main { min-width: 0; flex: 1; }
 .doc-title { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .doc-sub { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
