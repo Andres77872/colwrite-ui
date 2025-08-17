@@ -19,11 +19,21 @@ export function DocumentFooter() {
   return (
     <div className="doc-footer">
       <div className="df-item"><span className="label">Blocks</span><span className="value">{stats.total}</span></div>
-      <div className="df-item"><span className="label">Headings</span><span className="value">{headingsLabel(stats.headings)}</span></div>
-      <div className="df-item"><span className="label">Paragraphs</span><span className="value">{stats.paragraphs}</span></div>
-      <div className="df-item"><span className="label">Todos</span><span className="value">{stats.todos}</span></div>
-      <div className="df-item"><span className="label">Dividers</span><span className="value">{stats.dividers}</span></div>
-      <div className="df-item"><span className="label">Inline widgets</span><span className="value">{stats.inlines}</span></div>
+      {stats.headings > 0 && (
+        <div className="df-item"><span className="label">Headings</span><span className="value">{headingsLabel(stats.headings)}</span></div>
+      )}
+      {stats.paragraphs > 0 && (
+        <div className="df-item"><span className="label">Paragraphs</span><span className="value">{stats.paragraphs}</span></div>
+      )}
+      {stats.todos > 0 && (
+        <div className="df-item"><span className="label">Todos</span><span className="value">{stats.todos}</span></div>
+      )}
+      {stats.dividers > 0 && (
+        <div className="df-item"><span className="label">Dividers</span><span className="value">{stats.dividers}</span></div>
+      )}
+      {stats.inlines > 0 && (
+        <div className="df-item"><span className="label">Inline widgets</span><span className="value">{stats.inlines}</span></div>
+      )}
     </div>
   );
 }
