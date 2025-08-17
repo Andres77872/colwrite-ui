@@ -1,4 +1,5 @@
-export const API_BASE = 'http://127.0.0.1:8000';
+// Prefer relative base during development to avoid browser CORS via Vite proxy
+export const API_BASE: string = (import.meta as any)?.env?.VITE_API_BASE ?? '/api';
 
 function buildUrl(path: string): string {
   const base = API_BASE.replace(/\/$/, '');

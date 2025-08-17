@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { EditorProvider } from './editor'
 import { AppShell } from './components/layout/AppShell'
 // Header actions moved into DocumentHeader within Canvas
@@ -9,17 +10,19 @@ import { Sidebar } from './components/layout/Sidebar'
 import { Topbar } from './components/layout/Topbar'
 
 function App() {
+  const [leftCollapsed, setLeftCollapsed] = useState<boolean>(false)
   return (
     <EditorProvider>
       <AppShell
         header={<Topbar />}
-        left={<Sidebar />}
+        left={<Sidebar collapsed={leftCollapsed} onToggle={() => setLeftCollapsed(v => !v)} />}
         main={<>
           <Canvas />
           <FloatingToolbar />
           <SlashMenu />
         </>}
         aside={<JsonPanel />}
+        leftCollapsed={leftCollapsed}
       />
     </EditorProvider>
   )

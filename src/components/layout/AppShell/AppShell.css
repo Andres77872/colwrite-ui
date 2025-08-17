@@ -4,7 +4,11 @@
 .app-body.has-right { grid-template-columns: 1fr 380px; }
 .app-body.has-left { grid-template-columns: 260px 1fr; }
 .app-body.has-left.has-right { grid-template-columns: 260px 1fr 380px; }
+/* Collapsed left column */
+.app-body.has-left.is-left-collapsed { grid-template-columns: 56px 1fr; }
+.app-body.has-left.is-left-collapsed.has-right { grid-template-columns: 56px 1fr 380px; }
 .app-left { overflow: hidden; }
+.app-left.collapsed { width: 56px; }
 .app-main { padding: var(--sp-3); overflow: auto; }
 .app-aside { padding: var(--sp-3); overflow: auto; }
 .app-left .sidebar { height: 100%; }
