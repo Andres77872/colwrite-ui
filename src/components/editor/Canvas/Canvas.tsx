@@ -1,5 +1,5 @@
 import './Canvas.css';
-import { DocumentHeader, DocumentFooter } from '../DocumentChrome';
+import { DocumentHeader } from '../DocumentChrome';
 import { useEditor } from '../../../editor';
 import { Fragment, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
@@ -139,7 +139,7 @@ export function Canvas() {
           setInsertIndex(blocks.length);
         }}
       />
-      <DocumentFooter />
+      
     </div>
   );
 }

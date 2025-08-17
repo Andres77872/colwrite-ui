@@ -4,3 +4,4 @@ export * from './aiBeat';
 export * from './auth';
 export * from './arxiv';
 export * from './colpali';
+export * from './aichat';
