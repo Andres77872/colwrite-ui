@@ -98,9 +98,15 @@ export function Canvas() {
     >
       <DocumentHeader />
       {blocks.map((b, i) => {
+        const isCollapsed = (b as any).collapsed === true;
+        const isAiHidden = (b as any).aiHidden === true;
+        const isLocked = (b as any).locked === true;
         const classes = [
           'row block-row',
           b.id === activeId ? 'active' : '',
+          isCollapsed ? 'collapsed' : '',
+          isAiHidden ? 'ai-hidden' : '',
+          isLocked ? 'locked' : '',
           overId === b.id && overPos === 'before' ? 'drag-over-top' : '',
           overId === b.id && overPos === 'after' ? 'drag-over-bottom' : '',
         ].filter(Boolean).join(' ');
@@ -115,12 +121,26 @@ export function Canvas() {
             onDragOver={(e) => handleDragOver(e, i)}
           >
             <BlockControls id={b.id} />
-            <div className="grow">
-              {b.type === 'paragraph' && <ParagraphBlock block={b} />}
-              {b.type === 'heading' && <HeadingBlock block={b} />}
-              {b.type === 'todo' && <TodoBlock block={b} />}
-              {b.type === 'divider' && <DividerBlock />}
-            </div>
+            {isCollapsed ? (
+              <div className="grow">
+                <div className="block-collapsed">
+                  <span className="bc-arrow">▸</span>
+                  <span className="bc-label">
+                    {b.type === 'paragraph' ? 'Paragraph' : b.type === 'heading' ? 'Heading' : b.type === 'todo' ? 'Todo' : 'Divider'}
+                  </span>
+                  {('html' in b) && (b as any).html ? (
+                    <span className="bc-preview" dangerouslySetInnerHTML={{ __html: ((b as any).html || '').replace(/<[^>]*>/g, '').slice(0, 60) }} />
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <div className="grow">
+                {b.type === 'paragraph' && <ParagraphBlock block={b} />}
+                {b.type === 'heading' && <HeadingBlock block={b} />}
+                {b.type === 'todo' && <TodoBlock block={b} />}
+                {b.type === 'divider' && <DividerBlock />}
+              </div>
+            )}
           </div>
           </Fragment>
         );

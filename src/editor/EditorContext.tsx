@@ -17,6 +17,10 @@ export type EditorContextValue = {
   removeBlock: (id: string) => void;
   updateHtml: (id: string, html: string) => void;
   setParagraphColumns: (id: string, columns: number) => void;
+  // Block meta toggles (visual-only; backend enforces behavior)
+  toggleAiHidden: (id: string) => void;
+  toggleLocked: (id: string) => void;
+  toggleCollapsed: (id: string) => void;
   // Paragraph children helpers
   addParagraphChild: (blockId: string, child: ParagraphChild) => string;
   updateParagraphChild: (blockId: string, childId: string, next: Partial<ParagraphChild>) => void;
@@ -148,6 +152,15 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       : b
   )));
 
+  // Generic helper to toggle a boolean meta key on any block
+  const toggleMeta = (id: string, key: 'aiHidden' | 'locked' | 'collapsed') => setBlocks(prev => prev.map(b => (
+    b.id === id ? ({ ...(b as any), [key]: !((b as any)[key] ?? false) }) : b
+  )));
+
+  const toggleAiHidden = (id: string) => toggleMeta(id, 'aiHidden');
+  const toggleLocked = (id: string) => toggleMeta(id, 'locked');
+  const toggleCollapsed = (id: string) => toggleMeta(id, 'collapsed');
+
   const addParagraphChild: EditorContextValue['addParagraphChild'] = (blockId, child) => {
     setBlocks(prev => prev.map(b => {
       if (b.id !== blockId || b.type !== 'paragraph') return b;
@@ -263,6 +276,9 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     removeBlock,
     updateHtml,
     setParagraphColumns,
+    toggleAiHidden,
+    toggleLocked,
+    toggleCollapsed,
     addParagraphChild,
     updateParagraphChild,
     removeParagraphChild,

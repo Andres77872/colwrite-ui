@@ -3,11 +3,12 @@ import { useEditor } from '../../../editor';
 import { useEffect, useRef, useState, type KeyboardEventHandler } from 'react';
 
 export function BlockControls({ id }: { id: string }) {
-  const { addBlockAfter, moveBlock, removeBlock } = useEditor();
+  const { addBlockAfter, moveBlock, removeBlock, toggleAiHidden, toggleLocked, toggleCollapsed, blocks } = useEditor();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const block = blocks.find(b => b.id === id);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
@@ -57,52 +58,80 @@ export function BlockControls({ id }: { id: string }) {
 
   return (
     <div className={["block-controls", open ? "open" : ""].filter(Boolean).join(" ")} ref={ref}>
-      <button
-        className="icon drag-handle"
-        title="Drag to reorder"
-        type="button"
-        aria-label="Drag to reorder"
-        draggable
-        data-drag-handle="true"
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.preventDefault()}
-        onDragStart={(e) => {
-          e.dataTransfer.setData('text/plain', id);
-          e.dataTransfer.setData('application/x-block-id', id);
-          e.dataTransfer.effectAllowed = 'move';
-          // Optional: use the handle itself as drag image
-          if (e.currentTarget) {
-            e.dataTransfer.setDragImage(e.currentTarget as Element, 8, 8);
-          }
-        }}
-      >
-        ⋮⋮
-      </button>
-      <button className="icon" title="Move up" type="button" aria-label="Move block up" onClick={() => moveBlock(id, -1)}>↑</button>
-      <button className="icon" title="Move down" type="button" aria-label="Move block down" onClick={() => moveBlock(id, 1)}>↓</button>
-      <button className="icon danger" title="Delete" type="button" aria-label="Delete block" onClick={() => removeBlock(id)}>🗑</button>
-      {/* Inline bottom-centered add control (Jupyter-like) */}
-      <div className={["block-add-inline", open ? "open" : ""].filter(Boolean).join(" ")}>
+      <div className="bc-left">
         <button
-          ref={addBtnRef}
-          className="icon add-inline-btn"
-          title="Add block"
+          className="icon drag-handle"
+          title="Drag to reorder"
           type="button"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          onClick={() => setOpen(v => !v)}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowDown' && !open) {
-              setOpen(true);
-              e.preventDefault();
-            } else if (e.key === 'Escape' && open) {
-              setOpen(false);
-              e.preventDefault();
+          aria-label="Drag to reorder"
+          draggable
+          data-drag-handle="true"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.preventDefault()}
+          onDragStart={(e) => {
+            e.dataTransfer.setData('text/plain', id);
+            e.dataTransfer.setData('application/x-block-id', id);
+            e.dataTransfer.effectAllowed = 'move';
+            if (e.currentTarget) {
+              e.dataTransfer.setDragImage(e.currentTarget as Element, 8, 8);
             }
           }}
         >
-          ＋
+          ⋮⋮
         </button>
+      </div>
+      <div className="bc-top-right">
+        <button 
+          className={["icon", (block as any)?.aiHidden ? "active-ai-hidden" : ""].filter(Boolean).join(" ")} 
+          title={(block as any)?.aiHidden ? 'Show to AI' : 'Hide from AI'} 
+          type="button" 
+          onClick={() => toggleAiHidden(id)}
+        >
+          {(block as any)?.aiHidden ? '🙈' : '👁️'}
+        </button>
+        <button 
+          className={["icon", (block as any)?.locked ? "active-locked" : ""].filter(Boolean).join(" ")} 
+          title={(block as any)?.locked ? 'Unlock' : 'Lock'} 
+          type="button" 
+          onClick={() => toggleLocked(id)}
+        >
+          {(block as any)?.locked ? '🔓' : '🔒'}
+        </button>
+        <button 
+          className={["icon", (block as any)?.collapsed ? "active-collapsed" : ""].filter(Boolean).join(" ")} 
+          title={(block as any)?.collapsed ? 'Expand' : 'Collapse'} 
+          type="button" 
+          onClick={() => toggleCollapsed(id)}
+        >
+          {(block as any)?.collapsed ? '▾' : '▸'}
+        </button>
+        <button className="icon danger" title="Delete" type="button" aria-label="Delete block" onClick={() => removeBlock(id)}>🗑</button>
+      </div>
+      <div className={["block-add-inline", open ? "open" : ""].filter(Boolean).join(" ")}>
+        <div className="bottom-controls">
+          <button className="icon" title="Move up" type="button" aria-label="Move block up" onClick={() => moveBlock(id, -1)}>↑</button>
+          <button
+            ref={addBtnRef}
+            className="icon add-inline-btn"
+            title="Add block"
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={open}
+            onClick={() => setOpen(v => !v)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown' && !open) {
+                setOpen(true);
+                e.preventDefault();
+              } else if (e.key === 'Escape' && open) {
+                setOpen(false);
+                e.preventDefault();
+              }
+            }}
+          >
+            ＋
+          </button>
+          <button className="icon" title="Move down" type="button" aria-label="Move block down" onClick={() => moveBlock(id, 1)}>↓</button>
+        </div>
         {open && (
           <div className="block-menu" role="menu" ref={menuRef} onKeyDown={onAddKeyDown}>
             <button role="menuitem" onClick={() => add('paragraph')}><span className="mi">✍️</span> Text</button>

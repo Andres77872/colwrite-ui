@@ -1,5 +1,4 @@
-.block-controls { position: static; width: 90px; display: inline-flex; gap: 6px; opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
-.block-row:hover .block-controls, .block-row.active .block-controls, .block-controls.open { opacity: 1; pointer-events: auto; }
+.block-controls { position: static; width: auto; display: inline-flex; gap: 6px; }
 .block-controls .icon { border: 1px solid var(--color-border); background: #fff; border-radius: var(--radius-sm); width: 30px; height: 30px; display: grid; place-items: center; box-shadow: var(--shadow-sm); }
 .block-controls .icon:hover { background: var(--color-elev); }
 .block-controls .icon.danger { color: var(--color-danger); border-color: var(--color-danger); }
@@ -53,8 +52,26 @@
 }
 
 /* Drag handle affordance */
-.block-controls .drag-handle { cursor: grab; }
+.block-controls .drag-handle { 
+  cursor: grab; 
+  opacity: 0.6;
+}
 .block-controls .drag-handle:active { cursor: grabbing; }
+.block-controls .drag-handle:hover { 
+  opacity: 1;
+}
+
+/* Enhanced drag handle visibility for collapsed blocks */
+.block-row.collapsed .drag-handle {
+  opacity: 0.8;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+.block-row.collapsed .drag-handle:hover {
+  opacity: 1;
+  background: #fff;
+}
 
 /* --- Bottom inline add (Jupyter-like) --- */
 /* Position centered at the bottom of the entire block row */
@@ -78,11 +95,10 @@
 
 /* Circular add button like Jupyter */
 .block-add-inline .add-inline-btn { 
-  border-radius: 999px; 
+  border-radius: 50px; 
   width: 28px; 
   height: 28px; 
   line-height: 1; 
-  font-size: 18px; 
   box-shadow: var(--shadow-sm);
 }
 .block-add-inline .add-inline-btn:hover { box-shadow: var(--shadow-md); }
@@ -126,4 +142,92 @@
   border-right: 5px solid transparent; 
   border-bottom: 5px solid #fff; 
   border-top: none;
+}
+
+/* Layout for new control regions */
+.block-controls .bc-left { 
+  position: absolute; 
+  left: 16px; 
+  top: 50%; 
+  transform: translateY(-50%);
+  z-index: 2;
+}
+
+/* Adjust left control positioning for collapsed blocks */
+.block-row.collapsed .bc-left { 
+  left: 8px;
+  top: 50%; 
+  transform: translateY(-50%);
+}
+
+/* Improved drag handle sizing */
+.block-controls .bc-left .drag-handle {
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  border-radius: 6px;
+}
+
+/* Collapsed state drag handle styling */
+.block-row.collapsed .bc-left .drag-handle {
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+  border-radius: 4px;
+}
+.block-controls .bc-top-right { 
+  position: absolute; 
+  right: 8px; 
+  top: -24px; 
+  display: inline-flex; 
+  gap: 4px; 
+  opacity: 0; 
+  pointer-events: none;
+  padding: 4px 6px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: var(--radius-md);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+.block-row:hover .bc-top-right, .block-row.active .bc-top-right { opacity: 1; pointer-events: auto; }
+.block-controls .bottom-controls { display: inline-flex; gap: 6px; align-items: center; }
+
+/* Improve top-right button styling */
+.block-controls .bc-top-right .icon {
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+  box-shadow: none;
+  border: none;
+  background: transparent;
+  transition: all 120ms ease;
+}
+.block-controls .bc-top-right .icon:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* Active state styling for toggled options */
+.block-controls .bc-top-right .icon.active-ai-hidden {
+  background: #ec4899;
+  color: white;
+}
+.block-controls .bc-top-right .icon.active-ai-hidden:hover {
+  background: #be185d;
+}
+
+.block-controls .bc-top-right .icon.active-locked {
+  background: #f59e0b;
+  color: white;
+}
+.block-controls .bc-top-right .icon.active-locked:hover {
+  background: #d97706;
+}
+
+.block-controls .bc-top-right .icon.active-collapsed {
+  background: #6366f1;
+  color: white;
+}
+.block-controls .bc-top-right .icon.active-collapsed:hover {
+  background: #4f46e5;
 }
