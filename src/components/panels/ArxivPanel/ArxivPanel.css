@@ -1,0 +1,214 @@
+/* Main panel layout */
+.arxiv-panel { 
+  display: flex; 
+  flex-direction: column; 
+  gap: var(--sp-3); 
+  height: 100%; 
+  overflow: hidden;
+}
+
+.arxiv-panel[aria-busy="true"] {
+  opacity: 0.8;
+}
+
+/* Search form */
+.arxiv-panel .search { 
+  display: flex; 
+  gap: var(--sp-2); 
+  align-items: center;
+}
+
+.arxiv-panel .search .input:disabled,
+.arxiv-panel .search .select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Results container */
+.arxiv-panel .results { 
+  display: flex; 
+  flex-direction: column; 
+  gap: var(--sp-3); 
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* Individual result cards */
+.arxiv-panel .result { 
+  padding: var(--sp-4); 
+  position: relative;
+}
+
+.arxiv-panel .result-header { 
+  display: flex; 
+  gap: var(--sp-2); 
+  align-items: center; 
+  margin-bottom: var(--sp-2);
+}
+
+.arxiv-panel .rank { 
+  width: 32px; 
+  height: 32px; 
+  border-radius: var(--radius-sm); 
+  display: grid; 
+  place-items: center; 
+  background: var(--color-elev); 
+  border: 1px solid var(--color-border); 
+  font-weight: 700; 
+  font-size: var(--fs-sm);
+  color: var(--color-muted);
+}
+
+.arxiv-panel .badge { 
+  padding: 4px 8px; 
+  border-radius: 999px; 
+  border: 1px solid var(--color-border); 
+  font-size: var(--fs-xs); 
+  font-weight: 600;
+  background: rgba(59,130,246,0.08); 
+  color: var(--color-accent);
+}
+
+/* Title styling */
+.arxiv-panel .title { 
+  font-weight: 600; 
+  font-size: var(--fs-lg);
+  line-height: 1.4;
+  margin: 0 0 var(--sp-2) 0;
+  color: var(--color-text);
+}
+
+.arxiv-panel .title-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.arxiv-panel .title-link:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+/* Meta information */
+.arxiv-panel .meta { 
+  font-size: var(--fs-sm); 
+  margin-bottom: var(--sp-3);
+  line-height: 1.4;
+}
+
+.arxiv-panel .authors {
+  font-weight: 500;
+}
+
+.arxiv-panel .date {
+  opacity: 0.8;
+}
+
+/* Abstract handling */
+.arxiv-panel .abstract-wrapper {
+  margin-bottom: var(--sp-3);
+}
+
+.arxiv-panel .abstract { 
+  color: var(--color-text); 
+  line-height: 1.5;
+  font-size: var(--fs-md);
+}
+
+.arxiv-panel .abstract.collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.arxiv-panel .expand-btn {
+  background: none;
+  border: none;
+  color: var(--color-accent);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  cursor: pointer;
+  padding: var(--sp-1) 0;
+  margin-top: var(--sp-1);
+}
+
+.arxiv-panel .expand-btn:hover {
+  color: var(--color-accent-ink);
+  text-decoration: underline;
+}
+
+/* Action links */
+.arxiv-panel .actions { 
+  display: flex;
+  gap: var(--sp-3); 
+  flex-wrap: wrap;
+}
+
+.arxiv-panel .action-link {
+  color: var(--color-accent);
+  text-decoration: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+
+.arxiv-panel .action-link:hover {
+  background: rgba(59,130,246,0.08);
+  border-color: var(--color-border);
+  text-decoration: none;
+}
+
+/* Summary and feedback */
+.arxiv-panel .summary {
+  font-size: var(--fs-sm);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.arxiv-panel .score-highlight {
+  font-weight: 600;
+  color: var(--color-accent);
+}
+
+.arxiv-panel .error { 
+  color: var(--color-danger);
+  background: rgba(239, 68, 68, 0.08);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  font-size: var(--fs-sm);
+}
+
+/* Empty states */
+.arxiv-panel .empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-8) var(--sp-4);
+  text-align: center;
+  flex: 1;
+}
+
+.arxiv-panel .empty-icon {
+  font-size: 48px;
+  margin-bottom: var(--sp-3);
+  opacity: 0.5;
+}
+
+.arxiv-panel .empty-title {
+  font-weight: 600;
+  font-size: var(--fs-lg);
+  margin-bottom: var(--sp-2);
+  color: var(--color-text);
+}
+
+.arxiv-panel .empty-text {
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  max-width: 280px;
+}
+
+
