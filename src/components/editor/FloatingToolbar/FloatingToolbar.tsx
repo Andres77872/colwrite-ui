@@ -8,6 +8,7 @@ export function FloatingToolbar() {
   const { exec, refs, updateHtml } = useEditor();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
+  const [anchor, setAnchor] = useState<'center' | 'left'>('center');
   const [states, setStates] = useState({ bold: false, italic: false, underline: false, strike: false });
   const [hasSelection, setHasSelection] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -34,6 +35,7 @@ export function FloatingToolbar() {
         let rect = range.getBoundingClientRect();
         if (!rect || (rect.width === 0 && rect.height === 0)) { setHasSelection(false); setVisible(false); return; }
         setPos({ top: rect.top - 44, left: rect.left + rect.width / 2 });
+        setAnchor('center');
         try {
           setStates({
             bold: document.queryCommandState('bold'),
@@ -98,46 +100,8 @@ export function FloatingToolbar() {
         if (!isEmptyLine) { setHasSelection(false); setVisible(false); return; }
       }
 
-      // Compute caret rect for collapsed selection; if zero, use neighbor rects or a temporary marker
-      let rect = (range.getClientRects()[0] as DOMRect | undefined) || range.getBoundingClientRect();
-      const zeroRect = (r: DOMRect | undefined | null) => !r || (r.width === 0 && r.height === 0);
-      const rectFromNode = (n: Node | null): DOMRect | null => {
-        if (!n) return null;
-        if (n.nodeType === Node.ELEMENT_NODE) {
-          const el = n as HTMLElement;
-          const r1 = el.getBoundingClientRect();
-          if (!zeroRect(r1)) return r1;
-          // Try content rect
-          try {
-            const r = document.createRange();
-            r.selectNodeContents(el);
-            const r2 = r.getBoundingClientRect();
-            if (!zeroRect(r2)) return r2;
-          } catch {}
-          return null;
-        }
-        if (n.nodeType === Node.TEXT_NODE) {
-          try {
-            const r = document.createRange();
-            r.selectNode(n);
-            const r2 = r.getBoundingClientRect();
-            return zeroRect(r2) ? null : r2;
-          } catch { return null; }
-        }
-        return null;
-      };
-      if (zeroRect(rect)) {
-        if (sc === editableEl) {
-          const next = editableEl.childNodes[so] || null;
-          const prev = so > 0 ? editableEl.childNodes[so - 1] : null;
-          rect = rectFromNode(next) || rectFromNode(prev) || rect;
-        } else {
-          // Use the lineNode determined above and its neighbors
-          const ln = lineNode as (Node | null);
-          rect = rectFromNode(ln) || rectFromNode(ln ? ln.previousSibling : null) || rectFromNode(ln ? ln.nextSibling : null) || rect;
-        }
-      }
-      if (zeroRect(rect)) {
+      // Compute caret rect precisely by placing an invisible marker at caret
+      const getCaretRect = (): DOMRect | null => {
         try {
           const marker = document.createElement('span');
           marker.setAttribute('data-caret-marker', '1');
@@ -147,8 +111,10 @@ export function FloatingToolbar() {
           marker.style.opacity = '0';
           marker.style.pointerEvents = 'none';
           marker.textContent = '\u200b';
-          range.insertNode(marker);
-          rect = marker.getBoundingClientRect();
+          const clone = range.cloneRange();
+          clone.collapse(true);
+          clone.insertNode(marker);
+          const rect = marker.getBoundingClientRect();
           // Restore caret after marker and remove it
           const r2 = document.createRange();
           r2.setStartAfter(marker);
@@ -157,11 +123,16 @@ export function FloatingToolbar() {
           s2?.removeAllRanges();
           s2?.addRange(r2);
           marker.parentNode?.removeChild(marker);
-        } catch { /* ignore */ }
-      }
-      if (zeroRect(rect)) { setHasSelection(false); setVisible(false); return; }
+          return rect;
+        } catch {
+          return null;
+        }
+      };
+      const rect = getCaretRect();
+      if (!rect || (rect.width === 0 && rect.height === 0)) { setHasSelection(false); setVisible(false); return; }
 
-      setPos({ top: rect.top - 44, left: rect.left + rect.width / 2 });
+      setPos({ top: rect.top - 44, left: rect.left });
+      setAnchor('left');
       try {
         setStates({
           bold: document.queryCommandState('bold'),
@@ -439,6 +410,7 @@ export function FloatingToolbar() {
     <div
       ref={ref}
       className="floating-toolbar"
+      data-anchor={anchor}
       style={{ top: pos.top, left: pos.left }}
       onMouseDown={(e) => { e.preventDefault(); }}
     >
