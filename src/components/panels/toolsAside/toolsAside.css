@@ -1,0 +1,6 @@
+.tools-aside { height: 100%; display: flex; flex-direction: column; }
+.placeholder { display: grid; place-items: center; gap: 6px; padding: var(--sp-3); text-align: center; height: 100%; }
+.ph-title { font-weight: 600; }
+.ph-text { font-size: var(--fs-sm); }
+
+
