@@ -6,6 +6,12 @@
 /* DnD insertion indicators */
 .block-row { position: relative; }
 .block-row { isolation: isolate; }
+/* Ensure an active/hovered row (or a row with the inline add menu open) sits above
+   neighboring rows so its popovers are not occluded by following content. */
+.block-row:hover,
+.block-row.active { z-index: 2; }
+/* When the inline + menu is open, raise the whole row above siblings */
+.block-row:has(.block-add-inline.open) { z-index: 3; }
 .block-row.drag-over-top::before,
 .block-row.drag-over-bottom::after {
   content: "";
