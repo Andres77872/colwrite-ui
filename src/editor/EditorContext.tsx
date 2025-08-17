@@ -169,7 +169,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       if (cIndex === -1) return prev;
       const cur = children[cIndex];
       const merged: ParagraphChild = { ...cur, ...next } as ParagraphChild;
-      const equal = cur.message === merged.message && cur.prompt === merged.prompt && cur.output === merged.output && !!cur.collapsed === !!merged.collapsed && cur.id === merged.id && cur.type === merged.type;
+      const equal = JSON.stringify(cur) === JSON.stringify(merged);
       if (equal) return prev;
       const nextChildren = children.slice();
       nextChildren[cIndex] = merged;

@@ -8,7 +8,17 @@ export type AiBeatChild = {
   collapsed?: boolean;
 };
 
-export type ParagraphChild = AiBeatChild; // future: union of more child types
+export type TableChild = {
+  id: string;
+  type: 'table';
+  rows: number;
+  cols: number;
+  data: string[][]; // rows x cols
+  caption?: string;
+  header?: boolean; // first row as header
+};
+
+export type ParagraphChild = AiBeatChild | TableChild;
 
 export type ParagraphBlock = { id: string; type: 'paragraph'; html: string; children?: ParagraphChild[]; columns?: number };
 export type HeadingBlock = { id: string; type: 'heading'; level: 1 | 2 | 3; html: string };

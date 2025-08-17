@@ -1,7 +1,13 @@
-.slash-menu { position: fixed; z-index: 120; background: #fff; border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-md); padding: 6px; }
-.slash-menu-group { display: flex; flex-direction: column; gap: 4px; }
-.slash-item { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 6px 10px; border-radius: var(--radius-sm); cursor: pointer; font-weight: 600; }
-.slash-item:hover { background: var(--color-elev); }
+.slash-menu { position: fixed; z-index: 120; background: #fff; border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-md); padding: 6px; width: 320px; max-height: 320px; overflow: auto; }
+.slash-search { width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 8px; margin-bottom: 6px; }
+.slash-menu-group { display: flex; flex-direction: column; gap: 2px; }
+.slash-group-title { padding: 4px 10px; font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.04em; }
+.slash-item { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; font-weight: 600; justify-content: flex-start; text-align: left; }
+.slash-item .icon { font-size: 14px; width: 18px; display: inline-flex; align-items: center; justify-content: center; }
+.slash-item .label { display: flex; flex-direction: column; align-items: flex-start; }
+.slash-item .label .title { font-weight: 700; }
+.slash-item .label .desc { font-weight: 400; font-size: 12px; color: #666; }
+.slash-item:hover, .slash-item.active { background: var(--color-elev); }
 
 /* AIBeat inline widget */
 .editable [data-child-id] > .ai-beat-widget { position: relative; display: inline-flex; flex-direction: column; align-items: stretch; gap: 8px; background: var(--color-elev); padding: 8px 8px 40px 8px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px var(--color-border); }

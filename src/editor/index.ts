@@ -1,2 +1,2 @@
 export * from './types';
-export * from './EditorContext';
+export { EditorProvider, useEditor } from './EditorContext';

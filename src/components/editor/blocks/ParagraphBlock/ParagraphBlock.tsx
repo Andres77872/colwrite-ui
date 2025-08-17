@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useEditor } from '../../../../editor';
 import { createPortal } from 'react-dom';
 import { AiBeatInline } from './AiBeatInline.tsx';
+import { TableInline } from './TableInline';
 
 export function ParagraphBlock({ block }: { block: P }) {
   const { refs, updateParagraphChild, removeParagraphChild, updateHtml, documentId, createRemote, activeId, setParagraphColumns } = useEditor();
@@ -123,16 +124,27 @@ export function ParagraphBlock({ block }: { block: P }) {
         const child = (block.children || []).find(c => c.id === id);
         if (!child) return null;
         return createPortal(
-          <AiBeatInline
-            blockId={block.id}
-            child={child}
-            updateParagraphChild={updateParagraphChild}
-            removeParagraphChild={removeParagraphChild}
-            updateHtml={updateHtml}
-            refs={refs}
-            documentId={documentId}
-            createRemote={createRemote}
-          />,
+          child.type === 'aiBeat' ? (
+            <AiBeatInline
+              blockId={block.id}
+              child={child}
+              updateParagraphChild={updateParagraphChild}
+              removeParagraphChild={removeParagraphChild}
+              updateHtml={updateHtml}
+              refs={refs}
+              documentId={documentId}
+              createRemote={createRemote}
+            />
+          ) : (
+            <TableInline
+              blockId={block.id}
+              child={child}
+              updateParagraphChild={updateParagraphChild}
+              removeParagraphChild={removeParagraphChild}
+              updateHtml={updateHtml}
+              refs={refs}
+            />
+          ),
           el,
           id,
         );

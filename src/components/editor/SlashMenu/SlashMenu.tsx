@@ -1,7 +1,10 @@
 import './SlashMenu.css';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
-import { uid } from '../../../lib/uid';
+import { aiBeatItem } from './items/aiBeat';
+import { tableItem } from './items/table';
+import { serializeEditableHtml } from '../../common/Editable/Editable';
+import type { SlashContext, SlashItem } from './types';
 
 export const SLASH_MENU_EVENT = 'colwrite:open-slash-menu';
 
@@ -13,11 +16,13 @@ export function openSlashMenu(blockId: string) {
 }
 
 export function SlashMenu() {
-  const { refs, updateHtml, addParagraphChild } = useEditor();
+  const { refs, updateHtml, addParagraphChild, documentId, createRemote } = useEditor();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const [blockId, setBlockId] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement | null>(null);
+  const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(0);
 
   // Utilities adapted from FloatingToolbar to compute caret rect reliably
   const zeroRect = (r: DOMRect | undefined | null) => !r || (r.width === 0 && r.height === 0);
@@ -78,6 +83,8 @@ export function SlashMenu() {
     setPos({ top: rect.top + 20, left: rect.left });
     setBlockId(bid);
     setVisible(true);
+    setQuery('');
+    setActiveIndex(0);
   };
 
   useEffect(() => {
@@ -91,10 +98,36 @@ export function SlashMenu() {
     return () => window.removeEventListener(SLASH_MENU_EVENT, openListener as EventListener);
   }, []);
 
+  const items = useMemo(() => {
+    const base: SlashItem[] = [aiBeatItem, tableItem];
+    return base;
+  }, []);
+
+  const filteredItems = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return items.slice();
+    const out: any[] = [];
+    for (const item of items) {
+      const match = (item.label || '').toLowerCase().includes(q) || (item.desc || '').toLowerCase().includes(q);
+      if (match) out.push(item);
+    }
+    return out.length ? out : items.slice();
+  }, [items, query]);
+
   useEffect(() => {
     if (!visible) return;
     const onDocClick = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setVisible(false); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setVisible(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setVisible(false); e.preventDefault(); return; }
+      if (e.key === 'ArrowDown') { setActiveIndex(i => Math.min(i + 1, filteredItems.length - 1)); e.preventDefault(); }
+      if (e.key === 'ArrowUp') { setActiveIndex(i => Math.max(i - 1, 0)); e.preventDefault(); }
+      if (e.key === 'Enter') { e.preventDefault(); const item = filteredItems[activeIndex]; if (item) { item.onSelect(context()); } }
+      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        setQuery(q => q + e.key);
+        e.preventDefault();
+      }
+      if (e.key === 'Backspace') { setQuery(q => q.slice(0, -1)); e.preventDefault(); }
+    };
     const onScroll = () => setVisible(false);
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onKey, true);
@@ -106,38 +139,51 @@ export function SlashMenu() {
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onScroll);
     };
+  }, [visible, filteredItems, activeIndex, query]);
+
+  // Focus menu for keyboard nav when opened
+  useEffect(() => {
+    if (!visible) return;
+    ref.current?.focus();
   }, [visible]);
 
-  const insertAiBeatWidget = async () => {
-    if (!blockId) return;
-    const editable = refs.current[blockId];
-    if (!editable) return;
-    const sel = document.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0);
-    // Create a placeholder and a child entry; rendering is handled by ParagraphBlock via React
-    const childId = uid();
-    const placeholder = document.createElement('span');
-    placeholder.setAttribute('data-child-id', childId);
-    placeholder.contentEditable = 'false';
-    placeholder.textContent = '';
-    range.insertNode(placeholder);
-    // Insert a trailing space for caret navigation
-    const spacer = document.createTextNode(' ');
-    if (placeholder.nextSibling) placeholder.parentNode?.insertBefore(spacer, placeholder.nextSibling);
-    else placeholder.parentNode?.appendChild(spacer);
-
-    // Persist html and child descriptor
-    updateHtml(blockId, editable.innerHTML);
-    addParagraphChild(blockId, { id: childId, type: 'aiBeat', message: '', prompt: '', output: '', collapsed: false });
-    setVisible(false);
-  };
+  const context = (): SlashContext => ({ blockId: blockId!, refs, updateHtml: (id) => updateHtml(id, serializeEditableHtml(refs.current[id]!)), addParagraphChild, documentId, createRemote });
 
   if (!visible) return null;
   return (
-    <div ref={ref} className="slash-menu" style={{ top: pos.top, left: pos.left }} onMouseDown={(e) => e.preventDefault()}>
+    <div ref={ref} className="slash-menu" style={{ top: pos.top, left: pos.left }} onMouseDown={(e) => e.preventDefault()} tabIndex={-1}>
+      <input className="slash-search" placeholder="Type to filter…" value={query} onChange={(e) => setQuery(e.target.value)} />
       <div className="slash-menu-group">
-        <button className="slash-item" onMouseDown={(e) => { e.preventDefault(); insertAiBeatWidget(); }}>AIBeat</button>
+        {/* Actions group */}
+        {filteredItems.some(i => i.group === 'actions') && <div className="slash-group-title">Actions</div>}
+        {filteredItems.filter(i => i.group === 'actions').map((it) => {
+          const absoluteIndex = filteredItems.findIndex(f => f.id === it.id);
+          const active = absoluteIndex === activeIndex;
+          return (
+            <button key={it.id} className={["slash-item", active ? 'active' : ''].filter(Boolean).join(' ')} onMouseDown={(e) => { e.preventDefault(); it.onSelect(context()); }} onMouseEnter={() => setActiveIndex(absoluteIndex)}>
+              <span className="icon">{it.icon || '•'}</span>
+              <span className="label">
+                <span className="title">{it.label}</span>
+                {it.desc && <span className="desc">{it.desc}</span>}
+              </span>
+            </button>
+          );
+        })}
+        {/* Insert group */}
+        {filteredItems.some(i => i.group === 'insert') && <div className="slash-group-title">Insert</div>}
+        {filteredItems.filter(i => i.group === 'insert').map((it) => {
+          const absoluteIndex = filteredItems.findIndex(f => f.id === it.id);
+          const active = absoluteIndex === activeIndex;
+          return (
+            <button key={it.id} className={["slash-item", active ? 'active' : ''].filter(Boolean).join(' ')} onMouseDown={(e) => { e.preventDefault(); it.onSelect(context()); }} onMouseEnter={() => setActiveIndex(absoluteIndex)}>
+              <span className="icon">{it.icon || '•'}</span>
+              <span className="label">
+                <span className="title">{it.label}</span>
+                {it.desc && <span className="desc">{it.desc}</span>}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
