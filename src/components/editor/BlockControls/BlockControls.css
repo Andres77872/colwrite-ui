@@ -182,15 +182,20 @@
   display: inline-flex; 
   gap: 4px; 
   opacity: 0; 
-  pointer-events: none;
+  visibility: hidden; 
+  pointer-events: auto; /* let it be hoverable to keep itself open */
   padding: 4px 6px;
   background: rgba(255, 255, 255, 0.95);
   border-radius: var(--radius-md);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   backdrop-filter: blur(4px);
   border: 1px solid rgba(0, 0, 0, 0.06);
+  z-index: 1002; /* ensure above center editor */
 }
-.block-row:hover .bc-top-right, .block-row.active .bc-top-right { opacity: 1; pointer-events: auto; }
+.block-row:hover .bc-top-right, .block-row.active .bc-top-right, .block-controls .bc-top-right:hover { 
+  opacity: 1; 
+  visibility: visible; 
+}
 .block-controls .bottom-controls { display: inline-flex; gap: 6px; align-items: center; }
 
 /* Improve top-right button styling */
@@ -252,7 +257,6 @@
 .block-row:hover .bc-center-editor, 
 .block-row.active .bc-center-editor { 
   opacity: 1; 
-  pointer-events: auto; 
 }
 
 .bc-center-editor .bc-editor-card {
@@ -265,6 +269,7 @@
   align-items: center;
   gap: 8px;
   animation: bc-editor-pop 120ms ease-out both;
+  pointer-events: auto; /* allow interaction even if wrapper ignores events */
 }
 
 .bc-center-editor .editor-btn {
@@ -317,6 +322,7 @@
   padding: 8px;
   z-index: 1001;
   animation: bc-pop 120ms ease-out both;
+  pointer-events: auto; /* interactive dropdown */
 }
 
 .bc-center-editor .editor-menu::before {

@@ -1,4 +1,4 @@
-.chat-assistant { position: sticky; bottom: 45px; z-index: 4; margin: var(--sp-3) calc(-1 * var(--sp-3)) 0; border-top: 1px solid var(--color-border); background: var(--color-panel); box-shadow: 0 -4px 12px rgba(0,0,0,0.04); border-bottom-left-radius: var(--radius-lg); border-bottom-right-radius: var(--radius-lg); }
+.chat-assistant { position: sticky; bottom: 45px; z-index: 1000; margin: var(--sp-3) calc(-1 * var(--sp-3)) 0; border-top: 1px solid var(--color-border); background: var(--color-panel); box-shadow: 0 -4px 12px rgba(0,0,0,0.04); border-bottom-left-radius: var(--radius-lg); border-bottom-right-radius: var(--radius-lg); }
 .chat-assistant.expanded { border: 1px solid var(--color-border); margin-top: var(--sp-3); }
 .chat-assistant.collapsed { padding: var(--sp-2) var(--sp-3); }
 .chat-assistant .chat-quick-toggle { position: absolute; top: -22px; right: var(--sp-3); background: #fff; border: 1px solid var(--color-border); padding: 4px 8px; font-size: var(--fs-sm); box-shadow: var(--shadow-sm); }
