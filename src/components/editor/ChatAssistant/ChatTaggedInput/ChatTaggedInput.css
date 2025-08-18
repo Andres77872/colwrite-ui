@@ -1,0 +1,26 @@
+.chat-tagged-input { position: relative; width: 100%; }
+.chat-tagged-input .tagged-ce {
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-tagged-input .tagged-ce:empty::before { content: attr(data-placeholder); color: var(--color-muted); }
+.chat-tagged-input .ref-tag { display: inline-flex; align-items: center; gap: 4px; margin: 0 2px; vertical-align: middle; }
+.chat-tagged-input .ref-tag .ref-tag-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--color-border); background: var(--color-elev); font-size: 12px; line-height: 1.6; }
+.chat-tagged-input .ref-tag.document .ref-tag-pill { background: rgba(0, 122, 204, 0.08); border-color: rgba(0, 122, 204, 0.35); }
+.chat-tagged-input .ref-tag.block .ref-tag-pill { background: rgba(0, 180, 26, 0.08); border-color: rgba(0, 180, 26, 0.35); }
+.chat-tagged-input .ref-tag .ref-tag-icon { font-size: 12px; opacity: 0.9; }
+.chat-tagged-input .ref-tag .ref-tag-text { white-space: nowrap; }
+.chat-tagged-input .ref-tag .ref-tag-remove { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 999px; border: 1px solid var(--color-border); background: #fff; color: var(--color-muted); font-size: 12px; cursor: pointer; }
+.chat-tagged-input .ref-tag .ref-tag-remove:hover { background: var(--color-accent); color: #fff; border-color: var(--color-accent); }
+
+/* Ensure unicode bidi direction is normal to avoid reversed rendering */
+.chat-tagged-input .tagged-ce { direction: ltr; unicode-bidi: plaintext; }
+
+

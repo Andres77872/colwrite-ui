@@ -8,18 +8,19 @@ import { loadDocument as apiLoadDocument } from '../../../../services';
 type DocSummary = { _id: string; name?: string };
 
 export type ChatRefPickerHandle = {
-  openAt: (anchorIndex: number) => void;
+  openAt: (anchorIndex: number, opts?: { editing?: boolean }) => void;
   close: () => void;
 };
 
 type ChatRefPickerProps = {
-  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  hostRef: RefObject<HTMLElement | null>;
   input: string;
   setInput: (value: SetStateAction<string>) => void;
+  setCaretIndex?: (idx: number) => void;
 };
 
 export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>(function ChatRefPicker(
-  { textareaRef, input, setInput },
+  { hostRef, input, setInput, setCaretIndex },
   ref
 ) {
   const { blocks, listRemote } = useEditor();
@@ -33,6 +34,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   const [refDocContext, setRefDocContext] = useState<DocSummary | null>(null);
   const [refBlocks, setRefBlocks] = useState<Block[] | null>(null);
   const [refAnchorIndex, setRefAnchorIndex] = useState<number>(-1);
+  const [editingExisting, setEditingExisting] = useState<boolean>(false);
   // Separate selection indices to avoid left menu highlighting when navigating results
   const [menuIndex, setMenuIndex] = useState<number>(0);
   const [resultsIndex, setResultsIndex] = useState<number>(0);
@@ -43,7 +45,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
 
   const measureResultsLeft = () => {
     const menu = refMenuRef.current;
-    const wrapper = textareaRef.current?.closest('.chat-textarea-wrap') as HTMLElement | null;
+    const wrapper = hostRef.current?.closest('.chat-textarea-wrap') as HTMLElement | null;
     if (!menu || !wrapper) {
       setRefResultsLeft(268);
       return;
@@ -64,7 +66,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     }
   };
 
-  const openRefMenu = (anchorIndex: number) => {
+  const openRefMenu = (anchorIndex: number, opts?: { editing?: boolean }) => {
     setRefAnchorIndex(anchorIndex);
     setRefDocs(null);
     setRefBlocks(null);
@@ -74,6 +76,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setMenuIndex(0);
     setResultsIndex(0);
     setNavigationStack([{type: 'main'}]);
+    setEditingExisting(!!opts?.editing);
     requestAnimationFrame(measureResultsLeft);
     setRefOpen(true);
   };
@@ -86,6 +89,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setMenuIndex(0);
     setResultsIndex(0);
     setNavigationStack([{type: 'main'}]);
+    setEditingExisting(false);
   };
 
   const navigateBack = () => {
@@ -110,18 +114,21 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   }), []);
 
   const insertAtHash = (textToInsert: string) => {
-    const el = textareaRef.current;
+    // hostRef is a contenteditable div; we no longer need DOM selection values here
     const start = Math.max(0, refAnchorIndex);
-    const end = Math.min(input.length, start + 1);
+    let end = Math.min(input.length, start + 1);
+    if (editingExisting) {
+      const after = input.slice(start);
+      const m = after.match(/^#(?:doc\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)?|this\/[A-Za-z0-9_-]+)/);
+      if (m) end = start + m[0].length;
+    }
     const before = input.slice(0, start);
     const after = input.slice(end);
     const next = `${before}${textToInsert} ${after}`;
     setInput(next);
     requestAnimationFrame(() => {
-      if (!el) return;
       const caretPos = (before + textToInsert + ' ').length;
-      el.selectionStart = el.selectionEnd = caretPos;
-      el.focus();
+      if (typeof (setCaretIndex as any) === 'function') setCaretIndex!(caretPos);
     });
     closeRefMenu();
   };
@@ -199,8 +206,8 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       const target = e.target as HTMLElement | null;
       const insideMenu = !!refMenuRef.current && !!target && refMenuRef.current.contains(target);
       const insideResults = !!refResultsRef.current && !!target && refResultsRef.current.contains(target);
-      const isTextArea = !!textareaRef.current && !!target && textareaRef.current.contains(target as any);
-      if (!insideMenu && !insideResults && !isTextArea) closeRefMenu();
+      const isHost = !!hostRef.current && !!target && hostRef.current.contains(target as any);
+      if (!insideMenu && !insideResults && !isHost) closeRefMenu();
     };
     
     const onKey = (e: KeyboardEvent) => {
@@ -253,41 +260,14 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       document.removeEventListener('mousedown', onClick);
       document.removeEventListener('keydown', onKey, true);
     };
-  }, [refOpen, refResultsOpen, textareaRef, menuIndex, resultsIndex, navigationStack, refResultsType, refDocs, refBlocks]);
+  }, [refOpen, refResultsOpen, hostRef, menuIndex, resultsIndex, navigationStack, refResultsType, refDocs, refBlocks]);
 
   // Close the picker unless the caret is immediately after a trailing '#'
   useEffect(() => {
     if (!refOpen && !refResultsOpen) return;
-    const el = textareaRef.current;
-    const check = () => {
-      const textarea = textareaRef.current;
-      if (!textarea) { closeRefMenu(); return; }
-      const caret = textarea.selectionStart ?? 0;
-      const shouldStayOpen = caret === input.length && input.endsWith('#');
-      if (!shouldStayOpen) closeRefMenu();
-    };
-    // Run once on mount and whenever input changes
-    check();
-    // Also react to caret/selection changes while open
-    const textarea = el;
-    if (textarea) {
-      textarea.addEventListener('keyup', check);
-      textarea.addEventListener('mouseup', check);
-      textarea.addEventListener('input', check);
-    }
-    const onSelectionChange = () => {
-      if (document.activeElement === textareaRef.current) check();
-    };
-    document.addEventListener('selectionchange', onSelectionChange);
-    return () => {
-      if (textarea) {
-        textarea.removeEventListener('keyup', check);
-        textarea.removeEventListener('mouseup', check);
-        textarea.removeEventListener('input', check);
-      }
-      document.removeEventListener('selectionchange', onSelectionChange);
-    };
-  }, [refOpen, refResultsOpen, input, textareaRef]);
+    const shouldStayOpen = input.endsWith('#');
+    if (!shouldStayOpen) closeRefMenu();
+  }, [refOpen, refResultsOpen, input]);
 
   const handleEnterKey = () => {
     if (refOpen && !refResultsOpen) {

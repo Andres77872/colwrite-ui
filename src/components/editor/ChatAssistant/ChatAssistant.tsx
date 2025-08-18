@@ -4,6 +4,8 @@ import { useEditor } from '../../../editor';
 import type { OpenAIChatMessage } from '../../../services';
 import { streamDocumentAiChat } from '../../../services';
 import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
+import { ChatRefTags } from './ChatRefTags';
+import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
 
 type ChatMessage = OpenAIChatMessage;
 
@@ -20,7 +22,7 @@ export function ChatAssistant() {
   const [error, setError] = useState<string>('');
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const inputHostRef = useRef<ChatTaggedInputHandle | null>(null);
   const refPickerRef = useRef<ChatRefPickerHandle | null>(null);
 
   useEffect(() => {
@@ -113,7 +115,7 @@ export function ChatAssistant() {
             )}
             {visibleMessages.map((m, idx) => (
               <div key={idx} className={["msg", m.role].join(' ')}>
-                <div className="bubble">{m.content}</div>
+                <div className="bubble">{m.role === 'user' ? (<ChatRefTags text={m.content} />) : m.content}</div>
               </div>
             ))}
             {error && <div className="error">{error}</div>}
@@ -121,30 +123,30 @@ export function ChatAssistant() {
           <div className="chat-input">
             <div className="row">
               <div className="chat-textarea-wrap">
-                <textarea
-                  ref={textareaRef}
-                  className="textarea grow"
-                  rows={2}
-                  placeholder="Ask the assistant…"
+                <ChatTaggedInput
+                  ref={inputHostRef}
                   value={input}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setInput(val);
-                    const textarea = textareaRef.current;
-                    const caret = textarea ? textarea.selectionEnd : val.length;
-                    const shouldOpen = caret === val.length && val.endsWith('#');
-                    if (shouldOpen) {
-                      const anchor = Math.max(0, val.length - 1);
-                      requestAnimationFrame(() => refPickerRef.current?.openAt(anchor));
-                    } else {
-                      requestAnimationFrame(() => refPickerRef.current?.close());
-                    }
+                  onChange={setInput}
+                  placeholder="Ask the assistant…"
+                  onTriggerPicker={(anchor) => refPickerRef.current?.openAt(anchor)}
+                  onEditRef={(start) => refPickerRef.current?.openAt(start, { editing: true })}
+                  onRemoveRef={(start, refText) => {
+                    const before = input.slice(0, start);
+                    const after = input.slice(start + refText.length);
+                    setInput(before + after);
+                    requestAnimationFrame(() => inputHostRef.current?.setSelectionRange(start, start));
                   }}
                   onKeyDown={(e) => {
                     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { onSend(); return; }
                   }}
                 />
-                <ChatRefPicker ref={refPickerRef} textareaRef={textareaRef} input={input} setInput={setInput} />
+                <ChatRefPicker
+                  ref={refPickerRef}
+                  hostRef={{ current: inputHostRef.current?.getHost() as any }}
+                  input={input}
+                  setInput={setInput}
+                  setCaretIndex={(idx) => inputHostRef.current?.setSelectionRange(idx, idx)}
+                />
               </div>
               {!isStreaming ? (
                 <button className="btn primary" onClick={onSend} disabled={!input.trim()}>Send</button>
