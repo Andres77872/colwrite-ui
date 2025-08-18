@@ -32,4 +32,4 @@ export type DividerBlock = { id: string; type: 'divider' } & BlockMeta;
 
 export type Block = ParagraphBlock | HeadingBlock | DividerBlock;
 export type BlockType = Block['type'];
-export type Doc = { version: number; blocks: Block[] };
+export type Doc = { version: number; blocks: Block[]; name?: string };

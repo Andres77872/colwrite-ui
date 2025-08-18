@@ -11,6 +11,8 @@ export type EditorContextValue = {
   documentId: string | null;
   activeId: string | null;
   setActive: (id: string | null) => void;
+  setDocMeta: (meta: Partial<Doc>) => void;
+  setDocName: (name: string) => void;
   addBlockAtStart: (type: Block['type']) => string;
   addBlockAfter: (afterId: string, type: Block['type']) => string;
   moveBlock: (id: string, dir: -1 | 1) => void;
@@ -34,7 +36,7 @@ export type EditorContextValue = {
   newLocal: () => void; // create a fresh local document
   // API methods
   createRemote: (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)) => Promise<string>;
-  saveRemote: () => Promise<void>;
+  saveRemote: (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)) => Promise<void>;
   loadRemote: (id: string) => Promise<void>;
   deleteRemote: (id: string) => Promise<void>;
   listRemote: (page?: number, limit?: number) => Promise<{ documents: any[]; count: number }>; 
@@ -46,6 +48,7 @@ const EditorContext = createContext<EditorContextValue | null>(null);
 export function EditorProvider({ children }: { children: ReactNode }) {
   const makeDefaultDoc = (): Doc => ({
     version: 1,
+    name: 'Untitled document',
     blocks: [
       { id: uid(), type: 'heading', level: 2, html: 'Your document' },
       { id: uid(), type: 'paragraph', html: 'Write something here. Select text to format. Use the + to insert blocks.', children: [], columns: 1 },
@@ -101,6 +104,9 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setBlocks = (updater: (prev: Block[]) => Block[]) => setDoc(d => ({ ...d, blocks: updater(d.blocks) }));
+
+  const setDocMeta = (meta: Partial<Doc>) => setDoc(prev => ({ ...prev, ...meta }));
+  const setDocName = (name: string) => setDocMeta({ name });
 
   const addBlockAtStart = (type: Block['type']): string => {
     const newId = uid();
@@ -238,12 +244,13 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     return res.document_id;
   };
 
-  const saveRemote = async (): Promise<void> => {
+  const saveRemote = async (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)): Promise<void> => {
+    const payload = docOverride ?? doc;
     if (!documentId) {
-      const id = await createRemote();
+      const id = await createRemote(payload as any);
       setDocumentId(id);
     } else {
-      await apiSaveDocument(documentId, doc);
+      await apiSaveDocument(documentId, payload as any);
     }
     setLastSavedAt(Date.now());
   };
@@ -284,6 +291,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     documentId,
     activeId,
     setActive: setActiveId,
+    setDocMeta,
+    setDocName,
     addBlockAtStart,
     addBlockAfter,
     moveBlock,

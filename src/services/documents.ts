@@ -9,7 +9,13 @@ function toBackendDocument(input: NewDocInput): Record<string, any> {
   if (Array.isArray(input)) return { version: 1, blocks: input };
   if (input && typeof input === 'object') {
     const { version = 1, blocks = [], ...rest } = input as any;
-    return { version, blocks, ...rest };
+    const name = (rest as any).name;
+    const title = (rest as any).title ?? (name !== undefined ? name : undefined);
+    // Ensure both name and title are present when possible for backend compatibility
+    const out: Record<string, any> = { version, blocks, ...rest };
+    if (name !== undefined && out.name === undefined) out.name = name;
+    if (title !== undefined && out.title === undefined) out.title = title;
+    return out;
   }
   return { version: 1, blocks: [] };
 }
@@ -21,7 +27,10 @@ function toEditorDoc(payload: unknown): Doc {
     return { version: 1, blocks: payload as Block[] };
   }
   if (payload && typeof payload === 'object' && Array.isArray((payload as any).blocks)) {
-    return { version: 1, blocks: (payload as any).blocks as Block[] };
+    const obj = payload as Record<string, any>;
+    const name: string | undefined = (obj.name as string) || (obj.title as string) || undefined;
+    const version: number = typeof obj.version === 'number' ? obj.version : 1;
+    return { version, blocks: obj.blocks as Block[], name };
   }
   // Fallback to empty doc if unexpected shape
   return { version: 1, blocks: [] };
