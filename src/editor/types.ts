@@ -29,9 +29,8 @@ type BlockMeta = {
 
 export type ParagraphBlock = { id: string; type: 'paragraph'; html: string; children?: ParagraphChild[]; columns?: number } & BlockMeta;
 export type HeadingBlock = { id: string; type: 'heading'; level: 1 | 2 | 3; html: string } & BlockMeta;
-export type TodoBlock = { id: string; type: 'todo'; checked: boolean; html: string } & BlockMeta;
 export type DividerBlock = { id: string; type: 'divider' } & BlockMeta;
 
-export type Block = ParagraphBlock | HeadingBlock | TodoBlock | DividerBlock;
+export type Block = ParagraphBlock | HeadingBlock | DividerBlock;
 export type BlockType = Block['type'];
 export type Doc = { version: number; blocks: Block[] };

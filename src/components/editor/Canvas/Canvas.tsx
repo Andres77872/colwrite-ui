@@ -6,7 +6,6 @@ import type { DragEvent } from 'react';
 import { BlockControls } from '../BlockControls';
 import { ParagraphBlock } from '../blocks/ParagraphBlock';
 import { HeadingBlock } from '../blocks/HeadingBlock';
-import { TodoBlock } from '../blocks/TodoBlock';
 import { DividerBlock } from '../blocks/DividerBlock';
 
 export function Canvas() {
@@ -126,7 +125,7 @@ export function Canvas() {
                 <div className="block-collapsed">
                   <span className="bc-arrow">▸</span>
                   <span className="bc-label">
-                    {b.type === 'paragraph' ? 'Paragraph' : b.type === 'heading' ? 'Heading' : b.type === 'todo' ? 'Todo' : 'Divider'}
+                    {b.type === 'paragraph' ? 'Paragraph' : b.type === 'heading' ? 'Heading' : 'Divider'}
                   </span>
                   {('html' in b) && (b as any).html ? (
                     <span className="bc-preview" dangerouslySetInnerHTML={{ __html: ((b as any).html || '').replace(/<[^>]*>/g, '').slice(0, 60) }} />
@@ -137,7 +136,6 @@ export function Canvas() {
               <div className="grow">
                 {b.type === 'paragraph' && <ParagraphBlock block={b} />}
                 {b.type === 'heading' && <HeadingBlock block={b} />}
-                {b.type === 'todo' && <TodoBlock block={b} />}
                 {b.type === 'divider' && <DividerBlock />}
               </div>
             )}

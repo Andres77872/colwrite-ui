@@ -136,7 +136,6 @@ export function BlockControls({ id }: { id: string }) {
           <div className="block-menu" role="menu" ref={menuRef} onKeyDown={onAddKeyDown}>
             <button role="menuitem" onClick={() => add('paragraph')}><span className="mi">✍️</span> Text</button>
             <button role="menuitem" onClick={() => add('heading')}><span className="mi">🔠</span> Heading</button>
-            <button role="menuitem" onClick={() => add('todo')}><span className="mi">☑️</span> Todo</button>
             <button role="menuitem" onClick={() => add('divider')}><span className="mi">━</span> Divider</button>
           </div>
         )}

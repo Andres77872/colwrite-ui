@@ -6,14 +6,13 @@ export function DocumentFooter() {
   const { blocks } = useEditor();
 
   const stats = useMemo(() => {
-    let paragraphs = 0, headings = 0, todos = 0, dividers = 0, inlines = 0;
+    let paragraphs = 0, headings = 0, dividers = 0, inlines = 0;
     for (const b of blocks) {
       if (b.type === 'paragraph') { paragraphs++; inlines += (b.children || []).length; }
       else if (b.type === 'heading') headings++;
-      else if (b.type === 'todo') todos++;
       else if (b.type === 'divider') dividers++;
     }
-    return { total: blocks.length, paragraphs, headings, todos, dividers, inlines };
+    return { total: blocks.length, paragraphs, headings, dividers, inlines };
   }, [blocks]);
 
   return (
@@ -24,9 +23,6 @@ export function DocumentFooter() {
       )}
       {stats.paragraphs > 0 && (
         <div className="df-item"><span className="label">Paragraphs</span><span className="value">{stats.paragraphs}</span></div>
-      )}
-      {stats.todos > 0 && (
-        <div className="df-item"><span className="label">Todos</span><span className="value">{stats.todos}</span></div>
       )}
       {stats.dividers > 0 && (
         <div className="df-item"><span className="label">Dividers</span><span className="value">{stats.dividers}</span></div>

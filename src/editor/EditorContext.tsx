@@ -25,7 +25,6 @@ export type EditorContextValue = {
   addParagraphChild: (blockId: string, child: ParagraphChild) => string;
   updateParagraphChild: (blockId: string, childId: string, next: Partial<ParagraphChild>) => void;
   removeParagraphChild: (blockId: string, childId: string) => void;
-  toggleTodo: (id: string) => void;
   setHeadingLevel: (id: string, level: 1 | 2 | 3) => void;
   exec: (cmd: string) => void;
   getJSON: () => string;
@@ -109,7 +108,6 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       const next: Block =
         type === 'paragraph' ? { id: newId, type: 'paragraph', html: '', children: [], columns: 1 } :
         type === 'heading' ? { id: newId, type: 'heading', level: 2, html: '' } :
-        type === 'todo' ? { id: newId, type: 'todo', checked: false, html: '' } :
         { id: newId, type: 'divider' };
       const out = [...prev];
       out.splice(idx + 1, 0, next);
@@ -207,10 +205,6 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     }));
   };
 
-  const toggleTodo = (id: string) => setBlocks(prev => prev.map(b => (
-    b.id === id && b.type === 'todo' ? ({ ...b, checked: !b.checked }) : b
-  )));
-
   const setHeadingLevel = (id: string, level: 1 | 2 | 3) => setBlocks(prev => prev.map(b => (
     b.id === id && b.type === 'heading' ? ({ ...b, level }) : b
   )));
@@ -288,7 +282,6 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     addParagraphChild,
     updateParagraphChild,
     removeParagraphChild,
-    toggleTodo,
     setHeadingLevel,
     exec,
     getJSON,
