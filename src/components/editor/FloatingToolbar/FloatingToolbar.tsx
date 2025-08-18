@@ -74,6 +74,10 @@ export function FloatingToolbar() {
         if (!n) return true;
         if (n.nodeType === Node.ELEMENT_NODE) {
           const el = n as HTMLElement;
+          // Treat placeholders, inlines and media as content even if textContent is empty
+          const hasWidgets = el.matches('[data-child-id], .ai-beat-widget, .table-inline') || !!el.querySelector?.('[data-child-id], .ai-beat-widget, .table-inline');
+          const hasMedia = el.matches('img,svg,video,canvas,table') || !!el.querySelector?.('img,svg,video,canvas,table');
+          if (hasWidgets || hasMedia) return false;
           if ((el.tagName || '').toUpperCase() === 'BR') return true;
           const t = (el.textContent || '').replace(/\u00A0/g, ' ').trim();
           const h = el.innerHTML || '';
@@ -92,10 +96,10 @@ export function FloatingToolbar() {
         const next = editableEl.childNodes[so] || null;
         // Prefer the previous node (line above). If not present, use next. If neither, treat as empty position.
         lineNode = prev || next || editableEl;
-        // Consider this an empty line if prev is empty OR the immediate next is an explicit break or empty container.
-        const prevEmpty = isNodeEmpty(prev);
-        const nextEmpty = isNodeEmpty(next);
-        const isEmptyLine = prevEmpty || nextEmpty || lineNode === editableEl;
+        // Between nodes: it is an empty line only when both sides are empty/absent.
+        const prevHasContent = !!prev && !isNodeEmpty(prev);
+        const nextHasContent = !!next && !isNodeEmpty(next);
+        const isEmptyLine = !prevHasContent && !nextHasContent;
         if (!isEmptyLine) { setHasSelection(false); setVisible(false); return; }
       } else {
         // Ascend to nearest child of editable.
@@ -104,16 +108,8 @@ export function FloatingToolbar() {
           cur = cur.parentNode as Node | null;
         }
         lineNode = (cur && cur.parentNode === editableEl) ? cur : editableEl;
-        const prevSibling = lineNode ? (lineNode as Node).previousSibling : null;
-        // Are we at the very start of this line/node?
-        let atStartOfLine = false;
-        try {
-          const startRange = document.createRange();
-          if (lineNode) { startRange.selectNodeContents(lineNode); startRange.collapse(true); }
-          atStartOfLine = range.compareBoundaryPoints(Range.START_TO_START, startRange) === 0;
-        } catch {}
-        const prevIsBreakOrEmpty = !!prevSibling && (((prevSibling as Node).nodeName || '').toUpperCase() === 'BR' || isNodeEmpty(prevSibling));
-        const isEmptyLine = isNodeEmpty(lineNode) || (atStartOfLine && prevIsBreakOrEmpty);
+        // Consider the line empty strictly when the line node itself has no visible content
+        const isEmptyLine = isNodeEmpty(lineNode);
         if (!isEmptyLine) { setHasSelection(false); setVisible(false); return; }
       }
 
