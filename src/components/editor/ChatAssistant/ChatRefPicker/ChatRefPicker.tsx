@@ -33,6 +33,10 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   const [refDocContext, setRefDocContext] = useState<DocSummary | null>(null);
   const [refBlocks, setRefBlocks] = useState<Block[] | null>(null);
   const [refAnchorIndex, setRefAnchorIndex] = useState<number>(-1);
+  // Separate selection indices to avoid left menu highlighting when navigating results
+  const [menuIndex, setMenuIndex] = useState<number>(0);
+  const [resultsIndex, setResultsIndex] = useState<number>(0);
+  const [navigationStack, setNavigationStack] = useState<Array<{type: 'main' | 'documents' | 'doc-blocks' | 'this-blocks', data?: any}>>([{type: 'main'}]);
   const refMenuRef = useRef<HTMLDivElement | null>(null);
   const refResultsRef = useRef<HTMLDivElement | null>(null);
   const [refResultsLeft, setRefResultsLeft] = useState<number>(268);
@@ -67,6 +71,9 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setRefDocContext(null);
     setRefError('');
     setRefResultsOpen(false);
+    setMenuIndex(0);
+    setResultsIndex(0);
+    setNavigationStack([{type: 'main'}]);
     requestAnimationFrame(measureResultsLeft);
     setRefOpen(true);
   };
@@ -76,6 +83,25 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setRefResultsOpen(false);
     setRefLoading(false);
     setRefError('');
+    setMenuIndex(0);
+    setResultsIndex(0);
+    setNavigationStack([{type: 'main'}]);
+  };
+
+  const navigateBack = () => {
+    if (navigationStack.length > 1) {
+      const newStack = navigationStack.slice(0, -1);
+      setNavigationStack(newStack);
+      setResultsIndex(0);
+      
+      const prevLevel = newStack[newStack.length - 1];
+      if (prevLevel.type === 'main') {
+        setRefResultsOpen(false);
+      } else if (prevLevel.type === 'documents') {
+        setRefResultsType('documents');
+        setRefResultsOpen(true);
+      }
+    }
   };
 
   useImperativeHandle(ref, () => ({
@@ -100,6 +126,10 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     closeRefMenu();
   };
 
+  const insertDocumentReference = (doc: DocSummary) => {
+    insertAtHash(`#doc/${doc._id}`);
+  };
+
   const labelForBlock = (b: Block, index: number): string => {
     if (b.type === 'heading') return `Heading ${b.level}`;
     if (b.type === 'divider') return `Divider ${index + 1}`;
@@ -112,6 +142,8 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   const onSelectThis = () => {
     setRefResultsType('this-blocks');
     setRefBlocks(blocks.slice());
+    setNavigationStack(prev => [...prev, {type: 'this-blocks'}]);
+    setResultsIndex(0);
     setRefResultsOpen(true);
   };
 
@@ -119,10 +151,12 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setRefResultsType('documents');
     setRefLoading(true);
     setRefError('');
+    setResultsIndex(0);
     try {
       const { documents } = await listRemote(1, 10);
       const docs: DocSummary[] = (documents || []).map((d: any) => ({ _id: d._id, name: d.name }));
       setRefDocs(docs);
+      setNavigationStack(prev => [...prev, {type: 'documents', data: docs}]);
     } catch (e: any) {
       setRefError(e?.message || 'Failed to load documents');
     } finally {
@@ -136,9 +170,12 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setRefResultsType('doc-blocks');
     setRefLoading(true);
     setRefError('');
+    setResultsIndex(0);
     try {
       const loaded = await apiLoadDocument(doc._id);
-      setRefBlocks((loaded?.blocks as Block[]) || []);
+      const loadedBlocks = (loaded?.blocks as Block[]) || [];
+      setRefBlocks(loadedBlocks);
+      setNavigationStack(prev => [...prev, {type: 'doc-blocks', data: {doc, blocks: loadedBlocks}}]);
     } catch (e: any) {
       setRefError(e?.message || 'Failed to load document');
     } finally {
@@ -165,16 +202,79 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       const isTextArea = !!textareaRef.current && !!target && textareaRef.current.contains(target as any);
       if (!insideMenu && !insideResults && !isTextArea) closeRefMenu();
     };
+    
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { closeRefMenu(); }
+      if (e.key === 'Escape') { 
+        closeRefMenu(); 
+        return;
+      }
+      
+      // Handle keyboard navigation
+      if (!refOpen && !refResultsOpen) return;
+      
+      let maxIndex = 0;
+      
+      if (refOpen && !refResultsOpen) {
+        maxIndex = 1; // 'this' and 'documents' options
+      } else if (refResultsOpen) {
+        if (refResultsType === 'documents') {
+          maxIndex = (refDocs?.length || 0) - 1;
+        } else if (refResultsType === 'this-blocks' || refResultsType === 'doc-blocks') {
+          maxIndex = (refBlocks?.length || 0) - 1;
+        }
+      }
+      
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (refOpen && !refResultsOpen) {
+          setMenuIndex(prev => Math.min(prev + 1, maxIndex));
+        } else if (refResultsOpen) {
+          setResultsIndex(prev => Math.min(prev + 1, maxIndex));
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (refOpen && !refResultsOpen) {
+          setMenuIndex(prev => Math.max(prev - 1, 0));
+        } else if (refResultsOpen) {
+          setResultsIndex(prev => Math.max(prev - 1, 0));
+        }
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        handleEnterKey();
+      } else if (e.key === 'ArrowLeft' && navigationStack.length > 1) {
+        e.preventDefault();
+        navigateBack();
+      }
     };
+    
     document.addEventListener('mousedown', onClick);
     document.addEventListener('keydown', onKey, true);
     return () => {
       document.removeEventListener('mousedown', onClick);
       document.removeEventListener('keydown', onKey, true);
     };
-  }, [refOpen, refResultsOpen, textareaRef]);
+  }, [refOpen, refResultsOpen, textareaRef, menuIndex, resultsIndex, navigationStack, refResultsType, refDocs, refBlocks]);
+
+  const handleEnterKey = () => {
+    if (refOpen && !refResultsOpen) {
+      // Main menu
+      if (menuIndex === 0) {
+        onSelectThis();
+      } else if (menuIndex === 1) {
+        onSelectDocuments();
+      }
+    } else if (refResultsOpen) {
+      if (refResultsType === 'documents' && refDocs) {
+        const doc = refDocs[resultsIndex];
+        if (doc) onOpenDocBlocks(doc);
+      } else if ((refResultsType === 'this-blocks' || refResultsType === 'doc-blocks') && refBlocks) {
+        const block = refBlocks[resultsIndex];
+        if (block) {
+          onPickBlock(refResultsType === 'this-blocks' ? 'this' : 'doc', block);
+        }
+      }
+    }
+  };
 
   useEffect(() => {
     const on = () => requestAnimationFrame(measureResultsLeft);
@@ -190,11 +290,21 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
           <div className="ref-section">
             <div className="ref-title">References</div>
             <div className="ref-items">
-              <button className="ref-item" onMouseDown={(e) => e.preventDefault()} onClick={onSelectThis}>
+              <button 
+                className={`ref-item ${menuIndex === 0 ? 'selected' : ''}`} 
+                onMouseDown={(e) => e.preventDefault()} 
+                onClick={onSelectThis}
+                onMouseEnter={() => setMenuIndex(0)}
+              >
                 <span className="ref-item-title">this</span>
                 <span className="ref-item-desc">Reference current document</span>
               </button>
-              <button className="ref-item" onMouseDown={(e) => e.preventDefault()} onClick={onSelectDocuments}>
+              <button 
+                className={`ref-item ${menuIndex === 1 ? 'selected' : ''}`} 
+                onMouseDown={(e) => e.preventDefault()} 
+                onClick={onSelectDocuments}
+                onMouseEnter={() => setMenuIndex(1)}
+              >
                 <span className="ref-item-title">documents</span>
                 <span className="ref-item-desc">Reference another document</span>
               </button>
@@ -206,18 +316,46 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       {refResultsOpen && (
         <div ref={refResultsRef} className="chat-ref-results" style={{ left: refResultsLeft }} role="menu">
           <div className="ref-section">
+            {navigationStack.length > 1 && (
+              <div className="ref-header">
+                <button 
+                  className="ref-back-btn" 
+                  onClick={navigateBack}
+                  onMouseDown={(e) => e.preventDefault()}
+                  title="Go back"
+                >
+                  ← Back
+                </button>
+              </div>
+            )}
             {refResultsType === 'documents' && (
               <>
                 <div className="ref-title">Documents</div>
-                {refLoading && <div className="ref-empty">Loading…</div>}
+                {refLoading && <div className="ref-loading">Loading documents…</div>}
                 {refError && <div className="ref-error">{refError}</div>}
                 {!refLoading && !refError && (
                   <div className="ref-list">
-                    {(refDocs || []).map((d) => (
-                      <button key={d._id} className="ref-item" onMouseDown={(e) => e.preventDefault()} onClick={() => onOpenDocBlocks(d)}>
-                        <span className="ref-item-title">{d.name || d._id}</span>
-                        <span className="ref-item-desc">{d._id}</span>
-                      </button>
+                    {(refDocs || []).map((d, idx) => (
+                      <div key={d._id} className="ref-item-wrapper">
+                        <button 
+                          className={`ref-item ${resultsIndex === idx ? 'selected' : ''}`} 
+                          onMouseDown={(e) => e.preventDefault()} 
+                          onClick={() => insertDocumentReference(d)}
+                          onMouseEnter={() => setResultsIndex(idx)}
+                          title="Select this document"
+                        >
+                          <span className="ref-item-title">{d.name || d._id}</span>
+                          <span className="ref-item-desc">{d._id}</span>
+                        </button>
+                        <button 
+                          className="ref-item-action" 
+                          onMouseDown={(e) => e.preventDefault()} 
+                          onClick={() => onOpenDocBlocks(d)}
+                          title="Explore document blocks"
+                        >
+                          →
+                        </button>
+                      </div>
                     ))}
                     {(!refDocs || refDocs.length === 0) && <div className="ref-empty">No documents</div>}
                   </div>
@@ -228,16 +366,17 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
             {(refResultsType === 'this-blocks' || refResultsType === 'doc-blocks') && (
               <>
                 <div className="ref-title">{refResultsType === 'this-blocks' ? 'This document blocks' : `Blocks: ${refDocContext?.name || refDocContext?._id || ''}`}</div>
-                {refLoading && <div className="ref-empty">Loading…</div>}
+                {refLoading && <div className="ref-loading">Loading blocks…</div>}
                 {refError && <div className="ref-error">{refError}</div>}
                 {!refLoading && !refError && (
                   <div className="ref-list scroll">
                     {(refBlocks || []).map((b, idx) => (
                       <button
                         key={b.id}
-                        className="ref-item"
+                        className={`ref-item ${resultsIndex === idx ? 'selected' : ''}`}
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={() => onPickBlock(refResultsType === 'this-blocks' ? 'this' : 'doc', b)}
+                        onMouseEnter={() => setResultsIndex(idx)}
                       >
                         <span className="ref-item-title">{labelForBlock(b, idx)}</span>
                         <span className="ref-item-desc">{b.type}</span>
@@ -248,6 +387,14 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                 )}
               </>
             )}
+          </div>
+          <div className="ref-footer">
+            <div className="ref-hints">
+              <span>↑↓ Navigate</span>
+              <span>← Back</span>
+              <span>Enter Select</span>
+              <span>Esc Close</span>
+            </div>
           </div>
         </div>
       )}

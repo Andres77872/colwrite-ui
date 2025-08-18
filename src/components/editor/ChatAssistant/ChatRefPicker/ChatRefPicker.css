@@ -4,8 +4,10 @@
 .chat-ref-menu .ref-section { display: flex; flex-direction: column; }
 .chat-ref-menu .ref-title { padding: 8px 10px; border-bottom: 1px solid var(--color-border); font-size: var(--fs-sm); font-weight: 600; background: var(--color-panel); }
 .chat-ref-menu .ref-items { display: grid; grid-template-columns: 1fr; gap: 4px; padding: 8px; }
-.chat-ref-menu .ref-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid transparent; background: transparent; cursor: pointer; }
-.chat-ref-menu .ref-item:hover { background: var(--color-elev); border-color: var(--color-border); }
+.chat-ref-menu .ref-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid transparent; background: transparent; cursor: pointer; transition: all 0.15s ease; }
+.chat-ref-menu .ref-item:hover, .chat-ref-menu .ref-item.selected { background: var(--color-elev); border-color: var(--color-border); }
+.chat-ref-menu .ref-item.selected { background: var(--color-accent, #007acc); color: #fff; }
+.chat-ref-menu .ref-item.selected .ref-item-desc { color: rgba(255, 255, 255, 0.8); }
 .chat-ref-menu .ref-item-title { font-size: var(--fs-sm); font-weight: 600; }
 .chat-ref-menu .ref-item-desc { font-size: var(--fs-xs); color: var(--color-muted); }
 .chat-ref-menu .ref-list { display: flex; flex-direction: column; padding: 6px; max-height: 260px; overflow: auto; }
@@ -17,8 +19,18 @@
 .chat-ref-results { position: absolute; bottom: calc(100% + 8px); min-width: 340px; max-width: 560px; max-height: 360px; overflow: hidden; background: #fff; border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); z-index: 111; }
 .chat-ref-results .ref-section { display: flex; flex-direction: column; }
 .chat-ref-results .ref-title { padding: 10px 12px; border-bottom: 1px solid var(--color-border); font-size: var(--fs-sm); font-weight: 600; background: var(--color-panel); }
-.chat-ref-results .ref-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid transparent; background: transparent; cursor: pointer; }
-.chat-ref-results .ref-item:hover { background: var(--color-elev); border-color: var(--color-border); }
+.chat-ref-results .ref-header { padding: 8px 12px; border-bottom: 1px solid var(--color-border); background: var(--color-panel); }
+.chat-ref-results .ref-back-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: #fff; color: var(--color-muted); font-size: var(--fs-xs); cursor: pointer; transition: all 0.15s ease; }
+.chat-ref-results .ref-back-btn:hover { background: var(--color-elev); color: var(--color-text); }
+
+.chat-ref-results .ref-item-wrapper { display: flex; align-items: stretch; gap: 2px; }
+.chat-ref-results .ref-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; flex: 1; text-align: left; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid transparent; background: transparent; cursor: pointer; transition: all 0.15s ease; }
+.chat-ref-results .ref-item:hover, .chat-ref-results .ref-item.selected { background: var(--color-elev); border-color: var(--color-border); }
+.chat-ref-results .ref-item.selected { background: var(--color-accent, #007acc); color: #fff; }
+.chat-ref-results .ref-item.selected .ref-item-desc { color: rgba(255, 255, 255, 0.8); }
+
+.chat-ref-results .ref-item-action { display: flex; align-items: center; justify-content: center; width: 32px; padding: 8px 4px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: #fff; color: var(--color-muted); font-size: var(--fs-sm); cursor: pointer; transition: all 0.15s ease; }
+.chat-ref-results .ref-item-action:hover { background: var(--color-accent, #007acc); color: #fff; border-color: var(--color-accent, #007acc); }
 .chat-ref-results .ref-item-title { font-size: var(--fs-sm); font-weight: 600; }
 .chat-ref-results .ref-item-desc { font-size: var(--fs-xs); color: var(--color-muted); }
 .chat-ref-results .ref-list { display: flex; flex-direction: column; padding: 8px; max-height: 280px; overflow: auto; }
@@ -26,9 +38,29 @@
 .chat-ref-results .ref-empty { padding: 12px; font-size: var(--fs-sm); color: var(--color-muted); text-align: center; }
 .chat-ref-results .ref-error { padding: 12px; font-size: var(--fs-sm); color: var(--color-danger, #b00020); text-align: center; }
 
+.chat-ref-results .ref-footer { border-top: 1px solid var(--color-border); padding: 6px 12px; background: var(--color-panel); }
+.chat-ref-results .ref-hints { display: flex; gap: 12px; font-size: var(--fs-xs); color: var(--color-muted); }
+.chat-ref-results .ref-hints span { display: flex; align-items: center; gap: 2px; }
+
+/* Loading and feedback states */
+.chat-ref-menu .ref-loading, .chat-ref-results .ref-loading { display: flex; align-items: center; justify-content: center; padding: 20px; color: var(--color-muted); font-size: var(--fs-sm); }
+.chat-ref-menu .ref-loading::before, .chat-ref-results .ref-loading::before { content: ''; display: inline-block; width: 16px; height: 16px; margin-right: 8px; border: 2px solid var(--color-border); border-top-color: var(--color-accent, #007acc); border-radius: 50%; animation: spin 1s linear infinite; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Enhanced focus states */
+.chat-ref-menu .ref-item:focus, .chat-ref-results .ref-item:focus, .chat-ref-results .ref-item-action:focus, .chat-ref-results .ref-back-btn:focus { outline: 2px solid var(--color-accent, #007acc); outline-offset: 2px; }
+
+/* Improved transitions */
+.chat-ref-menu, .chat-ref-results { animation: fadeInUp 0.15s ease-out; }
+@keyframes fadeInUp { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
 @media (max-width: 980px) {
   .chat-ref-results { min-width: 280px; max-width: 320px; }
   .chat-ref-menu { min-width: 220px; max-width: 280px; }
+  .chat-ref-results .ref-hints { flex-wrap: wrap; gap: 8px; }
+  .chat-ref-results .ref-hints span { font-size: 10px; }
+  .chat-ref-results .ref-item-action { width: 28px; font-size: 12px; }
 }
 
 
