@@ -1,5 +1,5 @@
 import './ChatTaggedInput.css';
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, useCallback } from 'react';
 
 type SelectionRange = { start: number; end: number };
 
@@ -49,9 +49,12 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
   onEditRef?: (start: number, refText: string) => void;
   onRemoveRef?: (start: number, refText: string) => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
-}>(function ChatTaggedInput({ value, onChange, placeholder, disabled, onTriggerPicker, onEditRef, onRemoveRef, onKeyDown }, ref) {
+  maxLength?: number;
+  showStatus?: boolean;
+}>(function ChatTaggedInput({ value, onChange, placeholder, disabled, onTriggerPicker, onEditRef, onRemoveRef, onKeyDown, maxLength = 2000, showStatus = true }, ref) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const pendingCaretRef = useRef<SelectionRange | null>(null);
+  const [isFocused, setIsFocused] = useState(false);
 
   useImperativeHandle(ref, () => ({
     focus: () => hostRef.current?.focus(),
@@ -143,11 +146,46 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
     return { text: out, caret };
   };
 
-  const handleInput = () => {
+  const handleInput = useCallback(() => {
     const { text, caret } = rebuildModelFromDOM();
     pendingCaretRef.current = caret;
+    
+    // Enforce max length
+    if (maxLength && text.length > maxLength) {
+      const truncated = text.slice(0, maxLength);
+      onChange(truncated);
+      return;
+    }
+    
     onChange(text);
-  };
+  }, [onChange, maxLength]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    // Enhanced keyboard shortcuts
+    if (e.metaKey || e.ctrlKey) {
+      switch (e.key) {
+        case 'a':
+          // Select all - let browser handle this
+          break;
+        case 'Backspace':
+          // Delete word backwards
+          e.preventDefault();
+          const selection = window.getSelection();
+          if (selection && selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            const text = range.startContainer.textContent || '';
+            const words = text.split(/\s+/);
+            if (words.length > 1) {
+              document.execCommand('delete');
+            }
+          }
+          break;
+      }
+    }
+    
+    // Call external handler
+    onKeyDown?.(e);
+  }, [onKeyDown]);
 
   const handleKeyUp = (_e: React.KeyboardEvent<HTMLDivElement>) => {
     const caret = getCaretRange();
@@ -228,6 +266,9 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
     }
   }, [value]);
 
+  const charCount = value.length;
+  const isOverLimit = maxLength && charCount > maxLength;
+
   return (
     <div className="chat-tagged-input">
       <div
@@ -236,16 +277,54 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
         contentEditable={!disabled}
         role="textbox"
         aria-multiline="true"
+        aria-label={placeholder ? `Input field: ${placeholder}` : 'Text input field'}
+        aria-describedby={showStatus ? 'input-status' : undefined}
         data-placeholder={placeholder || ''}
         onInput={handleInput}
         onKeyUp={handleKeyUp}
+        onFocus={() => setIsFocused(true)}
+        onBlur={() => setIsFocused(false)}
         onPaste={(e) => {
           e.preventDefault();
           const text = (e.clipboardData || (window as any).clipboardData).getData('text/plain');
-          document.execCommand('insertText', false, text);
+          
+          // Check length before pasting
+          const newLength = charCount + text.length;
+          if (maxLength && newLength > maxLength) {
+            const allowedLength = maxLength - charCount;
+            const truncatedText = text.slice(0, allowedLength);
+            document.execCommand('insertText', false, truncatedText);
+          } else {
+            document.execCommand('insertText', false, text);
+          }
         }}
-        onKeyDown={onKeyDown}
+        onKeyDown={handleKeyDown}
+        style={{
+          borderColor: isOverLimit ? 'var(--color-danger, #dc3545)' : undefined,
+        }}
       />
+      {showStatus && (
+        <div id="input-status" className="input-status">
+          <div className="input-hints">
+            <span>
+              <kbd>#</kbd> Reference
+            </span>
+            {isFocused && (
+              <>
+                <span>
+                  <kbd>⌘/Ctrl</kbd> + <kbd>⌫</kbd> Delete word
+                </span>
+                <span>
+                  <kbd>⌘/Ctrl</kbd> + <kbd>A</kbd> Select all
+                </span>
+              </>
+            )}
+          </div>
+          <div className="char-count" style={{ color: isOverLimit ? 'var(--color-danger, #dc3545)' : undefined }}>
+            {charCount}{maxLength ? `/${maxLength}` : ''}
+          </div>
+        </div>
+      )}
     </div>
   );
 });

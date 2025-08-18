@@ -1,24 +1,214 @@
-.chat-tagged-input { position: relative; width: 100%; }
+.chat-tagged-input { 
+  position: relative; 
+  width: 100%; 
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .chat-tagged-input .tagged-ce {
   width: 100%;
-  min-height: 48px;
-  padding: 8px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  min-height: 52px;
+  max-height: 120px;
+  padding: 12px 14px;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
   background: #fff;
   outline: none;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.5;
+  transition: all 0.2s ease;
+  resize: none;
 }
-.chat-tagged-input .tagged-ce:empty::before { content: attr(data-placeholder); color: var(--color-muted); }
-.chat-tagged-input .ref-tag { display: inline-flex; align-items: center; gap: 4px; margin: 0 2px; vertical-align: middle; }
-.chat-tagged-input .ref-tag .ref-tag-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--color-border); background: var(--color-elev); font-size: 12px; line-height: 1.6; }
-.chat-tagged-input .ref-tag.document .ref-tag-pill { background: rgba(0, 122, 204, 0.08); border-color: rgba(0, 122, 204, 0.35); }
-.chat-tagged-input .ref-tag.block .ref-tag-pill { background: rgba(0, 180, 26, 0.08); border-color: rgba(0, 180, 26, 0.35); }
-.chat-tagged-input .ref-tag .ref-tag-icon { font-size: 12px; opacity: 0.9; }
-.chat-tagged-input .ref-tag .ref-tag-text { white-space: nowrap; }
-.chat-tagged-input .ref-tag .ref-tag-remove { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 999px; border: 1px solid var(--color-border); background: #fff; color: var(--color-muted); font-size: 12px; cursor: pointer; }
-.chat-tagged-input .ref-tag .ref-tag-remove:hover { background: var(--color-accent); color: #fff; border-color: var(--color-accent); }
+
+.chat-tagged-input .tagged-ce:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
+}
+
+.chat-tagged-input .tagged-ce:empty::before { 
+  content: attr(data-placeholder); 
+  color: var(--color-muted);
+  pointer-events: none;
+}
+
+.chat-tagged-input .tagged-ce:focus:empty::before {
+  opacity: 0.7;
+}
+
+/* Character count and input status */
+.chat-tagged-input .input-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--color-muted);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.chat-tagged-input:focus-within .input-status {
+  opacity: 1;
+}
+
+.chat-tagged-input .char-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-tagged-input .input-hints {
+  display: flex;
+  gap: 12px;
+}
+
+.chat-tagged-input .input-hints span {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Enhanced reference tags */
+.chat-tagged-input .ref-tag { 
+  display: inline-flex; 
+  align-items: center; 
+  gap: 2px; 
+  margin: 0 1px; 
+  vertical-align: middle;
+  transition: all 0.15s ease;
+}
+
+.chat-tagged-input .ref-tag:hover {
+  transform: translateY(-1px);
+}
+
+.chat-tagged-input .ref-tag .ref-tag-pill { 
+  display: inline-flex; 
+  align-items: center; 
+  gap: 6px; 
+  padding: 3px 10px; 
+  border-radius: 16px; 
+  border: 1px solid var(--color-border); 
+  background: var(--color-elev); 
+  font-size: 12px; 
+  line-height: 1.4;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.chat-tagged-input .ref-tag .ref-tag-pill:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.chat-tagged-input .ref-tag.document .ref-tag-pill { 
+  background: rgba(0, 122, 204, 0.1); 
+  border-color: rgba(0, 122, 204, 0.4);
+  color: #0066cc;
+}
+
+.chat-tagged-input .ref-tag.block .ref-tag-pill { 
+  background: rgba(0, 180, 26, 0.1); 
+  border-color: rgba(0, 180, 26, 0.4);
+  color: #00b41a;
+}
+
+.chat-tagged-input .ref-tag .ref-tag-icon { 
+  font-size: 11px; 
+  opacity: 0.9; 
+}
+
+.chat-tagged-input .ref-tag .ref-tag-text { 
+  white-space: nowrap; 
+  font-weight: 500;
+}
+
+.chat-tagged-input .ref-tag .ref-tag-remove { 
+  display: inline-flex; 
+  align-items: center; 
+  justify-content: center; 
+  width: 16px; 
+  height: 16px; 
+  border-radius: 8px; 
+  border: 1px solid transparent; 
+  background: rgba(0, 0, 0, 0.05); 
+  color: var(--color-muted); 
+  font-size: 11px; 
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  opacity: 0.7;
+}
+
+.chat-tagged-input .ref-tag:hover .ref-tag-remove {
+  opacity: 1;
+}
+
+.chat-tagged-input .ref-tag .ref-tag-remove:hover { 
+  background: var(--color-accent); 
+  color: #fff; 
+  border-color: var(--color-accent);
+  transform: scale(1.1);
+}
+
+/* Keyboard shortcut styling */
+.chat-tagged-input kbd {
+  display: inline-block;
+  padding: 1px 4px;
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--color-text);
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 3px;
+  font-family: ui-monospace, "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", Consolas, "Courier New", monospace;
+  font-weight: 500;
+}
+
+/* Disabled state */
+.chat-tagged-input .tagged-ce[contenteditable="false"] {
+  background-color: #f8f9fa;
+  border-color: #e9ecef;
+  color: var(--color-muted);
+  cursor: not-allowed;
+}
+
+.chat-tagged-input .tagged-ce[contenteditable="false"] .ref-tag {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+/* Auto-resize behavior */
+.chat-tagged-input .tagged-ce {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+.chat-tagged-input .tagged-ce::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-tagged-input .tagged-ce::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-tagged-input .tagged-ce::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 3px;
+}
+
+.chat-tagged-input .tagged-ce::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-muted);
+}
+
+/* Error state for over-limit */
+.chat-tagged-input .tagged-ce.over-limit {
+  border-color: var(--color-danger, #dc3545);
+  box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.1);
+}
 
 /* Ensure unicode bidi direction is normal to avoid reversed rendering */
 .chat-tagged-input .tagged-ce { direction: ltr; unicode-bidi: plaintext; }

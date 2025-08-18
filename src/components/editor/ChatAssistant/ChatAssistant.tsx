@@ -139,6 +139,8 @@ export function ChatAssistant() {
                   onKeyDown={(e) => {
                     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { onSend(); return; }
                   }}
+                  maxLength={2000}
+                  showStatus={true}
                 />
                 <ChatRefPicker
                   ref={refPickerRef}
@@ -154,7 +156,7 @@ export function ChatAssistant() {
                 <button className="btn danger" onClick={onStop}>Stop</button>
               )}
             </div>
-            <div className="hints">Press Ctrl/⌘+Enter to send</div>
+
           </div>
         </div>
       ) : (

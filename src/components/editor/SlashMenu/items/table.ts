@@ -25,7 +25,7 @@ export const tableItem: SlashItem = {
     if (placeholder.nextSibling) placeholder.parentNode?.insertBefore(spacer, placeholder.nextSibling);
     else placeholder.parentNode?.appendChild(spacer);
     updateHtml(blockId, serializeEditableHtml(editable));
-    addParagraphChild(blockId, { id: childId, type: 'table', rows: 2, cols: 3, data: Array.from({ length: 2 }, () => Array.from({ length: 3 }, () => '')), caption: '', header: true } as any);
+    addParagraphChild(blockId, { id: childId, type: 'table', rows: 2, cols: 3, data: Array.from({ length: 2 }, () => Array.from({ length: 3 }, () => '')), header: true } as any);
   },
 };
 

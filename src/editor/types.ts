@@ -14,7 +14,6 @@ export type TableChild = {
   rows: number;
   cols: number;
   data: string[][]; // rows x cols
-  caption?: string;
   header?: boolean; // first row as header
 };
 
