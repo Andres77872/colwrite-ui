@@ -3,18 +3,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
 
 export function DocumentHeader() {
-  const { blocks, doc, setDocName, addBlockAtStart, updateHtml, saveRemote, deleteRemote, newLocal, documentId, lastSavedAt } = useEditor();
+  const { doc, setDocName, saveRemote, deleteRemote, newLocal, documentId, lastSavedAt } = useEditor();
   const [loading, setLoading] = useState<null | 'save' | 'delete'>(null);
   const [editing, setEditing] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const headingTitle = (() => {
-    const h = blocks.find(b => b.type === 'heading');
-    const html = (h as any)?.html || '';
-    const text = html.replace(/<[^>]*>/g, '').trim();
-    return text;
-  })();
-  const title = (doc.name || headingTitle || 'Untitled document');
+  const title = (doc.name || 'Untitled document');
 
   useEffect(() => {
     if (editing) queueMicrotask(() => inputRef.current?.select());
@@ -38,21 +32,6 @@ export function DocumentHeader() {
     const trimmed = (next || '').trim();
     const normalized = trimmed || 'Untitled document';
     setDocName(normalized);
-    // Reflect title into first heading block in canvas
-    const escapeHtml = (s: string) => s
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-    const heading = blocks.find(b => b.type === 'heading') as any;
-    const nextHtml = escapeHtml(normalized);
-    if (heading) {
-      updateHtml(heading.id, nextHtml);
-    } else {
-      const id = addBlockAtStart('heading');
-      updateHtml(id, nextHtml);
-    }
     // Save immediately with override so the request includes the latest name
     const override = { ...doc, name: normalized } as any;
     try { await saveRemote(override); } catch {}
