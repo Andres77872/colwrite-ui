@@ -127,14 +127,21 @@ export function ChatAssistant() {
                   rows={2}
                   placeholder="Ask the assistant…"
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setInput(val);
+                    const textarea = textareaRef.current;
+                    const caret = textarea ? textarea.selectionEnd : val.length;
+                    const shouldOpen = caret === val.length && val.endsWith('#');
+                    if (shouldOpen) {
+                      const anchor = Math.max(0, val.length - 1);
+                      requestAnimationFrame(() => refPickerRef.current?.openAt(anchor));
+                    } else {
+                      requestAnimationFrame(() => refPickerRef.current?.close());
+                    }
+                  }}
                   onKeyDown={(e) => {
                     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { onSend(); return; }
-                    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === '#') {
-                      const el = textareaRef.current;
-                      const anchor = el ? el.selectionStart : input.length;
-                      requestAnimationFrame(() => refPickerRef.current?.openAt(anchor));
-                    }
                   }}
                 />
                 <ChatRefPicker ref={refPickerRef} textareaRef={textareaRef} input={input} setInput={setInput} />

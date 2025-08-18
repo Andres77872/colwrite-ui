@@ -255,6 +255,40 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     };
   }, [refOpen, refResultsOpen, textareaRef, menuIndex, resultsIndex, navigationStack, refResultsType, refDocs, refBlocks]);
 
+  // Close the picker unless the caret is immediately after a trailing '#'
+  useEffect(() => {
+    if (!refOpen && !refResultsOpen) return;
+    const el = textareaRef.current;
+    const check = () => {
+      const textarea = textareaRef.current;
+      if (!textarea) { closeRefMenu(); return; }
+      const caret = textarea.selectionStart ?? 0;
+      const shouldStayOpen = caret === input.length && input.endsWith('#');
+      if (!shouldStayOpen) closeRefMenu();
+    };
+    // Run once on mount and whenever input changes
+    check();
+    // Also react to caret/selection changes while open
+    const textarea = el;
+    if (textarea) {
+      textarea.addEventListener('keyup', check);
+      textarea.addEventListener('mouseup', check);
+      textarea.addEventListener('input', check);
+    }
+    const onSelectionChange = () => {
+      if (document.activeElement === textareaRef.current) check();
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => {
+      if (textarea) {
+        textarea.removeEventListener('keyup', check);
+        textarea.removeEventListener('mouseup', check);
+        textarea.removeEventListener('input', check);
+      }
+      document.removeEventListener('selectionchange', onSelectionChange);
+    };
+  }, [refOpen, refResultsOpen, input, textareaRef]);
+
   const handleEnterKey = () => {
     if (refOpen && !refResultsOpen) {
       // Main menu
