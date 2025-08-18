@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
 import type { OpenAIChatMessage } from '../../../services';
 import { streamDocumentAiChat } from '../../../services';
+import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
 
 type ChatMessage = OpenAIChatMessage;
 
@@ -19,6 +20,8 @@ export function ChatAssistant() {
   const [error, setError] = useState<string>('');
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const refPickerRef = useRef<ChatRefPickerHandle | null>(null);
 
   useEffect(() => {
     try { localStorage.setItem('chat.expanded', expanded ? '1' : '0'); } catch {}
@@ -117,16 +120,25 @@ export function ChatAssistant() {
           </div>
           <div className="chat-input">
             <div className="row">
-              <textarea
-                className="textarea grow"
-                rows={2}
-                placeholder="Ask the assistant…"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') onSend();
-                }}
-              />
+              <div className="chat-textarea-wrap">
+                <textarea
+                  ref={textareaRef}
+                  className="textarea grow"
+                  rows={2}
+                  placeholder="Ask the assistant…"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { onSend(); return; }
+                    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === '#') {
+                      const el = textareaRef.current;
+                      const anchor = el ? el.selectionStart : input.length;
+                      requestAnimationFrame(() => refPickerRef.current?.openAt(anchor));
+                    }
+                  }}
+                />
+                <ChatRefPicker ref={refPickerRef} textareaRef={textareaRef} input={input} setInput={setInput} />
+              </div>
               {!isStreaming ? (
                 <button className="btn primary" onClick={onSend} disabled={!input.trim()}>Send</button>
               ) : (
