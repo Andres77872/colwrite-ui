@@ -145,7 +145,7 @@ export function SlashMenu() {
       if (e.key === 'Escape') { setVisible(false); e.preventDefault(); return; }
       if (e.key === 'ArrowDown') { setActiveIndex(i => Math.min(i + 1, filteredItems.length - 1)); e.preventDefault(); }
       if (e.key === 'ArrowUp') { setActiveIndex(i => Math.max(i - 1, 0)); e.preventDefault(); }
-      if (e.key === 'Enter') { e.preventDefault(); const item = filteredItems[activeIndex]; if (item) { item.onSelect(context()); } }
+      if (e.key === 'Enter') { e.preventDefault(); const item = filteredItems[activeIndex]; if (item) { setVisible(false); item.onSelect(context()); } }
       if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
         setQuery(q => q + e.key);
         e.preventDefault();
@@ -181,7 +181,7 @@ export function SlashMenu() {
           const absoluteIndex = filteredItems.findIndex(f => f.id === it.id);
           const active = absoluteIndex === activeIndex;
           return (
-            <button key={it.id} className={["slash-item", active ? 'active' : ''].filter(Boolean).join(' ')} onMouseDown={(e) => { e.preventDefault(); it.onSelect(context()); }} onMouseEnter={() => setActiveIndex(absoluteIndex)}>
+            <button key={it.id} className={["slash-item", active ? 'active' : ''].filter(Boolean).join(' ')} onMouseDown={(e) => { e.preventDefault(); setVisible(false); it.onSelect(context()); }} onMouseEnter={() => setActiveIndex(absoluteIndex)}>
               <span className="icon">{it.icon || '•'}</span>
               <span className="label">
                 <span className="title">{it.label}</span>
@@ -196,7 +196,7 @@ export function SlashMenu() {
           const absoluteIndex = filteredItems.findIndex(f => f.id === it.id);
           const active = absoluteIndex === activeIndex;
           return (
-            <button key={it.id} className={["slash-item", active ? 'active' : ''].filter(Boolean).join(' ')} onMouseDown={(e) => { e.preventDefault(); it.onSelect(context()); }} onMouseEnter={() => setActiveIndex(absoluteIndex)}>
+            <button key={it.id} className={["slash-item", active ? 'active' : ''].filter(Boolean).join(' ')} onMouseDown={(e) => { e.preventDefault(); setVisible(false); it.onSelect(context()); }} onMouseEnter={() => setActiveIndex(absoluteIndex)}>
               <span className="icon">{it.icon || '•'}</span>
               <span className="label">
                 <span className="title">{it.label}</span>

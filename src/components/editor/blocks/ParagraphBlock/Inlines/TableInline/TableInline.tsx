@@ -1,6 +1,7 @@
+import './TableInline.css';
 import { useEffect, useMemo, useState, useRef, type MutableRefObject, type ChangeEvent, type MouseEvent, type KeyboardEvent } from 'react';
-import type { ParagraphChild } from '../../../../editor';
-import { serializeEditableHtml } from '../../../common/Editable/Editable';
+import type { ParagraphChild } from '../../../../../../editor';
+import { serializeEditableHtml } from '../../../../../../components/common/Editable/Editable';
 
 export function TableInline({
   blockId,
@@ -189,5 +190,7 @@ function normalizeData(data: string[][], rows: number, cols: number): string[][]
   }
   return out;
 }
+
+
 
 

@@ -1,7 +1,8 @@
+import './AiBeatInline.css';
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import type { ParagraphChild } from '../../../../editor';
-import { streamAiBeat } from '../../../../services';
-import { serializeEditableHtml } from '../../../common/Editable/Editable';
+import type { ParagraphChild } from '../../../../../../editor';
+import { streamAiBeat } from '../../../../../../services';
+import { serializeEditableHtml } from '../../../../../../components/common/Editable/Editable';
 
 export function AiBeatInline({
   blockId,
@@ -142,5 +143,7 @@ export function AiBeatInline({
     </span>
   );
 }
+
+
 
 

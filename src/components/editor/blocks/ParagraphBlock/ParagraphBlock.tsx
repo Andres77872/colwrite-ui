@@ -4,8 +4,8 @@ import { Editable } from '../../../common/Editable';
 import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useEditor } from '../../../../editor';
 import { createPortal } from 'react-dom';
-import { AiBeatInline } from './AiBeatInline.tsx';
-import { TableInline } from './TableInline';
+import { AiBeatInline } from './Inlines/AiBeatInline';
+import { TableInline } from './Inlines/TableInline';
 
 export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P }) {
   const { refs, updateParagraphChild, removeParagraphChild, updateHtml, documentId, createRemote } = useEditor();
