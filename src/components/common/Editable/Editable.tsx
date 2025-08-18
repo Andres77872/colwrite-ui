@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import './Editable.css';
 import { useEditor } from '../../../editor';
-import { useLayoutEffect } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { openSlashMenu, isSlashMenuOpen } from '../../editor/SlashMenu/SlashMenu';
 
 export function serializeEditableHtml(root: HTMLDivElement): string {
@@ -31,6 +31,7 @@ export function Editable({
   style?: CSSProperties;
 }) {
   const { addBlockAfter, removeBlock, updateHtml, refs, setActive, activeId } = useEditor();
+  const pointerDownRef = useRef(false);
 
   // Keep DOM content in sync only when NOT actively editing this block.
   // When becoming active (focus), ensure content is restored if a re-render replaced the node.
@@ -60,6 +61,7 @@ export function Editable({
       ref={(el) => { refs.current[id] = el; }}
       contentEditable
       suppressContentEditableWarning
+      onMouseDown={() => { pointerDownRef.current = true; }}
       onFocus={(e) => {
         setActive(id);
         // If focus originated inside an AI widget, do not steal focus or move caret
@@ -69,6 +71,12 @@ export function Editable({
         const el = e.currentTarget as HTMLDivElement;
         if (!el.innerHTML && (html ?? '') !== '') {
           el.innerHTML = html || '';
+        }
+        // When focus was initiated by a pointer (mouse/touch), preserve the browser's caret
+        // placement instead of forcing it to the end. Reset the flag after this tick.
+        if (pointerDownRef.current) {
+          queueMicrotask(() => { pointerDownRef.current = false; });
+          return;
         }
         const range = document.createRange();
         range.selectNodeContents(el);
@@ -81,14 +89,20 @@ export function Editable({
         const el = e.currentTarget as HTMLDivElement;
         const row = el.closest('[data-block-id]') as HTMLElement | null;
         const explicitNext = (e.relatedTarget as HTMLElement | null) || null;
+        const canvas = el.closest('.canvas') as HTMLElement | null;
         // If the slash menu is open, do not clear active block when focus appears to move elsewhere
         if (isSlashMenuOpen()) return;
-        if (row && explicitNext && row.contains(explicitNext)) return; // focus moved inside same block
+        // Focus moved within the same block row (e.g., controls) → keep active
+        if (row && explicitNext && row.contains(explicitNext)) return;
         // Defer to allow focus to settle (e.relatedTarget can be null on mousedown)
         queueMicrotask(() => {
           const next = document.activeElement as HTMLElement | null;
-          if (row && next && row.contains(next)) return;
           if (isSlashMenuOpen()) return;
+          // If focus remains inside the same row, keep active
+          if (row && next && row.contains(next)) return;
+          // If focus moved elsewhere but still inside the editor canvas, do not clear here.
+          // The destination will set active via its own focus handler.
+          if (canvas && next && canvas.contains(next)) return;
           setActive(null);
         });
       }}

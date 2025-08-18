@@ -3,17 +3,26 @@ import { useEditor } from '../../../editor';
 import { useEffect, useRef, useState, type KeyboardEventHandler } from 'react';
 
 export function BlockControls({ id }: { id: string }) {
-  const { addBlockAfter, moveBlock, removeBlock, toggleAiHidden, toggleLocked, toggleCollapsed, blocks } = useEditor();
+  const { addBlockAfter, moveBlock, removeBlock, toggleAiHidden, toggleLocked, toggleCollapsed, blocks, setParagraphColumns, setHeadingLevel } = useEditor();
   const [open, setOpen] = useState(false);
+  const [colsOpen, setColsOpen] = useState(false);
+  const [headingOpen, setHeadingOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const colsRef = useRef<HTMLDivElement | null>(null);
+  const headingRef = useRef<HTMLDivElement | null>(null);
   const block = blocks.find(b => b.id === id);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       if (!ref.current) return;
-      if (!ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (!ref.current.contains(target)) {
+        setOpen(false);
+        setColsOpen(false);
+        setHeadingOpen(false);
+      }
     };
     document.addEventListener('mousedown', onDocClick);
     return () => document.removeEventListener('mousedown', onDocClick);
@@ -80,6 +89,87 @@ export function BlockControls({ id }: { id: string }) {
           ⋮⋮
         </button>
       </div>
+      {/* Centered editor controls (edition) */}
+      {(block?.type === 'paragraph' || block?.type === 'heading') && (
+        <div className="bc-center-editor" role="group" aria-label="Block editor" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="bc-editor-card" role="toolbar" aria-label="Block edition">
+            {block?.type === 'paragraph' && (
+              <div style={{ position: 'relative' }} ref={colsRef}>
+                <button
+                  className={["editor-btn", colsOpen ? "is-open" : ""].filter(Boolean).join(" ")}
+                  title="Columns"
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={colsOpen}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => { setColsOpen(v => !v); setHeadingOpen(false); }}
+                >
+                  <span className="editor-icon" aria-hidden>▦</span>
+                  <span className="editor-label">Columns</span>
+                  <span className="editor-value">{String((block as any)?.columns || 1)}</span>
+                </button>
+                {colsOpen && (
+                  <div className="editor-menu" role="menu">
+                    <div className="segmented" role="group" aria-label="Columns options">
+                      {[1,2,3,4].map(n => (
+                        <button
+                          role="menuitemradio"
+                          aria-checked={n === (block as any)?.columns || (n===1 && !(block as any)?.columns)}
+                          key={n}
+                          className={["seg-btn", n === ((block as any)?.columns || 1) ? "active" : ""].filter(Boolean).join(" ")}
+                          type="button"
+                          title={`${n} column${n>1?'s':''}`}
+                          onClick={() => { setParagraphColumns(id, n); setColsOpen(false); }}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {block?.type === 'heading' && (
+              <div style={{ position: 'relative' }} ref={headingRef}>
+                <button
+                  className={["editor-btn", headingOpen ? "is-open" : ""].filter(Boolean).join(" ")}
+                  title="Heading level"
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={headingOpen}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => { setHeadingOpen(v => !v); setColsOpen(false); }}
+                >
+                  <span className="editor-icon" aria-hidden>H</span>
+                  <span className="editor-label">Level</span>
+                  <span className="editor-value">{String((block as any)?.level || 2)}</span>
+                </button>
+                {headingOpen && (
+                  <div className="editor-menu" role="menu">
+                    <div className="segmented" role="group" aria-label="Heading level">
+                      {[1,2,3].map(l => (
+                        <button
+                          role="menuitemradio"
+                          aria-checked={l === (block as any)?.level}
+                          key={l}
+                          className={["seg-btn", l === (block as any)?.level ? "active" : ""].filter(Boolean).join(" ")}
+                          type="button"
+                          title={`Heading ${l}`}
+                          onClick={() => { setHeadingLevel(id, l as 1|2|3); setHeadingOpen(false); }}
+                        >
+                          H{l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Right-aligned actions */}
       <div className="bc-top-right">
         <button 
           className={["icon", (block as any)?.aiHidden ? "active-ai-hidden" : ""].filter(Boolean).join(" ")} 
