@@ -128,3 +128,19 @@
   text-overflow: ellipsis; 
   font-size: 13px;
 }
+
+/* Empty document state */
+.empty-doc { display: flex; justify-content: center; padding: 48px 16px 16px; }
+.empty-card {
+  max-width: 720px;
+  width: 100%;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+  background: #fafafa;
+  padding: 24px;
+  text-align: center;
+}
+.empty-title { font-weight: 700; font-size: 18px; color: #111827; margin-bottom: 6px; }
+.empty-sub { color: #6b7280; font-size: 14px; margin-bottom: 16px; }
+.empty-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 8px; }
+.empty-hint { color: #9ca3af; font-size: 12px; }

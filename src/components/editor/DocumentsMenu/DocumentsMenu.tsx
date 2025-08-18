@@ -35,7 +35,7 @@ export function DocumentsMenu() {
   const onCreate = async () => {
     try {
       setCreating(true);
-      await createRemote();
+      await createRemote({ name: 'New document', blocks: [] });
       // Optionally auto-load is already the current document after create
       await fetchList();
     } finally {

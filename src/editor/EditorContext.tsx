@@ -11,6 +11,7 @@ export type EditorContextValue = {
   documentId: string | null;
   activeId: string | null;
   setActive: (id: string | null) => void;
+  addBlockAtStart: (type: Block['type']) => string;
   addBlockAfter: (afterId: string, type: Block['type']) => string;
   moveBlock: (id: string, dir: -1 | 1) => void;
   reorderBlock: (id: string, toIndex: number) => void;
@@ -32,7 +33,7 @@ export type EditorContextValue = {
   save: () => void; // local save
   newLocal: () => void; // create a fresh local document
   // API methods
-  createRemote: () => Promise<string>;
+  createRemote: (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)) => Promise<string>;
   saveRemote: () => Promise<void>;
   loadRemote: (id: string) => Promise<void>;
   deleteRemote: (id: string) => Promise<void>;
@@ -100,6 +101,18 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setBlocks = (updater: (prev: Block[]) => Block[]) => setDoc(d => ({ ...d, blocks: updater(d.blocks) }));
+
+  const addBlockAtStart = (type: Block['type']): string => {
+    const newId = uid();
+    setBlocks(prev => {
+      const next: Block =
+        type === 'paragraph' ? { id: newId, type: 'paragraph', html: '', children: [], columns: 1 } :
+        type === 'heading' ? { id: newId, type: 'heading', level: 2, html: '' } :
+        { id: newId, type: 'divider' };
+      return [next, ...prev];
+    });
+    return newId;
+  };
 
   const addBlockAfter = (afterId: string, type: Block['type']): string => {
     const newId = uid();
@@ -218,8 +231,9 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   };
 
   // API-backed persistence
-  const createRemote = async (): Promise<string> => {
-    const res = await apiCreateDocument(doc);
+  const createRemote = async (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)): Promise<string> => {
+    const payload = docOverride ?? doc;
+    const res = await apiCreateDocument(payload);
     setDocumentId(res.document_id);
     return res.document_id;
   };
@@ -270,6 +284,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     documentId,
     activeId,
     setActive: setActiveId,
+    addBlockAtStart,
     addBlockAfter,
     moveBlock,
     reorderBlock,

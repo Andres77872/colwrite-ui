@@ -2,10 +2,16 @@ import { get, post, put, del } from './api';
 import type { Block, Doc } from '../editor/types';
 
 // The backend expects { document: { ... } } where document is an object, not a raw array.
-// Convert our internal Doc or a blocks array to an object with a blocks property.
-function toBackendDocument(input: Doc | Block[]): Doc {
+// Convert our internal Doc or a blocks array to an object with a blocks property while
+// preserving any extra metadata like name/title if provided by callers.
+type NewDocInput = Doc | Block[] | (Partial<Doc> & Record<string, any>);
+function toBackendDocument(input: NewDocInput): Record<string, any> {
   if (Array.isArray(input)) return { version: 1, blocks: input };
-  return input;
+  if (input && typeof input === 'object') {
+    const { version = 1, blocks = [], ...rest } = input as any;
+    return { version, blocks, ...rest };
+  }
+  return { version: 1, blocks: [] };
 }
 
 // Normalize backend payload to our internal Doc shape.
@@ -22,13 +28,13 @@ function toEditorDoc(payload: unknown): Doc {
 }
 
 // Create a new document, returns generated document_id
-export async function createDocument(doc: Doc | Block[]): Promise<{ document_id: string }> {
+export async function createDocument(doc: NewDocInput): Promise<{ document_id: string }> {
   const payload = toBackendDocument(doc);
   return post<{ document_id: string }>('/document/create', { document: payload });
 }
 
 // Update an existing document by ID
-export async function saveDocument(documentId: string, doc: Doc | Block[]): Promise<{ status: string; message: string }> {
+export async function saveDocument(documentId: string, doc: NewDocInput): Promise<{ status: string; message: string }> {
   const payload = toBackendDocument(doc);
   return put<{ status: string; message: string }>(`/document/save/${encodeURIComponent(documentId)}`, { document: payload });
 }

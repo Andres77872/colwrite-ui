@@ -9,7 +9,7 @@ import { HeadingBlock } from '../blocks/HeadingBlock';
 import { DividerBlock } from '../blocks/DividerBlock';
 
 export function Canvas() {
-  const { blocks, activeId, setActive, reorderBlock } = useEditor();
+  const { blocks, activeId, setActive, reorderBlock, addBlockAtStart, refs, updateHtml } = useEditor();
   const [overId, setOverId] = useState<string | null>(null);
   const [overPos, setOverPos] = useState<'before' | 'after' | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -72,12 +72,53 @@ export function Canvas() {
     <div
       className="canvas"
       ref={containerRef}
+      tabIndex={0}
       onDragEnd={clearDnd}
       onDragOverCapture={(e) => {
         // Allow dropping anywhere on the canvas for our block drag
         if (Array.from(e.dataTransfer.types || []).includes('application/x-block-id')) {
           e.preventDefault();
           updateIndicatorFromPoint(e.clientY);
+        }
+      }}
+      onMouseDown={(e) => {
+        // When empty, allow clicking anywhere on the canvas background to enable keyboard capture
+        if (blocks.length === 0) {
+          const target = e.target as HTMLElement | null;
+          const insideUi = !!target?.closest?.('.empty-card, .btn, .floating-toolbar, .slash-menu');
+          if (!insideUi) {
+            (e.currentTarget as HTMLDivElement).focus();
+          }
+        }
+      }}
+      onKeyDown={(e) => {
+        if (blocks.length > 0) return;
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const id = addBlockAtStart('paragraph');
+          queueMicrotask(() => refs.current[id]?.focus());
+          return;
+        }
+        if (e.key.length === 1) {
+          e.preventDefault();
+          const initial = e.key;
+          const id = addBlockAtStart('paragraph');
+          queueMicrotask(() => {
+            const el = refs.current[id];
+            if (!el) return;
+            el.textContent = initial;
+            updateHtml(id, el.innerHTML);
+            try {
+              const r = document.createRange();
+              r.selectNodeContents(el);
+              r.collapse(false);
+              const s = window.getSelection();
+              s?.removeAllRanges();
+              s?.addRange(r);
+            } catch {}
+            el.focus();
+          });
         }
       }}
       onDropCapture={(e) => {
@@ -96,6 +137,37 @@ export function Canvas() {
       }}
     >
       <DocumentHeader />
+      {blocks.length === 0 && (
+        <div className="empty-doc">
+          <div className="empty-card">
+            <div className="empty-title">Start writing</div>
+            <div className="empty-sub">Add your first block to begin. You can always use '/' to open the command menu.</div>
+            <div className="empty-actions">
+              <button
+                className="btn primary"
+                onClick={() => {
+                  const id = addBlockAtStart('paragraph');
+                  queueMicrotask(() => refs.current[id]?.focus());
+                }}
+              >New text block</button>
+              <button
+                className="btn"
+                onClick={() => {
+                  const id = addBlockAtStart('heading');
+                  queueMicrotask(() => refs.current[id]?.focus());
+                }}
+              >Add heading</button>
+              <button
+                className="btn"
+                onClick={() => {
+                  addBlockAtStart('divider');
+                }}
+              >Insert divider</button>
+            </div>
+            <div className="empty-hint">Tip: Press '/' inside a text block for quick actions and inserts.</div>
+          </div>
+        </div>
+      )}
       {blocks.map((b, i) => {
         const isCollapsed = (b as any).collapsed === true;
         const isAiHidden = (b as any).aiHidden === true;
