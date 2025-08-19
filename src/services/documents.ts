@@ -54,11 +54,20 @@ export async function loadDocument(documentId: string): Promise<Doc> {
   return toEditorDoc(res.document);
 }
 
-// List documents with pagination
-export async function listDocuments(page = 1, limit = 10): Promise<{ documents: any[]; count: number; status: string; message: string }> {
+// List documents with pagination and optional search query
+export async function listDocuments(
+  page = 1,
+  limit = 10,
+  query?: string,
+): Promise<{ documents: any[]; count: number; status: string; message: string }> {
+  const body: Record<string, any> = { page, limit };
+  // Only include query in payload if provided and non-empty after trimming
+  if (typeof query === 'string' && query.trim() !== '') {
+    body.query = query;
+  }
   return post<{ documents: any[]; count: number; status: string; message: string }>(
     '/document/list',
-    { page, limit },
+    body,
   );
 }
 

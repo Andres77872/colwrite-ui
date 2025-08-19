@@ -39,7 +39,7 @@ export type EditorContextValue = {
   saveRemote: (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)) => Promise<void>;
   loadRemote: (id: string) => Promise<void>;
   deleteRemote: (id: string) => Promise<void>;
-  listRemote: (page?: number, limit?: number) => Promise<{ documents: any[]; count: number }>; 
+  listRemote: (page?: number, limit?: number, query?: string) => Promise<{ documents: any[]; count: number }>; 
   lastSavedAt: number | null;
 };
 
@@ -266,8 +266,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     if (documentId === id) setDocumentId(null);
   };
 
-  const listRemote = async (page = 1, limit = 10): Promise<{ documents: any[]; count: number }> => {
-    const res = await apiListDocuments(page, limit);
+  const listRemote = async (page = 1, limit = 10, query?: string): Promise<{ documents: any[]; count: number }> => {
+    const res = await apiListDocuments(page, limit, query);
     return { documents: res.documents || [], count: res.count || 0 };
   };
 

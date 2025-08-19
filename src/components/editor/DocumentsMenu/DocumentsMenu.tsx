@@ -11,13 +11,15 @@ export function DocumentsMenu() {
   const [loading, setLoading] = useState<boolean>(false);
   const [creating, setCreating] = useState<boolean>(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [query, setQuery] = useState<string>('');
+  const [debouncedQuery, setDebouncedQuery] = useState<string>('');
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(count / limit)), [count, limit]);
 
   const fetchList = async () => {
     try {
       setLoading(true);
-      const res = await listRemote(page, limit);
+      const res = await listRemote(page, limit, debouncedQuery);
       setItems(res.documents || []);
       setCount(res.count || 0);
     } catch (e) {
@@ -27,10 +29,21 @@ export function DocumentsMenu() {
     }
   };
 
+  // Debounce search input
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query.trim()), 350);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  // Reset to page 1 on new search term
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedQuery]);
+
   useEffect(() => {
     fetchList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
+  }, [page, debouncedQuery]);
 
   const onCreate = async () => {
     try {
@@ -73,6 +86,17 @@ export function DocumentsMenu() {
           <button className="btn" onClick={fetchList} disabled={loading}>Refresh</button>
           <button className="btn primary" onClick={onCreate} disabled={creating}>New</button>
         </div>
+      </div>
+
+      <div className="row">
+        <input
+          className="input grow"
+          type="search"
+          placeholder="Search documents…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="Search documents"
+        />
       </div>
 
       <div className="muted" style={{ fontSize: 12 }}>
