@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
 import { aiBeatItem } from './items/aiBeat';
 import { tableItem } from './items/table';
+import { citationItem } from './items/citation';
 import { serializeEditableHtml } from '../../common/Editable/Editable';
 import type { SlashContext, SlashItem } from './types';
 
@@ -118,7 +119,7 @@ export function SlashMenu() {
   }, [visible]);
 
   const items = useMemo(() => {
-    const base: SlashItem[] = [aiBeatItem, tableItem];
+    const base: SlashItem[] = [aiBeatItem, tableItem, citationItem];
     return base;
   }, []);
 

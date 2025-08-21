@@ -17,7 +17,17 @@ export type TableChild = {
   header?: boolean; // first row as header
 };
 
-export type ParagraphChild = AiBeatChild | TableChild;
+export type CitationChild = {
+  id: string;
+  type: 'citation';
+  keys: string[];                    // citation keys/DOIs/arXiv IDs
+  style?: 'numeric' | 'author-year' | 'ieee';
+  prefix?: string;                   // e.g., 'see', 'cf.'
+  suffix?: string;                   // e.g., 'ch. 2', 'pp. 21–24'
+  locator?: string;                  // page/section locator
+};
+
+export type ParagraphChild = AiBeatChild | TableChild | CitationChild;
 
 // Common optional metadata for AI/UI behavior
 type BlockMeta = {

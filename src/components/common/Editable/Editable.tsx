@@ -66,7 +66,7 @@ export function Editable({
         setActive(id);
         // If focus originated inside an AI widget, do not steal focus or move caret
         const origin = e.target as HTMLElement;
-        const insideAi = !!origin.closest?.('.ai-suggest, .ai-beat-widget, .table-inline');
+        const insideAi = !!origin.closest?.('.ai-suggest, .ai-beat-widget, .table-inline, .citation-inline');
         if (insideAi) return;
         const el = e.currentTarget as HTMLDivElement;
         if (!el.innerHTML && (html ?? '') !== '') {
@@ -122,7 +122,8 @@ export function Editable({
         const inAiSuggest = !!anchorEl?.closest('.ai-suggest');
         const inAiBeat = !!(document.activeElement as HTMLElement | null)?.closest?.('.ai-beat-widget') || !!anchorEl?.closest('[data-child-id] .ai-beat-widget');
         const inTable = !!(document.activeElement as HTMLElement | null)?.closest?.('.table-inline') || !!anchorEl?.closest('[data-child-id] .table-inline');
-        if (inAiSuggest || inAiBeat || inTable) return;
+        const inCitation = !!(document.activeElement as HTMLElement | null)?.closest?.('.citation-inline') || !!anchorEl?.closest('[data-child-id] .citation-inline');
+        if (inAiSuggest || inAiBeat || inTable || inCitation) return;
         if (e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
           // Open slash menu and prevent literal '/'
           e.preventDefault();

@@ -6,6 +6,7 @@ import { useEditor } from '../../../../editor';
 import { createPortal } from 'react-dom';
 import { AiBeatInline } from './Inlines/AiBeatInline';
 import { TableInline } from './Inlines/TableInline';
+import { CitationInline } from './Inlines/CitationInline';
 
 export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P }) {
   const { refs, updateParagraphChild, removeParagraphChild, updateHtml, documentId, createRemote } = useEditor();
@@ -83,7 +84,7 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
               documentId={documentId}
               createRemote={createRemote}
             />
-          ) : (
+          ) : child.type === 'table' ? (
             <TableInline
               blockId={block.id}
               child={child}
@@ -92,7 +93,16 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
               updateHtml={updateHtml}
               refs={refs}
             />
-          ),
+          ) : child.type === 'citation' ? (
+            <CitationInline
+              blockId={block.id}
+              child={child}
+              updateParagraphChild={updateParagraphChild}
+              removeParagraphChild={removeParagraphChild}
+              updateHtml={updateHtml}
+              refs={refs}
+            />
+          ) : null,
           el,
           id,
         );
