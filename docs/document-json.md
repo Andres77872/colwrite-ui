@@ -11,6 +11,7 @@ It references the following source files for ground truth:
 - `src/components/editor/SlashMenu/items/table.ts`
 - `src/components/editor/SlashMenu/items/citation.ts`
 - `src/components/editor/SlashMenu/items/equation.ts`
+- `src/components/editor/SlashMenu/items/graph.ts`
 - `src/components/editor/SlashMenu/SlashMenu.tsx`
 - `src/components/editor/FloatingToolbar/FloatingToolbar.tsx`
 - `src/components/editor/blocks/ParagraphBlock/ParagraphBlock.tsx`
@@ -18,6 +19,7 @@ It references the following source files for ground truth:
 - `src/components/editor/blocks/ParagraphBlock/Inlines/TableInline/TableInline.tsx`
 - `src/components/editor/blocks/ParagraphBlock/Inlines/CitationInline/CitationInline.tsx`
 - `src/components/editor/blocks/ParagraphBlock/Inlines/EquationInline/EquationInline.tsx`
+- `src/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/GraphInline.tsx`
 - `src/components/editor/BlockControls/BlockControls.tsx`
 - `src/components/editor/DocumentChrome/DocumentHeader.tsx`
 - `src/services/documents.ts`
@@ -31,7 +33,7 @@ It references the following source files for ground truth:
 
 - A document (`Doc`) is a versioned object with an ordered list of blocks and an optional name.
 - Blocks are one of: paragraph, heading, divider. All blocks can carry optional metadata flags.
-- Paragraph blocks may contain inline children (AI Beat, Table, Citation, and Equation) which are referenced via placeholders inside the block's HTML.
+- Paragraph blocks may contain inline children (AI Beat, Table, Citation, Equation, and Graph) which are referenced via placeholders inside the block's HTML.
 - The editor keeps HTML and child JSON in sync via placeholder elements with `data-child-id`.
 
 
@@ -121,7 +123,19 @@ export type EquationChild = {
   labelId?: string;            // optional anchor for cross-references
 };
 
-export type ParagraphChild = AiBeatChild | TableChild | CitationChild | EquationChild;
+export type GraphChild = {
+  id: string;
+  type: 'graph';
+  kind: 'bar' | 'line' | 'pie';
+  data: {
+    values: number[];
+    labels?: string[];
+    colors?: string[];
+  };
+  title?: string;
+};
+
+export type ParagraphChild = AiBeatChild | TableChild | CitationChild | EquationChild | GraphChild;
 ```
 
 Representation in HTML (placeholders):
@@ -129,7 +143,7 @@ Representation in HTML (placeholders):
 - Inline children are not inlined into the `html` string. Instead, `html` contains empty placeholders:
   - `<span data-child-id="<child-id>" contenteditable="false"></span>`
 - The actual child state (e.g., AI Beat message/prompt/output, table grid data, citation metadata, equation fields) lives in the `children` array of the paragraph block.
-- The renderer (`ParagraphBlock.tsx`) detects placeholders in the editable DOM and uses React portals to mount the corresponding inline component (`AiBeatInline`, `TableInline`, `CitationInline`, or `EquationInline`) in place.
+- The renderer (`ParagraphBlock.tsx`) detects placeholders in the editable DOM and uses React portals to mount the corresponding inline component (`AiBeatInline`, `TableInline`, `CitationInline`, `EquationInline`, or `GraphInline`) in place.
 
 Serialization of editable HTML:
 
@@ -142,6 +156,7 @@ Insertion of children via slash menu:
 - Table: `src/components/editor/SlashMenu/items/table.ts`
 - Citation: `src/components/editor/SlashMenu/items/citation.ts`
 - Equation: `src/components/editor/SlashMenu/items/equation.ts`
+- Graph: `src/components/editor/SlashMenu/items/graph.ts`
 
 All items:
 - Insert a `<span data-child-id="..." contenteditable="false"></span>` at the caret.
@@ -150,7 +165,7 @@ All items:
 
 Removal of children:
 
-- All inline components (AI Beat, Table, Citation, Equation) implement a remove button that:
+- All inline components (AI Beat, Table, Citation, Equation, Graph) implement a remove button that:
   - Deletes the placeholder DOM node.
   - Calls `removeParagraphChild(blockId, child.id)` to drop JSON state.
   - Persists updated HTML via `serializeEditableHtml`.
@@ -339,6 +354,25 @@ Paragraph with an AI Beat child:
       "prompt": "You are a helpful assistant",
       "output": "- Idea 1...",
       "collapsed": false
+    }
+  ]
+}
+```
+
+Paragraph with a Graph child:
+
+```json
+{
+  "id": "p6",
+  "type": "paragraph",
+  "html": "Trend: <span data-child-id=\"g1\" contenteditable=\"false\"></span> shows improvement.",
+  "children": [
+    {
+      "id": "g1",
+      "type": "graph",
+      "kind": "line",
+      "data": { "values": [1, 3, 2, 5], "labels": ["Q1", "Q2", "Q3", "Q4"] },
+      "title": "Quarterly"
     }
   ]
 }

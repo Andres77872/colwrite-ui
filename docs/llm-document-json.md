@@ -26,6 +26,88 @@ Example (shape only):
 }
 ```
 
+- Child object (citation):
+  - `id`: string
+  - `type`: "citation"
+  - `keys`: string[] (citation keys/DOIs/arXiv IDs)
+  - `style` (optional): `"numeric" | "author-year" | "ieee"`
+  - `prefix` (optional): string (e.g., "see")
+  - `suffix` (optional): string (e.g., "ch. 2")
+  - `locator` (optional): string (page/section locator)
+
+Example paragraph with a citation child:
+```json
+{
+  "id": "p2",
+  "type": "paragraph",
+  "html": "See <span data-child-id=\"c1\" contenteditable=\"false\"></span> for details.",
+  "children": [
+    { "id": "c1", "type": "citation", "keys": ["doe2021"], "style": "numeric", "prefix": "see", "suffix": "ch. 2" }
+  ]
+}
+```
+
+- Child object (equation):
+  - `id`: string
+  - `type`: "equation"
+  - `latex`: string (LaTeX math without `$` delimiters)
+  - `numbered` (optional): boolean
+  - `labelId` (optional): string
+
+Example paragraph with an equation child:
+```json
+{
+  "id": "p3",
+  "type": "paragraph",
+  "html": "Einstein proposed <span data-child-id=\"e1\" contenteditable=\"false\"></span> in his work.",
+  "children": [
+    { "id": "e1", "type": "equation", "latex": "E=mc^2", "numbered": false, "labelId": "" }
+  ]
+}
+```
+
+- Child object (graph):
+  - `id`: string
+  - `type`: "graph"
+  - `kind`: `"bar" | "line" | "pie"`
+  - `data`: object
+    - `values`: number[]
+    - `labels` (optional): string[]
+    - `colors` (optional): string[]
+  - `title` (optional): string
+
+Example paragraph with a graph child:
+```json
+{
+  "id": "p4",
+  "type": "paragraph",
+  "html": "Trend: <span data-child-id=\"g1\" contenteditable=\"false\"></span> shows improvement.",
+  "children": [
+    { "id": "g1", "type": "graph", "kind": "line", "data": { "values": [1, 3, 2, 5], "labels": ["Q1","Q2","Q3","Q4"] }, "title": "Quarterly" }
+  ]
+}
+```
+
+- Child object (aiBeat):
+  - `id`: string
+  - `type`: "aiBeat"
+  - `message`: string
+  - `prompt`: string
+  - `output`: string
+  - `collapsed` (optional): boolean
+
+Example paragraph with an AI Beat child:
+```json
+{
+  "id": "p5",
+  "type": "paragraph",
+  "html": "Ideas: <span data-child-id=\"a1\" contenteditable=\"false\"></span>",
+  "children": [
+    { "id": "a1", "type": "aiBeat", "message": "List product ideas for Q4", "prompt": "You are a helpful assistant", "output": "- Idea 1...", "collapsed": false }
+  ]
+}
+```
+
 ## Block types
 
 Each block has an `id: string` and `type` field. Supported types:
@@ -34,7 +116,7 @@ Each block has an `id: string` and `type` field. Supported types:
 - Shape:
   - `type`: "paragraph"
   - `html`: string (serialized HTML for the paragraph)
-  - `children` (optional): array of inline child objects (table only; see below)
+  - `children` (optional): array of inline child objects (table, citation, equation, graph, aiBeat; see below)
   - `columns` (optional): integer 1..6
   - Metadata (optional): `aiHidden?: boolean`, `locked?: boolean`, `collapsed?: boolean`
 
@@ -76,9 +158,9 @@ Each block has an `id: string` and `type` field. Supported types:
 }
 ```
 
-## Paragraph inline children (table only)
+## Paragraph inline children
 
-Paragraphs may embed table widgets using placeholders inside `html` and a matching child object in `children`.
+Paragraphs may embed inline widgets using placeholders inside `html` and a matching child object in `children`.
 
 - Placeholder in `html`:
   - Insert an empty span for each child: `<span data-child-id="<child-id>" contenteditable="false"></span>`
@@ -119,8 +201,9 @@ Example paragraph with a table child:
 - Paragraph columns: clamp to 1..6. If omitted, default behavior is 1 column.
 - Heading levels: allowed values are 1, 2, or 3.
 - Table integrity: `rows` × `cols` must match the `data` matrix dimensions.
-- Placeholders: for each table child in `children`, include exactly one matching placeholder in the `html` string.
+- Placeholders: for each child in `children`, include exactly one matching placeholder in the `html` string.
 - HTML content: avoid complex or unsafe markup; prefer plain text and simple inline tags like `<strong>`, `<em>`, `<u>`, `<a>`, and `<br>` where necessary.
+- Graph integrity: `data.values` are finite numbers; if `labels` present then `labels.length === values.length`; if `colors` present then `colors.length === values.length`. For `kind: "pie"`, values must be ≥ 0 and not all zero.
 
 ## Minimal complete documents (ready to output)
 
@@ -158,6 +241,24 @@ Example paragraph with a table child:
       "columns": 1,
       "children": [
         { "id": "t1", "type": "table", "rows": 2, "cols": 2, "data": [["A","B"],["C","D"]], "header": true }
+      ]
+    }
+  ]
+}
+```
+
+4) Paragraph with a graph child
+```json
+{
+  "version": 1,
+  "name": "Report",
+  "blocks": [
+    {
+      "id": "p2",
+      "type": "paragraph",
+      "html": "Trend: <span data-child-id=\"g1\" contenteditable=\"false\"></span> shows improvement.",
+      "children": [
+        { "id": "g1", "type": "graph", "kind": "bar", "data": { "values": [3, 5, 2], "labels": ["A","B","C"] }, "title": "" }
       ]
     }
   ]
