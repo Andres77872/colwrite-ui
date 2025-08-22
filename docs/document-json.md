@@ -9,11 +9,15 @@ It references the following source files for ground truth:
 - `src/components/common/Editable/Editable.tsx`
 - `src/components/editor/SlashMenu/items/aiBeat.ts`
 - `src/components/editor/SlashMenu/items/table.ts`
+- `src/components/editor/SlashMenu/items/citation.ts`
+- `src/components/editor/SlashMenu/items/equation.ts`
 - `src/components/editor/SlashMenu/SlashMenu.tsx`
 - `src/components/editor/FloatingToolbar/FloatingToolbar.tsx`
 - `src/components/editor/blocks/ParagraphBlock/ParagraphBlock.tsx`
 - `src/components/editor/blocks/ParagraphBlock/Inlines/AiBeatInline/AiBeatInline.tsx`
 - `src/components/editor/blocks/ParagraphBlock/Inlines/TableInline/TableInline.tsx`
+- `src/components/editor/blocks/ParagraphBlock/Inlines/CitationInline/CitationInline.tsx`
+- `src/components/editor/blocks/ParagraphBlock/Inlines/EquationInline/EquationInline.tsx`
 - `src/components/editor/BlockControls/BlockControls.tsx`
 - `src/components/editor/DocumentChrome/DocumentHeader.tsx`
 - `src/services/documents.ts`
@@ -27,7 +31,7 @@ It references the following source files for ground truth:
 
 - A document (`Doc`) is a versioned object with an ordered list of blocks and an optional name.
 - Blocks are one of: paragraph, heading, divider. All blocks can carry optional metadata flags.
-- Paragraph blocks may contain inline children (AI Beat and Table) which are referenced via placeholders inside the block's HTML.
+- Paragraph blocks may contain inline children (AI Beat, Table, Citation, and Equation) which are referenced via placeholders inside the block's HTML.
 - The editor keeps HTML and child JSON in sync via placeholder elements with `data-child-id`.
 
 
@@ -99,15 +103,33 @@ export type TableChild = {
   header?: boolean; // first row as header
 };
 
-export type ParagraphChild = AiBeatChild | TableChild;
+export type CitationChild = {
+  id: string;
+  type: 'citation';
+  keys: string[];                    // citation keys/DOIs/arXiv IDs
+  style?: 'numeric' | 'author-year' | 'ieee';
+  prefix?: string;                   // e.g., 'see', 'cf.'
+  suffix?: string;                   // e.g., 'ch. 2', 'pp. 21–24'
+  locator?: string;                  // page/section locator
+};
+
+export type EquationChild = {
+  id: string;
+  type: 'equation';
+  latex: string;               // LaTeX math without $ delimiters
+  numbered?: boolean;          // reserved; false by default for inline
+  labelId?: string;            // optional anchor for cross-references
+};
+
+export type ParagraphChild = AiBeatChild | TableChild | CitationChild | EquationChild;
 ```
 
 Representation in HTML (placeholders):
 
 - Inline children are not inlined into the `html` string. Instead, `html` contains empty placeholders:
   - `<span data-child-id="<child-id>" contenteditable="false"></span>`
-- The actual child state (AI Beat message/prompt/output or table grid) lives in the `children` array of the paragraph block.
-- The renderer (`ParagraphBlock.tsx`) detects placeholders in the editable DOM and uses React portals to mount the corresponding inline component (`AiBeatInline` or `TableInline`) in place.
+- The actual child state (e.g., AI Beat message/prompt/output, table grid data, citation metadata, equation fields) lives in the `children` array of the paragraph block.
+- The renderer (`ParagraphBlock.tsx`) detects placeholders in the editable DOM and uses React portals to mount the corresponding inline component (`AiBeatInline`, `TableInline`, `CitationInline`, or `EquationInline`) in place.
 
 Serialization of editable HTML:
 
@@ -118,15 +140,17 @@ Insertion of children via slash menu:
 
 - AI Beat: `src/components/editor/SlashMenu/items/aiBeat.ts`
 - Table: `src/components/editor/SlashMenu/items/table.ts`
+- Citation: `src/components/editor/SlashMenu/items/citation.ts`
+- Equation: `src/components/editor/SlashMenu/items/equation.ts`
 
-Both items:
+All items:
 - Insert a `<span data-child-id="..." contenteditable="false"></span>` at the caret.
 - Call `updateHtml(blockId, serializeEditableHtml(editable))` to persist sanitized HTML.
 - Append the child object to the paragraph block via `addParagraphChild(...)` with the same `id`.
 
 Removal of children:
 
-- Both inline components implement a remove button that:
+- All inline components (AI Beat, Table, Citation, Equation) implement a remove button that:
   - Deletes the placeholder DOM node.
   - Calls `removeParagraphChild(blockId, child.id)` to drop JSON state.
   - Persists updated HTML via `serializeEditableHtml`.
@@ -243,6 +267,32 @@ Minimal empty document:
   "version": 1,
   "name": "Untitled document",
   "blocks": []
+}
+```
+
+Paragraph with an Equation child:
+
+```json
+{
+  "id": "p4",
+  "type": "paragraph",
+  "html": "Einstein proposed <span data-child-id=\"e1\" contenteditable=\"false\"></span> in his work.",
+  "children": [
+    { "id": "e1", "type": "equation", "latex": "E=mc^2", "numbered": false, "labelId": "" }
+  ]
+}
+```
+
+Paragraph with a Citation child:
+
+```json
+{
+  "id": "p5",
+  "type": "paragraph",
+  "html": "See <span data-child-id=\"c1\" contenteditable=\"false\"></span> for details.",
+  "children": [
+    { "id": "c1", "type": "citation", "keys": ["doe2021"], "style": "numeric", "prefix": "see", "suffix": "ch. 2" }
+  ]
 }
 ```
 

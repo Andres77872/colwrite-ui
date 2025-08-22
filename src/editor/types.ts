@@ -27,7 +27,15 @@ export type CitationChild = {
   locator?: string;                  // page/section locator
 };
 
-export type ParagraphChild = AiBeatChild | TableChild | CitationChild;
+export type EquationChild = {
+  id: string;
+  type: 'equation';
+  latex: string;               // LaTeX math without $ delimiters
+  numbered?: boolean;          // reserved; false by default for inline
+  labelId?: string;            // optional anchor for cross-references
+};
+
+export type ParagraphChild = AiBeatChild | TableChild | CitationChild | EquationChild;
 
 // Common optional metadata for AI/UI behavior
 type BlockMeta = {

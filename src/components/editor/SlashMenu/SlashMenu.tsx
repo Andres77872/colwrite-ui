@@ -4,6 +4,7 @@ import { useEditor } from '../../../editor';
 import { aiBeatItem } from './items/aiBeat';
 import { tableItem } from './items/table';
 import { citationItem } from './items/citation';
+import { equationItem } from './items/equation';
 import { serializeEditableHtml } from '../../common/Editable/Editable';
 import type { SlashContext, SlashItem } from './types';
 
@@ -119,7 +120,7 @@ export function SlashMenu() {
   }, [visible]);
 
   const items = useMemo(() => {
-    const base: SlashItem[] = [aiBeatItem, tableItem, citationItem];
+    const base: SlashItem[] = [aiBeatItem, tableItem, citationItem, equationItem];
     return base;
   }, []);
 

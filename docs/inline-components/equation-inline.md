@@ -34,7 +34,12 @@ Extend `ParagraphChild` union to include `EquationChild`.
 - Props: `{ blockId, child, updateParagraphChild, removeParagraphChild, updateHtml, refs }`.
 - Root: `<span className="equation-inline" contentEditable={false} ...>`.
 - UI:
-  - Display rendered math (KaTeX in future). MVP: show plaintext `child.latex`.
+  - Display rendered math via optional KaTeX if available (checks `window.katex`); otherwise fallback to plaintext `child.latex`.
+  - To enable KaTeX preview, include KaTeX CSS and JS in `index.html` so `window.katex` is available:
+    ```html
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
+    ```
   - Clicking toggles an inline editor (single-line text input). Enter saves; Esc cancels.
   - Optional checkbox for `numbered` and text input for `labelId`.
   - Remove button (“×”).
