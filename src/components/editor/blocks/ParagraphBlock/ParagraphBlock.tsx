@@ -4,7 +4,7 @@ import { Editable } from '../../../common/Editable';
 import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useEditor } from '../../../../editor';
 import { createPortal } from 'react-dom';
-import { AiBeatInline, TableInline, CitationInline, EquationInline } from './Inlines';
+import { AiBeatInline, TableInline, CitationInline, EquationInline, GraphInline } from './Inlines';
 
 export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P }) {
   const { refs, updateParagraphChild, removeParagraphChild, updateHtml, documentId, createRemote } = useEditor();
@@ -102,6 +102,15 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
             />
           ) : child.type === 'equation' ? (
             <EquationInline
+              blockId={block.id}
+              child={child}
+              updateParagraphChild={updateParagraphChild}
+              removeParagraphChild={removeParagraphChild}
+              updateHtml={updateHtml}
+              refs={refs}
+            />
+          ) : child.type === 'graph' ? (
+            <GraphInline
               blockId={block.id}
               child={child}
               updateParagraphChild={updateParagraphChild}

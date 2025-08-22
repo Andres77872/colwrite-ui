@@ -35,7 +35,20 @@ export type EquationChild = {
   labelId?: string;            // optional anchor for cross-references
 };
 
-export type ParagraphChild = AiBeatChild | TableChild | CitationChild | EquationChild;
+// Inline graph widget for small charts embedded in text
+export type GraphChild = {
+  id: string;
+  type: 'graph';
+  kind: 'bar' | 'line' | 'pie';
+  data: {
+    values: number[];
+    labels?: string[];
+    colors?: string[];
+  };
+  title?: string;
+};
+
+export type ParagraphChild = AiBeatChild | TableChild | CitationChild | EquationChild | GraphChild;
 
 // Common optional metadata for AI/UI behavior
 type BlockMeta = {
