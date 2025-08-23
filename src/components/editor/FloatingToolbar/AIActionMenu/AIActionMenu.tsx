@@ -1,4 +1,3 @@
-import './AIActionMenu.css';
 import { useEffect, useRef, useState } from 'react';
 import type { AiAction } from '../../../../services';
 
@@ -46,23 +45,54 @@ export function AIActionMenu({ onAction, disabled = false }: { onAction: (action
   };
 
   return (
-    <div className="ai-menu" ref={rootRef} onMouseDown={(e) => { /* Keep selection */ e.preventDefault(); e.stopPropagation(); }}>
-      <button className="ai-toggle" title="AI Actions" onMouseDown={handleToggleMouseDown} aria-haspopup="menu" aria-expanded={open} disabled={disabled} aria-disabled={disabled}>
+    <div
+      className="relative inline-block"
+      ref={rootRef}
+      onMouseDown={(e) => {
+        /* Keep selection */
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
+      <button
+        className="inline-flex items-center gap-1.5 rounded-sm px-2 py-1.5 font-semibold hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+        title="AI Actions"
+        onMouseDown={handleToggleMouseDown}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        aria-disabled={disabled}
+      >
         ✨ AI
       </button>
       {open && (
-        <div className="ai-list" role="menu">
-          <button role="menuitem" className="ai-item" onMouseDown={call('search-for-references')}>
-            <span className="ai-icn">🔎</span>
-            <span className="ai-label">Search for references</span>
+        <div
+          className="absolute left-0 top-full z-[200] mt-1.5 min-w-[220px] rounded-md border border-gray-200 bg-white p-1.5 shadow-md flex flex-col"
+          role="menu"
+        >
+          <button
+            role="menuitem"
+            className="flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left hover:bg-gray-100"
+            onMouseDown={call('search-for-references')}
+          >
+            <span className="inline-flex w-[18px] justify-center">🔎</span>
+            <span className="flex-1">Search for references</span>
           </button>
-          <button role="menuitem" className="ai-item" onMouseDown={call('add-details')}>
-            <span className="ai-icn">➕</span>
-            <span className="ai-label">Add details</span>
+          <button
+            role="menuitem"
+            className="flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left hover:bg-gray-100"
+            onMouseDown={call('add-details')}
+          >
+            <span className="inline-flex w-[18px] justify-center">➕</span>
+            <span className="flex-1">Add details</span>
           </button>
-          <button role="menuitem" className="ai-item" onMouseDown={call('more-concise')}>
-            <span className="ai-icn">➖</span>
-            <span className="ai-label">More concise</span>
+          <button
+            role="menuitem"
+            className="flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left hover:bg-gray-100"
+            onMouseDown={call('more-concise')}
+          >
+            <span className="inline-flex w-[18px] justify-center">➖</span>
+            <span className="flex-1">More concise</span>
           </button>
         </div>
       )}

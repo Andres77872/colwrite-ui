@@ -1,8 +1,8 @@
-import './FloatingToolbar.css';
 import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
 import { streamAiAction, type AiAction } from '../../../services';
 import { AIActionMenu } from './AIActionMenu/AIActionMenu';
+import { serializeEditableHtml } from '../../common/Editable/Editable';
 
 export function FloatingToolbar() {
   const { exec, refs, updateHtml } = useEditor();
@@ -14,6 +14,13 @@ export function FloatingToolbar() {
   const ref = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const slashOpenRef = useRef<boolean>(false);
+
+  // Abort any in-flight AI stream if the toolbar unmounts
+  useEffect(() => {
+    return () => {
+      try { abortRef.current?.abort(); } catch {}
+    };
+  }, []);
 
   useEffect(() => {
     // Listen for slash menu visibility changes to avoid flicker/toggle when typing '/'
@@ -205,35 +212,53 @@ export function FloatingToolbar() {
 
     // Build wrapper UI inside the editable element
     const wrapper = document.createElement('span');
-    wrapper.className = 'ai-suggest';
+    // Keep semantic class for logic in Editable.tsx, add Tailwind utilities for styling
+    wrapper.className = [
+      'ai-suggest',
+      'inline-flex', 'flex-col', 'items-stretch', 'gap-1.5',
+      'p-2', 'pr-[72px]', 'relative', 'rounded-sm', 'bg-elev',
+      'ring-1', 'ring-border', 'ring-inset',
+    ].join(' ');
     wrapper.setAttribute('data-action', action);
     wrapper.contentEditable = 'true';
     wrapper.setAttribute('data-generating', '1');
 
     const original = document.createElement('span');
-    original.className = 'ai-original';
+    original.className = [
+      'ai-original',
+      'opacity-75', 'bg-white', 'rounded-sm', 'px-1.5', 'py-1',
+      'max-w-[60ch]', 'whitespace-pre-wrap', 'break-words',
+    ].join(' ');
     // Do not allow editing of the original snapshot
     original.contentEditable = 'false';
     const generated = document.createElement('span');
-    generated.className = 'ai-generated';
+    generated.className = [
+      'ai-generated',
+      'bg-[#fffbe6]', 'border', 'border-dashed', 'border-[#f0c36d]',
+      'rounded-sm', 'px-1.5', 'py-1', 'min-w-[1ch]', 'whitespace-pre-wrap', 'break-words',
+    ].join(' ');
     generated.contentEditable = 'true';
 
     const controls = document.createElement('span');
-    controls.className = 'ai-controls';
+    controls.className = [
+      'ai-controls',
+      'absolute', 'top-1', 'right-1', 'inline-flex', 'items-center', 'gap-1',
+    ].join(' ');
     controls.contentEditable = 'false';
+    const ctrlBtnBase = 'ring-1 ring-inset ring-border bg-white rounded-sm px-1.5 py-0.5 cursor-pointer hover:bg-elev';
     const acceptBtn = document.createElement('button');
     acceptBtn.type = 'button';
-    acceptBtn.className = 'ai-accept';
+    acceptBtn.className = ['ai-accept', ctrlBtnBase, 'text-green-700'].join(' ');
     acceptBtn.title = 'Accept';
     acceptBtn.textContent = '✔';
     const rejectBtn = document.createElement('button');
     rejectBtn.type = 'button';
-    rejectBtn.className = 'ai-reject';
+    rejectBtn.className = ['ai-reject', ctrlBtnBase, 'text-[#a11]'].join(' ');
     rejectBtn.title = 'Reject';
     rejectBtn.textContent = '✖';
     const stopBtn = document.createElement('button');
     stopBtn.type = 'button';
-    stopBtn.className = 'ai-stop';
+    // dynamic mode class will be set below, base styling via ctrlBtnBase
     stopBtn.title = 'Stop generating';
     stopBtn.textContent = '⏹';
     controls.append(acceptBtn, rejectBtn, stopBtn);
@@ -259,8 +284,8 @@ export function FloatingToolbar() {
       sel.addRange(r);
     } catch {}
 
-    // Update doc HTML initially
-    updateHtml(blockId, editable.innerHTML);
+    // Update doc HTML initially (serialize to strip ephemeral UI wrappers)
+    updateHtml(blockId, serializeEditableHtml(editable));
     setVisible(false);
 
     let rafPending = false;
@@ -269,7 +294,7 @@ export function FloatingToolbar() {
       rafPending = true;
       requestAnimationFrame(() => {
         rafPending = false;
-        updateHtml(blockId, editable.innerHTML);
+        updateHtml(blockId, serializeEditableHtml(editable));
       });
     };
 
@@ -279,13 +304,13 @@ export function FloatingToolbar() {
     // Streaming helpers: stop -> regenerate flow
     let stopped = false;
     const setStopMode = () => {
-      stopBtn.className = 'ai-stop';
+      stopBtn.className = ['ai-stop', ctrlBtnBase, 'text-[#555]'].join(' ');
       stopBtn.title = 'Stop generating';
       stopBtn.textContent = '⏹';
       stopBtn.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); stopped = true; abortRef.current?.abort(); };
     };
     const setRegenMode = () => {
-      stopBtn.className = 'ai-regenerate';
+      stopBtn.className = ['ai-regenerate', ctrlBtnBase, 'text-accent'].join(' ');
       stopBtn.title = 'Regenerate';
       stopBtn.textContent = '🔄';
       stopBtn.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); runStream(); };
@@ -295,6 +320,9 @@ export function FloatingToolbar() {
       // Prepare fresh state
       stopped = false;
       wrapper.setAttribute('data-generating', '1');
+      // reset error visuals and start pulsing animation on generated
+      generated.classList.remove('bg-[#ffeaea]', 'border-[#ff9a9a]');
+      generated.classList.add('animate-pulse');
       wrapper.removeAttribute('data-error');
       // clear previous suggestion
       while (generated.firstChild) generated.removeChild(generated.firstChild);
@@ -326,9 +354,14 @@ export function FloatingToolbar() {
       try {
         await streamAiAction({ message: selectedText, action }, { signal: abortRef.current.signal, onChunk });
       } catch (err) {
-        if (!stopped) wrapper.setAttribute('data-error', '1');
+        if (!stopped) {
+          wrapper.setAttribute('data-error', '1');
+          // show error coloring
+          generated.classList.add('bg-[#ffeaea]', 'border-[#ff9a9a]');
+        }
       } finally {
         wrapper.removeAttribute('data-generating');
+        generated.classList.remove('animate-pulse');
         // after finishing (natural or aborted), allow regeneration
         setRegenMode();
       }
@@ -365,8 +398,8 @@ export function FloatingToolbar() {
       }
       const lastInserted = frag.lastChild as (Node | null);
       replaceWithFragment(frag);
-      // Persist immediately to ensure state matches DOM
-      updateHtml(blockId, editable.innerHTML);
+      // Persist immediately to ensure state matches DOM (serialize to strip wrappers)
+      updateHtml(blockId, serializeEditableHtml(editable));
       // Place caret at end of inserted content
       try {
         if (lastInserted) {
@@ -394,8 +427,8 @@ export function FloatingToolbar() {
       while (original.firstChild) frag.appendChild(original.firstChild);
       const lastInserted = frag.lastChild as (Node | null);
       replaceWithFragment(frag);
-      // Persist immediately to ensure state matches DOM
-      updateHtml(blockId, editable.innerHTML);
+      // Persist immediately to ensure state matches DOM (serialize to strip wrappers)
+      updateHtml(blockId, serializeEditableHtml(editable));
       // Place caret at end of restored content
       try {
         if (lastInserted) {
@@ -422,16 +455,51 @@ export function FloatingToolbar() {
   return (
     <div
       ref={ref}
-      className="floating-toolbar"
-      data-anchor={anchor}
-      style={{ top: pos.top, left: pos.left }}
+      className="floating-toolbar fixed inline-flex gap-1.5 p-1.5 bg-white border border-border rounded-md shadow-md z-[100]"
+      style={{ top: pos.top, left: pos.left, transform: anchor === 'left' ? 'translate(0, -8px)' : 'translate(-50%, -8px)' }}
       onMouseDown={(e) => { e.preventDefault(); }}
     >
-      <button className={states.bold ? 'active' : ''} onMouseDown={onFormat('bold')} title="Bold">B</button>
-      <button className={states.italic ? 'active' : ''} onMouseDown={onFormat('italic')} title="Italic"><i>I</i></button>
-      <button className={states.underline ? 'active' : ''} onMouseDown={onFormat('underline')} title="Underline"><u>U</u></button>
-      <button className={states.strike ? 'active' : ''} onMouseDown={onFormat('strikeThrough')} title="Strikethrough"><s>S</s></button>
-      <div className="sep" />
+      <button
+        className={[
+          'px-2', 'py-1.5', 'rounded-sm', 'font-semibold', 'hover:bg-elev',
+          states.bold ? 'text-accent' : '',
+        ].join(' ')}
+        onMouseDown={onFormat('bold')}
+        title="Bold"
+      >
+        B
+      </button>
+      <button
+        className={[
+          'px-2', 'py-1.5', 'rounded-sm', 'font-semibold', 'hover:bg-elev',
+          states.italic ? 'text-accent' : '',
+        ].join(' ')}
+        onMouseDown={onFormat('italic')}
+        title="Italic"
+      >
+        <i>I</i>
+      </button>
+      <button
+        className={[
+          'px-2', 'py-1.5', 'rounded-sm', 'font-semibold', 'hover:bg-elev',
+          states.underline ? 'text-accent' : '',
+        ].join(' ')}
+        onMouseDown={onFormat('underline')}
+        title="Underline"
+      >
+        <u>U</u>
+      </button>
+      <button
+        className={[
+          'px-2', 'py-1.5', 'rounded-sm', 'font-semibold', 'hover:bg-elev',
+          states.strike ? 'text-accent' : '',
+        ].join(' ')}
+        onMouseDown={onFormat('strikeThrough')}
+        title="Strikethrough"
+      >
+        <s>S</s>
+      </button>
+      <div className="w-px bg-border mx-0.5" />
       <AIActionMenu disabled={!hasSelection} onAction={(action: AiAction, e: React.MouseEvent) => onAi(action)(e)} />
     </div>
   );

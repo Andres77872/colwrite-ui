@@ -1,4 +1,3 @@
-import './SlashMenu.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
 import { aiBeatItem } from './items/aiBeat';
@@ -175,35 +174,66 @@ export function SlashMenu() {
 
   if (!visible) return null;
   return (
-    <div ref={ref} className="slash-menu" style={{ top: pos.top, left: pos.left }} onMouseDown={(e) => e.preventDefault()} tabIndex={-1}>
-      <input className="slash-search" placeholder="Type to filter…" value={query} onChange={(e) => setQuery(e.target.value)} />
-      <div className="slash-menu-group">
+    <div
+      ref={ref}
+      className="fixed z-[120] bg-white border border-border rounded-[var(--radius-md)] shadow-[var(--shadow-md)] p-[6px] w-[320px] max-h-[320px] overflow-auto"
+      style={{ top: pos.top, left: pos.left }}
+      onMouseDown={(e) => e.preventDefault()}
+      tabIndex={-1}
+    >
+      <input
+        className="input w-full px-2 py-[6px] mb-[6px]"
+        placeholder="Type to filter…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      <div className="flex flex-col gap-[2px]">
         {/* Actions group */}
-        {filteredItems.some(i => i.group === 'actions') && <div className="slash-group-title">Actions</div>}
+        {filteredItems.some(i => i.group === 'actions') && (
+          <div className="px-[10px] py-1 text-[11px] uppercase text-[#666] tracking-[0.04em]">Actions</div>
+        )}
         {filteredItems.filter(i => i.group === 'actions').map((it) => {
           const absoluteIndex = filteredItems.findIndex(f => f.id === it.id);
           const active = absoluteIndex === activeIndex;
           return (
-            <button key={it.id} className={["slash-item", active ? 'active' : ''].filter(Boolean).join(' ')} onMouseDown={(e) => { e.preventDefault(); setVisible(false); it.onSelect(context()); }} onMouseEnter={() => setActiveIndex(absoluteIndex)}>
-              <span className="icon">{it.icon || '•'}</span>
-              <span className="label">
-                <span className="title">{it.label}</span>
-                {it.desc && <span className="desc">{it.desc}</span>}
+            <button
+              key={it.id}
+              className={[
+                'flex items-center gap-2 px-[10px] py-2 rounded-[var(--radius-sm)] cursor-pointer font-semibold text-left hover:bg-elev w-full',
+                active ? 'bg-elev' : ''
+              ].filter(Boolean).join(' ')}
+              onMouseDown={(e) => { e.preventDefault(); setVisible(false); it.onSelect(context()); }}
+              onMouseEnter={() => setActiveIndex(absoluteIndex)}
+            >
+              <span className="w-[18px] inline-flex items-center justify-center text-[14px]">{it.icon || '•'}</span>
+              <span className="flex flex-col items-start">
+                <span className="font-bold">{it.label}</span>
+                {it.desc && <span className="font-normal text-[12px] text-[#666]">{it.desc}</span>}
               </span>
             </button>
           );
         })}
         {/* Insert group */}
-        {filteredItems.some(i => i.group === 'insert') && <div className="slash-group-title">Insert</div>}
+        {filteredItems.some(i => i.group === 'insert') && (
+          <div className="px-[10px] py-1 text-[11px] uppercase text-[#666] tracking-[0.04em]">Insert</div>
+        )}
         {filteredItems.filter(i => i.group === 'insert').map((it) => {
           const absoluteIndex = filteredItems.findIndex(f => f.id === it.id);
           const active = absoluteIndex === activeIndex;
           return (
-            <button key={it.id} className={["slash-item", active ? 'active' : ''].filter(Boolean).join(' ')} onMouseDown={(e) => { e.preventDefault(); setVisible(false); it.onSelect(context()); }} onMouseEnter={() => setActiveIndex(absoluteIndex)}>
-              <span className="icon">{it.icon || '•'}</span>
-              <span className="label">
-                <span className="title">{it.label}</span>
-                {it.desc && <span className="desc">{it.desc}</span>}
+            <button
+              key={it.id}
+              className={[
+                'flex items-center gap-2 px-[10px] py-2 rounded-[var(--radius-sm)] cursor-pointer font-semibold text-left hover:bg-elev w-full',
+                active ? 'bg-elev' : ''
+              ].filter(Boolean).join(' ')}
+              onMouseDown={(e) => { e.preventDefault(); setVisible(false); it.onSelect(context()); }}
+              onMouseEnter={() => setActiveIndex(absoluteIndex)}
+            >
+              <span className="w-[18px] inline-flex items-center justify-center text-[14px]">{it.icon || '•'}</span>
+              <span className="flex flex-col items-start">
+                <span className="font-bold">{it.label}</span>
+                {it.desc && <span className="font-normal text-[12px] text-[#666]">{it.desc}</span>}
               </span>
             </button>
           );

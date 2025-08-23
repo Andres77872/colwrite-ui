@@ -1,4 +1,3 @@
-import './DocumentHeader.css';
 import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
 
@@ -50,17 +49,17 @@ export function DocumentHeader() {
   };
 
   return (
-    <div className="doc-header">
-      <div className="doc-title">
+    <div className="sticky top-0 z-10 bg-panel border-b border-border -mx-3 -mt-3 mb-3 px-3 py-2 rounded-t-[var(--radius-lg)]">
+      <div className="flex items-baseline gap-3">
         {!editing && (
-          <button className="doc-title-text as-button" title="Rename" onClick={() => setEditing(true)}>
+          <button className="text-xl font-semibold bg-transparent border-0 p-0 text-left cursor-text" title="Rename" onClick={() => setEditing(true)}>
             {title}
           </button>
         )}
         {editing && (
           <input
             ref={inputRef}
-            className="doc-title-input"
+            className="text-xl font-semibold border border-border rounded-sm px-1.5 py-0.5 bg-elev"
             defaultValue={title}
             onBlur={(e) => { setEditing(false); commitTitle(e.currentTarget.value); }}
             onKeyDown={(e) => {
@@ -69,17 +68,17 @@ export function DocumentHeader() {
             }}
           />
         )}
-        {documentId && <div className="doc-id">{documentId}</div>}
+        {documentId && <div className="text-muted text-sm px-1.5 py-0.5 border border-dashed border-border rounded-sm bg-elev">{documentId}</div>}
       </div>
-      <div className="doc-actions">
-        <button className="btn" onClick={onNew} disabled={loading !== null}>New</button>
-        <button className="btn primary" onClick={onSave} disabled={loading !== null}>
+      <div className="flex items-center gap-2">
+        <button className="px-2.5 py-1.5 rounded-sm border border-border bg-white hover:bg-elev active:translate-y-[0.5px] disabled:opacity-60 disabled:cursor-not-allowed" onClick={onNew} disabled={loading !== null}>New</button>
+        <button className="px-2.5 py-1.5 rounded-sm border border-accent bg-accent text-white hover:bg-accent-ink active:translate-y-[0.5px] disabled:opacity-60 disabled:cursor-not-allowed" onClick={onSave} disabled={loading !== null}>
           {loading === 'save' ? 'Saving…' : (documentId ? 'Save' : 'Save (create)')}
         </button>
-        <button className="btn danger" onClick={onDelete} disabled={!documentId || loading !== null}>
+        <button className="px-2.5 py-1.5 rounded-sm border border-danger bg-danger text-white hover:brightness-90 active:translate-y-[0.5px] disabled:opacity-60 disabled:cursor-not-allowed" onClick={onDelete} disabled={!documentId || loading !== null}>
           {loading === 'delete' ? 'Deleting…' : 'Delete'}
         </button>
-        <div className="muted">{lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : (loading === 'save' ? 'Saving…' : '—')}</div>
+        <div className="text-muted">{lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : (loading === 'save' ? 'Saving…' : '—')}</div>
       </div>
     </div>
   );

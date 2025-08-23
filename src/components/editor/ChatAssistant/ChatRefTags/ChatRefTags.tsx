@@ -1,4 +1,3 @@
-import './ChatRefTags.css';
 import { Fragment, type CSSProperties } from 'react';
 import { useEditor } from '../../../../editor';
 import type { Block } from '../../../../editor';
@@ -91,7 +90,7 @@ export function ChatRefTags({
   const { parts } = parseRefs(text);
 
   return (
-    <span className={["ref-tags", className || ''].join(' ').trim()} style={{ whiteSpace: 'pre-wrap', ...style }}>
+    <span className={["inline whitespace-pre-wrap", className || ''].join(' ').trim()} style={style}>
       {parts.map((p, idx) => {
         if (typeof p === 'string') {
           return <Fragment key={idx}>{p}</Fragment>;
@@ -108,28 +107,36 @@ export function ChatRefTags({
           : (p.source === 'this'
               ? `Block in this doc: ${p.blockId}`
               : `Block ${p.blockId} in Document ${p.docId}`);
-        const classNames = [
-          'ref-tag',
-          isDoc ? 'doc' : '',
-          isBlock ? 'block' : '',
-          interactive ? 'interactive' : '',
+        const tagClass = [
+          'inline-flex items-center gap-1 mx-[2px] align-middle',
+          interactive ? 'cursor-pointer group' : '',
+        ].filter(Boolean).join(' ');
+
+        const pillClass = [
+          'inline-flex items-center gap-1.5 py-0.5 px-2 rounded-full border text-xs leading-[1.6]',
+          interactive ? 'transition group-hover:brightness-[.98]' : '',
+          isDoc
+            ? 'bg-[rgba(0,122,204,0.08)] border-[rgba(0,122,204,0.35)]'
+            : isBlock
+              ? 'bg-[rgba(0,180,26,0.08)] border-[rgba(0,180,26,0.35)]'
+              : 'bg-[var(--color-elev)] border-[var(--color-border)]',
         ].filter(Boolean).join(' ');
 
         const content = (
-          <span className={classNames} title={title}
+          <span className={tagClass} title={title}
                 onMouseDown={interactive ? (e) => e.preventDefault() : undefined}
                 onClick={interactive ? () => onTagClick?.(p.start, p.refText) : undefined}
           >
-            <span className="ref-tag-pill">
-              <span className="ref-tag-icon" aria-hidden>
+            <span className={pillClass}>
+              <span className="text-xs opacity-90" aria-hidden>
                 {isDoc ? '📄' : '🔖'}
               </span>
-              <span className="ref-tag-text">{label}</span>
+              <span className="whitespace-nowrap">{label}</span>
             </span>
             {interactive && (
               <button
                 type="button"
-                className="ref-tag-remove"
+                className="inline-flex items-center justify-center w-[18px] h-[18px] rounded-full border border-[var(--color-border)] bg-white text-[var(--color-muted)] text-xs cursor-pointer hover:bg-[var(--color-accent)] hover:text-white hover:border-[var(--color-accent)]"
                 aria-label="Remove reference"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={(e) => { e.stopPropagation(); onTagRemove?.(p.start, p.refText); }}

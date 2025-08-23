@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import './DocumentsMenu.css';
 import { useEditor } from '../../../editor';
 
 export function DocumentsMenu() {
@@ -79,16 +78,16 @@ export function DocumentsMenu() {
   const next = () => setPage((p) => Math.min(totalPages, p + 1));
 
   return (
-    <div className="documents-menu">
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
         <strong>Documents</strong>
-        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+        <div className="flex items-center gap-2">
           <button className="btn" onClick={fetchList} disabled={loading}>Refresh</button>
           <button className="btn primary" onClick={onCreate} disabled={creating}>New</button>
         </div>
       </div>
 
-      <div className="row">
+      <div className="flex">
         <input
           className="input grow"
           type="search"
@@ -99,14 +98,14 @@ export function DocumentsMenu() {
         />
       </div>
 
-      <div className="muted" style={{ fontSize: 12 }}>
+      <div className="text-[var(--color-muted)] text-xs">
         Page {page} / {totalPages} · {count} total
       </div>
 
-      <div className="list">
-        {loading && <div className="muted">Loading…</div>}
+      <div className="flex flex-col gap-1">
+        {loading && <div className="text-[var(--color-muted)]">Loading…</div>}
         {!loading && items.length === 0 && (
-          <div className="muted">No documents yet. Create one to get started.</div>
+          <div className="text-[var(--color-muted)]">No documents yet. Create one to get started.</div>
         )}
         {!loading && items.map((d: any) => {
           const id: string = String(d._id || d.id || d.document_id || '');
@@ -114,12 +113,21 @@ export function DocumentsMenu() {
           const title: string = String(d.title || d.name || '(untitled)');
           const isActive = documentId === id;
           return (
-            <div key={id} className={`doc-row${isActive ? ' active' : ''}`} onClick={() => onLoad(id)}>
-              <div className="doc-main">
-                <div className="doc-title">{title}</div>
-                <div className="doc-sub muted">{id}</div>
+            <div
+              key={id}
+              className={[
+                'flex items-center justify-between gap-2 p-2 rounded-lg cursor-pointer border',
+                isActive
+                  ? 'border-[var(--color-border)] bg-[rgba(59,130,246,0.06)]'
+                  : 'border-transparent hover:bg-[var(--color-elev)]',
+              ].join(' ')}
+              onClick={() => onLoad(id)}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="text-sm truncate">{title}</div>
+                <div className="text-xs truncate text-[var(--color-muted)]">{id}</div>
               </div>
-              <div className="doc-actions">
+              <div className="shrink-0">
                 <button
                   className="btn danger"
                   onClick={(e) => { e.stopPropagation(); onDelete(id); }}
@@ -134,7 +142,7 @@ export function DocumentsMenu() {
         })}
       </div>
 
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+      <div className="flex items-center justify-between mt-2">
         <button className="btn" onClick={prev} disabled={page <= 1}>Prev</button>
         <button className="btn" onClick={next} disabled={page >= totalPages}>Next</button>
       </div>

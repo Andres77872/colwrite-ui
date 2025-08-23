@@ -1,4 +1,3 @@
-import './BlockControls.css';
 import { useEditor } from '../../../editor';
 import { useEffect, useRef, useState, type KeyboardEventHandler } from 'react';
 

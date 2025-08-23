@@ -1,4 +1,3 @@
-import './Toolbar.css';
 import { useState } from 'react';
 import { useEditor } from '../../../editor';
 
@@ -36,9 +35,9 @@ export function Toolbar() {
     }
   };
   return (
-    <div className="toolbar">
-      <div className="spacer" />
-      <div className="toolbar-group">
+    <div className="flex items-center gap-2 p-2 border border-border rounded-md bg-elev">
+      <div className="flex-1" />
+      <div className="inline-flex items-center gap-2">
         <button className="btn" title="New document" onClick={onNew} disabled={loading !== null}>New</button>
         <button className="btn primary" title={documentId ? 'Save changes' : 'Save and create document'} onClick={onSave} disabled={loading !== null}>
           {loading === 'save' ? 'Saving…' : 'Save'}
@@ -46,8 +45,8 @@ export function Toolbar() {
         <button className="btn danger" title="Delete current document" onClick={onDelete} disabled={!documentId || loading !== null}>
           {loading === 'delete' ? 'Deleting…' : 'Delete'}
         </button>
-        <div className="muted">{documentId ? `ID: ${documentId}` : 'Unsaved'}</div>
-        <div className="muted">{lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : (loading === 'save' ? 'Saving…' : '—')}</div>
+        <div className="muted text-sm">{documentId ? `ID: ${documentId}` : 'Unsaved'}</div>
+        <div className="muted text-sm">{lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : (loading === 'save' ? 'Saving…' : '—')}</div>
       </div>
     </div>
   );

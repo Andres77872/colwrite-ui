@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import './AppShell.css';
 
 export function AppShell({
   header,

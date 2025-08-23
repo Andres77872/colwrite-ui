@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import './JsonPanel.css';
+// styles migrated to Tailwind (see src/styles/tailwind.css)
 import { useEditor } from '../../../editor';
 import { createDocument, saveDocument, loadDocument, listDocuments, deleteDocument } from '../../../services';
 
@@ -92,10 +92,10 @@ export function JsonPanel() {
   };
 
   return (
-    <div className="json-panel">
-      <div className="row" style={{ justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+    <div className="h-full flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
         <strong>Document JSON</strong>
-        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+        <div className="flex items-center gap-2">
           <input
             className="input"
             placeholder="Document ID"
@@ -111,15 +111,19 @@ export function JsonPanel() {
         </div>
       </div>
 
-      <div className="row" style={{ justifyContent: 'space-between', marginTop: 8 }}>
-        <div className="row" style={{ gap: 8 }}>
+      <div className="flex justify-between mt-2">
+        <div className="flex gap-2">
           <button className="btn" onClick={() => setText(getJSON())}>Refresh</button>
           <button className="btn" onClick={onLoad}>Apply JSON</button>
           <button className="btn primary" onClick={save}>Save (local)</button>
         </div>
       </div>
 
-      <textarea className="textarea" value={text} onChange={(e) => setText(e.target.value)} />
+      <textarea
+        className="flex-1 min-h-[200px] font-mono text-sm leading-[1.5] p-[10px] rounded-sm border border-border w-full"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
 
       {documents.length > 0 && (
         <div style={{ marginTop: 8 }}>

@@ -1,4 +1,3 @@
-import './AiBeatInline.css';
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import type { ParagraphChild } from '../../../../../../editor';
 import { streamAiBeat } from '../../../../../../services';
@@ -89,33 +88,35 @@ export function AiBeatInline({
   }, [output, message]);
 
   return (
-    <span className="ai-beat-widget" contentEditable={false as any} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-      <div className="ai-beat-header">
-        <span className="ai-beat-title">AIBeat</span>
-        <span className="ai-beat-header-actions">
-          <button type="button" className="ai-beat-collapse" title="Collapse / Expand" onMouseDown={(e) => { e.preventDefault(); setCollapsed(v => !v); }}>
+    <span className="ai-beat-widget relative inline-flex flex-col items-stretch gap-2 bg-[color:var(--color-elev)] p-2 pb-10 rounded-[var(--radius-sm)] shadow-[inset_0_0_0_1px_var(--color-border)]" contentEditable={false as any} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-bold text-xs opacity-80">AIBeat</span>
+        <span className="inline-flex gap-1">
+          <button type="button" className="border-0 bg-white shadow-[inset_0_0_0_1px_var(--color-border)] rounded-[var(--radius-sm)] px-1.5 py-0.5 cursor-pointer text-[#555]" title="Collapse / Expand" onMouseDown={(e) => { e.preventDefault(); setCollapsed(v => !v); }}>
             {collapsed ? '▸' : '▾'}
           </button>
-          <button type="button" className="ai-beat-close" title="Remove" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); const host = refs.current[blockId]; const el = host?.querySelector(`[data-child-id=\"${child.id}\"]`); el?.parentNode?.removeChild(el as any); removeParagraphChild(blockId, child.id); const editable = refs.current[blockId]; if (editable) updateHtml(blockId, serializeEditableHtml(editable)); }}>
+          <button type="button" className="border-0 bg-white shadow-[inset_0_0_0_1px_var(--color-border)] rounded-[var(--radius-sm)] px-1.5 py-0.5 cursor-pointer text-[#a11]" title="Remove" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); const host = refs.current[blockId]; const el = host?.querySelector(`[data-child-id=\"${child.id}\"]`); el?.parentNode?.removeChild(el as any); removeParagraphChild(blockId, child.id); const editable = refs.current[blockId]; if (editable) updateHtml(blockId, serializeEditableHtml(editable)); }}>
             ×
           </button>
         </span>
       </div>
       {!collapsed && (
         <>
-          <textarea className="ai-beat-input" placeholder="What do you want to generate?" rows={2} value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onGenerate(); } if (e.key === 'Escape') { e.preventDefault(); setCollapsed(true); } }} />
-          <div className="ai-beat-prompt-row">
-            <span className="ai-beat-prompt-label">Prompt</span>
-            <input type="text" className="ai-beat-prompt-input" placeholder="You are a helpful assistant" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+          <textarea className="border-0 outline-none px-2 py-1.5 bg-white rounded-[var(--radius-sm)] min-w-[36ch] resize-y" placeholder="What do you want to generate?" rows={2} value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onGenerate(); } if (e.key === 'Escape') { e.preventDefault(); setCollapsed(true); } }} />
+          <div className="flex items-center gap-1.5 opacity-[0.85]">
+            <span className="text-xs text-[#666]">Prompt</span>
+            <input type="text" className="flex-1 min-w-[24ch] border-0 outline-none px-1.5 py-1 bg-white rounded-[var(--radius-sm)]" placeholder="You are a helpful assistant" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
           </div>
-          <div className="ai-beat-error" style={{ display: 'none' }} />
-          <div className="ai-beat-output">{output}</div>
-          <span className="ai-beat-controls">
-            <button type="button" className="ai-beat-accept" title="Accept and insert into document" disabled={!output.trim()} onMouseDown={(e) => {
+          <div className="hidden" />
+          {output.trim() && (
+            <div className="bg-[#fffbe6] border border-dashed border-[#f0c36d] rounded-[var(--radius-sm)] px-2 py-1.5 whitespace-pre-wrap break-words">{output}</div>
+          )}
+          <span className="absolute right-2 bottom-2 inline-flex gap-1.5">
+            <button type="button" className="bg-[#0a7f3f] text-white px-2 py-1 rounded-[var(--radius-sm)] disabled:opacity-60 disabled:cursor-default" title="Accept and insert into document" disabled={!output.trim()} onMouseDown={(e) => {
               e.preventDefault();
               const editable = refs.current[blockId];
               if (!editable) return;
-              const span = editable.querySelector(`[data-child-id="${child.id}"]`);
+              const span = editable.querySelector(`[data-child-id=\"${child.id}\"]`);
               if (!span) return;
               const parent = span.parentNode; if (!parent) return;
               const afterMarker = document.createTextNode('');
@@ -126,19 +127,19 @@ export function AiBeatInline({
             }}>
               Accept
             </button>
-            <button type="button" className="ai-beat-clear" title="Clear generated content" disabled={!output.trim()} onMouseDown={(e) => { e.preventDefault(); setOutput(''); }}>
+            <button type="button" className="bg-white shadow-[inset_0_0_0_1px_var(--color-border)] rounded-[var(--radius-sm)] px-2 py-1 cursor-pointer disabled:opacity-60 disabled:cursor-default" title="Clear generated content" disabled={!output.trim()} onMouseDown={(e) => { e.preventDefault(); setOutput(''); }}>
               Clear
             </button>
             {generating ? (
-              <button type="button" className="ai-beat-generate" title="Stop" onMouseDown={(e) => { e.preventDefault(); onStop(); }}>Stop</button>
+              <button type="button" className="bg-[color:var(--color-accent)] text-white px-2 py-1 rounded-[var(--radius-sm)]" title="Stop" onMouseDown={(e) => { e.preventDefault(); onStop(); }}>Stop</button>
             ) : (
-              <button type="button" className="ai-beat-generate" title="Generate (Ctrl/Cmd+Enter)" onMouseDown={(e) => { e.preventDefault(); onGenerate(); }}>{output.trim() ? 'Regenerate' : 'Generate'}</button>
+              <button type="button" className="bg-[color:var(--color-accent)] text-white px-2 py-1 rounded-[var(--radius-sm)] hover:brightness-95" title="Generate (Ctrl/Cmd+Enter)" onMouseDown={(e) => { e.preventDefault(); onGenerate(); }}>{output.trim() ? 'Regenerate' : 'Generate'}</button>
             )}
           </span>
         </>
       )}
       {collapsed && (
-        <div className="ai-beat-summary" style={{ display: '' }}>{summaryText}</div>
+        <div className="opacity-80">{summaryText}</div>
       )}
     </span>
   );

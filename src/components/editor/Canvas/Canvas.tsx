@@ -1,4 +1,3 @@
-import './Canvas.css';
 import { DocumentHeader } from '../DocumentChrome';
 import { useEditor } from '../../../editor';
 import { Fragment, useRef, useState } from 'react';

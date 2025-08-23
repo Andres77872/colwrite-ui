@@ -1,4 +1,3 @@
-import './HeadingBlock.css';
 import type { HeadingBlock as H } from '../../../../editor';
 import { Editable } from '../../../common/Editable';
 import { memo } from 'react';

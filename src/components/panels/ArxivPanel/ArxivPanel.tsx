@@ -1,13 +1,16 @@
 import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import './ArxivPanel.css';
 import { searchArxiv } from '../../../services/arxiv';
 import type { ArxivResult } from '../../../services/arxiv';
 
 function ScoreBadge({ score }: { score?: number }) {
   if (typeof score !== 'number') return null;
   const pct = Math.round(score * 100);
-  return <span className="badge">{pct}%</span>;
+  return (
+    <span className="px-2 py-1 rounded-full border border-border text-xs font-semibold bg-[rgba(59,130,246,0.08)] text-accent">
+      {pct}%
+    </span>
+  );
 }
 
 export function ArxivPanel() {
@@ -60,26 +63,26 @@ export function ArxivPanel() {
   }
 
   return (
-    <div className="arxiv-panel" aria-busy={loading}>
-      <div className="row" style={{ justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+    <div className={`h-full flex flex-col gap-3 overflow-hidden ${loading ? 'opacity-80' : ''}`} aria-busy={loading}>
+      <div className="flex items-center justify-between gap-2">
         <strong>References</strong>
-        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+        <div className="flex items-center gap-2">
           <span className="muted">
             {loading ? 'Searching…' : results.length ? `${results.length} papers found` : 'Search arXiv papers'}
           </span>
         </div>
       </div>
 
-      <form className="search" onSubmit={onSearch}>
+      <form className="flex items-center gap-2" onSubmit={onSearch}>
         <input
-          className="input grow"
+          className="input grow disabled:opacity-60 disabled:cursor-not-allowed"
           placeholder="Search arXiv papers (e.g., 'attention is all you need')"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           disabled={loading}
         />
         <select 
-          className="select" 
+          className="select disabled:opacity-60 disabled:cursor-not-allowed" 
           value={limit} 
           onChange={(e) => setLimit(Number(e.target.value))}
           disabled={loading}
@@ -93,16 +96,24 @@ export function ArxivPanel() {
         </button>
       </form>
 
-      {error && <div className="error" role="alert" aria-live="polite">{error}</div>}
-
-      {results.length > 0 && (
-        <div className="summary">
-          <span className="muted">Average relevance: </span>
-          <span className="score-highlight">{avgScore}</span>
+      {error && (
+        <div
+          className="text-[var(--color-danger)] bg-[rgba(239,68,68,0.08)] p-2.5 rounded-sm border border-[rgba(239,68,68,0.2)] text-sm"
+          role="alert"
+          aria-live="polite"
+        >
+          {error}
         </div>
       )}
 
-      <div className="results">
+      {results.length > 0 && (
+        <div className="text-sm py-2 border-b border-border">
+          <span className="muted">Average relevance: </span>
+          <span className="font-semibold text-accent">{avgScore}</span>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-3 overflow-y-auto flex-1">
         {results.map((r, idx) => {
           const key = `${r.id}-${idx}`;
           const isExpanded = expanded.has(key);
@@ -111,15 +122,15 @@ export function ArxivPanel() {
           const needsTruncation = hasAbstract && (r.abstract?.length ?? 0) > 280;
           
           return (
-            <div className="result card" key={key}>
-              <div className="result-header">
-                <div className="rank">#{idx + 1}</div>
+            <div className="card p-4 relative" key={key}>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 rounded-sm grid place-items-center bg-elev border border-border font-bold text-sm text-muted">#{idx + 1}</div>
                 <ScoreBadge score={r.score} />
               </div>
               
-              <h3 className="title">
+              <h3 className="font-semibold text-lg leading-snug mb-2">
                 {r.url ? (
-                  <a className="title-link" href={r.url} target="_blank" rel="noreferrer">
+                  <a className="text-current no-underline hover:text-accent hover:underline" href={r.url} target="_blank" rel="noreferrer">
                     {r.title || '(untitled)'}
                   </a>
                 ) : (
@@ -127,19 +138,19 @@ export function ArxivPanel() {
                 )}
               </h3>
               
-              <div className="meta muted">
+              <div className="text-sm mb-3 leading-snug muted">
                 {r.authors && <span className="authors">{r.authors}</span>}
-                {r.date && <span className="date"> · {new Date(r.date).toLocaleDateString()}</span>}
+                {r.date && <span className="opacity-80"> · {new Date(r.date).toLocaleDateString()}</span>}
               </div>
               
               {hasAbstract && (
-                <div className="abstract-wrapper">
-                  <div className={`abstract ${isExpanded ? 'expanded' : 'collapsed'}`}>
+                <div className="mb-3">
+                  <div className={`text-base leading-relaxed ${isExpanded ? '' : 'line-clamp-4'}`}>
                     {displayAbstract}
                   </div>
                   {needsTruncation && (
                     <button 
-                      className="expand-btn" 
+                      className="bg-transparent text-accent text-sm font-medium cursor-pointer py-1 mt-1 hover:underline hover:text-[var(--color-accent-ink)]" 
                       onClick={() => toggleExpanded(key)}
                       aria-expanded={isExpanded}
                     >
@@ -149,19 +160,19 @@ export function ArxivPanel() {
                 </div>
               )}
               
-              <div className="actions">
+              <div className="flex gap-3 flex-wrap">
                 {r.url && (
-                  <a className="action-link" href={r.url} target="_blank" rel="noreferrer">
+                  <a className="text-accent no-underline text-sm font-medium py-1 px-2 rounded-sm border border-transparent hover:bg-[rgba(59,130,246,0.08)] hover:border-border" href={r.url} target="_blank" rel="noreferrer">
                     📄 arXiv
                   </a>
                 )}
                 {r.pdfUrl && (
-                  <a className="action-link" href={r.pdfUrl} target="_blank" rel="noreferrer">
+                  <a className="text-accent no-underline text-sm font-medium py-1 px-2 rounded-sm border border-transparent hover:bg-[rgba(59,130,246,0.08)] hover:border-border" href={r.pdfUrl} target="_blank" rel="noreferrer">
                     📥 PDF
                   </a>
                 )}
                 {r.doi && (
-                  <a className="action-link" href={`https://doi.org/${r.doi}`} target="_blank" rel="noreferrer">
+                  <a className="text-accent no-underline text-sm font-medium py-1 px-2 rounded-sm border border-transparent hover:bg-[rgba(59,130,246,0.08)] hover:border-border" href={`https://doi.org/${r.doi}`} target="_blank" rel="noreferrer">
                     🔗 DOI
                   </a>
                 )}
@@ -172,18 +183,18 @@ export function ArxivPanel() {
       </div>
 
       {!loading && !results.length && !error && query.trim() && (
-        <div className="empty-state">
-          <div className="empty-icon">🔍</div>
-          <div className="empty-title">No papers found</div>
-          <div className="empty-text muted">Try adjusting your search terms or use broader keywords.</div>
+        <div className="flex flex-col items-center justify-center py-8 px-4 text-center flex-1">
+          <div className="text-[48px] mb-3 opacity-50">🔍</div>
+          <div className="font-semibold text-lg mb-2">No papers found</div>
+          <div className="text-sm leading-relaxed max-w-[280px] muted">Try adjusting your search terms or use broader keywords.</div>
         </div>
       )}
 
       {!loading && !results.length && !error && !query.trim() && (
-        <div className="empty-state">
-          <div className="empty-icon">📚</div>
-          <div className="empty-title">Search arXiv papers</div>
-          <div className="empty-text muted">Find relevant research papers and references for your work.</div>
+        <div className="flex flex-col items-center justify-center py-8 px-4 text-center flex-1">
+          <div className="text-[48px] mb-3 opacity-50">📚</div>
+          <div className="font-semibold text-lg mb-2">Search arXiv papers</div>
+          <div className="text-sm leading-relaxed max-w-[280px] muted">Find relevant research papers and references for your work.</div>
         </div>
       )}
     </div>

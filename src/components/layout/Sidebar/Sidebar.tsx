@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import './Sidebar.css';
 import { DocumentsMenu } from '../../editor/DocumentsMenu';
 
 export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?: () => void }) {

@@ -1,4 +1,3 @@
-import './TableInline.css';
 import { useEffect, useMemo, useState, useRef, type MutableRefObject, type ChangeEvent, type MouseEvent, type KeyboardEvent } from 'react';
 import type { ParagraphChild } from '../../../../../../editor';
 import { serializeEditableHtml } from '../../../../../../components/common/Editable/Editable';
@@ -134,25 +133,25 @@ export function TableInline({
   };
 
   return (
-    <span className="table-inline" contentEditable={false as any} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-      <div className="table-toolbar">
-        <span className="stat">Cols: {cols}</span>
-        <button type="button" className="tbtn" title="Add column" onMouseDown={(e) => { e.preventDefault(); setCols(c => c + 1); }}>+ Col</button>
-        <button type="button" className="tbtn" title="Remove column" onMouseDown={(e) => { e.preventDefault(); setCols(c => Math.max(1, c - 1)); }}>− Col</button>
-        <span className="stat">Rows: {rows}</span>
-        <button type="button" className="tbtn" title="Add row" onMouseDown={(e) => { e.preventDefault(); setRows(r => r + 1); }}>+ Row</button>
-        <button type="button" className="tbtn" title="Remove row" onMouseDown={(e) => { e.preventDefault(); setRows(r => Math.max(1, r - 1)); }}>− Row</button>
-        <label className="topt"><input type="checkbox" checked={header} onChange={(e) => setHeader(e.target.checked)} /> Header</label>
-        <button type="button" className="tbtn danger" title="Remove table" onMouseDown={onRemove}>×</button>
+    <span className="table-inline relative inline-flex flex-col gap-2 bg-[color:var(--color-elev)] p-2 pb-2.5 rounded-[var(--radius-sm)] shadow-[inset_0_0_0_1px_var(--color-border)]" contentEditable={false as any} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-2">
+        <span className="text-[color:var(--color-muted)] text-xs">Cols: {cols}</span>
+        <button type="button" className="border border-[color:var(--color-border)] bg-white px-1.5 py-0.5 rounded cursor-pointer" title="Add column" onMouseDown={(e) => { e.preventDefault(); setCols(c => c + 1); }}>+ Col</button>
+        <button type="button" className="border border-[color:var(--color-border)] bg-white px-1.5 py-0.5 rounded cursor-pointer" title="Remove column" onMouseDown={(e) => { e.preventDefault(); setCols(c => Math.max(1, c - 1)); }}>− Col</button>
+        <span className="text-[color:var(--color-muted)] text-xs">Rows: {rows}</span>
+        <button type="button" className="border border-[color:var(--color-border)] bg-white px-1.5 py-0.5 rounded cursor-pointer" title="Add row" onMouseDown={(e) => { e.preventDefault(); setRows(r => r + 1); }}>+ Row</button>
+        <button type="button" className="border border-[color:var(--color-border)] bg-white px-1.5 py-0.5 rounded cursor-pointer" title="Remove row" onMouseDown={(e) => { e.preventDefault(); setRows(r => Math.max(1, r - 1)); }}>− Row</button>
+        <label className="inline-flex items-center gap-1 text-sm"><input type="checkbox" checked={header} onChange={(e) => setHeader(e.target.checked)} /> Header</label>
+        <button type="button" className="border border-[color:var(--color-border)] bg-white px-1.5 py-0.5 rounded cursor-pointer text-[#d00] border-[#f3c1c1]" title="Remove table" onMouseDown={onRemove}>×</button>
       </div>
-      <div className="table-wrap">
-        <table>
+      <div className="overflow-auto max-w-[70vw] rounded-[6px] shadow-sm">
+        <table className="border-collapse bg-white text-sm">
           {header && (
             <thead>
               <tr>
                 {grid[0].map((_, c) => (
-                  <th key={`h-${c}`}>
-                    <input ref={setCellRef(0, c)} value={grid[0][c]} onChange={onCellInput(0, c)} onKeyDown={onCellKeyDown(0, c)} placeholder={`H${c + 1}`} />
+                  <th key={`h-${c}`} className="sticky top-0 bg-white border border-[color:var(--color-border)] p-0 z-[1]">
+                    <input className="border-0 px-2.5 py-2 w-[140px] outline-none font-bold bg-transparent focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] rounded-[2px]" ref={setCellRef(0, c)} value={grid[0][c]} onChange={onCellInput(0, c)} onKeyDown={onCellKeyDown(0, c)} placeholder={`H${c + 1}`} />
                   </th>
                 ))}
               </tr>
@@ -161,10 +160,10 @@ export function TableInline({
           <tbody>
             {grid.map((row, r) => (
               (!header || r > 0) && (
-                <tr key={`r-${r}`}>
+                <tr key={`r-${r}`} className="odd:bg-[#fafafa]">
                   {row.map((_, c) => (
-                    <td key={`c-${r}-${c}`}>
-                      <input ref={setCellRef(r, c)} value={grid[r][c]} onChange={onCellInput(r, c)} onKeyDown={onCellKeyDown(r, c)} placeholder={header ? `R${r}${c + 1}` : `R${r + 1}${c + 1}`} />
+                    <td key={`c-${r}-${c}`} className="border border-[color:var(--color-border)] p-0">
+                      <input className="border-0 px-2.5 py-2 w-[140px] outline-none focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] rounded-[2px]" ref={setCellRef(r, c)} value={grid[r][c]} onChange={onCellInput(r, c)} onKeyDown={onCellKeyDown(r, c)} placeholder={header ? `R${r}${c + 1}` : `R${r + 1}${c + 1}`} />
                     </td>
                   ))}
                 </tr>

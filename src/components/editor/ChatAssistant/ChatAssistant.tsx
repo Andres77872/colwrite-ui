@@ -1,4 +1,3 @@
-import './ChatAssistant.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
 import type { OpenAIChatMessage } from '../../../services';
@@ -91,9 +90,16 @@ export function ChatAssistant() {
   };
 
   return (
-    <div className={["chat-assistant", expanded ? 'expanded' : 'collapsed'].join(' ')}>
+    <div
+      className={[
+        'sticky bottom-[45px] z-[1000] mt-[var(--spacing-3)] -mx-[var(--spacing-3)] bg-[var(--color-panel)] shadow-[0_-4px_12px_rgba(0,0,0,0.04)] rounded-b-lg',
+        expanded
+          ? 'border border-[var(--color-border)]'
+          : 'border-t border-[var(--color-border)] px-[var(--spacing-3)] py-[var(--spacing-2)]',
+      ].join(' ')}
+    >
       <button
-        className={["chat-quick-toggle", 'btn'].join(' ')}
+        className="absolute -top-[22px] right-[var(--spacing-3)] px-2 py-1 text-[var(--text-sm)] rounded-sm border border-[var(--color-border)] bg-white shadow-sm hover:bg-[var(--color-elev)] active:translate-y-px"
         onClick={() => setExpanded(v => !v)}
         aria-expanded={expanded}
         title={expanded ? 'Hide assistant' : 'Show assistant'}
@@ -102,27 +108,32 @@ export function ChatAssistant() {
       </button>
 
       {expanded ? (
-        <div className="chat-panel">
-          <div className="chat-header row">
+        <div className="flex flex-col h-[360px] max-[980px]:h-[300px]">
+          <div className="flex items-center gap-[var(--spacing-3)] px-[var(--spacing-3)] py-[var(--spacing-2)] border-b border-[var(--color-border)]">
             <div className="grow">
-              <div className="title">Assistant</div>
-              <div className="subtitle">Helps you edit and refine your document</div>
+              <div className="text-[var(--text-base)] font-semibold">Assistant</div>
+              <div className="text-[var(--text-xs)] text-[var(--color-muted)]">Helps you edit and refine your document</div>
             </div>
           </div>
-          <div className="chat-body" ref={listRef}>
+          <div className="flex-1 overflow-auto p-[var(--spacing-3)] bg-[var(--color-elev)]" ref={listRef}>
             {visibleMessages.length === 0 && (
-              <div className="empty">Ask for suggestions, rewriting, structure, summaries, or references.</div>
+              <div className="text-[var(--color-muted)] text-[var(--text-sm)] text-center mt-[var(--spacing-6)]">Ask for suggestions, rewriting, structure, summaries, or references.</div>
             )}
             {visibleMessages.map((m, idx) => (
-              <div key={idx} className={["msg", m.role].join(' ')}>
-                <div className="bubble">{m.role === 'user' ? (<ChatRefTags text={m.content} />) : m.content}</div>
+              <div key={idx} className={["flex mb-[var(--spacing-2)]", m.role === 'user' ? 'justify-end' : 'justify-start'].join(' ')}>
+                <div className={[
+                  'max-w-[70%] px-[12px] py-[10px] rounded-[12px] border border-[var(--color-border)] bg-white',
+                  m.role === 'user' ? 'bg-[var(--color-accent)] text-white border-[var(--color-accent)]' : '',
+                ].join(' ')}>
+                  {m.role === 'user' ? (<ChatRefTags text={m.content} />) : m.content}
+                </div>
               </div>
             ))}
-            {error && <div className="error">{error}</div>}
+            {error && <div className="text-[var(--color-danger)] text-sm mt-2">{error}</div>}
           </div>
-          <div className="chat-input">
-            <div className="row">
-              <div className="chat-textarea-wrap">
+          <div className="border-t border-[var(--color-border)] px-[var(--spacing-3)] py-[var(--spacing-2)] bg-white">
+            <div className="flex items-center gap-[var(--spacing-3)]">
+              <div className="relative w-full">
                 <ChatTaggedInput
                   ref={inputHostRef}
                   value={input}
@@ -160,9 +171,9 @@ export function ChatAssistant() {
           </div>
         </div>
       ) : (
-        <div className="chat-collapsed-row">
-          <button className="chat-toggle btn" onClick={() => setExpanded(true)} aria-expanded={expanded}>
-            <span className="dot" /> Assistant
+        <div>
+          <button className="btn inline-flex items-center gap-2" onClick={() => setExpanded(true)} aria-expanded={expanded}>
+            <span className="inline-block w-2 h-2 bg-[var(--color-accent)] rounded-full" /> Assistant
           </button>
         </div>
       )}

@@ -1,4 +1,3 @@
-import './GraphInline.css';
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import type { ParagraphChild } from '../../../../../../editor';
@@ -232,7 +231,7 @@ export function GraphInline({
     const barW = Math.max(4, Math.floor(width / Math.max(values.length * 1.5, 1)));
     const gap = 2;
     return (
-      <svg className="bars" width={width} height={height} aria-hidden>
+      <svg className="block" width={width} height={height} aria-hidden>
         {values.map((v, i) => {
           const h = Math.round((Math.abs(v) / max) * (height - 6));
           const x = i * (barW + gap);
@@ -279,7 +278,7 @@ export function GraphInline({
     }
     const stroke = colors[0] || '#6366f1';
     return (
-      <svg className="figure-svg" width={width} height={height} aria-label="Graph">
+      <svg className="block w-full h-auto" width={width} height={height} aria-label="Graph">
         <rect x="0" y="0" width={width} height={height} fill="#fff" />
         {/* grid */}
         {ticks.map((t, i) => (
@@ -338,7 +337,7 @@ export function GraphInline({
       </g>
     ));
     return (
-      <svg className="figure-svg" width={width} height={height} aria-label="Graph">
+      <svg className="block w-full h-auto" width={width} height={height} aria-label="Graph">
         <rect x="0" y="0" width={width} height={height} fill="#fff" />
         {segments}
         {legend}
@@ -349,7 +348,7 @@ export function GraphInline({
   return (
     <span
       ref={rootRef}
-      className="graph-inline"
+      className="graph-inline relative block my-2"
       role="group"
       aria-label="Graph"
       contentEditable={false as any}
@@ -357,36 +356,36 @@ export function GraphInline({
       onClick={(e) => e.stopPropagation()}
     >
       <figure
-        className="graph-figure"
+        className="block border border-[color:var(--color-border)] rounded-[8px] bg-white shadow-[var(--shadow-xs,0_1px_0_rgba(0,0,0,0.02))] p-2 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-accent)] focus-visible:ring-offset-2"
         role="button"
         tabIndex={0}
         title="Edit graph"
         onMouseDown={(e) => { e.preventDefault(); setOpen(v => !v); }}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v); } }}
       >
-        <div className="chart-box" aria-hidden>
+        <div className="block w-full max-w-[520px] mx-auto" aria-hidden>
           {chartReady ? (
-            <canvas ref={pillCanvasRef} width={420} height={240} />
+            <canvas className="block w-full h-auto" ref={pillCanvasRef} width={420} height={240} />
           ) : (kind === 'pie' ? figureFallbackPie : figureFallbackBarLine) || null}
         </div>
         {(title || labels.length) && (
-          <figcaption className="caption">{title || `${capKind} (${values.length})`}</figcaption>
+          <figcaption className="mt-1.5 text-xs text-[color:var(--color-muted)] text-center">{title || `${capKind} (${values.length})`}</figcaption>
         )}
       </figure>
       {open && (
-        <div className="graph-editor" onMouseDown={(e) => e.stopPropagation()}>
-          <div className="row">
-            <label className="lab">Type</label>
-            <select className="inp" value={kind} onChange={(e) => setKind(e.target.value as any)}>
+        <div className="absolute left-0 top-[calc(100%+6px)] min-w-[460px] bg-white border border-[color:var(--color-border)] rounded-[var(--radius-sm)] shadow-[var(--shadow-sm)] p-2.5 z-10" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
+            <label className="text-xs text-[color:var(--color-muted)]">Type</label>
+            <select className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--color-accent)] focus:border-transparent" value={kind} onChange={(e) => setKind(e.target.value as any)}>
               <option value="bar">Bar</option>
               <option value="line">Line</option>
               <option value="pie">Pie</option>
             </select>
           </div>
-          <div className="row">
-            <label className="lab">Values</label>
+          <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
+            <label className="text-xs text-[color:var(--color-muted)]">Values</label>
             <input
-              className="inp"
+              className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--color-accent)] focus:border-transparent"
               type="text"
               placeholder="1, 2, 3"
               value={valuesStr}
@@ -394,29 +393,29 @@ export function GraphInline({
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setOpen(false); } if (e.key === 'Escape') { e.preventDefault(); const init = initialRef.current; setKind(init.kind as any); setValuesStr(init.valuesStr); setLabelsStr(init.labelsStr); setColorsStr(init.colorsStr); setTitle(init.title); setOpen(false); } }}
             />
           </div>
-          <div className="row">
-            <label className="lab">Labels</label>
-            <input className="inp" type="text" placeholder="A, B, C" value={labelsStr} onChange={(e) => setLabelsStr(e.target.value)} />
+          <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
+            <label className="text-xs text-[color:var(--color-muted)]">Labels</label>
+            <input className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="A, B, C" value={labelsStr} onChange={(e) => setLabelsStr(e.target.value)} />
           </div>
-          <div className="row">
-            <label className="lab">Colors</label>
-            <input className="inp" type="text" placeholder="#6366f1, #22c55e" value={colorsStr} onChange={(e) => setColorsStr(e.target.value)} />
+          <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
+            <label className="text-xs text-[color:var(--color-muted)]">Colors</label>
+            <input className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="#6366f1, #22c55e" value={colorsStr} onChange={(e) => setColorsStr(e.target.value)} />
           </div>
-          <div className="row">
-            <label className="lab">Title</label>
-            <input className="inp" type="text" placeholder="Optional" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
+            <label className="text-xs text-[color:var(--color-muted)]">Title</label>
+            <input className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="Optional" value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
-          <div className="preview">
+          <div className="mt-1.5 p-2 bg-[color:var(--color-elev)] rounded-[6px] text-sm flex items-center justify-center">
             {chartReady ? (
-              <canvas ref={canvasRef} width={160} height={80} />
+              <canvas className="block" ref={canvasRef} width={160} height={80} />
             ) : (
-              fallbackBars || <div className="placeholder">Graph preview</div>
+              fallbackBars || <div className="text-[color:var(--color-muted)]">Graph preview</div>
             )}
           </div>
-          {error && <div className="error" role="alert">{error}</div>}
-          <div className="actions">
-            <button type="button" className="btn danger" title="Remove graph" onMouseDown={onRemove}>Remove</button>
-            <button type="button" className="btn" title="Close" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</button>
+          {error && <div className="mt-1.5 text-[#b31212] text-xs" role="alert">{error}</div>}
+          <div className="flex justify-end gap-2 mt-2">
+            <button type="button" className="border border-[color:var(--color-border)] bg-white px-2.5 py-1.5 rounded-[6px] cursor-pointer text-[#b31212] border-[#f3c1c1]" title="Remove graph" onMouseDown={onRemove}>Remove</button>
+            <button type="button" className="border border-[color:var(--color-border)] bg-white px-2.5 py-1.5 rounded-[6px] cursor-pointer" title="Close" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</button>
           </div>
         </div>
       )}

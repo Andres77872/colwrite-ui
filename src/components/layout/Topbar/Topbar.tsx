@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import './Topbar.css';
 import { login, setSessionTokenCookie, clearSessionTokenCookie } from '../../../services';
 
 type User = { name: string; email: string };

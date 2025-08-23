@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import './Editable.css';
+
 import { useEditor } from '../../../editor';
 import { useLayoutEffect, useRef } from 'react';
 import { openSlashMenu, isSlashMenuOpen } from '../../editor/SlashMenu/SlashMenu';
@@ -12,6 +12,20 @@ export function serializeEditableHtml(root: HTMLDivElement): string {
     const elh = el as HTMLElement;
     elh.setAttribute('contenteditable', 'false');
     clearNode(elh);
+  });
+  // Strip ephemeral AI suggestion wrappers; they are temporary UI only.
+  // Replace each `.ai-suggest` with its original content, so the stored HTML
+  // remains clean until the user explicitly accepts a suggestion.
+  clone.querySelectorAll('.ai-suggest').forEach((wrap) => {
+    const w = wrap as HTMLElement;
+    const orig = w.querySelector('.ai-original') as HTMLElement | null;
+    const frag = document.createDocumentFragment();
+    if (orig) {
+      while (orig.firstChild) frag.appendChild(orig.firstChild);
+    } else {
+      frag.appendChild(document.createTextNode(w.textContent || ''));
+    }
+    w.replaceWith(frag);
   });
   // Do not try to serialize rendered internals for AI; they are represented via placeholders.
   return clone.innerHTML;

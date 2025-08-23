@@ -1,4 +1,3 @@
-import './ParagraphBlock.css';
 import type { ParagraphBlock as P } from '../../../../editor';
 import { Editable } from '../../../common/Editable';
 import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react';
