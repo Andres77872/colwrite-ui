@@ -71,7 +71,15 @@ export function Editable({
   }, [html, activeId, id, refs]);
   return (
     <div
-      className={['editable', className].filter(Boolean).join(' ')}
+      className={[
+        'editable',
+        // Inline Tailwind utilities mirroring most .editable styles
+        'outline-none min-h-6 px-2 py-1.5 rounded-sm transition-[background,box-shadow] ease-linear duration-150',
+        'break-words',
+        // Reserve focus ring space at rest and apply on focus
+        'shadow-[inset_0_0_0_1px_transparent] focus:bg-white focus:shadow-[inset_0_0_0_1px_var(--color-border)]',
+        className,
+      ].filter(Boolean).join(' ')}
       ref={(el) => { refs.current[id] = el; }}
       contentEditable
       suppressContentEditableWarning

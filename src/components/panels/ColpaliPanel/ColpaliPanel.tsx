@@ -2,6 +2,9 @@ import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { ColpaliArxivResult } from '../../../services/colpali';
 import { searchColpaliArxiv } from '../../../services/colpali';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card } from '@/components/ui/card';
 
 function PageBadge({ page }: { page?: number }) {
   if (typeof page !== 'number') return null;
@@ -64,23 +67,23 @@ export function ColpaliPanel() {
       <div className="flex items-center justify-between gap-2">
         <strong>ColPali Search</strong>
         <div className="flex items-center gap-2">
-          <span className="muted">
+          <span className="text-muted-foreground">
             {loading ? 'Searching…' : hasResults ? `${results.length} hits` : 'Semantic search over arXiv (ColPali)'}
           </span>
         </div>
       </div>
 
       <form className="flex items-center gap-2" onSubmit={onSearch}>
-        <input
-          className="input grow disabled:opacity-60 disabled:cursor-not-allowed"
+        <Input
+          className="flex-1 disabled:opacity-60 disabled:cursor-not-allowed"
           placeholder="Search arXiv with ColPali (e.g., 'ai on education')"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           disabled={loading}
         />
-        <select 
-          className="select disabled:opacity-60 disabled:cursor-not-allowed" 
-          value={limit} 
+        <select
+          className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          value={limit}
           onChange={(e) => setLimit(Number(e.target.value))}
           disabled={loading}
         >
@@ -88,9 +91,9 @@ export function ColpaliPanel() {
             <option key={n} value={n}>{n}</option>
           ))}
         </select>
-        <button className="btn" type="submit" disabled={loading || !query.trim()}>
+        <Button type="submit" disabled={loading || !query.trim()}>
           {loading ? 'Searching…' : 'Search'}
-        </button>
+        </Button>
       </form>
 
       {error && (
@@ -105,7 +108,7 @@ export function ColpaliPanel() {
 
       {hasResults && domains.length > 0 && (
         <div className="text-sm py-2 border-b border-border">
-          <span className="muted">Sources: </span>
+          <span className="text-muted-foreground">Sources: </span>
           <span>{domains.join(', ')}</span>
         </div>
       )}
@@ -122,9 +125,9 @@ export function ColpaliPanel() {
           const needsTruncation = abstract.length > 240;
           const displayAbstract = isExpanded ? abstract : short;
           return (
-            <div className="card p-4 relative" key={key}>
+            <Card className="p-4 relative" key={key}>
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-8 h-8 rounded-sm grid place-items-center bg-elev border border-border font-bold text-sm text-muted">#{idx + 1}</div>
+                <div className="w-8 h-8 rounded-sm grid place-items-center bg-elev border border-border font-bold text-sm text-muted-foreground">#{idx + 1}</div>
                 <PageBadge page={r.page} />
               </div>
               <h3 className="font-semibold text-lg leading-snug mb-2">
@@ -136,7 +139,7 @@ export function ColpaliPanel() {
                   r.title || '(untitled)'
                 )}
               </h3>
-              <div className="text-sm mb-3 leading-snug muted">
+              <div className="text-sm mb-3 leading-snug text-muted-foreground">
                 {r.authors && <span className="authors">{r.authors}</span>}
                 {r.date && <span className="opacity-80"> · {new Date(r.date).toLocaleDateString()}</span>}
                 {r.version && <span className="opacity-80"> · v{r.version}</span>}
@@ -178,7 +181,7 @@ export function ColpaliPanel() {
                   <a className="text-accent no-underline text-sm font-medium py-1 px-2 rounded-sm border border-transparent hover:bg-[rgba(59,130,246,0.08)] hover:border-border" href={`https://doi.org/${r.doi}`} target="_blank" rel="noreferrer">🔗 DOI</a>
                 )}
               </div>
-            </div>
+            </Card>
           );
         })}
       </div>
@@ -187,7 +190,7 @@ export function ColpaliPanel() {
         <div className="flex flex-col items-center justify-center py-8 px-4 text-center flex-1">
           <div className="text-[48px] mb-3 opacity-50">🔍</div>
           <div className="font-semibold text-lg mb-2">No hits found</div>
-          <div className="text-sm leading-relaxed max-w-[280px] muted">Try broadening the query or rephrasing.</div>
+          <div className="text-sm leading-relaxed max-w-[280px] text-muted-foreground">Try broadening the query or rephrasing.</div>
         </div>
       )}
 
@@ -195,7 +198,7 @@ export function ColpaliPanel() {
         <div className="flex flex-col items-center justify-center py-8 px-4 text-center flex-1">
           <div className="text-[48px] mb-3 opacity-50">🤖</div>
           <div className="font-semibold text-lg mb-2">ColPali semantic search</div>
-          <div className="text-sm leading-relaxed max-w-[280px] muted">Find relevant pages from arXiv papers. Thumbnails are optimized (.jpg).</div>
+          <div className="text-sm leading-relaxed max-w-[280px] text-muted-foreground">Find relevant pages from arXiv papers. Thumbnails are optimized (.jpg).</div>
         </div>
       )}
     </div>

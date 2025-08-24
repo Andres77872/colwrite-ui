@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 // styles migrated to Tailwind (see src/styles/tailwind.css)
 import { useEditor } from '../../../editor';
 import { createDocument, saveDocument, loadDocument, listDocuments, deleteDocument } from '../../../services';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 export function JsonPanel() {
   const { getJSON, setFromJSON, save, doc } = useEditor();
@@ -96,26 +98,25 @@ export function JsonPanel() {
       <div className="flex items-center justify-between gap-2">
         <strong>Document JSON</strong>
         <div className="flex items-center gap-2">
-          <input
-            className="input"
+          <Input
             placeholder="Document ID"
             value={documentId}
             onChange={(e) => setDocumentId(e.target.value)}
-            style={{ minWidth: 280 }}
+            className="min-w-[280px]"
           />
-          <button className="btn" disabled={loading} onClick={onCreate}>Create</button>
-          <button className="btn" disabled={loading} onClick={onSaveById}>Save by ID</button>
-          <button className="btn" disabled={loading} onClick={onLoadById}>Load by ID</button>
-          <button className="btn danger" disabled={loading} onClick={onDeleteById}>Delete</button>
-          <button className="btn" disabled={loading} onClick={onList}>List</button>
+          <Button disabled={loading} onClick={onCreate}>Create</Button>
+          <Button variant="outline" disabled={loading} onClick={onSaveById}>Save by ID</Button>
+          <Button variant="outline" disabled={loading} onClick={onLoadById}>Load by ID</Button>
+          <Button variant="destructive" disabled={loading} onClick={onDeleteById}>Delete</Button>
+          <Button variant="outline" disabled={loading} onClick={onList}>List</Button>
         </div>
       </div>
 
       <div className="flex justify-between mt-2">
         <div className="flex gap-2">
-          <button className="btn" onClick={() => setText(getJSON())}>Refresh</button>
-          <button className="btn" onClick={onLoad}>Apply JSON</button>
-          <button className="btn primary" onClick={save}>Save (local)</button>
+          <Button variant="outline" onClick={() => setText(getJSON())}>Refresh</Button>
+          <Button variant="outline" onClick={onLoad}>Apply JSON</Button>
+          <Button onClick={save}>Save (local)</Button>
         </div>
       </div>
 
@@ -126,15 +127,15 @@ export function JsonPanel() {
       />
 
       {documents.length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          <div className="muted" style={{ marginBottom: 4 }}>Found {count} documents</div>
-          <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+        <div className="mt-2">
+          <div className="text-muted-foreground mb-1">Found {count} documents</div>
+          <ul className="m-0 pl-5">
             {documents.map((d: any) => {
               const id = d._id || d.id || '';
               const title = d.title || '(untitled)';
               return (
-                <li key={id} style={{ cursor: 'pointer' }} onClick={() => setDocumentId(String(id))}>
-                  <span className="muted">{String(id)}</span> — {String(title)}
+                <li key={id} className="cursor-pointer text-sm" onClick={() => setDocumentId(String(id))}>
+                  <span className="text-muted-foreground">{String(id)}</span> — {String(title)}
                 </li>
               );
             })}

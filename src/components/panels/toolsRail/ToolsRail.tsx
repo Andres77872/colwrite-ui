@@ -36,7 +36,7 @@ export function ToolsRail() {
         {btn('colpali', 'ColPali search', '🔎')}
         {btn('library', 'Library', '📚')}
       </div>
-      <div className="mt-auto py-2 text-[11px]"><span className="muted">v0.1</span></div>
+      <div className="mt-auto py-2 text-[11px]"><span className="text-muted-foreground">v0.1</span></div>
     </div>
   );
 }

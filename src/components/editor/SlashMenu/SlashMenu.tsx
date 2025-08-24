@@ -7,6 +7,7 @@ import { equationItem } from './items/equation';
 import { graphItem } from './items/graph';
 import { serializeEditableHtml } from '../../common/Editable/Editable';
 import type { SlashContext, SlashItem } from './types';
+import { Input } from '@/components/ui/input';
 
 export const SLASH_MENU_EVENT = 'colwrite:open-slash-menu';
 export const SLASH_MENU_VISIBILITY_EVENT = 'colwrite:slash-menu-visibility';
@@ -181,8 +182,8 @@ export function SlashMenu() {
       onMouseDown={(e) => e.preventDefault()}
       tabIndex={-1}
     >
-      <input
-        className="input w-full px-2 py-[6px] mb-[6px]"
+      <Input
+        className="w-full mb-[6px]"
         placeholder="Type to filter…"
         value={query}
         onChange={(e) => setQuery(e.target.value)}

@@ -2,6 +2,9 @@ import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { searchArxiv } from '../../../services/arxiv';
 import type { ArxivResult } from '../../../services/arxiv';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card } from '@/components/ui/card';
 
 function ScoreBadge({ score }: { score?: number }) {
   if (typeof score !== 'number') return null;
@@ -67,23 +70,23 @@ export function ArxivPanel() {
       <div className="flex items-center justify-between gap-2">
         <strong>References</strong>
         <div className="flex items-center gap-2">
-          <span className="muted">
+          <span className="text-muted-foreground">
             {loading ? 'Searching…' : results.length ? `${results.length} papers found` : 'Search arXiv papers'}
           </span>
         </div>
       </div>
 
       <form className="flex items-center gap-2" onSubmit={onSearch}>
-        <input
-          className="input grow disabled:opacity-60 disabled:cursor-not-allowed"
+        <Input
+          className="flex-1 disabled:opacity-60 disabled:cursor-not-allowed"
           placeholder="Search arXiv papers (e.g., 'attention is all you need')"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           disabled={loading}
         />
-        <select 
-          className="select disabled:opacity-60 disabled:cursor-not-allowed" 
-          value={limit} 
+        <select
+          className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          value={limit}
           onChange={(e) => setLimit(Number(e.target.value))}
           disabled={loading}
         >
@@ -91,9 +94,9 @@ export function ArxivPanel() {
             <option key={n} value={n}>{n}</option>
           ))}
         </select>
-        <button className="btn" type="submit" disabled={loading || !query.trim()}>
+        <Button type="submit" disabled={loading || !query.trim()}>
           {loading ? 'Searching…' : 'Search'}
-        </button>
+        </Button>
       </form>
 
       {error && (
@@ -108,7 +111,7 @@ export function ArxivPanel() {
 
       {results.length > 0 && (
         <div className="text-sm py-2 border-b border-border">
-          <span className="muted">Average relevance: </span>
+          <span className="text-muted-foreground">Average relevance: </span>
           <span className="font-semibold text-accent">{avgScore}</span>
         </div>
       )}
@@ -122,9 +125,9 @@ export function ArxivPanel() {
           const needsTruncation = hasAbstract && (r.abstract?.length ?? 0) > 280;
           
           return (
-            <div className="card p-4 relative" key={key}>
+            <Card className="p-4 relative" key={key}>
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-8 h-8 rounded-sm grid place-items-center bg-elev border border-border font-bold text-sm text-muted">#{idx + 1}</div>
+                <div className="w-8 h-8 rounded-sm grid place-items-center bg-elev border border-border font-bold text-sm text-muted-foreground">#{idx + 1}</div>
                 <ScoreBadge score={r.score} />
               </div>
               
@@ -177,7 +180,7 @@ export function ArxivPanel() {
                   </a>
                 )}
               </div>
-            </div>
+            </Card>
           );
         })}
       </div>
@@ -186,7 +189,7 @@ export function ArxivPanel() {
         <div className="flex flex-col items-center justify-center py-8 px-4 text-center flex-1">
           <div className="text-[48px] mb-3 opacity-50">🔍</div>
           <div className="font-semibold text-lg mb-2">No papers found</div>
-          <div className="text-sm leading-relaxed max-w-[280px] muted">Try adjusting your search terms or use broader keywords.</div>
+          <div className="text-sm leading-relaxed max-w-[280px] text-muted-foreground">Try adjusting your search terms or use broader keywords.</div>
         </div>
       )}
 
@@ -194,7 +197,7 @@ export function ArxivPanel() {
         <div className="flex flex-col items-center justify-center py-8 px-4 text-center flex-1">
           <div className="text-[48px] mb-3 opacity-50">📚</div>
           <div className="font-semibold text-lg mb-2">Search arXiv papers</div>
-          <div className="text-sm leading-relaxed max-w-[280px] muted">Find relevant research papers and references for your work.</div>
+          <div className="text-sm leading-relaxed max-w-[280px] text-muted-foreground">Find relevant research papers and references for your work.</div>
         </div>
       )}
     </div>

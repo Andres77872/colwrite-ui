@@ -6,6 +6,7 @@ import { BlockControls } from '../BlockControls';
 import { ParagraphBlock } from '../blocks/ParagraphBlock';
 import { HeadingBlock } from '../blocks/HeadingBlock';
 import { DividerBlock } from '../blocks/DividerBlock';
+import { Button } from '@/components/ui/button';
 
 export function Canvas() {
   const { blocks, activeId, setActive, reorderBlock, addBlockAtStart, refs, updateHtml } = useEditor();
@@ -69,7 +70,7 @@ export function Canvas() {
 
   return (
     <div
-      className="canvas"
+      className="canvas min-h-full flex flex-col gap-3 pb-[calc(var(--spacing-8,32px)+48px)]"
       ref={containerRef}
       tabIndex={0}
       onDragEnd={clearDnd}
@@ -142,26 +143,25 @@ export function Canvas() {
             <div className="empty-title">Start writing</div>
             <div className="empty-sub">Add your first block to begin. You can always use '/' to open the command menu.</div>
             <div className="empty-actions">
-              <button
-                className="btn primary"
+              <Button
                 onClick={() => {
                   const id = addBlockAtStart('paragraph');
                   queueMicrotask(() => refs.current[id]?.focus());
                 }}
-              >New text block</button>
-              <button
-                className="btn"
+              >New text block</Button>
+              <Button
+                variant="outline"
                 onClick={() => {
                   const id = addBlockAtStart('heading');
                   queueMicrotask(() => refs.current[id]?.focus());
                 }}
-              >Add heading</button>
-              <button
-                className="btn"
+              >Add heading</Button>
+              <Button
+                variant="outline"
                 onClick={() => {
                   addBlockAtStart('divider');
                 }}
-              >Insert divider</button>
+              >Insert divider</Button>
             </div>
             <div className="empty-hint">Tip: Press '/' inside a text block for quick actions and inserts.</div>
           </div>
@@ -172,7 +172,7 @@ export function Canvas() {
         const isAiHidden = (b as any).aiHidden === true;
         const isLocked = (b as any).locked === true;
         const classes = [
-          'row block-row',
+          'block-row flex group',
           b.id === activeId ? 'active' : '',
           isCollapsed ? 'collapsed' : '',
           isAiHidden ? 'ai-hidden' : '',
@@ -192,7 +192,7 @@ export function Canvas() {
           >
             <BlockControls id={b.id} />
             {isCollapsed ? (
-              <div className="grow">
+              <div className="flex-1">
                 <div className="block-collapsed">
                   <span className="bc-arrow">▸</span>
                   <span className="bc-label">
@@ -204,7 +204,7 @@ export function Canvas() {
                 </div>
               </div>
             ) : (
-              <div className="grow">
+              <div className="flex-1">
                 {b.type === 'paragraph' && <ParagraphBlock block={b} />}
                 {b.type === 'heading' && <HeadingBlock block={b} />}
                 {b.type === 'divider' && <DividerBlock />}

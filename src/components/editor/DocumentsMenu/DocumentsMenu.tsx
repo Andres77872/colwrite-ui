@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useEditor } from '../../../editor';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 export function DocumentsMenu() {
   const { listRemote, loadRemote, createRemote, deleteRemote, documentId } = useEditor();
@@ -82,30 +84,30 @@ export function DocumentsMenu() {
       <div className="flex items-center justify-between">
         <strong>Documents</strong>
         <div className="flex items-center gap-2">
-          <button className="btn" onClick={fetchList} disabled={loading}>Refresh</button>
-          <button className="btn primary" onClick={onCreate} disabled={creating}>New</button>
+          <Button variant="outline" onClick={fetchList} disabled={loading}>Refresh</Button>
+          <Button onClick={onCreate} disabled={creating}>New</Button>
         </div>
       </div>
 
       <div className="flex">
-        <input
-          className="input grow"
+        <Input
           type="search"
           placeholder="Search documents…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search documents"
+          className="flex-1"
         />
       </div>
 
-      <div className="text-[var(--color-muted)] text-xs">
+      <div className="text-muted-foreground text-xs">
         Page {page} / {totalPages} · {count} total
       </div>
 
       <div className="flex flex-col gap-1">
-        {loading && <div className="text-[var(--color-muted)]">Loading…</div>}
+        {loading && <div className="text-muted-foreground">Loading…</div>}
         {!loading && items.length === 0 && (
-          <div className="text-[var(--color-muted)]">No documents yet. Create one to get started.</div>
+          <div className="text-muted-foreground">No documents yet. Create one to get started.</div>
         )}
         {!loading && items.map((d: any) => {
           const id: string = String(d._id || d.id || d.document_id || '');
@@ -125,17 +127,18 @@ export function DocumentsMenu() {
             >
               <div className="min-w-0 flex-1">
                 <div className="text-sm truncate">{title}</div>
-                <div className="text-xs truncate text-[var(--color-muted)]">{id}</div>
+                <div className="text-xs truncate text-muted-foreground">{id}</div>
               </div>
               <div className="shrink-0">
-                <button
-                  className="btn danger"
+                <Button
+                  variant="destructive"
+                  size="sm"
                   onClick={(e) => { e.stopPropagation(); onDelete(id); }}
                   disabled={deletingId === id}
                   title="Delete document"
                 >
                   Delete
-                </button>
+                </Button>
               </div>
             </div>
           );
@@ -143,8 +146,8 @@ export function DocumentsMenu() {
       </div>
 
       <div className="flex items-center justify-between mt-2">
-        <button className="btn" onClick={prev} disabled={page <= 1}>Prev</button>
-        <button className="btn" onClick={next} disabled={page >= totalPages}>Next</button>
+        <Button variant="outline" onClick={prev} disabled={page <= 1}>Prev</Button>
+        <Button variant="outline" onClick={next} disabled={page >= totalPages}>Next</Button>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
 import type { OpenAIChatMessage } from '../../../services';
 import { streamDocumentAiChat } from '../../../services';
+import { Button } from '@/components/ui/button';
 import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
 import { ChatRefTags } from './ChatRefTags';
 import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
@@ -110,7 +111,7 @@ export function ChatAssistant() {
       {expanded ? (
         <div className="flex flex-col h-[360px] max-[980px]:h-[300px]">
           <div className="flex items-center gap-[var(--spacing-3)] px-[var(--spacing-3)] py-[var(--spacing-2)] border-b border-[var(--color-border)]">
-            <div className="grow">
+            <div className="flex-1">
               <div className="text-[var(--text-base)] font-semibold">Assistant</div>
               <div className="text-[var(--text-xs)] text-[var(--color-muted)]">Helps you edit and refine your document</div>
             </div>
@@ -162,9 +163,9 @@ export function ChatAssistant() {
                 />
               </div>
               {!isStreaming ? (
-                <button className="btn primary" onClick={onSend} disabled={!input.trim()}>Send</button>
+                <Button onClick={onSend} disabled={!input.trim()}>Send</Button>
               ) : (
-                <button className="btn danger" onClick={onStop}>Stop</button>
+                <Button variant="destructive" onClick={onStop}>Stop</Button>
               )}
             </div>
 
@@ -172,9 +173,9 @@ export function ChatAssistant() {
         </div>
       ) : (
         <div>
-          <button className="btn inline-flex items-center gap-2" onClick={() => setExpanded(true)} aria-expanded={expanded}>
+          <Button variant="outline" className="inline-flex items-center gap-2" onClick={() => setExpanded(true)} aria-expanded={expanded}>
             <span className="inline-block w-2 h-2 bg-[var(--color-accent)] rounded-full" /> Assistant
-          </button>
+          </Button>
         </div>
       )}
     </div>
