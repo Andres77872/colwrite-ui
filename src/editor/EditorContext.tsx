@@ -29,6 +29,9 @@ export type EditorContextValue = {
   updateParagraphChild: (blockId: string, childId: string, next: Partial<ParagraphChild>) => void;
   removeParagraphChild: (blockId: string, childId: string) => void;
   setHeadingLevel: (id: string, level: 1 | 2 | 3) => void;
+  // Generic block patch helpers for AI chat extras
+  insertBlockAt: (block: Block, beforeOf?: string | null, afterOf?: string | null) => void;
+  updateBlockFields: (blockId: string, fields: Partial<Block>) => void;
   exec: (cmd: string) => void;
   getJSON: () => string;
   setFromJSON: (json: string) => void;
@@ -228,6 +231,45 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     b.id === id && b.type === 'heading' ? ({ ...b, level }) : b
   )));
 
+  // Insert a fully-formed block at a specific position. If beforeOf is provided,
+  // insert before that id; else if afterOf is provided, insert after that id; otherwise append.
+  // If a block with the same id already exists, do nothing to keep operation idempotent.
+  const insertBlockAt = (block: Block, beforeOf?: string | null, afterOf?: string | null) => setBlocks(prev => {
+    if (!block || typeof (block as any).id !== 'string') return prev;
+    if (prev.some(b => b.id === (block as any).id)) return prev; // idempotent insert
+    const out = prev.slice();
+    // Determine target index
+    if (typeof beforeOf === 'string') {
+      const idx = out.findIndex(b => b.id === beforeOf);
+      if (idx >= 0) { out.splice(idx, 0, block); return out; }
+    }
+    if (typeof afterOf === 'string') {
+      const idx = out.findIndex(b => b.id === afterOf);
+      if (idx >= 0) { out.splice(idx + 1, 0, block); return out; }
+    }
+    out.push(block);
+    return out;
+  });
+
+  // Update specific fields on a block by id. Type changes are ignored.
+  const updateBlockFields = (blockId: string, fields: Partial<Block>) => setBlocks(prev => {
+    const idx = prev.findIndex(b => b.id === blockId);
+    if (idx === -1) return prev;
+    const cur = prev[idx] as Block;
+    const next: any = { ...cur, ...fields };
+    // Prevent type mutation
+    if ((fields as any)?.type && (fields as any).type !== (cur as any).type) {
+      next.type = (cur as any).type;
+    }
+    // Clamp paragraph columns if present
+    if (cur.type === 'paragraph' && typeof (next as any).columns === 'number') {
+      next.columns = Math.max(1, Math.min(6, Math.floor((next as any).columns || 1)));
+    }
+    const out = prev.slice();
+    out[idx] = next as Block;
+    return out;
+  });
+
   const exec = (cmd: string) => document.execCommand(cmd, false);
 
   const newLocal = () => {
@@ -307,6 +349,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     updateParagraphChild,
     removeParagraphChild,
     setHeadingLevel,
+    insertBlockAt,
+    updateBlockFields,
     exec,
     getJSON,
     setFromJSON,
