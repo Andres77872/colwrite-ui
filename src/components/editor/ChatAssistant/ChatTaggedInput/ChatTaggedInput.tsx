@@ -332,18 +332,18 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
         }}
       />
       {showStatus && (
-        <div id="input-status" className="flex justify-between items-center text-[11px] text-[var(--color-muted)] opacity-0 transition-opacity duration-200 group-focus-within:opacity-100">
+        <div id="input-status" className="flex justify-between items-center text-[11px] text-foreground opacity-70 group-focus-within:opacity-100 transition-opacity duration-200">
           <div className="flex gap-3">
             <span className="flex items-center gap-[3px]">
-              <kbd className="inline-block px-1 py-px text-[10px] leading-[1.2] text-[var(--color-text)] bg-[#f8f9fa] border border-[#dee2e6] rounded-[3px] font-mono font-medium">#</kbd> Reference
+              <kbd className="inline-block px-1 py-px text-[10px] leading-[1.2] text-foreground bg-muted border border-border rounded-[3px] font-mono font-medium">#</kbd> Reference
             </span>
             {isFocused && (
               <>
                 <span className="flex items-center gap-[3px]">
-                  <kbd className="inline-block px-1 py-px text-[10px] leading-[1.2] text-[var(--color-text)] bg-[#f8f9fa] border border-[#dee2e6] rounded-[3px] font-mono font-medium">⌘/Ctrl</kbd> + <kbd className="inline-block px-1 py-px text-[10px] leading-[1.2] text-[var(--color-text)] bg-[#f8f9fa] border border-[#dee2e6] rounded-[3px] font-mono font-medium">⌫</kbd> Delete word
+                  <kbd className="inline-block px-1 py-px text-[10px] leading-[1.2] text-foreground bg-muted border border-border rounded-[3px] font-mono font-medium">⌘/Ctrl</kbd> + <kbd className="inline-block px-1 py-px text-[10px] leading-[1.2] text-foreground bg-muted border border-border rounded-[3px] font-mono font-medium">⌫</kbd> Delete word
                 </span>
                 <span className="flex items-center gap-[3px]">
-                  <kbd className="inline-block px-1 py-px text-[10px] leading-[1.2] text-[var(--color-text)] bg-[#f8f9fa] border border-[#dee2e6] rounded-[3px] font-mono font-medium">⌘/Ctrl</kbd> + <kbd className="inline-block px-1 py-px text-[10px] leading-[1.2] text-[var(--color-text)] bg-[#f8f9fa] border border-[#dee2e6] rounded-[3px] font-mono font-medium">A</kbd> Select all
+                  <kbd className="inline-block px-1 py-px text-[10px] leading-[1.2] text-foreground bg-muted border border-border rounded-[3px] font-mono font-medium">⌘/Ctrl</kbd> + <kbd className="inline-block px-1 py-px text-[10px] leading-[1.2] text-foreground bg-muted border border-border rounded-[3px] font-mono font-medium">A</kbd> Select all
                 </span>
               </>
             )}

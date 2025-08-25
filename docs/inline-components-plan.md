@@ -10,6 +10,11 @@ Ground-truth code references:
 - `src/components/editor/blocks/ParagraphBlock/Inlines/TableInline/TableInline.tsx`
 - `src/components/editor/SlashMenu/items/*`
 
+## Current implementation status
+
+- Implemented: `AiBeatInline`, `TableInline`, `CitationInline`, `EquationInline`, `GraphInline`
+- Pending (planned): `FootnoteInline`, `XRefInline`, `VarInline`
+
 ## Architectural principles (current)
 - __Placeholders__: Paragraph `html` contains empty placeholders `<span data-child-id="ID" contenteditable="false"></span>`; actual state lives in `ParagraphBlock.children`.
 - __Portals__: `ParagraphBlock.tsx` queries placeholders and mounts React inline components with `createPortal` into each matching span.

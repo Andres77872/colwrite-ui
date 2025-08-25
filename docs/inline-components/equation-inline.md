@@ -8,6 +8,13 @@ References:
 - `src/editor/types.ts`
 - `src/components/editor/SlashMenu/items/*`
 
+## Status
+
+- Implemented.
+- UI component: `src/components/editor/blocks/ParagraphBlock/Inlines/EquationInline/EquationInline.tsx`
+- Slash menu item: `src/components/editor/SlashMenu/items/equation.ts`
+- Mounted via portals in: `src/components/editor/blocks/ParagraphBlock/ParagraphBlock.tsx`
+
 ## Purpose
 - Add inline equations within sentences (e.g., `E=mc^2`).
 

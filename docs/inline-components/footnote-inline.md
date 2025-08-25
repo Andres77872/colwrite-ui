@@ -7,6 +7,14 @@ References:
 - `src/components/common/Editable/Editable.tsx`
 - `src/editor/types.ts`
 
+## Status
+
+- Types: not yet present in code (planned below).
+- UI component: not implemented.
+- Slash menu item: not implemented.
+- Not mounted in `ParagraphBlock.tsx` (no portal case yet).
+- Do not include `footnote` children in JSON yet; unsupported and will not render.
+
 ## Purpose
 - Provide inline footnotes with automatic numbering based on document order.
 

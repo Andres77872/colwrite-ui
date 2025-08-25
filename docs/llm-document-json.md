@@ -26,6 +26,11 @@ Example (shape only):
 }
 ```
 
+## Supported inline children (current)
+
+- Allowed inline child types: `aiBeat`, `table`, `citation`, `equation`, `graph`.
+- Do not emit planned types yet: `footnote`, `var`, `xref` (unsupported and will not render in the editor).
+
 - Child object (citation):
   - `id`: string
   - `type`: "citation"

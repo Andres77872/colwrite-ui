@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
+import { Button } from '@/components/ui/button';
 
 export function DocumentHeader() {
   const { doc, setDocName, saveRemote, deleteRemote, newLocal, documentId, lastSavedAt } = useEditor();
@@ -71,13 +72,13 @@ export function DocumentHeader() {
         {documentId && <div className="text-muted text-sm px-1.5 py-0.5 border border-dashed border-border rounded-sm bg-elev">{documentId}</div>}
       </div>
       <div className="flex items-center gap-2">
-        <button className="px-2.5 py-1.5 rounded-sm border border-border bg-white hover:bg-elev active:translate-y-[0.5px] disabled:opacity-60 disabled:cursor-not-allowed" onClick={onNew} disabled={loading !== null}>New</button>
-        <button className="px-2.5 py-1.5 rounded-sm border border-accent bg-accent text-white hover:bg-accent-ink active:translate-y-[0.5px] disabled:opacity-60 disabled:cursor-not-allowed" onClick={onSave} disabled={loading !== null}>
+        <Button variant="outline" size="sm" onClick={onNew} disabled={loading !== null}>New</Button>
+        <Button size="sm" onClick={onSave} disabled={loading !== null}>
           {loading === 'save' ? 'Saving…' : (documentId ? 'Save' : 'Save (create)')}
-        </button>
-        <button className="px-2.5 py-1.5 rounded-sm border border-danger bg-danger text-white hover:brightness-90 active:translate-y-[0.5px] disabled:opacity-60 disabled:cursor-not-allowed" onClick={onDelete} disabled={!documentId || loading !== null}>
+        </Button>
+        <Button variant="destructive" size="sm" onClick={onDelete} disabled={!documentId || loading !== null}>
           {loading === 'delete' ? 'Deleting…' : 'Delete'}
-        </button>
+        </Button>
         <div className="text-muted">{lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : (loading === 'save' ? 'Saving…' : '—')}</div>
       </div>
     </div>

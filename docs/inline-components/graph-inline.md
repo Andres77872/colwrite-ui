@@ -8,6 +8,13 @@ References:
 - `src/editor/types.ts`
 - `src/components/editor/SlashMenu/items/*`
 
+## Status
+
+- Implemented.
+- UI component: `src/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/GraphInline.tsx`
+- Slash menu item: `src/components/editor/SlashMenu/items/graph.ts`
+- Mounted via portals in: `src/components/editor/blocks/ParagraphBlock/ParagraphBlock.tsx`
+
 ## Purpose
 - Insert compact, non-intrusive charts in-flow with text for quick data cues (means, trends, proportions).
 - Supported kinds (MVP): `bar`, `line`, `pie`.

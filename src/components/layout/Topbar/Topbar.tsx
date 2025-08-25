@@ -72,7 +72,7 @@ export function Topbar() {
               <Button variant="ghost" className="h-9 px-2">
                 <Avatar className="w-7 h-7 mr-2 ring-2 ring-accent/20 ring-offset-2 ring-offset-background">
                   <AvatarImage src={`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.name)}`} />
-                  <AvatarFallback className="bg-gradient-to-br from-accent to-accent-hover text-primary-foreground text-xs font-semibold">
+                  <AvatarFallback className="bg-gradient-to-br from-accent to-accent-hover text-accent-foreground text-xs font-semibold">
                     {initials}
                   </AvatarFallback>
                 </Avatar>
