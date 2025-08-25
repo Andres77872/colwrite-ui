@@ -111,7 +111,7 @@ export function Editable({
         const el = e.currentTarget as HTMLDivElement;
         const row = el.closest('[data-block-id]') as HTMLElement | null;
         const explicitNext = (e.relatedTarget as HTMLElement | null) || null;
-        const canvas = el.closest('.canvas') as HTMLElement | null;
+        const canvas = el.closest('[data-editor-canvas]') as HTMLElement | null;
         // If the slash menu is open, do not clear active block when focus appears to move elsewhere
         if (isSlashMenuOpen()) return;
         // Focus moved within the same block row (e.g., controls) → keep active

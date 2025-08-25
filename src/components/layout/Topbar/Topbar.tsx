@@ -39,7 +39,7 @@ export function Topbar() {
     <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 px-3 py-2 bg-card border border-border rounded-lg shadow-sm relative z-10 w-full">
       <a className="flex items-center gap-3 no-underline text-foreground" href="#" aria-label="ColWrite home">
         <div className="w-7 h-7 rounded-sm grid place-items-center bg-primary text-primary-foreground font-bold">CW</div>
-        <div className="brand-text">
+        <div className="leading-tight">
           <div className="font-bold">ColWrite</div>
           <div className="text-sm text-muted-foreground">Assistant writer for arXiv papers</div>
         </div>

@@ -70,7 +70,8 @@ export function Canvas() {
 
   return (
     <div
-      className="canvas min-h-full flex flex-col gap-3 pb-[calc(var(--spacing-8,32px)+48px)]"
+      className="min-h-full flex flex-col gap-3 pb-[calc(var(--spacing-8,32px)+48px)]"
+      data-editor-canvas
       ref={containerRef}
       tabIndex={0}
       onDragEnd={clearDnd}

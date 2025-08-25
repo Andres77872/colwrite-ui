@@ -84,28 +84,10 @@ button { cursor: pointer; }
 @utility row { @apply flex items-center gap-3; }
 @utility muted { @apply text-muted; }
 
-/* Shared components */
-.btn { @apply px-2.5 py-1.5 rounded-sm border border-border bg-white; }
-.btn:hover { @apply bg-elev; }
-.btn:active { transform: translateY(0.5px); }
-.btn.primary { @apply bg-accent text-white border-accent; }
-.btn.primary:hover { @apply bg-accent-ink; }
-.btn.ghost { @apply bg-transparent; }
-.btn.danger { @apply bg-danger text-white border-danger; }
-.btn.danger:hover { filter: brightness(0.9); }
-.btn:disabled { @apply opacity-60 cursor-not-allowed; }
-
-.input, .select, .textarea { @apply border border-border rounded-sm bg-white; }
-.input:focus, .select:focus, .textarea:focus { outline: 2px solid rgba(59,130,246,0.25); outline-offset: 1px; }
-
+/* Shared components (legacy pruned: .btn, .input/.select/.textarea removed) */
 .divider { @apply h-px bg-border my-3; }
 
-/* ========== Blocks (DividerBlock) ========== */
-.divider-block { border: 0; border-top: 1px solid var(--color-border); }
-
-/* ========== Blocks (ParagraphBlock & HeadingBlock) ========== */
-.paragraph-block { margin: 0; }
-.heading-block { margin: 0; }
+/* ========== Blocks (Divider/Paragraph/Heading) migrated to Tailwind utilities in components ========== */
 
 /* ========== Common (Editable) ========== */
 .editable { outline: none; min-height: 24px; padding: 6px 8px; border-radius: var(--radius-sm); transition: background 120ms ease, box-shadow 120ms ease; }
@@ -131,73 +113,13 @@ button { cursor: pointer; }
 *::-webkit-scrollbar-thumb:hover { background: #cfd6de; }
 
 /* ========== AppShell (replaces AppShell.css) ========== */
-.app-shell { @apply h-[100dvh] p-3 flex flex-col gap-3; }
-.app-header { @apply p-0 w-full bg-transparent border-0 shadow-none relative z-20; }
-.app-body { @apply grid gap-3 flex-1 min-h-0 grid-cols-1; }
-.app-body.has-right { grid-template-columns: 1fr 380px; }
-.app-body.has-right-rail { grid-template-columns: 1fr 52px; }
-.app-body.has-right-rail.has-right { grid-template-columns: 1fr 380px 52px; }
-.app-body.has-left { grid-template-columns: 260px 1fr; }
-.app-body.has-left.has-right-rail { grid-template-columns: 260px 1fr 52px; }
-.app-body.has-left.has-right-rail.has-right { grid-template-columns: 260px 1fr 380px 52px; }
-.app-body.has-left.is-left-collapsed { grid-template-columns: 56px 1fr; }
-.app-body.has-left.is-left-collapsed.has-right { grid-template-columns: 56px 1fr 380px; }
-.app-body.has-left.is-left-collapsed.has-right-rail { grid-template-columns: 56px 1fr 52px; }
-.app-body.has-left.is-left-collapsed.has-right-rail.has-right { grid-template-columns: 56px 1fr 380px 52px; }
-.app-left { @apply overflow-hidden; }
-.app-left.collapsed { width: 56px; }
-.app-main { @apply p-3 overflow-auto; }
-.app-aside { @apply p-3 overflow-auto; }
-.app-right { @apply p-2 overflow-auto; }
-.app-left .sidebar { @apply h-full; }
-@media (max-width: 980px) {
-  .app-body,
-  .app-body.has-right,
-  .app-body.has-right-rail,
-  .app-body.has-left,
-  .app-body.has-left.has-right,
-  .app-body.has-left.has-right-rail,
-  .app-body.has-left.has-right-rail.has-right { grid-template-columns: 1fr; }
-  .app-left { display: none; }
-  .app-right { display: none; }
-  .app-aside { display: none; }
-}
+/* Legacy AppShell classnames removed; components use Tailwind directly. */
 /* Grid helper for dynamic columns (used by AppShell). On mobile we keep 1 column via Tailwind's grid-cols-1; on desktop apply CSS var. */
 @media (min-width: 981px) {
   .app-grid { grid-template-columns: var(--app-cols); }
 }
 
-/* ========== Topbar (replaces Topbar.css) ========== */
-.topbar { @apply grid grid-cols-[auto_1fr_auto] items-center gap-3 px-3 py-2 bg-panel border border-border rounded-lg shadow-sm relative z-10 w-full; }
-.brand { @apply flex items-center gap-3 no-underline text-inherit; }
-.brand-logo { @apply w-7 h-7 rounded-sm grid place-items-center text-white font-bold; background: linear-gradient(135deg, var(--color-accent), var(--color-accent-ink)); }
-.brand-title { @apply font-bold; }
-.brand-sub { font-size: var(--text-sm); }
-.nav { display: none; }
-.nav-link { display: none; }
-.actions { @apply flex items-center gap-2; }
-.user { @apply relative; }
-.user-btn { @apply flex items-center gap-2 border border-border bg-white px-1.5 py-1 rounded-sm shadow-sm; }
-.avatar { @apply w-[26px] h-[26px] rounded-full grid place-items-center font-bold text-white; background: var(--color-accent); }
-.user-name { font-weight: 600; font-size: var(--text-base); }
-.user-sub { font-size: var(--text-sm); }
-.menu { @apply absolute right-0; top: calc(100% + 8px); padding: 8px; min-width: 220px; }
-.menu-section { @apply px-2 py-1.5 border-b border-border mb-1; }
-.menu-label { font-size: var(--text-sm); color: var(--color-muted); }
-.menu-value { @apply font-semibold; }
-.menu-item { @apply w-full text-left p-2 rounded-sm border border-transparent bg-transparent; }
-.menu-item:hover { @apply bg-elev border-border; }
-.auth-backdrop { @apply fixed inset-0 grid place-items-center z-[1000]; background: rgba(15,23,42,0.45); }
-.auth-modal { width: min(520px, 92vw); padding: var(--spacing-4); }
-.auth-head { @apply flex items-center gap-2 mb-2; }
-.auth-tabs { @apply inline-flex gap-[2px] p-1 border border-border rounded-sm my-2; background: var(--color-elev); }
-.auth-tab { @apply px-2.5 py-1.5 rounded-sm border border-transparent bg-transparent; }
-.auth-tab.active { @apply bg-white border-border shadow-sm; }
-.provider-btn, .provider-btn:disabled, .provider-icn { display: none; }
-.error-text { color: var(--color-danger); font-size: var(--text-sm); }
-.alpha-notice { @apply mt-3 p-3 border border-dashed border-border rounded-sm; background: var(--color-elev); }
-.alpha-title { @apply font-bold mb-1; }
-.alpha-text { font-size: var(--text-sm); color: var(--color-muted); }
+/* ========== Topbar: legacy classnames removed (component uses Tailwind/shadcn) ========== */
 
 /* ========== Sidebar (replaces Sidebar.css) ========== */
 .sidebar { @apply h-full flex flex-col; }
@@ -227,7 +149,6 @@ button { cursor: pointer; }
 .sidebar .muted { color: var(--color-muted); font-size: var(--text-sm); }
 
 /* ========== Canvas (replaces Canvas.css) ========== */
-.canvas { @apply min-h-full flex flex-col gap-3 pb-[calc(var(--spacing-8,32px)+48px)]; }
 .block-row { @apply items-start gap-[10px] my-[6px] p-[6px] rounded-md transition-[background,box-shadow] ease-linear duration-150 pl-14 pr-14 relative isolate pt-[18px]; }
 .block-row:hover { background: #fafbff; }
 .block-row.active { background: #f3f7ff; box-shadow: inset 0 0 0 1px rgba(59,130,246,0.15); }
@@ -258,39 +179,7 @@ button { cursor: pointer; }
 .empty-hint { @apply text-[12px] text-[#9ca3af]; }
 
 /* ========== Document Chrome (replaces DocumentHeader.css & DocumentFooter.css) ========== */
-.doc-header { 
-  @apply sticky top-0 z-10 bg-panel border-b border-border; 
-  padding: var(--spacing-2) var(--spacing-3);
-  margin: calc(-1 * var(--spacing-3)) calc(-1 * var(--spacing-3)) var(--spacing-3);
-  border-top-left-radius: var(--radius-lg);
-  border-top-right-radius: var(--radius-lg);
-}
-.doc-header, .doc-actions { 
-  display: flex; 
-  align-items: center; 
-  gap: var(--spacing-2);
-}
-.doc-title { @apply flex items-baseline; gap: var(--spacing-3); }
-.doc-title-text { font-size: var(--text-xl); font-weight: 600; }
-.doc-title-text.as-button { background: transparent; border: none; padding: 0; color: inherit; cursor: text; text-align: left; }
-.doc-title-input { font-size: var(--text-xl); font-weight: 600; border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 2px 6px; background: var(--color-elev); }
-.doc-id { color: var(--color-muted); font-size: var(--text-sm); padding: 2px 6px; border: 1px dashed var(--color-border); border-radius: var(--radius-sm); background: var(--color-elev); }
-
-.doc-footer {
-  position: sticky; bottom: 0; z-index: 1000; 
-  display: flex; flex-wrap: wrap; gap: var(--spacing-3);
-  border-top: 1px solid var(--color-border);
-  margin: var(--spacing-3) calc(-1 * var(--spacing-3)) calc(-1 * var(--spacing-3));
-  padding: var(--spacing-2) var(--spacing-3);
-  background: var(--color-panel);
-  border-bottom-left-radius: var(--radius-lg);
-  border-bottom-right-radius: var(--radius-lg);
-  box-shadow: 0 -4px 12px rgba(0,0,0,0.04);
-}
-.doc-footer .df-item { display: inline-flex; gap: var(--spacing-2); align-items: center; padding: 4px 8px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: #fff; transition: background 120ms ease, border-color 120ms ease; }
-.doc-footer .df-item:hover { background: #f9fafb; border-color: var(--color-border-strong, var(--color-border)); }
-.doc-footer .label { color: var(--color-muted); font-size: var(--text-sm); }
-.doc-footer .value { font-weight: 600; }
+/* ========== Document Chrome: legacy classnames removed (components use Tailwind) ========== */
 
 /* ========== BlockControls (replaces BlockControls.css) ========== */
 /* Pruned unused legacy selectors (.block-controls, .bc-top-right, .block-menu, .block-add-inline, .bc-left, .drag-handle).
