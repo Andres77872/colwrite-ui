@@ -70,7 +70,7 @@ export function Canvas() {
 
   return (
     <div
-      className="min-h-full flex flex-col gap-3 pb-[calc(var(--spacing-8,32px)+48px)]"
+      className="min-h-full flex flex-col space-y-6 pb-24"
       data-editor-canvas
       ref={containerRef}
       tabIndex={0}
@@ -139,32 +139,47 @@ export function Canvas() {
     >
       <DocumentHeader />
       {blocks.length === 0 && (
-        <div className="empty-doc">
-          <div className="empty-card">
-            <div className="empty-title">Start writing</div>
-            <div className="empty-sub">Add your first block to begin. You can always use '/' to open the command menu.</div>
-            <div className="empty-actions">
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="max-w-md text-center space-y-6 p-8 rounded-lg border bg-card">
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold">Start writing</h3>
+              <p className="text-sm text-muted-foreground">
+                Add your first block to begin. You can always use '/' to open the command menu.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 justify-center">
               <Button
                 onClick={() => {
                   const id = addBlockAtStart('paragraph');
                   queueMicrotask(() => refs.current[id]?.focus());
                 }}
-              >New text block</Button>
+                size="sm"
+              >
+                New text block
+              </Button>
               <Button
                 variant="outline"
+                size="sm"
                 onClick={() => {
                   const id = addBlockAtStart('heading');
                   queueMicrotask(() => refs.current[id]?.focus());
                 }}
-              >Add heading</Button>
+              >
+                Add heading
+              </Button>
               <Button
-                variant="outline"
+                variant="outline" 
+                size="sm"
                 onClick={() => {
                   addBlockAtStart('divider');
                 }}
-              >Insert divider</Button>
+              >
+                Insert divider
+              </Button>
             </div>
-            <div className="empty-hint">Tip: Press '/' inside a text block for quick actions and inserts.</div>
+            <p className="text-xs text-muted-foreground">
+              Tip: Press '/' inside a text block for quick actions and inserts.
+            </p>
           </div>
         </div>
       )}

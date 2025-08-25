@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useEditor } from '../../../editor';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Spinner } from '@/components/ui/spinner';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
+import { Search, RefreshCw, Plus, Trash2 } from 'lucide-react';
 
 export function DocumentsMenu() {
   const { listRemote, loadRemote, createRemote, deleteRemote, documentId } = useEditor();
@@ -80,75 +85,127 @@ export function DocumentsMenu() {
   const next = () => setPage((p) => Math.min(totalPages, p + 1));
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <strong>Documents</strong>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={fetchList} disabled={loading}>Refresh</Button>
-          <Button onClick={onCreate} disabled={creating}>New</Button>
+    <Card className="shadow-sm">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg flex items-center gap-2">
+            Documents
+            <Badge variant="secondary" className="text-xs">{count}</Badge>
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={fetchList} disabled={loading}>
+              {loading ? <Spinner size="sm" /> : <RefreshCw className="w-4 h-4" />}
+            </Button>
+            <Button size="sm" onClick={onCreate} disabled={creating}>
+              {creating ? <Spinner size="sm" /> : <Plus className="w-4 h-4" />}
+            </Button>
+          </div>
         </div>
-      </div>
+      </CardHeader>
 
-      <div className="flex">
-        <Input
-          type="search"
-          placeholder="Search documents…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          aria-label="Search documents"
-          className="flex-1"
-        />
-      </div>
+      <CardContent className="space-y-4">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+          <Input
+            placeholder="Search documents..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-10"
+          />
+        </div>
 
-      <div className="text-muted-foreground text-xs">
-        Page {page} / {totalPages} · {count} total
-      </div>
-
-      <div className="flex flex-col gap-1">
-        {loading && <div className="text-muted-foreground">Loading…</div>}
-        {!loading && items.length === 0 && (
-          <div className="text-muted-foreground">No documents yet. Create one to get started.</div>
-        )}
-        {!loading && items.map((d: any) => {
-          const id: string = String(d._id || d.id || d.document_id || '');
-          if (!id) return null;
-          const title: string = String(d.title || d.name || '(untitled)');
-          const isActive = documentId === id;
-          return (
-            <div
-              key={id}
-              className={[
-                'flex items-center justify-between gap-2 p-2 rounded-lg cursor-pointer border',
-                isActive
-                  ? 'border-[var(--color-border)] bg-[rgba(59,130,246,0.06)]'
-                  : 'border-transparent hover:bg-[var(--color-elev)]',
-              ].join(' ')}
-              onClick={() => onLoad(id)}
-            >
-              <div className="min-w-0 flex-1">
-                <div className="text-sm truncate">{title}</div>
-                <div className="text-xs truncate text-muted-foreground">{id}</div>
-              </div>
-              <div className="shrink-0">
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={(e) => { e.stopPropagation(); onDelete(id); }}
-                  disabled={deletingId === id}
-                  title="Delete document"
-                >
-                  Delete
-                </Button>
+        <div className="space-y-2">
+          {loading && (
+            <div className="flex items-center gap-2 p-3 text-muted-foreground text-sm">
+              <Spinner size="sm" />
+              Loading documents…
+            </div>
+          )}
+          {!loading && items.length === 0 && (
+            <div className="p-4 text-center">
+              <div className="text-muted-foreground text-sm mb-2">No documents found</div>
+              <div className="text-xs text-muted-foreground/80">
+                {query ? 'Try a different search term' : 'Create your first document to get started'}
               </div>
             </div>
-          );
-        })}
-      </div>
+          )}
+          {!loading && items.map((d: any) => {
+            const id: string = String(d._id || d.id || d.document_id || '');
+            if (!id) return null;
+            const title: string = String(d.title || d.name || '(untitled)');
+            const isActive = documentId === id;
+            return (
+              <div
+                key={id}
+                className={[
+                  'group flex items-center justify-between gap-3 p-3 rounded-lg cursor-pointer border transition-all duration-200',
+                  isActive
+                    ? 'border-accent/30 bg-accent/5 shadow-sm ring-1 ring-accent/10'
+                    : 'border-transparent hover:border-border hover:bg-muted/5 hover:shadow-xs',
+                ].join(' ')}
+                onClick={() => onLoad(id)}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className={[
+                    'text-sm font-medium truncate transition-colors',
+                    isActive ? 'text-accent-ink' : 'text-foreground group-hover:text-accent'
+                  ].join(' ')}>
+                    {title}
+                  </div>
+                  <div className="text-xs truncate text-muted-foreground mt-0.5 font-mono">
+                    {id.slice(-8)}
+                  </div>
+                </div>
+                <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => { e.stopPropagation(); onDelete(id); }}
+                    disabled={deletingId === id}
+                    className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    title="Delete document"
+                  >
+                    {deletingId === id ? (
+                      <Spinner size="sm" />
+                    ) : (
+                      <Trash2 className="w-3 h-3" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
 
-      <div className="flex items-center justify-between mt-2">
-        <Button variant="outline" onClick={prev} disabled={page <= 1}>Prev</Button>
-        <Button variant="outline" onClick={next} disabled={page >= totalPages}>Next</Button>
-      </div>
-    </div>
+        {totalPages > 1 && (
+          <>
+            <Separator />
+            <div className="flex items-center justify-center gap-2">
+              <Button 
+                variant="ghost" 
+                size="sm"
+                onClick={prev} 
+                disabled={page <= 1}
+                className="h-8 px-3 font-medium disabled:opacity-50"
+              >
+                ← Prev
+              </Button>
+              <div className="flex items-center gap-1 text-xs text-muted-foreground min-w-16 justify-center">
+                {page} / {totalPages}
+              </div>
+              <Button 
+                variant="ghost" 
+                size="sm"
+                onClick={next} 
+                disabled={page >= totalPages}
+                className="h-8 px-3 font-medium disabled:opacity-50"
+              >
+                Next →
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }

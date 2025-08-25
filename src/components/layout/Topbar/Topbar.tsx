@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { login, setSessionTokenCookie, clearSessionTokenCookie } from '@/services/auth';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuLabel } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { User, Settings, LogOut, FileText } from 'lucide-react';
 
 type User = { name: string; email: string };
 
@@ -30,49 +31,87 @@ export function Topbar() {
   }, [user]);
 
   const signOut = () => {
+    clearSessionTokenCookie();
     localStorage.removeItem(STORAGE_KEY);
     setUser(null);
-    clearSessionTokenCookie();
   };
 
   return (
-    <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 px-3 py-2 bg-card border border-border rounded-lg shadow-sm relative z-10 w-full">
-      <a className="flex items-center gap-3 no-underline text-foreground" href="#" aria-label="ColWrite home">
-        <div className="w-7 h-7 rounded-sm grid place-items-center bg-primary text-primary-foreground font-bold">CW</div>
-        <div className="leading-tight">
-          <div className="font-bold">ColWrite</div>
-          <div className="text-sm text-muted-foreground">Assistant writer for arXiv papers</div>
-        </div>
-      </a>
+    <div className="flex items-center justify-between w-full">
+      {/* Left: Logo and Branding */}
+      <div className="flex items-center space-x-4">
+        <a 
+          className="flex items-center space-x-3 no-underline text-foreground hover:opacity-80 transition-opacity" 
+          href="#" 
+          aria-label="ColWrite home"
+        >
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-primary/80 text-primary-foreground font-bold text-sm flex items-center justify-center shadow-sm">
+            CW
+          </div>
+          <div className="hidden sm:block">
+            <div className="font-semibold text-lg text-foreground">
+              ColWrite
+            </div>
+            <div className="text-sm text-muted-foreground -mt-0.5">
+              Assistant writer for arXiv papers
+            </div>
+          </div>
+        </a>
+      </div>
 
-      {/* Primary navigation intentionally removed for now */}
+      {/* Center: Search or Navigation (expandable) */}
+      <div className="flex-1 max-w-md mx-4 hidden md:block">
+        {/* Future: Add search bar or navigation breadcrumbs here */}
+      </div>
 
-      <div className="flex-1" />
-
-      <div className="flex items-center gap-2">
-        {!user ? (
-          <Button onClick={() => setOpen(true)}>Sign in</Button>
-        ) : (
+      {/* Right: User Actions */}
+      <div className="flex items-center space-x-3">
+        {user ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="flex items-center gap-2 px-1.5 py-1 shadow-sm">
-                <Avatar className="h-6 w-6">
-                  <AvatarImage alt={user.name || user.email} />
-                  <AvatarFallback>{initials}</AvatarFallback>
+              <Button variant="ghost" className="h-9 px-2">
+                <Avatar className="w-7 h-7 mr-2 ring-2 ring-accent/20 ring-offset-2 ring-offset-background">
+                  <AvatarImage src={`https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.name)}`} />
+                  <AvatarFallback className="bg-gradient-to-br from-accent to-accent-hover text-primary-foreground text-xs font-semibold">
+                    {initials}
+                  </AvatarFallback>
                 </Avatar>
-                <div className="text-left leading-tight">
-                  <div className="text-sm font-semibold">{user.name || user.email}</div>
-                  <div className="text-xs text-muted-foreground">{user.email}</div>
-                </div>
+                <span className="text-sm font-medium">{user.name}</span>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Signed in</DropdownMenuLabel>
-              <DropdownMenuItem disabled>{user.email}</DropdownMenuItem>
+            <DropdownMenuContent align="end" className="w-56">
+              <div className="px-2 py-1.5">
+                <DropdownMenuLabel className="font-normal">
+                  <div className="flex flex-col space-y-1">
+                    <p className="text-sm font-medium leading-none">{user.name}</p>
+                    <p className="text-xs leading-none text-muted-foreground">{user.email}</p>
+                  </div>
+                </DropdownMenuLabel>
+              </div>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={signOut}>Sign out</DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer">
+                <User className="mr-2 h-4 w-4" />
+                Profile
+              </DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer">
+                <Settings className="mr-2 h-4 w-4" />
+                Settings
+              </DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer">
+                <FileText className="mr-2 h-4 w-4" />
+                Documents
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={signOut} className="cursor-pointer text-destructive focus:text-destructive">
+                <LogOut className="mr-2 h-4 w-4" />
+                Sign out
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+        ) : (
+          <Button onClick={() => setOpen(true)} size="sm">
+            Sign In
+          </Button>
         )}
       </div>
 
@@ -80,8 +119,8 @@ export function Topbar() {
         <AuthDialog
           onClose={() => setOpen(false)}
           onSubmit={(u) => { localStorage.setItem(STORAGE_KEY, JSON.stringify(u)); setUser(u); setOpen(false); }}
-        />)
-      }
+        />
+      )}
     </div>
   );
 }
