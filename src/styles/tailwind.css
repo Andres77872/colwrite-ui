@@ -531,3 +531,82 @@ button:disabled {
     @apply bg-background text-foreground;
   }
 }
+
+/* ========== Markdown rendering (used by ChatAssistant) ========== */
+.markdown-body {
+  font-size: var(--text-base);
+  line-height: 1.6;
+  color: inherit;
+}
+
+.markdown-body p { margin: 0 0 0.5rem 0; }
+.markdown-body p:last-child { margin-bottom: 0; }
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 0.6rem 0 0.3rem;
+}
+.markdown-body h1 { font-size: var(--text-2xl); }
+.markdown-body h2 { font-size: var(--text-xl); }
+.markdown-body h3 { font-size: var(--text-lg); }
+
+.markdown-body ul,
+.markdown-body ol { padding-left: 1.2em; margin: 0.4rem 0; }
+.markdown-body li { margin: 0.2rem 0; }
+
+.markdown-body code { 
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: #f6f8fa;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.12em 0.36em;
+}
+.markdown-body pre { 
+  background: #0b1020;
+  color: #f8fafc;
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow: auto;
+  border: 1px solid rgba(0,0,0,0.08);
+}
+.markdown-body pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.85em;
+}
+
+.markdown-body table { 
+  width: 100%; 
+  border-collapse: collapse; 
+  margin: 0.5rem 0; 
+}
+.markdown-body th, 
+.markdown-body td { 
+  border: 1px solid var(--color-border); 
+  padding: 6px 8px; 
+}
+.markdown-body th { background: var(--color-elev); text-align: left; }
+
+.markdown-body blockquote {
+  margin: 0.6rem 0;
+  padding: 0.4rem 0.8rem;
+  border-left: 3px solid var(--color-border);
+  color: var(--color-text-light);
+  background: #fafafa;
+  border-radius: 4px;
+}
+
+.markdown-body a { color: var(--color-accent); text-decoration: underline; }
+.markdown-body hr { border: none; border-top: 1px solid var(--color-border); margin: 0.75rem 0; }
+
+/* KaTeX tweaks inside bubbles */
+.markdown-body .katex-display { margin: 0.5rem 0; overflow-x: auto; }
+.markdown-body .katex { font-size: 1.02em; }

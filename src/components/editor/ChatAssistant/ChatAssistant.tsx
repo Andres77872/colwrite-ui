@@ -8,7 +8,16 @@ import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
 import { ChatRefTags } from './ChatRefTags';
 import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
 
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+
 type ChatMessage = OpenAIChatMessage;
+
+// Shared tag constants
+const EXTRAS_OPEN = '<EXTRAS_JSON>';
+const EXTRAS_CLOSE = '</EXTRAS_JSON>';
 
 // Streaming tag parser: extracts complete <EXTRAS_JSON>...</EXTRAS_JSON> blocks from a running buffer
 // and returns the visible delta (with tags removed) along with any parsed extras objects.
@@ -16,8 +25,8 @@ function parseAndStripExtras(
   delta: string,
   bufferRef: MutableRefObject<string>
 ): { visibleDelta: string; parsedExtras: any[] } {
-  const OPEN = '<EXTRAS_JSON>';
-  const CLOSE = '</EXTRAS_JSON>';
+  const OPEN = EXTRAS_OPEN;
+  const CLOSE = EXTRAS_CLOSE;
   const GUARD = OPEN.length - 1; // keep a small tail to detect partial tag start
 
   let combined = (bufferRef.current || '') + (delta || '');
@@ -154,6 +163,8 @@ export function ChatAssistant() {
   // Maintain a buffer to detect and parse <EXTRAS_JSON> blocks across chunk boundaries (fallback)
   const tagBufferRef = useRef<string>('');
   const lastAppliedExtrasRef = useRef<string>('');
+  const [extrasGenerating, setExtrasGenerating] = useState<boolean>(false);
+  const extrasGeneratingRef = useRef<boolean>(false);
   const { applyExtrasIfNew } = useApplyExtras({
     blocks,
     insertBlockAt,
@@ -173,7 +184,7 @@ export function ChatAssistant() {
     if (listRef.current) {
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
-  }, [visibleMessages, isStreaming]);
+  }, [visibleMessages, isStreaming, extrasGenerating]);
 
   const ensureDocumentId = async (): Promise<string> => {
     if (documentId) return documentId;
@@ -195,12 +206,19 @@ export function ChatAssistant() {
       const controller = new AbortController();
       abortRef.current = controller;
       setIsStreaming(true);
+      // Reset buffers/state for a fresh stream
+      tagBufferRef.current = '';
+      lastAppliedExtrasRef.current = '';
+      extrasGeneratingRef.current = false;
+      setExtrasGenerating(false);
 
       await streamDocumentAiChat(id, nextMessages, {
         signal: controller.signal,
         onChunk: (delta, chunk) => {
+          // Raw delta may still include tags depending on server behavior
+          const rawDelta = delta || '';
           // 1) Prefer server-provided clean content (delta) which should have tags stripped already
-          let cleanDelta = delta;
+          let cleanDelta = rawDelta;
           // 2) Fallback: if server did not strip tags and included them in content, remove them while parsing extras
           const { visibleDelta, parsedExtras } = parseAndStripExtras(cleanDelta, tagBufferRef);
           cleanDelta = visibleDelta;
@@ -232,6 +250,19 @@ export function ChatAssistant() {
             // Use the latest parsed block if server didn't provide extras
             applyExtrasIfNew(parsedExtras[parsedExtras.length - 1]);
           }
+
+          // Indicator logic:
+          // - Turn on when we see an open tag in the raw stream, or when buffer indicates we are inside an open block
+          // - As a fallback, if SSE is emitting extras and we are not already generating, turn on
+          // - Turn off when we see a close tag; otherwise it will turn off at stream end
+          let nextGen = extrasGeneratingRef.current;
+          if (rawDelta.includes(EXTRAS_OPEN) || tagBufferRef.current.startsWith(EXTRAS_OPEN)) nextGen = true;
+          if (rawDelta.includes(EXTRAS_CLOSE)) nextGen = false;
+          if (!nextGen && extrasFromSse != null) nextGen = true;
+          if (nextGen !== extrasGeneratingRef.current) {
+            extrasGeneratingRef.current = nextGen;
+            setExtrasGenerating(nextGen);
+          }
         },
       });
     } catch (e: any) {
@@ -239,6 +270,26 @@ export function ChatAssistant() {
     } finally {
       setIsStreaming(false);
       abortRef.current = null;
+      // Flush any trailing visible text left in the tag buffer (guarded tail)
+      if (tagBufferRef.current) {
+        const pending = tagBufferRef.current;
+        // If pending starts with an open tag, it's an incomplete extras block => drop it
+        if (!pending.startsWith(EXTRAS_OPEN)) {
+          setMessages(prev => {
+            const out = prev.slice();
+            for (let i = out.length - 1; i >= 0; i--) {
+              if (out[i].role === 'assistant') {
+                out[i] = { ...out[i], content: (out[i].content || '') + pending };
+                break;
+              }
+            }
+            return out;
+          });
+        }
+        tagBufferRef.current = '';
+      }
+      extrasGeneratingRef.current = false;
+      setExtrasGenerating(false);
     }
   };
 
@@ -247,6 +298,25 @@ export function ChatAssistant() {
       abortRef.current.abort();
       abortRef.current = null;
       setIsStreaming(false);
+      // Also clear any indicator and flush safe trailing text
+      if (tagBufferRef.current) {
+        const pending = tagBufferRef.current;
+        if (!pending.startsWith(EXTRAS_OPEN)) {
+          setMessages(prev => {
+            const out = prev.slice();
+            for (let i = out.length - 1; i >= 0; i--) {
+              if (out[i].role === 'assistant') {
+                out[i] = { ...out[i], content: (out[i].content || '') + pending };
+                break;
+              }
+            }
+            return out;
+          });
+        }
+        tagBufferRef.current = '';
+      }
+      extrasGeneratingRef.current = false;
+      setExtrasGenerating(false);
     }
   };
 
@@ -286,10 +356,37 @@ export function ChatAssistant() {
                   'max-w-[70%] px-[12px] py-[10px] rounded-[12px] border border-[var(--color-border)] bg-white',
                   m.role === 'user' ? 'bg-[var(--color-accent)] text-white border-[var(--color-accent)]' : '',
                 ].join(' ')}>
-                  {m.role === 'user' ? (<ChatRefTags text={m.content} />) : m.content}
+                  {m.role === 'user' ? (
+                    <ChatRefTags text={m.content} />
+                  ) : (
+                    <div className="markdown-body">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm, remarkMath]}
+                        rehypePlugins={[rehypeKatex]}
+                        components={{
+                          a: ({ node, ...props }) => (
+                            <a {...props} target="_blank" rel="noopener noreferrer" />
+                          ),
+                        }}
+                      >
+                        {m.content || ''}
+                      </ReactMarkdown>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
+            {extrasGenerating && (
+              <div className="flex mb-[var(--spacing-2)] justify-start">
+                <div className="inline-flex items-center gap-2 max-w-[70%] px-[12px] py-[10px] rounded-[12px] border border-dashed border-[var(--color-border)] bg-white/80 text-[var(--color-muted)] text-[var(--text-xs)]">
+                  <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"></path>
+                  </svg>
+                  <span>Generating document content…</span>
+                </div>
+              </div>
+            )}
             {error && <div className="text-[var(--color-danger)] text-sm mt-2">{error}</div>}
           </div>
           <div className="border-t border-[var(--color-border)] px-[var(--spacing-3)] py-[var(--spacing-2)] bg-white">
