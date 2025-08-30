@@ -29,3 +29,11 @@
 
 /* Reference picker styles moved into ChatRefPicker/ChatRefPicker.css */
 
+
+/* Extras feedback (shown while <EXTRAS_JSON> is streaming) */
+.extras-feedback { display: flex; align-items: center; gap: 8px; color: var(--color-muted); font-size: var(--fs-xs); margin: 8px 0 0 0; }
+.extras-feedback .spinner { width: 14px; height: 14px; border: 2px solid var(--color-border); border-top-color: var(--color-accent); border-radius: 50%; display: inline-block; animation: chat-spin 0.8s linear infinite; }
+
+@keyframes chat-spin {
+  to { transform: rotate(360deg); }
+}

@@ -9,6 +9,7 @@ export type OpenAIChatMessage = {
 export type AiChatChunk = {
   content?: string;
   done?: boolean;
+  extras?: any;
   [key: string]: unknown;
 };
 
@@ -81,7 +82,7 @@ function processLines(lines: string[], onChunk?: (delta: string, chunk: AiChatCh
       try {
         const obj = JSON.parse(dataStr) as AiChatChunk;
         const delta = typeof obj.content === 'string' ? obj.content : '';
-        if (delta && onChunk) onChunk(delta, obj);
+        if (onChunk) onChunk(delta, obj);
       } catch {
         // ignore parse errors
       }
@@ -92,7 +93,7 @@ function processLines(lines: string[], onChunk?: (delta: string, chunk: AiChatCh
     try {
       const obj = JSON.parse(trimmed) as AiChatChunk;
       const delta = typeof obj.content === 'string' ? obj.content : '';
-      if (delta && onChunk) onChunk(delta, obj);
+      if (onChunk) onChunk(delta, obj);
     } catch {
       // ignore
     }
