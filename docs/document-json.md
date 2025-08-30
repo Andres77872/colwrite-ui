@@ -33,8 +33,13 @@ It references the following source files for ground truth:
 
 - A document (`Doc`) is a versioned object with an ordered list of blocks and an optional name.
 - Blocks are one of: paragraph, heading, divider. All blocks can carry optional metadata flags.
-- Paragraph blocks may contain inline children (AI Beat, Table, Citation, Equation, and Graph) which are referenced via placeholders inside the block's HTML.
+- Paragraph blocks may contain inline children referenced via placeholders inside the block's HTML.
 - The editor keeps HTML and child JSON in sync via placeholder elements with `data-child-id`.
+
+### Status (inline children)
+
+- Implemented UI and slash items: `aiBeat`, `table`, `citation`, `equation`, `graph`.
+- Only implemented types are mounted in `src/components/editor/blocks/ParagraphBlock/ParagraphBlock.tsx`.
 
 
 ## Doc schema
@@ -157,6 +162,11 @@ Insertion of children via slash menu:
 - Citation: `src/components/editor/SlashMenu/items/citation.ts`
 - Equation: `src/components/editor/SlashMenu/items/equation.ts`
 - Graph: `src/components/editor/SlashMenu/items/graph.ts`
+
+Pending (planned, not yet implemented):
+- Footnote: planned `src/components/editor/SlashMenu/items/footnote.ts`
+- Var: planned `src/components/editor/SlashMenu/items/var.ts`
+- XRef: planned `src/components/editor/SlashMenu/items/xref.ts`
 
 All items:
 - Insert a `<span data-child-id="..." contenteditable="false"></span>` at the caret.

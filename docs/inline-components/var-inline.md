@@ -7,6 +7,14 @@ References:
 - `src/components/common/Editable/Editable.tsx`
 - `src/editor/types.ts`
 
+## Status
+
+- Types: not yet present in code (planned below).
+- UI component: not implemented.
+- Slash menu item: not implemented.
+- Not mounted in `ParagraphBlock.tsx` (no portal case yet).
+- Do not include `var` children in JSON yet; unsupported and will not render.
+
 ## Purpose
 - Insert variables that can be reused throughout the document; updating one updates all with the same name.
 

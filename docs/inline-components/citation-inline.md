@@ -8,6 +8,13 @@ References:
 - `src/editor/types.ts`
 - `src/components/editor/SlashMenu/items/*`
 
+## Status
+
+- Implemented.
+- UI component: `src/components/editor/blocks/ParagraphBlock/Inlines/CitationInline/CitationInline.tsx`
+- Slash menu item: `src/components/editor/SlashMenu/items/citation.ts`
+- Mounted via portals in: `src/components/editor/blocks/ParagraphBlock/ParagraphBlock.tsx`
+
 ## Purpose
 - Enable inline citations in numeric or author–year styles.
 - Support multiple keys, prefixes/suffixes, and locators.
