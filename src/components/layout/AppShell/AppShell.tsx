@@ -61,7 +61,7 @@ export function AppShell({
 
         {/* Main Content */}
         <main className="min-h-0 flex-1 overflow-auto bg-background">
-          <div className="container p-6 space-y-6">
+          <div className="p-6 space-y-6">
             {main}
           </div>
         </main>

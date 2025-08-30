@@ -123,19 +123,19 @@ export function CitationInline({
 
   return (
     <span ref={rootRef} className="citation-inline relative inline-flex items-center" role="group" aria-label="Citation" contentEditable={false as any} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-      <button type="button" className="inline-flex items-center gap-1.5 px-2 py-0.5 border border-[color:var(--color-border)] rounded-full bg-white cursor-pointer shadow-xs text-sm hover:bg-[color:var(--color-elev)]" title="Edit citation" onMouseDown={(e) => { e.preventDefault(); setOpen(v => !v); }} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v); } } }>
+      <button type="button" className="inline-flex items-center gap-1.5 px-2 py-0.5 border border-[color:var(--color-border)] rounded-full bg-[color:var(--color-panel)] cursor-pointer shadow-xs text-sm hover:bg-[color:var(--color-elev)]" title="Edit citation" onMouseDown={(e) => { e.preventDefault(); setOpen(v => !v); }} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v); } } }>
         <span className="whitespace-nowrap">{pillText}</span>
         <span className="opacity-60" aria-hidden>▾</span>
       </button>
       {open && (
-        <div className="absolute left-0 top-[calc(100%+6px)] min-w-[380px] bg-white border border-[color:var(--color-border)] rounded-[var(--radius-sm)] shadow-sm p-2.5 z-10" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="absolute left-0 top-[calc(100%+6px)] min-w-[380px] bg-[color:var(--color-panel)] border border-[color:var(--color-border)] rounded-[var(--radius-sm)] shadow-sm p-2.5 z-10" onMouseDown={(e) => e.stopPropagation()}>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
             <label className="text-xs text-[color:var(--color-muted)]">Keys</label>
-            <input className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="smith2020, doe2021" value={keysStr} onChange={(e) => setKeysStr(e.target.value)} />
+            <input className="w-full border border-[color:var(--color-border)] bg-[color:var(--color-panel)] px-2 py-1.5 rounded-[6px] outline-none focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="smith2020, doe2021" value={keysStr} onChange={(e) => setKeysStr(e.target.value)} />
           </div>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
             <label className="text-xs text-[color:var(--color-muted)]">Style</label>
-            <select className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] focus:border-transparent" value={style} onChange={(e) => setStyle(e.target.value as any)}>
+            <select className="w-full border border-[color:var(--color-border)] bg-[color:var(--color-panel)] px-2 py-1.5 rounded-[6px] outline-none focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] focus:border-transparent" value={style} onChange={(e) => setStyle(e.target.value as any)}>
               <option value="numeric">Numeric</option>
               <option value="author-year">Author–year</option>
               <option value="ieee">IEEE</option>
@@ -143,19 +143,19 @@ export function CitationInline({
           </div>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
             <label className="text-xs text-[color:var(--color-muted)]">Prefix</label>
-            <input className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="see" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
+            <input className="w-full border border-[color:var(--color-border)] bg-[color:var(--color-panel)] px-2 py-1.5 rounded-[6px] outline-none focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="see" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
           </div>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
             <label className="text-xs text-[color:var(--color-muted)]">Locator</label>
-            <input className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="p. 12" value={locator} onChange={(e) => setLocator(e.target.value)} />
+            <input className="w-full border border-[color:var(--color-border)] bg-[color:var(--color-panel)] px-2 py-1.5 rounded-[6px] outline-none focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="p. 12" value={locator} onChange={(e) => setLocator(e.target.value)} />
           </div>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
             <label className="text-xs text-[color:var(--color-muted)]">Suffix</label>
-            <input className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="ch. 2" value={suffix} onChange={(e) => setSuffix(e.target.value)} />
+            <input className="w-full border border-[color:var(--color-border)] bg-[color:var(--color-panel)] px-2 py-1.5 rounded-[6px] outline-none focus:ring-inset focus:ring-2 focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="ch. 2" value={suffix} onChange={(e) => setSuffix(e.target.value)} />
           </div>
           <div className="flex justify-end gap-2 mt-1.5">
-            <button type="button" className="border border-[color:var(--color-border)] bg-white px-2.5 py-1.5 rounded-[6px] cursor-pointer text-[#b31212] border-[#f3c1c1]" title="Remove citation" onMouseDown={onRemove}>Remove</button>
-            <button type="button" className="border border-[color:var(--color-border)] bg-white px-2.5 py-1.5 rounded-[6px] cursor-pointer" title="Close" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</button>
+            <button type="button" className="border px-2.5 py-1.5 rounded-[6px] cursor-pointer bg-[color:var(--color-panel)] text-[color:var(--color-danger)] border-[color:var(--color-danger)] hover:bg-[color:var(--color-elev)]" title="Remove citation" onMouseDown={onRemove}>Remove</button>
+            <button type="button" className="border border-[color:var(--color-border)] bg-[color:var(--color-panel)] px-2.5 py-1.5 rounded-[6px] cursor-pointer hover:bg-[color:var(--color-elev)]" title="Close" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</button>
           </div>
         </div>
       )}

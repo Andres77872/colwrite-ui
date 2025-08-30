@@ -12,22 +12,23 @@
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, SF Mono, Consolas, Liberation Mono, Menlo, monospace;
 
   /* Enhanced Colors */
-  --color-bg: #fafbfc;
-  --color-panel: #ffffff;
-  --color-elev: #f8fafc;
-  --color-border: #e1e5e9;
-  --color-border-hover: #cbd2d9;
-  --color-muted: #64748b;
-  --color-text: #0f172a;
-  --color-text-light: #475569;
-  --color-accent: #2563eb;
-  --color-accent-hover: #1d4ed8;
-  --color-accent-light: #dbeafe;
-  --color-accent-ink: #1e40af;
-  --color-success: #059669;
-  --color-warning: #d97706;
-  --color-danger: #dc2626;
-  --color-info: #0284c7;
+  /* Enhanced Colors (aliased to OkLCH system below for a single source of truth) */
+  --color-bg: var(--background);
+  --color-panel: var(--card);
+  --color-elev: var(--secondary);
+  --color-border: var(--border);
+  --color-border-hover: color-mix(in oklch, var(--border), var(--foreground) 20%);
+  --color-muted: var(--muted-foreground);
+  --color-text: var(--foreground);
+  --color-text-light: var(--muted-foreground);
+  --color-accent: var(--primary);
+  --color-accent-hover: color-mix(in oklch, var(--primary), black 10%);
+  --color-accent-light: var(--accent);
+  --color-accent-ink: var(--primary-foreground);
+  --color-success: var(--chart-3);
+  --color-warning: var(--chart-4);
+  --color-danger: var(--destructive);
+  --color-info: var(--ring);
 
   /* shadcn/ui tokens mapped to our theme */
   --color-background: var(--color-bg);
@@ -138,7 +139,7 @@ button:disabled {
 }
 
 /* Selection */
-::selection { background: rgba(59,130,246,0.25); }
+::selection { background: color-mix(in oklch, var(--primary) 25%, transparent); }
 
 /* Enhanced Utilities */
 @utility stack { @apply flex flex-col gap-4; }
@@ -146,7 +147,7 @@ button:disabled {
 @utility center { @apply flex items-center justify-center; }
 @utility between { @apply flex items-center justify-between; }
 @utility muted { @apply text-muted; }
-@utility glass { @apply bg-white/80 backdrop-blur-sm border border-white/20; }
+@utility glass { @apply backdrop-blur-sm border; background: color-mix(in oklch, var(--card) 80%, transparent); border-color: color-mix(in oklch, var(--card) 20%, transparent); }
 @utility focus-ring { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2; }
 @utility animate-fade-in { animation: fadeIn 250ms ease-out; }
 @utility animate-slide-up { animation: slideUp 250ms ease-out; }
@@ -172,9 +173,10 @@ button:disabled {
 }
 
 .badge-primary { @apply bg-accent-light text-accent-ink; }
-.badge-success { @apply bg-green-100 text-green-800; }
-.badge-warning { @apply bg-yellow-100 text-yellow-800; }
-.badge-danger { @apply bg-red-100 text-red-800; }
+/* Neutral badges to avoid color-coded meaning by hue; rely on text/icon for semantics */
+.badge-success { @apply bg-secondary text-foreground; }
+.badge-warning { @apply bg-secondary text-foreground; }
+.badge-danger { @apply bg-secondary text-foreground; }
 
 /* Modern animations */
 @keyframes fadeIn {
@@ -314,33 +316,34 @@ button:disabled {
 
 /* ========== Canvas (replaces Canvas.css) ========== */
 .block-row { @apply items-start gap-[10px] my-[6px] p-[6px] rounded-md transition-[background,box-shadow] ease-linear duration-150 pl-14 pr-14 relative isolate pt-[18px]; }
-.block-row:hover { background: #fafbff; }
-.block-row.active { background: #f3f7ff; box-shadow: inset 0 0 0 1px rgba(59,130,246,0.15); }
-.block-row.collapsed { background: #fbfbfb; }
+.block-row:hover { background: var(--color-elev); }
+/* Active state keeps neutral elevation and subtle ring tint */
+.block-row.active { background: var(--color-elev); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent) 30%, transparent); }
+.block-row.collapsed { background: var(--color-panel); }
 .block-row:hover,
 .block-row.active { z-index: 2; }
-.block-row.ai-hidden { position: relative; background: #fdf2f8; border: 1px dashed #ec4899; }
-.block-row.ai-hidden::before { content: "🙈 Hidden from AI"; position: absolute; top: -8px; left: 12px; background: #ec4899; color: white; font-size: 10px; padding: 2px 6px; border-radius: var(--radius-sm); font-weight: 500; z-index: 1; }
-.block-row.locked { position: relative; background: #fef3c7; border: 1px dashed #f59e0b; }
-.block-row.locked::before { content: "🔒 Locked"; position: absolute; top: -8px; left: 12px; background: #f59e0b; color: white; font-size: 10px; padding: 2px 6px; border-radius: var(--radius-sm); font-weight: 500; z-index: 1; }
-.block-row.ai-hidden.locked::before { content: "🙈🔒 Hidden & Locked"; background: #dc2626; }
+.block-row.ai-hidden { position: relative; background: var(--color-elev); border: 1px dashed var(--color-border); }
+.block-row.ai-hidden::before { content: "🙈 Hidden from AI"; position: absolute; top: -8px; left: 12px; background: var(--color-panel); color: var(--color-text-light); font-size: 10px; padding: 2px 6px; border-radius: var(--radius-sm); font-weight: 500; z-index: 1; border: 1px solid var(--color-border); }
+.block-row.locked { position: relative; background: var(--color-elev); border: 1px dashed var(--color-border); }
+.block-row.locked::before { content: "🔒 Locked"; position: absolute; top: -8px; left: 12px; background: var(--color-panel); color: var(--color-text-light); font-size: 10px; padding: 2px 6px; border-radius: var(--radius-sm); font-weight: 500; z-index: 1; border: 1px solid var(--color-border); }
+.block-row.ai-hidden.locked::before { content: "🙈🔒 Hidden & Locked"; background: var(--color-panel); color: var(--color-text-light); }
 .block-row.drag-over-top::before, .block-row.drag-over-bottom::after { content: ""; position: absolute; left: 0; right: 0; height: 2px; background: var(--color-accent); }
 .block-row.drag-over-top::before { top: -1px; }
 .block-row.drag-over-bottom::after { bottom: -1px; }
 .dnd-insertion { @apply h-[2px] my-[6px] rounded-[1px]; background: var(--color-accent); }
 .dnd-tail { @apply relative h-4 my-2; }
 .dnd-tail.active::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 2px; background: var(--color-accent); }
-.block-collapsed { @apply inline-flex items-center gap-2 text-[#6b7280] text-[14px] px-3 py-2 rounded-md ml-2 min-h-8; background: rgba(255,255,255,0.8); border: 1px solid rgba(0,0,0,0.08); }
-.block-collapsed:hover { background: rgba(255,255,255,0.95); border-color: rgba(0,0,0,0.12); }
-.block-collapsed .bc-arrow { opacity: 0.8; font-size: 12px; color: #9ca3af; }
-.block-collapsed .bc-label { @apply font-medium; color: #374151; font-size: 13px; }
-.block-collapsed .bc-preview { @apply ml-2 opacity-75 max-w-[520px] whitespace-nowrap overflow-hidden text-ellipsis; font-size: 13px; }
+.block-collapsed { @apply inline-flex items-center gap-2 text-[14px] px-3 py-2 rounded-md ml-2 min-h-8; background: var(--color-panel); border: 1px solid var(--color-border); color: var(--color-text-light); }
+.block-collapsed:hover { background: var(--color-elev); border-color: var(--color-border-hover); }
+.block-collapsed .bc-arrow { opacity: 0.8; font-size: 12px; color: var(--color-text-light); }
+.block-collapsed .bc-label { @apply font-medium; color: var(--color-text); font-size: 13px; }
+.block-collapsed .bc-preview { @apply ml-2 opacity-75 max-w-[520px] whitespace-nowrap overflow-hidden text-ellipsis; font-size: 13px; color: var(--color-text-light); }
 .empty-doc { @apply flex justify-center px-4 pt-12 pb-4; }
-.empty-card { @apply max-w-[720px] w-full border border-dashed border-border rounded-lg bg-[#fafafa] p-6 text-center; }
-.empty-title { @apply font-bold text-[18px] text-[#111827] mb-[6px]; }
+.empty-card { @apply max-w-[720px] w-full border border-dashed border-border rounded-lg p-6 text-center; background: var(--color-elev); }
+.empty-title { @apply font-bold text-[18px] mb-[6px]; color: var(--color-text); }
 .empty-sub { @apply text-[14px] text-muted mb-4; }
 .empty-actions { @apply flex gap-2 justify-center flex-wrap mb-2; }
-.empty-hint { @apply text-[12px] text-[#9ca3af]; }
+.empty-hint { @apply text-[12px]; color: var(--color-text-light); }
 
 /* ========== Document Chrome (replaces DocumentHeader.css & DocumentFooter.css) ========== */
 /* ========== Document Chrome: legacy classnames removed (components use Tailwind) ========== */
@@ -377,7 +380,7 @@ button:disabled {
   top: calc(100% + 6px);
   left: 50%;
   transform: translateX(-50%);
-  background: #fff;
+  background: var(--color-panel);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
@@ -410,7 +413,7 @@ button:disabled {
   height: 0;
   border-left: 5px solid transparent;
   border-right: 5px solid transparent;
-  border-bottom: 5px solid #fff;
+  border-bottom: 5px solid var(--color-panel);
 }
 
 /* Raise row z-index when the inline editor menu is open so it overlays neighbors */
@@ -563,18 +566,18 @@ button:disabled {
 .markdown-body code { 
   font-family: var(--font-mono);
   font-size: 0.9em;
-  background: #f6f8fa;
+  background: var(--color-elev);
   border: 1px solid var(--color-border);
   border-radius: 6px;
   padding: 0.12em 0.36em;
 }
 .markdown-body pre { 
-  background: #0b1020;
-  color: #f8fafc;
+  background: var(--color-panel);
+  color: inherit;
   padding: 10px 12px;
   border-radius: 8px;
   overflow: auto;
-  border: 1px solid rgba(0,0,0,0.08);
+  border: 1px solid var(--color-border);
 }
 .markdown-body pre code {
   background: transparent;
@@ -600,7 +603,7 @@ button:disabled {
   padding: 0.4rem 0.8rem;
   border-left: 3px solid var(--color-border);
   color: var(--color-text-light);
-  background: #fafafa;
+  background: var(--color-elev);
   border-radius: 4px;
 }
 

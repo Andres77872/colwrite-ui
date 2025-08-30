@@ -29,7 +29,7 @@ function parseAndStripExtras(
   const CLOSE = EXTRAS_CLOSE;
   const GUARD = OPEN.length - 1; // keep a small tail to detect partial tag start
 
-  let combined = (bufferRef.current || '') + (delta || '');
+  const combined = (bufferRef.current || '') + (delta || '');
   let pos = 0;
   const parsed: any[] = [];
   let visible = '';
@@ -330,7 +330,7 @@ export function ChatAssistant() {
       ].join(' ')}
     >
       <button
-        className="absolute -top-[22px] right-[var(--spacing-3)] px-2 py-1 text-[var(--text-sm)] rounded-sm border border-[var(--color-border)] bg-white shadow-sm hover:bg-[var(--color-elev)] active:translate-y-px"
+        className="absolute -top-[22px] right-[var(--spacing-3)] px-2 py-1 text-[var(--text-sm)] rounded-sm border border-[var(--color-border)] bg-[var(--color-panel)] shadow-sm hover:bg-[var(--color-elev)] active:translate-y-px"
         onClick={() => setExpanded(v => !v)}
         aria-expanded={expanded}
         title={expanded ? 'Hide assistant' : 'Show assistant'}
@@ -353,8 +353,8 @@ export function ChatAssistant() {
             {visibleMessages.map((m, idx) => (
               <div key={idx} className={["flex mb-[var(--spacing-2)]", m.role === 'user' ? 'justify-end' : 'justify-start'].join(' ')}>
                 <div className={[
-                  'max-w-[70%] px-[12px] py-[10px] rounded-[12px] border border-[var(--color-border)] bg-white',
-                  m.role === 'user' ? 'bg-[var(--color-accent)] text-white border-[var(--color-accent)]' : '',
+                  'max-w-[70%] px-[12px] py-[10px] rounded-[12px] border border-[var(--color-border)] bg-[var(--color-panel)]',
+                  m.role === 'user' ? 'bg-[var(--color-accent)] text-[var(--color-primary-foreground)] border-[var(--color-accent)]' : '',
                 ].join(' ')}>
                   {m.role === 'user' ? (
                     <ChatRefTags text={m.content} />
@@ -378,7 +378,7 @@ export function ChatAssistant() {
             ))}
             {extrasGenerating && (
               <div className="flex mb-[var(--spacing-2)] justify-start">
-                <div className="inline-flex items-center gap-2 max-w-[70%] px-[12px] py-[10px] rounded-[12px] border border-dashed border-[var(--color-border)] bg-white/80 text-[var(--color-muted)] text-[var(--text-xs)]">
+                <div className="inline-flex items-center gap-2 max-w-[70%] px-[12px] py-[10px] rounded-[12px] border border-dashed border-[var(--color-border)] bg-[var(--color-panel)] text-[var(--color-muted)] text-[var(--text-xs)]">
                   <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" aria-hidden="true">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"></path>
@@ -389,7 +389,7 @@ export function ChatAssistant() {
             )}
             {error && <div className="text-[var(--color-danger)] text-sm mt-2">{error}</div>}
           </div>
-          <div className="border-t border-[var(--color-border)] px-[var(--spacing-3)] py-[var(--spacing-2)] bg-white">
+          <div className="border-t border-[var(--color-border)] px-[var(--spacing-3)] py-[var(--spacing-2)] bg-[var(--color-panel)]">
             <div className="flex items-center gap-[var(--spacing-3)]">
               <div className="relative w-full">
                 <ChatTaggedInput
