@@ -41,6 +41,8 @@ export type EditorContextValue = {
   deleteRemote: (id: string) => Promise<void>;
   listRemote: (page?: number, limit?: number, query?: string) => Promise<{ documents: any[]; count: number }>; 
   lastSavedAt: number | null;
+  isAutoSaving: boolean;
+  lastSaveSource: 'auto' | 'manual' | null;
 };
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -61,11 +63,38 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [documentId, setDocumentId] = useState<string | null>(() => loadDocumentId());
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
+  const [lastSaveSource, setLastSaveSource] = useState<'auto' | 'manual' | null>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
 
   // Auto-save
   useEffect(() => {
     const raf = requestAnimationFrame(() => saveDoc(doc));
     return () => cancelAnimationFrame(raf);
+  }, [doc]);
+
+  // Debounced remote auto-save (5 seconds after last change)
+  useEffect(() => {
+    if (autoSaveTimerRef.current !== null) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    autoSaveTimerRef.current = window.setTimeout(async () => {
+      setIsAutoSaving(true);
+      try {
+        await doRemoteSave('auto');
+      } catch {
+        // ignore autosave errors for now; manual save remains available
+      } finally {
+        setIsAutoSaving(false);
+      }
+    }, 5000);
+    return () => {
+      if (autoSaveTimerRef.current !== null) {
+        clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
   }, [doc]);
 
   // Persist current document id
@@ -244,7 +273,13 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     return res.document_id;
   };
 
-  const saveRemote = async (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)): Promise<void> => {
+  // Internal helper to centralize remote saves and mark source
+  const doRemoteSave = async (source: 'auto' | 'manual', docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)): Promise<void> => {
+    // Cancel any pending autosave timer to avoid duplicate saves
+    if (autoSaveTimerRef.current !== null) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
     const payload = docOverride ?? doc;
     if (!documentId) {
       const id = await createRemote(payload as any);
@@ -253,6 +288,11 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       await apiSaveDocument(documentId, payload as any);
     }
     setLastSavedAt(Date.now());
+    setLastSaveSource(source);
+  };
+
+  const saveRemote = async (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)): Promise<void> => {
+    await doRemoteSave('manual', docOverride);
   };
 
   const loadRemote = async (id: string): Promise<void> => {
@@ -318,6 +358,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     deleteRemote,
     listRemote,
     lastSavedAt,
+    isAutoSaving,
+    lastSaveSource,
   };
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;

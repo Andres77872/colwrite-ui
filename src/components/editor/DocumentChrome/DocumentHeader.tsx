@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
 
 export function DocumentHeader() {
-  const { doc, setDocName, saveRemote, deleteRemote, newLocal, documentId, lastSavedAt } = useEditor();
+  const { doc, setDocName, saveRemote, deleteRemote, newLocal, documentId, lastSavedAt, isAutoSaving, lastSaveSource } = useEditor();
   const [loading, setLoading] = useState<null | 'save' | 'delete'>(null);
   const [editing, setEditing] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -49,6 +49,16 @@ export function DocumentHeader() {
     }
   };
 
+  const statusText = (() => {
+    if (loading === 'save') return 'Saving…';
+    if (isAutoSaving) return 'Auto-saving…';
+    if (lastSavedAt) {
+      const time = new Date(lastSavedAt).toLocaleTimeString();
+      return lastSaveSource === 'auto' ? `Auto-saved ${time}` : `Saved ${time}`;
+    }
+    return '—';
+  })();
+
   return (
     <div className="doc-header">
       <div className="doc-title">
@@ -79,7 +89,7 @@ export function DocumentHeader() {
         <button className="btn danger" onClick={onDelete} disabled={!documentId || loading !== null}>
           {loading === 'delete' ? 'Deleting…' : 'Delete'}
         </button>
-        <div className="muted">{lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : (loading === 'save' ? 'Saving…' : '—')}</div>
+        <div className="muted">{statusText}</div>
       </div>
     </div>
   );
