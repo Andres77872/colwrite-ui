@@ -226,7 +226,7 @@ export function FloatingToolbar() {
     const original = document.createElement('span');
     original.className = [
       'ai-original',
-      'opacity-75', 'bg-white', 'rounded-sm', 'px-1.5', 'py-1',
+      'opacity-75', 'bg-card', 'rounded-sm', 'px-1.5', 'py-1',
       'max-w-[60ch]', 'whitespace-pre-wrap', 'break-words',
     ].join(' ');
     // Do not allow editing of the original snapshot
@@ -234,7 +234,7 @@ export function FloatingToolbar() {
     const generated = document.createElement('span');
     generated.className = [
       'ai-generated',
-      'bg-[#fffbe6]', 'border', 'border-dashed', 'border-[#f0c36d]',
+      'bg-elev', 'border', 'border-dashed', 'border-border',
       'rounded-sm', 'px-1.5', 'py-1', 'min-w-[1ch]', 'whitespace-pre-wrap', 'break-words',
     ].join(' ');
     generated.contentEditable = 'true';
@@ -245,15 +245,15 @@ export function FloatingToolbar() {
       'absolute', 'top-1', 'right-1', 'inline-flex', 'items-center', 'gap-1',
     ].join(' ');
     controls.contentEditable = 'false';
-    const ctrlBtnBase = 'ring-1 ring-inset ring-border bg-white rounded-sm px-1.5 py-0.5 cursor-pointer hover:bg-elev';
+    const ctrlBtnBase = 'ring-1 ring-inset ring-border bg-card rounded-sm px-1.5 py-0.5 cursor-pointer hover:bg-elev';
     const acceptBtn = document.createElement('button');
     acceptBtn.type = 'button';
-    acceptBtn.className = ['ai-accept', ctrlBtnBase, 'text-green-700'].join(' ');
+    acceptBtn.className = ['ai-accept', ctrlBtnBase, 'text-[var(--color-success)]'].join(' ');
     acceptBtn.title = 'Accept';
     acceptBtn.textContent = '✔';
     const rejectBtn = document.createElement('button');
     rejectBtn.type = 'button';
-    rejectBtn.className = ['ai-reject', ctrlBtnBase, 'text-[#a11]'].join(' ');
+    rejectBtn.className = ['ai-reject', ctrlBtnBase, 'text-danger'].join(' ');
     rejectBtn.title = 'Reject';
     rejectBtn.textContent = '✖';
     const stopBtn = document.createElement('button');
@@ -304,7 +304,7 @@ export function FloatingToolbar() {
     // Streaming helpers: stop -> regenerate flow
     let stopped = false;
     const setStopMode = () => {
-      stopBtn.className = ['ai-stop', ctrlBtnBase, 'text-[#555]'].join(' ');
+      stopBtn.className = ['ai-stop', ctrlBtnBase, 'text-[var(--color-muted-foreground)]'].join(' ');
       stopBtn.title = 'Stop generating';
       stopBtn.textContent = '⏹';
       stopBtn.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); stopped = true; abortRef.current?.abort(); };
@@ -321,7 +321,7 @@ export function FloatingToolbar() {
       stopped = false;
       wrapper.setAttribute('data-generating', '1');
       // reset error visuals and start pulsing animation on generated
-      generated.classList.remove('bg-[#ffeaea]', 'border-[#ff9a9a]');
+      generated.classList.remove('border-danger');
       generated.classList.add('animate-pulse');
       wrapper.removeAttribute('data-error');
       // clear previous suggestion
@@ -356,8 +356,8 @@ export function FloatingToolbar() {
       } catch (err) {
         if (!stopped) {
           wrapper.setAttribute('data-error', '1');
-          // show error coloring
-          generated.classList.add('bg-[#ffeaea]', 'border-[#ff9a9a]');
+          // show error border coloring
+          generated.classList.add('border-danger');
         }
       } finally {
         wrapper.removeAttribute('data-generating');
@@ -455,7 +455,7 @@ export function FloatingToolbar() {
   return (
     <div
       ref={ref}
-      className="floating-toolbar fixed inline-flex gap-1.5 p-1.5 bg-white border border-border rounded-md shadow-md z-[100]"
+      className="floating-toolbar fixed inline-flex gap-1.5 p-1.5 bg-card border border-border rounded-md shadow-md z-[100]"
       style={{ top: pos.top, left: pos.left, transform: anchor === 'left' ? 'translate(0, -8px)' : 'translate(-50%, -8px)' }}
       onMouseDown={(e) => { e.preventDefault(); }}
     >

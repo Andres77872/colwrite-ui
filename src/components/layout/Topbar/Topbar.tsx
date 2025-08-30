@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuLabel } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { User, Settings, LogOut, FileText } from 'lucide-react';
+import { ThemeToggle } from '../ThemeToggle';
 
 type User = { name: string; email: string };
 
@@ -64,8 +65,9 @@ export function Topbar() {
         {/* Future: Add search bar or navigation breadcrumbs here */}
       </div>
 
-      {/* Right: User Actions */}
+      {/* Right: Theme + User Actions */}
       <div className="flex items-center space-x-3">
+        <ThemeToggle />
         {user ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

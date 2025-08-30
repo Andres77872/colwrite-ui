@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ThemeProvider } from './components/layout/ThemeProvider'
 import { EditorProvider } from './editor'
 import { AppShell } from './components/layout/AppShell'
 // Header actions moved into DocumentHeader within Canvas
@@ -14,24 +15,26 @@ import { Topbar } from './components/layout/Topbar'
 function App() {
   const [leftCollapsed, setLeftCollapsed] = useState<boolean>(false)
   return (
-    <EditorProvider>
-      <PanelsProvider>
-        <AppShell
-          header={<Topbar />}
-          left={<Sidebar collapsed={leftCollapsed} onToggle={() => setLeftCollapsed(v => !v)} />}
-          main={<>
-            <Canvas />
-            <ChatAssistant />
-            <DocumentFooter />
-            <FloatingToolbar />
-            <SlashMenu />
-          </>}
-          right={<ToolsRail />}
-          aside={<ToolsAside />}
-          leftCollapsed={leftCollapsed}
-        />
-      </PanelsProvider>
-    </EditorProvider>
+    <ThemeProvider>
+      <EditorProvider>
+        <PanelsProvider>
+          <AppShell
+            header={<Topbar />}
+            left={<Sidebar collapsed={leftCollapsed} onToggle={() => setLeftCollapsed(v => !v)} />}
+            main={<>
+              <Canvas />
+              <ChatAssistant />
+              <DocumentFooter />
+              <FloatingToolbar />
+              <SlashMenu />
+            </>}
+            right={<ToolsRail />}
+            aside={<ToolsAside />}
+            leftCollapsed={leftCollapsed}
+          />
+        </PanelsProvider>
+      </EditorProvider>
+    </ThemeProvider>
   )
 }
 

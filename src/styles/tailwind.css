@@ -38,7 +38,7 @@
   --color-popover: var(--color-panel);
   --color-popover-foreground: var(--color-text);
   --color-primary: var(--color-accent);
-  --color-primary-foreground: #ffffff;
+  --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--color-elev);
   --color-secondary-foreground: var(--color-text);
   --color-muted-foreground: var(--color-muted);
@@ -224,7 +224,7 @@ button:disabled {
 }
 
 .editable:focus { 
-  background: #fff; 
+  background: var(--color-panel); 
   box-shadow: inset 0 0 0 2px var(--color-accent-light), var(--shadow-sm);
   transform: translateY(-1px);
 }
@@ -294,7 +294,7 @@ button:disabled {
 .sidebar.collapsed .sb-footer { padding-top: var(--spacing-4); }
 .sb-header { @apply flex items-center justify-between gap-2 px-4 py-4 border-b border-border; }
 .sb-brand { @apply flex items-center gap-3; }
-.sb-logo { @apply w-7 h-7 rounded-sm grid place-items-center text-white font-bold; background: linear-gradient(135deg, var(--color-accent), var(--color-accent-ink)); }
+.sb-logo { @apply w-7 h-7 rounded-sm grid place-items-center text-primary-foreground font-bold; background: linear-gradient(135deg, var(--color-accent), var(--color-accent-ink)); }
 .sidebar .sb-logo { border: none; }
 .sidebar.collapsed .sb-logo { cursor: pointer; }
 .sb-title { @apply font-semibold; letter-spacing: 0.2px; }
@@ -304,7 +304,7 @@ button:disabled {
 .sb-nav { @apply grid gap-2; }
 .sb-item { @apply flex items-center gap-3 px-2.5 py-2 rounded-sm border border-transparent bg-transparent text-left text-inherit; }
 .sb-item:hover { @apply bg-elev border-border; }
-.sb-item.active { background: rgba(59,130,246,0.08); border-color: var(--color-accent); }
+.sb-item.active { @apply bg-accent/10 border-accent; }
 .sb-icn { @apply inline-flex justify-center; width: 18px; }
 .sb-section { @apply border-t border-border pt-2; }
 .sb-section-header { @apply w-full flex items-center justify-between px-2.5 py-2 rounded-sm border border-transparent bg-transparent text-inherit; }

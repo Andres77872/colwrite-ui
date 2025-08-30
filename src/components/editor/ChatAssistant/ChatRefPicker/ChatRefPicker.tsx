@@ -385,7 +385,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
         <div
           ref={refMenuRef}
           role="menu"
-          className="absolute bottom-[calc(100%+8px)] left-0 min-w-[260px] max-w-[360px] max-h-[280px] overflow-hidden bg-white border border-[var(--color-border)] rounded-[var(--radius-md)] shadow-[var(--shadow-lg)] z-[110] animate-[fadeInUp_0.15s_ease-out]"
+          className="absolute bottom-[calc(100%+8px)] left-0 min-w-[260px] max-w-[360px] max-h-[280px] overflow-hidden bg-[var(--color-card)] border border-[var(--color-border)] rounded-[var(--radius-md)] shadow-[var(--shadow-lg)] z-[110] animate-[fadeInUp_0.15s_ease-out]"
           style={{ animationName: undefined }}
         >
           <div className="flex flex-col">
@@ -395,7 +395,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                 className={[
                   'flex flex-col items-start gap-[2px] w-full text-left py-2 px-[10px] rounded-[var(--radius-sm)] border border-transparent bg-transparent cursor-pointer transition-all duration-150',
                   'hover:bg-[var(--color-elev)] hover:border-[var(--color-border)] focus:outline focus:outline-2 focus:outline-[var(--color-accent)] focus:outline-offset-2',
-                  menuIndex === 0 ? 'bg-[var(--color-accent)] text-white border-[var(--color-accent)]' : '',
+                  menuIndex === 0 ? 'bg-[var(--color-accent)] text-[var(--color-accent-foreground)] border-[var(--color-accent)]' : '',
                 ].filter(Boolean).join(' ')}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={onSelectThis}
@@ -404,14 +404,14 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                 <span className="text-[var(--text-sm)] font-semibold">this</span>
                 <span className={[
                   'text-[var(--text-xs)] text-[var(--color-muted)]',
-                  menuIndex === 0 ? 'text-white/80' : '',
+                  menuIndex === 0 ? 'text-[var(--color-accent-foreground)] opacity-80' : '',
                 ].filter(Boolean).join(' ')}>Reference current document</span>
               </button>
               <button
                 className={[
                   'flex flex-col items-start gap-[2px] w-full text-left py-2 px-[10px] rounded-[var(--radius-sm)] border border-transparent bg-transparent cursor-pointer transition-all duration-150',
                   'hover:bg-[var(--color-elev)] hover:border-[var(--color-border)] focus:outline focus:outline-2 focus:outline-[var(--color-accent)] focus:outline-offset-2',
-                  menuIndex === 1 ? 'bg-[var(--color-accent)] text-white border-[var(--color-accent)]' : '',
+                  menuIndex === 1 ? 'bg-[var(--color-accent)] text-[var(--color-accent-foreground)] border-[var(--color-accent)]' : '',
                 ].filter(Boolean).join(' ')}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={onSelectDocuments}
@@ -420,7 +420,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                 <span className="text-[var(--text-sm)] font-semibold">documents</span>
                 <span className={[
                   'text-[var(--text-xs)] text-[var(--color-muted)]',
-                  menuIndex === 1 ? 'text-white/80' : '',
+                  menuIndex === 1 ? 'text-[var(--color-accent-foreground)] opacity-80' : '',
                 ].filter(Boolean).join(' ')}>Reference another document</span>
               </button>
             </div>
@@ -432,14 +432,14 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
         <div
           ref={refResultsRef}
           role="menu"
-          className="absolute bottom-[calc(100%+8px)] min-w-[340px] max-w-[560px] max-h-[360px] overflow-hidden bg-white border border-[var(--color-border)] rounded-[var(--radius-md)] shadow-[var(--shadow-lg)] z-[111] max-[980px]:min-w-[280px] max-[980px]:max-w-[320px]"
+          className="absolute bottom-[calc(100%+8px)] min-w-[340px] max-w-[560px] max-h-[360px] overflow-hidden bg-[var(--color-card)] border border-[var(--color-border)] rounded-[var(--radius-md)] shadow-[var(--shadow-lg)] z-[111] max-[980px]:min-w-[280px] max-[980px]:max-w-[320px]"
           style={{ left: refResultsLeft }}
         >
           <div className="flex flex-col">
             {navigationStack.length > 1 && (
               <div className="px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-panel)]">
                 <button
-                  className="inline-flex items-center gap-1 px-2 py-1 border border-[var(--color-border)] rounded-[var(--radius-sm)] bg-white text-[var(--color-muted)] text-[var(--text-xs)] transition-all duration-150 hover:bg-[var(--color-elev)] hover:text-[var(--color-text)] focus:outline focus:outline-2 focus:outline-[var(--color-accent)] focus:outline-offset-2"
+                  className="inline-flex items-center gap-1 px-2 py-1 border border-[var(--color-border)] rounded-[var(--radius-sm)] bg-[var(--color-card)] text-[var(--color-muted)] text-[var(--text-xs)] transition-all duration-150 hover:bg-[var(--color-elev)] hover:text-[var(--color-text)] focus:outline focus:outline-2 focus:outline-[var(--color-accent)] focus:outline-offset-2"
                   onClick={navigateBack}
                   onMouseDown={(e) => e.preventDefault()}
                   title="Go back"
@@ -468,7 +468,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                           className={[
                             'flex flex-col items-start gap-[2px] flex-1 text-left py-2 px-[10px] rounded-[var(--radius-sm)] border border-transparent bg-transparent cursor-pointer transition-all duration-150',
                             'hover:bg-[var(--color-elev)] hover:border-[var(--color-border)] focus:outline focus:outline-2 focus:outline-[var(--color-accent)] focus:outline-offset-2',
-                            resultsIndex === idx ? 'bg-[var(--color-accent)] text-white border-[var(--color-accent)]' : '',
+                            resultsIndex === idx ? 'bg-[var(--color-accent)] text-[var(--color-accent-foreground)] border-[var(--color-accent)]' : '',
                           ].filter(Boolean).join(' ')}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => insertDocumentReference(d)}
@@ -478,11 +478,11 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                           <span className="text-[var(--text-sm)] font-semibold">{d.name || d._id}</span>
                           <span className={[
                             'text-[var(--text-xs)] text-[var(--color-muted)]',
-                            resultsIndex === idx ? 'text-white/80' : '',
+                            resultsIndex === idx ? 'text-[var(--color-accent-foreground)] opacity-80' : '',
                           ].filter(Boolean).join(' ')}>{d._id}</span>
                         </button>
                         <button
-                          className="flex items-center justify-center w-8 px-1 py-2 border border-[var(--color-border)] rounded-[var(--radius-sm)] bg-white text-[var(--color-muted)] text-[var(--text-sm)] transition-all duration-150 hover:bg-[var(--color-accent)] hover:text-white hover:border-[var(--color-accent)] focus:outline focus:outline-2 focus:outline-[var(--color-accent)] focus:outline-offset-2"
+                          className="flex items-center justify-center w-8 px-1 py-2 border border-[var(--color-border)] rounded-[var(--radius-sm)] bg-[var(--color-card)] text-[var(--color-muted)] text-[var(--text-sm)] transition-all duration-150 hover:bg-[var(--color-accent)] hover:text-[var(--color-accent-foreground)] hover:border-[var(--color-accent)] focus:outline focus:outline-2 focus:outline-[var(--color-accent)] focus:outline-offset-2"
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => onOpenDocBlocks(d)}
                           title="Explore document blocks"
@@ -516,7 +516,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                         className={[
                           'flex flex-col items-start gap-[2px] w-full text-left py-2 px-[10px] rounded-[var(--radius-sm)] border border-transparent bg-transparent cursor-pointer transition-all duration-150',
                           'hover:bg-[var(--color-elev)] hover:border-[var(--color-border)] focus:outline focus:outline-2 focus:outline-[var(--color-accent)] focus:outline-offset-2',
-                          resultsIndex === idx ? 'bg-[var(--color-accent)] text-white border-[var(--color-accent)]' : '',
+                          resultsIndex === idx ? 'bg-[var(--color-accent)] text-[var(--color-accent-foreground)] border-[var(--color-accent)]' : '',
                         ].filter(Boolean).join(' ')}
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={() => onPickBlock(refResultsType === 'this-blocks' ? 'this' : 'doc', b)}
@@ -525,7 +525,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                         <span className="text-[var(--text-sm)] font-semibold">{labelForBlock(b, idx)}</span>
                         <span className={[
                           'text-[var(--text-xs)] text-[var(--color-muted)]',
-                          resultsIndex === idx ? 'text-white/80' : '',
+                          resultsIndex === idx ? 'text-[var(--color-accent-foreground)] opacity-80' : '',
                         ].filter(Boolean).join(' ')}>{b.type}</span>
                       </button>
                     ))}

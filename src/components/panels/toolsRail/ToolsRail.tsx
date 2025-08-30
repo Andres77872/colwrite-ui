@@ -10,7 +10,7 @@ export function ToolsRail() {
         'w-8', 'h-8', 'rounded-sm', 'grid', 'place-items-center',
         'border', 'border-transparent', 'bg-transparent',
         'hover:bg-elev', 'hover:border-border',
-        activeTool === id ? 'bg-[rgba(59,130,246,0.08)] border-accent' : '',
+        activeTool === id ? 'bg-accent/10 border-accent' : '',
       ].join(' ')}
       onClick={() => setTool(activeTool === id ? null : id)}
       title={label}
@@ -24,7 +24,7 @@ export function ToolsRail() {
     <div className="h-full flex flex-col items-center gap-3" role="toolbar" aria-label="Right tools">
       <div className="py-2">
         <div
-          className="w-7 h-7 rounded-sm grid place-items-center text-white font-bold"
+          className="w-7 h-7 rounded-sm grid place-items-center text-primary-foreground font-bold"
           style={{ background: 'linear-gradient(135deg, var(--color-accent), var(--color-accent-ink))' }}
         >
           CW

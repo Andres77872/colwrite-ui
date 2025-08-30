@@ -35,6 +35,24 @@
   --color-chart-3: #16a34a;
   --color-chart-4: #d97706;
   --color-chart-5: #7c3aed;
+ 
+  /* Aliases for existing components (backwards-compat) */
+  --color-elev: var(--color-accent);
+  --color-panel: var(--color-secondary);
+  --color-danger: var(--color-destructive);
+  --color-text: var(--color-foreground);
+
+  /* Soft backgrounds for semantic pills */
+  --color-info-soft: #dbeafe; /* blue-100 */
+  --color-success-soft: #dcfce7; /* green-100 */
+
+  /* Text size aliases used in arbitrary value classes */
+  --text-xs: var(--fs-xs);
+  --text-sm: var(--fs-sm);
+
+  /* Focus shadow utility (fallback value included) */
+  --shadow-focus: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  --shadow-danger: 0 0 0 3px rgba(239, 68, 68, 0.15);
   
   /* Enhanced Spacing System (8px base grid for better rhythm) */
   --sp-0: 0px;

@@ -323,7 +323,7 @@ export function ChatAssistant() {
   return (
     <div
       className={[
-        'sticky bottom-[45px] z-[1000] mt-[var(--spacing-3)] -mx-[var(--spacing-3)] bg-[var(--color-panel)] shadow-[0_-4px_12px_rgba(0,0,0,0.04)] rounded-b-lg',
+        'sticky bottom-[45px] z-[1000] mt-[var(--spacing-3)] -mx-[var(--spacing-3)] bg-[var(--color-panel)] shadow-[0_-4px_12px_color-mix(in oklch, var(--color-foreground) 6%, transparent)] rounded-b-lg',
         expanded
           ? 'border border-[var(--color-border)]'
           : 'border-t border-[var(--color-border)] px-[var(--spacing-3)] py-[var(--spacing-2)]',

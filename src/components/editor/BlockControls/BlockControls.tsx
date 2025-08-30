@@ -90,7 +90,7 @@ export function BlockControls({ id }: { id: string }) {
                           role="menuitemradio"
                           aria-checked={n === (block as any)?.columns || (n===1 && !(block as any)?.columns)}
                           key={n}
-                          className={["px-3 py-1.5 text-sm font-semibold text-slate-600 min-w-9 transition", n === ((block as any)?.columns || 1) ? "bg-primary text-primary-foreground shadow" : "hover:bg-background"].filter(Boolean).join(" ")}
+                          className={["px-3 py-1.5 text-sm font-semibold text-muted-foreground min-w-9 transition", n === ((block as any)?.columns || 1) ? "bg-primary text-primary-foreground shadow" : "hover:bg-background"].filter(Boolean).join(" ")}
                           type="button"
                           title={`${n} column${n>1?'s':''}`}
                           onClick={() => { setParagraphColumns(id, n); setColsOpen(false); }}
@@ -126,7 +126,7 @@ export function BlockControls({ id }: { id: string }) {
                           role="menuitemradio"
                           aria-checked={l === (block as any)?.level}
                           key={l}
-                          className={["px-3 py-1.5 text-sm font-semibold text-slate-600 min-w-9 transition", l === (block as any)?.level ? "bg-primary text-primary-foreground shadow" : "hover:bg-background"].filter(Boolean).join(" ")}
+                          className={["px-3 py-1.5 text-sm font-semibold text-muted-foreground min-w-9 transition", l === (block as any)?.level ? "bg-primary text-primary-foreground shadow" : "hover:bg-background"].filter(Boolean).join(" ")}
                           type="button"
                           title={`Heading ${l}`}
                           onClick={() => { setHeadingLevel(id, l as 1|2|3); setHeadingOpen(false); }}
@@ -146,7 +146,7 @@ export function BlockControls({ id }: { id: string }) {
       {/* Right-aligned actions */}
       <div className="absolute right-2 -top-6 inline-flex gap-1 items-center px-1.5 py-1 bg-background/95 border border-border rounded-md shadow-md backdrop-blur opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-opacity pointer-events-auto z-[1002]">
         <button 
-          className={[ (block as any)?.aiHidden ? "inline-grid place-items-center w-6 h-6 rounded-sm bg-pink-500 text-white hover:bg-pink-600 border border-pink-500 transition" : "inline-grid place-items-center w-6 h-6 rounded-sm border border-transparent hover:bg-black/5 transition"].filter(Boolean).join(" ")} 
+          className={[ (block as any)?.aiHidden ? "inline-grid place-items-center w-6 h-6 rounded-sm border border-accent bg-accent text-primary-foreground hover:bg-accent/90 transition" : "inline-grid place-items-center w-6 h-6 rounded-sm border border-transparent hover:bg-elev transition"].filter(Boolean).join(" ")} 
           title={(block as any)?.aiHidden ? 'Show to AI' : 'Hide from AI'} 
           type="button" 
           onClick={() => toggleAiHidden(id)}
@@ -154,7 +154,7 @@ export function BlockControls({ id }: { id: string }) {
           {(block as any)?.aiHidden ? '🙈' : '👁️'}
         </button>
         <button 
-          className={[ (block as any)?.locked ? "inline-grid place-items-center w-6 h-6 rounded-sm bg-amber-500 text-white hover:bg-amber-600 border border-amber-500 transition" : "inline-grid place-items-center w-6 h-6 rounded-sm border border-transparent hover:bg-black/5 transition"].filter(Boolean).join(" ")} 
+          className={[ (block as any)?.locked ? "inline-grid place-items-center w-6 h-6 rounded-sm border border-accent bg-accent text-primary-foreground hover:bg-accent/90 transition" : "inline-grid place-items-center w-6 h-6 rounded-sm border border-transparent hover:bg-elev transition"].filter(Boolean).join(" ")} 
           title={(block as any)?.locked ? 'Unlock' : 'Lock'} 
           type="button" 
           onClick={() => toggleLocked(id)}
@@ -162,7 +162,7 @@ export function BlockControls({ id }: { id: string }) {
           {(block as any)?.locked ? '🔓' : '🔒'}
         </button>
         <button 
-          className={[ (block as any)?.collapsed ? "inline-grid place-items-center w-6 h-6 rounded-sm bg-indigo-500 text-white hover:bg-indigo-600 border border-indigo-500 transition" : "inline-grid place-items-center w-6 h-6 rounded-sm border border-transparent hover:bg-black/5 transition"].filter(Boolean).join(" ")} 
+          className={[ (block as any)?.collapsed ? "inline-grid place-items-center w-6 h-6 rounded-sm border border-accent bg-accent text-primary-foreground hover:bg-accent/90 transition" : "inline-grid place-items-center w-6 h-6 rounded-sm border border-transparent hover:bg-elev transition"].filter(Boolean).join(" ")} 
           title={(block as any)?.collapsed ? 'Expand' : 'Collapse'} 
           type="button" 
           onClick={() => toggleCollapsed(id)}

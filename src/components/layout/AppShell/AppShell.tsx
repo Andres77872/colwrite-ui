@@ -23,7 +23,7 @@ export function AppShell({
   colsParts.push('1fr');
   if (aside) colsParts.push('400px');
   if (right) colsParts.push('60px');
-  
+
   const gridCols = colsParts.join(' ');
 
   return (
@@ -31,22 +31,22 @@ export function AppShell({
       {/* Enhanced header with consistent spacing */}
       {header && (
         <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-          <div className="container flex h-16 items-center px-4">
+          <div className="flex h-16 items-center px-4">
             {header}
           </div>
         </header>
       )}
-      
+
       {/* Main content area with improved layout */}
-      <div 
+      <div
         className={cn(
           "flex-1 min-h-0 overflow-hidden",
           "grid grid-cols-1 lg:grid-cols-[auto_1fr] xl:grid-cols-[auto_1fr_auto_auto]",
           "gap-0"
         )}
-        style={{ 
+        style={{
           ['--app-cols' as any]: gridCols,
-          height: header ? 'calc(100dvh - 4rem)' : '100dvh'
+          height: header ? 'calc(100dvh - 4rem +1px)' : '100dvh'
         }}
       >
         {/* Left Sidebar */}

@@ -4,7 +4,18 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>Vite + React + TS</title>
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('theme');
+          var mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+          var wantDark = stored ? stored === 'dark' : (mq ? mq.matches : false);
+          if (wantDark) document.documentElement.classList.add('dark');
+        } catch (e) { /* no-op */ }
+      })();
+    </script>
     <!-- Optional KaTeX for math rendering used by EquationInline preview -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>

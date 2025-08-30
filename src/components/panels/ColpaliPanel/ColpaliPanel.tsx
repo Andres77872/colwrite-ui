@@ -9,7 +9,7 @@ import { Card } from '@/components/ui/card';
 function PageBadge({ page }: { page?: number }) {
   if (typeof page !== 'number') return null;
   return (
-    <span className="px-2 py-1 rounded-full border border-border text-xs font-semibold bg-[rgba(59,130,246,0.08)] text-accent">
+    <span className="px-2 py-1 rounded-full border border-border text-xs font-semibold bg-accent/10 text-accent">
       p.{page}
     </span>
   );
@@ -98,7 +98,7 @@ export function ColpaliPanel() {
 
       {error && (
         <div
-          className="text-[var(--color-danger)] bg-[rgba(239,68,68,0.08)] p-2.5 rounded-sm border border-[rgba(239,68,68,0.2)] text-sm"
+          className="text-[var(--color-danger)] bg-[color-mix(in oklch, var(--color-danger) 12%, transparent)] p-2.5 rounded-sm border border-[color-mix(in oklch, var(--color-danger) 20%, transparent)] text-sm"
           role="alert"
           aria-live="polite"
         >
@@ -160,7 +160,7 @@ export function ColpaliPanel() {
                   )}
                   {needsTruncation && (
                     <button 
-                      className="bg-transparent text-accent text-sm font-medium cursor-pointer py-1 mt-1 hover:underline hover:text-[var(--color-accent-ink)]" 
+                      className="bg-transparent text-accent text-sm font-medium cursor-pointer py-1 mt-1 hover:underline" 
                       onClick={() => toggleExpanded(key)}
                       aria-expanded={isExpanded}
                     >
@@ -172,13 +172,13 @@ export function ColpaliPanel() {
 
               <div className="flex gap-3 flex-wrap">
                 {r.url && (
-                  <a className="text-accent no-underline text-sm font-medium py-1 px-2 rounded-sm border border-transparent hover:bg-[rgba(59,130,246,0.08)] hover:border-border" href={r.url} target="_blank" rel="noreferrer">📄 arXiv</a>
+                  <a className="text-accent no-underline text-sm font-medium py-1 px-2 rounded-sm border border-transparent hover:bg-accent/10 hover:border-border" href={r.url} target="_blank" rel="noreferrer">📄 arXiv</a>
                 )}
                 {typeof r.id === 'string' && (
-                  <a className="text-accent no-underline text-sm font-medium py-1 px-2 rounded-sm border border-transparent hover:bg-[rgba(59,130,246,0.08)] hover:border-border" href={`https://arxiv.org/pdf/${r.id}.pdf`} target="_blank" rel="noreferrer">📥 PDF</a>
+                  <a className="text-accent no-underline text-sm font-medium py-1 px-2 rounded-sm border border-transparent hover:bg-accent/10 hover:border-border" href={`https://arxiv.org/pdf/${r.id}.pdf`} target="_blank" rel="noreferrer">📥 PDF</a>
                 )}
                 {r.doi && (
-                  <a className="text-accent no-underline text-sm font-medium py-1 px-2 rounded-sm border border-transparent hover:bg-[rgba(59,130,246,0.08)] hover:border-border" href={`https://doi.org/${r.doi}`} target="_blank" rel="noreferrer">🔗 DOI</a>
+                  <a className="text-accent no-underline text-sm font-medium py-1 px-2 rounded-sm border border-transparent hover:bg-accent/10 hover:border-border" href={`https://doi.org/${r.doi}`} target="_blank" rel="noreferrer">🔗 DOI</a>
                 )}
               </div>
             </Card>

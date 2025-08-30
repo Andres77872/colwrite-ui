@@ -231,8 +231,8 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
           'text-[12px] leading-[1.4] font-medium cursor-pointer transition-all duration-150',
           'shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:shadow-[0_2px_4px_rgba(0,0,0,0.1)]',
           p.kind === 'document'
-            ? 'bg-[rgba(0,122,204,0.1)] border-[rgba(0,122,204,0.4)] text-[#0066cc]'
-            : 'bg-[rgba(0,180,26,0.1)] border-[rgba(0,180,26,0.4)] text-[#00b41a]'
+            ? 'bg-[var(--color-info-soft)] border-[var(--color-border)] text-[var(--color-info)]'
+            : 'bg-[var(--color-success-soft)] border-[var(--color-border)] text-[var(--color-success)]'
         ].join(' ');
         const icon = document.createElement('span');
         icon.className = 'text-[11px] opacity-90';
@@ -248,9 +248,9 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
         remove.type = 'button';
         remove.className = [
           'inline-flex items-center justify-center w-4 h-4 rounded border border-transparent',
-          'bg-[rgba(0,0,0,0.05)] text-[var(--color-muted)] text-[11px] font-semibold cursor-pointer',
+          'bg-[var(--color-muted)] text-[var(--color-muted-foreground)] text-[11px] font-semibold cursor-pointer',
           'transition-all duration-150 opacity-70 group-hover:opacity-100',
-          'hover:bg-[var(--color-accent)] hover:text-white hover:border-[var(--color-accent)] hover:scale-110',
+          'hover:bg-[var(--color-accent)] hover:text-[var(--color-accent-foreground)] hover:border-[var(--color-accent)] hover:scale-110',
         ].join(' ');
         remove.title = 'Remove';
         remove.textContent = '×';
@@ -292,13 +292,13 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
       <div
         ref={hostRef}
         className={[
-          'w-full min-h-[52px] max-h-[120px] p-[12px_14px] border-2 rounded-md bg-white outline-none',
+          'w-full min-h-[52px] max-h-[120px] p-[12px_14px] border-2 rounded-md bg-[var(--color-card)] outline-none',
           'whitespace-pre-wrap break-words overflow-y-auto text-sm leading-6 transition-all duration-200',
           'empty:before:content-[attr(data-placeholder)] before:text-[var(--color-muted)] before:pointer-events-none',
           'focus:empty:before:opacity-70',
-          'focus:border-[var(--color-accent)] focus:shadow-[0_0_0_3px_rgba(0,122,255,0.1)]',
-          disabled ? 'bg-[#f8f9fa] border-[#e9ecef] text-[var(--color-muted)] cursor-not-allowed' : '',
-          isOverLimit ? 'shadow-[0_0_0_3px_rgba(220,53,69,0.1)] border-[var(--color-danger,#dc3545)]' : '',
+          'focus:border-[var(--color-accent)] focus:shadow-[var(--shadow-focus)]',
+          disabled ? 'bg-[var(--color-muted)] border-[var(--color-border)] text-[var(--color-muted-foreground)] cursor-not-allowed' : '',
+          isOverLimit ? 'shadow-[var(--shadow-danger)] border-[var(--color-danger)]' : '',
         ].filter(Boolean).join(' ')}
         contentEditable={!disabled}
         role="textbox"
@@ -326,7 +326,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
         }}
         onKeyDown={handleKeyDown}
         style={{
-          borderColor: isOverLimit ? 'var(--color-danger, #dc3545)' : undefined,
+          borderColor: isOverLimit ? 'var(--color-danger)' : undefined,
           direction: 'ltr',
           unicodeBidi: 'plaintext',
         }}

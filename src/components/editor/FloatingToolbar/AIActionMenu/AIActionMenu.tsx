@@ -55,7 +55,7 @@ export function AIActionMenu({ onAction, disabled = false }: { onAction: (action
       }}
     >
       <button
-        className="inline-flex items-center gap-1.5 rounded-sm px-2 py-1.5 font-semibold hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+        className="inline-flex items-center gap-1.5 rounded-sm px-2 py-1.5 font-semibold hover:bg-elev disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
         title="AI Actions"
         onMouseDown={handleToggleMouseDown}
         aria-haspopup="menu"
@@ -67,12 +67,12 @@ export function AIActionMenu({ onAction, disabled = false }: { onAction: (action
       </button>
       {open && (
         <div
-          className="absolute left-0 top-full z-[200] mt-1.5 min-w-[220px] rounded-md border border-gray-200 bg-white p-1.5 shadow-md flex flex-col"
+          className="absolute left-0 top-full z-[200] mt-1.5 min-w-[220px] rounded-md border border-border bg-popover p-1.5 shadow-[var(--shadow-md)] flex flex-col"
           role="menu"
         >
           <button
             role="menuitem"
-            className="flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left hover:bg-gray-100"
+            className="flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left hover:bg-elev"
             onMouseDown={call('search-for-references')}
           >
             <span className="inline-flex w-[18px] justify-center">🔎</span>
@@ -80,7 +80,7 @@ export function AIActionMenu({ onAction, disabled = false }: { onAction: (action
           </button>
           <button
             role="menuitem"
-            className="flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left hover:bg-gray-100"
+            className="flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left hover:bg-elev"
             onMouseDown={call('add-details')}
           >
             <span className="inline-flex w-[18px] justify-center">➕</span>
@@ -88,7 +88,7 @@ export function AIActionMenu({ onAction, disabled = false }: { onAction: (action
           </button>
           <button
             role="menuitem"
-            className="flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left hover:bg-gray-100"
+            className="flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left hover:bg-elev"
             onMouseDown={call('more-concise')}
           >
             <span className="inline-flex w-[18px] justify-center">➖</span>

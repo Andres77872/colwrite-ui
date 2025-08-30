@@ -96,7 +96,6 @@ export function ChatRefTags({
           return <Fragment key={idx}>{p}</Fragment>;
         }
         const isDoc = p.kind === 'document';
-        const isBlock = p.kind === 'block';
         const label = isDoc
           ? `Doc ${shorten(p.docId || '')}`
           : (p.source === 'this'
@@ -115,11 +114,8 @@ export function ChatRefTags({
         const pillClass = [
           'inline-flex items-center gap-1.5 py-0.5 px-2 rounded-full border text-xs leading-[1.6]',
           interactive ? 'transition group-hover:brightness-[.98]' : '',
-          isDoc
-            ? 'bg-[rgba(0,122,204,0.08)] border-[rgba(0,122,204,0.35)]'
-            : isBlock
-              ? 'bg-[rgba(0,180,26,0.08)] border-[rgba(0,180,26,0.35)]'
-              : 'bg-[var(--color-elev)] border-[var(--color-border)]',
+          // Neutral tokenized styling for pills; icons convey kind differences.
+          'bg-elev border-border',
         ].filter(Boolean).join(' ');
 
         const content = (
@@ -136,7 +132,7 @@ export function ChatRefTags({
             {interactive && (
               <button
                 type="button"
-                className="inline-flex items-center justify-center w-[18px] h-[18px] rounded-full border border-[var(--color-border)] bg-white text-[var(--color-muted)] text-xs cursor-pointer hover:bg-[var(--color-accent)] hover:text-white hover:border-[var(--color-accent)]"
+                className="inline-flex items-center justify-center w-[18px] h-[18px] rounded-full border border-border bg-card text-muted-foreground text-xs cursor-pointer hover:bg-accent hover:text-primary-foreground hover:border-accent"
                 aria-label="Remove reference"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={(e) => { e.stopPropagation(); onTagRemove?.(p.start, p.refText); }}

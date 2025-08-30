@@ -15,32 +15,32 @@ export function DocumentFooter() {
   }, [blocks]);
 
   return (
-    <div className="sticky bottom-0 z-[1000] flex flex-wrap gap-3 border-t border-border mt-3 -mx-3 -mb-3 px-3 py-2 bg-panel rounded-b-[var(--radius-lg)] shadow-[0_-4px_12px_rgba(0,0,0,0.04)]">
-      <div className="inline-flex gap-2 items-center px-2 py-1 border border-border rounded-sm bg-white transition-colors hover:bg-[#f9fafb]">
-        <span className="text-muted text-sm">Blocks</span>
+    <div className="sticky bottom-0 z-[1000] flex flex-wrap gap-3 border-t border-border mt-3 -mx-3 -mb-3 px-3 py-2 bg-panel rounded-b-[var(--radius-lg)] shadow-[var(--shadow-sm)]">
+      <div className="inline-flex gap-2 items-center px-2 py-1 border border-border rounded-sm bg-card transition-colors hover:bg-elev">
+        <span className="text-[var(--color-muted-foreground)] text-sm">Blocks</span>
         <span className="font-semibold">{stats.total}</span>
       </div>
       {stats.headings > 0 && (
-        <div className="inline-flex gap-2 items-center px-2 py-1 border border-border rounded-sm bg-white transition-colors hover:bg-[#f9fafb]">
-          <span className="text-muted text-sm">Headings</span>
+        <div className="inline-flex gap-2 items-center px-2 py-1 border border-border rounded-sm bg-card transition-colors hover:bg-elev">
+          <span className="text-[var(--color-muted-foreground)] text-sm">Headings</span>
           <span className="font-semibold">{headingsLabel(stats.headings)}</span>
         </div>
       )}
       {stats.paragraphs > 0 && (
-        <div className="inline-flex gap-2 items-center px-2 py-1 border border-border rounded-sm bg-white transition-colors hover:bg-[#f9fafb]">
-          <span className="text-muted text-sm">Paragraphs</span>
+        <div className="inline-flex gap-2 items-center px-2 py-1 border border-border rounded-sm bg-card transition-colors hover:bg-elev">
+          <span className="text-[var(--color-muted-foreground)] text-sm">Paragraphs</span>
           <span className="font-semibold">{stats.paragraphs}</span>
         </div>
       )}
       {stats.dividers > 0 && (
-        <div className="inline-flex gap-2 items-center px-2 py-1 border border-border rounded-sm bg-white transition-colors hover:bg-[#f9fafb]">
-          <span className="text-muted text-sm">Dividers</span>
+        <div className="inline-flex gap-2 items-center px-2 py-1 border border-border rounded-sm bg-card transition-colors hover:bg-elev">
+          <span className="text-[var(--color-muted-foreground)] text-sm">Dividers</span>
           <span className="font-semibold">{stats.dividers}</span>
         </div>
       )}
       {stats.inlines > 0 && (
-        <div className="inline-flex gap-2 items-center px-2 py-1 border border-border rounded-sm bg-white transition-colors hover:bg-[#f9fafb]">
-          <span className="text-muted text-sm">Inline widgets</span>
+        <div className="inline-flex gap-2 items-center px-2 py-1 border border-border rounded-sm bg-card transition-colors hover:bg-elev">
+          <span className="text-[var(--color-muted-foreground)] text-sm">Inline widgets</span>
           <span className="font-semibold">{stats.inlines}</span>
         </div>
       )}

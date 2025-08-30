@@ -124,7 +124,7 @@ export function EquationInline({
     >
       <button
         type="button"
-        className="inline-flex items-center gap-1.5 px-2 py-0.5 border border-border rounded-full bg-white cursor-pointer shadow-[0_1px_0_rgba(0,0,0,0.02)] text-[14px] hover:bg-elev"
+        className="inline-flex items-center gap-1.5 px-2 py-0.5 border border-border rounded-full bg-card cursor-pointer shadow-[0_1px_0_rgba(0,0,0,0.02)] text-[14px] hover:bg-elev"
         title="Edit equation"
         onMouseDown={(e) => { e.preventDefault(); setOpen(v => !v); }}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v); } }}
@@ -144,13 +144,13 @@ export function EquationInline({
       </button>
       {open && (
         <div
-          className="absolute left-0 top-[calc(100%+6px)] min-w-[420px] bg-white border border-border rounded-sm shadow-sm p-2.5 z-10"
+          className="absolute left-0 top-[calc(100%+6px)] min-w-[420px] bg-popover border border-border rounded-sm shadow-sm p-2.5 z-10"
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2">
-            <label className="text-[12px] text-muted">LaTeX</label>
+            <label className="text-[12px] text-[var(--color-muted-foreground)]">LaTeX</label>
             <input
-              className="w-full border border-border bg-white px-2 py-1.5 rounded-md outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
+              className="w-full border border-border bg-card px-2 py-1.5 rounded-md outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
               type="text"
               placeholder="E=mc^2"
               value={latex}
@@ -162,7 +162,7 @@ export function EquationInline({
             />
           </div>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2">
-            <label className="text-[12px] text-muted">Numbered</label>
+            <label className="text-[12px] text-[var(--color-muted-foreground)]">Numbered</label>
             <input
               className="w-4 h-4"
               type="checkbox"
@@ -171,9 +171,9 @@ export function EquationInline({
             />
           </div>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
-            <label className="text-[12px] text-muted">Label ID</label>
+            <label className="text-[12px] text-[var(--color-muted-foreground)]">Label ID</label>
             <input
-              className="w-full border border-border bg-white px-2 py-1.5 rounded-md outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
+              className="w-full border border-border bg-card px-2 py-1.5 rounded-md outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
               type="text"
               placeholder="eq:mass-energy"
               value={labelId}
@@ -194,7 +194,7 @@ export function EquationInline({
           <div className="flex justify-end gap-2 mt-2">
             <button
               type="button"
-              className="px-2.5 py-1.5 rounded-md border border-danger text-danger bg-white hover:opacity-90"
+              className="px-2.5 py-1.5 rounded-md border border-danger text-danger bg-card hover:opacity-90"
               title="Remove equation"
               onMouseDown={onRemove}
             >
@@ -202,7 +202,7 @@ export function EquationInline({
             </button>
             <button
               type="button"
-              className="px-2.5 py-1.5 rounded-md border border-border bg-white hover:bg-elev"
+              className="px-2.5 py-1.5 rounded-md border border-border bg-card hover:bg-elev"
               title="Close"
               onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}
             >

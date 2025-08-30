@@ -3,6 +3,26 @@ import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'rea
 import type { ParagraphChild } from '../../../../../../editor';
 import { serializeEditableHtml } from '../../../../../../components/common/Editable/Editable';
 
+// Resolve a CSS variable to its computed value (with optional fallback)
+const cssVar = (name: string, fallback?: string): string => {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || (fallback || '');
+  } catch {
+    return fallback || '';
+  }
+};
+
+// Convert hex color (#rrggbb) to rgba string with given alpha
+const hexToRgba = (hex: string, alpha = 1): string => {
+  const m = hex?.trim().match(/^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i);
+  if (!m) return hex || '';
+  const r = parseInt(m[1], 16);
+  const g = parseInt(m[2], 16);
+  const b = parseInt(m[3], 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
 export function GraphInline({
   blockId,
   child,
@@ -148,8 +168,8 @@ export function GraphInline({
           {
             label: title || 'Graph',
             data: values,
-            backgroundColor: kind === 'pie' ? (colors.length ? colors : undefined) : (colors[0] || 'rgba(99, 102, 241, 0.6)'),
-            borderColor: kind === 'line' ? (colors[0] || '#6366f1') : undefined,
+            backgroundColor: kind === 'pie' ? (colors.length ? colors : undefined) : (colors[0] || hexToRgba(cssVar('--color-chart-1'), 0.6)),
+            borderColor: kind === 'line' ? (colors[0] || cssVar('--color-chart-1')) : undefined,
           },
         ],
       };
@@ -177,8 +197,8 @@ export function GraphInline({
           {
             label: '',
             data: values,
-            backgroundColor: kind === 'pie' ? (colors.length ? colors : undefined) : (colors[0] || 'rgba(99, 102, 241, 0.6)'),
-            borderColor: kind === 'line' ? (colors[0] || '#6366f1') : undefined,
+            backgroundColor: kind === 'pie' ? (colors.length ? colors : undefined) : (colors[0] || hexToRgba(cssVar('--color-chart-1', '#2563eb'), 0.6)),
+            borderColor: kind === 'line' ? (colors[0] || cssVar('--color-chart-1', '#2563eb')) : undefined,
           },
         ],
       };
@@ -197,7 +217,7 @@ export function GraphInline({
           },
           scales: kind === 'pie' ? undefined : {
             x: { display: true, grid: { display: false } },
-            y: { display: true, grid: { color: 'rgba(0,0,0,0.06)' } },
+            y: { display: true, grid: { color: cssVar('--color-border') } },
           },
           elements: { point: { radius: 2 } },
         },
@@ -236,7 +256,7 @@ export function GraphInline({
           const h = Math.round((Math.abs(v) / max) * (height - 6));
           const x = i * (barW + gap);
           const y = height - h - 2;
-          const fill = colors[i] || '#6366f1';
+          const fill = colors[i] || 'var(--color-chart-1)';
           return <rect key={i} x={x} y={y} width={barW} height={h} fill={fill} rx={2} ry={2} />;
         })}
       </svg>
@@ -265,7 +285,7 @@ export function GraphInline({
       const yv = y(Math.max(v, 0));
       const yb = y(Math.min(v, 0));
       const h = Math.max(2, Math.abs(yb - yv));
-      const fill = colors[i] || '#6366f1';
+      const fill = colors[i] || 'var(--color-chart-1)';
       return <rect key={i} x={Math.round(x)} y={Math.round(Math.min(yv, yb))} width={barW} height={Math.round(h)} fill={fill} rx={2} ry={2} />;
     }) : null;
     let linePts = '';
@@ -276,19 +296,19 @@ export function GraphInline({
       });
       linePts = pts.join(' ');
     }
-    const stroke = colors[0] || '#6366f1';
+    const stroke = colors[0] || 'var(--color-chart-1)';
     return (
       <svg className="block w-full h-auto" width={width} height={height} aria-label="Graph">
-        <rect x="0" y="0" width={width} height={height} fill="#fff" />
+        <rect x="0" y="0" width={width} height={height} fill="var(--color-card)" />
         {/* grid */}
         {ticks.map((t, i) => (
-          <line key={`g${i}`} x1={ml} y1={Math.round(tickY(t))} x2={width - mr} y2={Math.round(tickY(t))} stroke="rgba(0,0,0,0.06)" strokeWidth="1" />
+          <line key={`g${i}`} x1={ml} y1={Math.round(tickY(t))} x2={width - mr} y2={Math.round(tickY(t))} stroke="var(--color-border)" strokeWidth="1" />
         ))}
         {/* axes */}
-        <line x1={ml} y1={mt} x2={ml} y2={height - mb} stroke="#333" strokeWidth="1" />
-        <line x1={ml} y1={height - mb} x2={width - mr} y2={height - mb} stroke="#333" strokeWidth="1" />
+        <line x1={ml} y1={mt} x2={ml} y2={height - mb} stroke="var(--color-foreground)" strokeWidth="1" />
+        <line x1={ml} y1={height - mb} x2={width - mr} y2={height - mb} stroke="var(--color-foreground)" strokeWidth="1" />
         {/* zero line */}
-        {minV < 0 && maxV > 0 ? <line x1={ml} y1={Math.round(zeroY)} x2={width - mr} y2={Math.round(zeroY)} stroke="rgba(0,0,0,0.3)" strokeDasharray="4 3" /> : null}
+        {minV < 0 && maxV > 0 ? <line x1={ml} y1={Math.round(zeroY)} x2={width - mr} y2={Math.round(zeroY)} stroke="var(--color-border)" strokeDasharray="4 3" /> : null}
         {/* series */}
         {kind === 'bar' ? barRects : (
           <polyline fill="none" stroke={stroke} strokeWidth="2" points={linePts} strokeLinejoin="round" strokeLinecap="round" />
@@ -296,11 +316,11 @@ export function GraphInline({
         {/* x tick labels if labels present */}
         {labels.length ? labels.map((lab, i) => {
           const x = ml + i * step + step / 2;
-          return <text key={`xl${i}`} x={Math.round(x)} y={height - 10} textAnchor="middle" fontSize="11" fill="#555">{lab}</text>;
+          return <text key={`xl${i}`} x={Math.round(x)} y={height - 10} textAnchor="middle" fontSize="11" fill="var(--color-muted-foreground)">{lab}</text>;
         }) : null}
         {/* y axis labels */}
         {ticks.map((t, i) => (
-          <text key={`yl${i}`} x={ml - 6} y={Math.round(tickY(t))} textAnchor="end" dy="0.35em" fontSize="11" fill="#555">{Number(t.toFixed(2)).toString()}</text>
+          <text key={`yl${i}`} x={ml - 6} y={Math.round(tickY(t))} textAnchor="end" dy="0.35em" fontSize="11" fill="var(--color-muted-foreground)">{Number(t.toFixed(2)).toString()}</text>
         ))}
       </svg>
     );
@@ -323,7 +343,7 @@ export function GraphInline({
       const x2 = cx + r * Math.cos(end);
       const y2 = cy + r * Math.sin(end);
       const largeArc = angle > Math.PI ? 1 : 0;
-      const fill = colors[i] || '#6366f1';
+      const fill = colors[i] || 'var(--color-chart-1)';
       const d = `M ${cx},${cy} L ${x1},${y1} A ${r},${r} 0 ${largeArc} 1 ${x2},${y2} Z`;
       segments.push(<path key={i} d={d} fill={fill} />);
       start = end;
@@ -332,13 +352,13 @@ export function GraphInline({
     const legendX = 310, legendY = 40, rowH = 18;
     const legend = values.map((_, i) => (
       <g key={`lg${i}`} transform={`translate(${legendX}, ${legendY + i * rowH})`}>
-        <rect x={0} y={-10} width={12} height={12} fill={colors[i] || '#6366f1'} rx={2} ry={2} />
-        <text x={18} y={0} fontSize="12" fill="#555" alignmentBaseline="middle">{labels[i] || `Slice ${i + 1}`}</text>
+        <rect x={0} y={-10} width={12} height={12} fill={colors[i] || 'var(--color-chart-1)'} rx={2} ry={2} />
+        <text x={18} y={0} fontSize="12" fill="var(--color-muted-foreground)" alignmentBaseline="middle">{labels[i] || `Slice ${i + 1}`}</text>
       </g>
     ));
     return (
       <svg className="block w-full h-auto" width={width} height={height} aria-label="Graph">
-        <rect x="0" y="0" width={width} height={height} fill="#fff" />
+        <rect x="0" y="0" width={width} height={height} fill="var(--color-card)" />
         {segments}
         {legend}
       </svg>
@@ -356,7 +376,7 @@ export function GraphInline({
       onClick={(e) => e.stopPropagation()}
     >
       <figure
-        className="block border border-[color:var(--color-border)] rounded-[8px] bg-white shadow-[var(--shadow-xs,0_1px_0_rgba(0,0,0,0.02))] p-2 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-accent)] focus-visible:ring-offset-2"
+        className="block border border-[var(--color-border)] rounded-[8px] bg-[var(--color-card)] shadow-[var(--shadow-xs,0_1px_0_rgba(0,0,0,0.02))] p-2 cursor-pointer focus:outline-none focus-visible:shadow-[var(--shadow-focus)] focus-visible:border-[var(--color-accent)]"
         role="button"
         tabIndex={0}
         title="Edit graph"
@@ -369,23 +389,23 @@ export function GraphInline({
           ) : (kind === 'pie' ? figureFallbackPie : figureFallbackBarLine) || null}
         </div>
         {(title || labels.length) && (
-          <figcaption className="mt-1.5 text-xs text-[color:var(--color-muted)] text-center">{title || `${capKind} (${values.length})`}</figcaption>
+          <figcaption className="mt-1.5 text-xs text-[var(--color-muted-foreground)] text-center">{title || `${capKind} (${values.length})`}</figcaption>
         )}
       </figure>
       {open && (
-        <div className="absolute left-0 top-[calc(100%+6px)] min-w-[460px] bg-white border border-[color:var(--color-border)] rounded-[var(--radius-sm)] shadow-[var(--shadow-sm)] p-2.5 z-10" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="absolute left-0 top-[calc(100%+6px)] min-w-[460px] bg-[var(--color-popover)] border border-[var(--color-border)] rounded-[var(--radius-sm)] shadow-[var(--shadow-md)] p-2.5 z-10" onMouseDown={(e) => e.stopPropagation()}>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
-            <label className="text-xs text-[color:var(--color-muted)]">Type</label>
-            <select className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--color-accent)] focus:border-transparent" value={kind} onChange={(e) => setKind(e.target.value as any)}>
+            <label className="text-xs text-[var(--color-muted-foreground)]">Type</label>
+            <select className="w-full border border-[var(--color-border)] bg-[var(--color-popover)] px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[var(--color-accent)] focus:border-transparent" value={kind} onChange={(e) => setKind(e.target.value as any)}>
               <option value="bar">Bar</option>
               <option value="line">Line</option>
               <option value="pie">Pie</option>
             </select>
           </div>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
-            <label className="text-xs text-[color:var(--color-muted)]">Values</label>
+            <label className="text-xs text-[var(--color-muted-foreground)]">Values</label>
             <input
-              className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--color-accent)] focus:border-transparent"
+              className="w-full border border-[var(--color-border)] bg-[var(--color-popover)] px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[var(--color-accent)] focus:border-transparent"
               type="text"
               placeholder="1, 2, 3"
               value={valuesStr}
@@ -394,28 +414,28 @@ export function GraphInline({
             />
           </div>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
-            <label className="text-xs text-[color:var(--color-muted)]">Labels</label>
-            <input className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="A, B, C" value={labelsStr} onChange={(e) => setLabelsStr(e.target.value)} />
+            <label className="text-xs text-[var(--color-muted-foreground)]">Labels</label>
+            <input className="w-full border border-[var(--color-border)] bg-[var(--color-popover)] px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[var(--color-accent)] focus:border-transparent" type="text" placeholder="A, B, C" value={labelsStr} onChange={(e) => setLabelsStr(e.target.value)} />
           </div>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
-            <label className="text-xs text-[color:var(--color-muted)]">Colors</label>
-            <input className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="#6366f1, #22c55e" value={colorsStr} onChange={(e) => setColorsStr(e.target.value)} />
+            <label className="text-xs text-[var(--color-muted-foreground)]">Colors</label>
+            <input className="w-full border border-[var(--color-border)] bg-[var(--color-popover)] px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[var(--color-accent)] focus:border-transparent" type="text" placeholder="#2563eb, #16a34a" value={colorsStr} onChange={(e) => setColorsStr(e.target.value)} />
           </div>
           <div className="grid grid-cols-[92px_1fr] items-center gap-2 mb-2 last:mb-0">
-            <label className="text-xs text-[color:var(--color-muted)]">Title</label>
-            <input className="w-full border border-[color:var(--color-border)] bg-white px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[color:var(--color-accent)] focus:border-transparent" type="text" placeholder="Optional" value={title} onChange={(e) => setTitle(e.target.value)} />
+            <label className="text-xs text-[var(--color-muted-foreground)]">Title</label>
+            <input className="w-full border border-[var(--color-border)] bg-[var(--color-popover)] px-2 py-1.5 rounded-[6px] outline-none focus:ring-2 focus:ring-inset focus:ring-[var(--color-accent)] focus:border-transparent" type="text" placeholder="Optional" value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
-          <div className="mt-1.5 p-2 bg-[color:var(--color-elev)] rounded-[6px] text-sm flex items-center justify-center">
+          <div className="mt-1.5 p-2 bg-[var(--color-elev)] rounded-[6px] text-sm flex items-center justify-center">
             {chartReady ? (
               <canvas className="block" ref={canvasRef} width={160} height={80} />
             ) : (
-              fallbackBars || <div className="text-[color:var(--color-muted)]">Graph preview</div>
+              fallbackBars || <div className="text-[var(--color-muted-foreground)]">Graph preview</div>
             )}
           </div>
-          {error && <div className="mt-1.5 text-[#b31212] text-xs" role="alert">{error}</div>}
+          {error && <div className="mt-1.5 text-[var(--color-danger)] text-xs" role="alert">{error}</div>}
           <div className="flex justify-end gap-2 mt-2">
-            <button type="button" className="border border-[color:var(--color-border)] bg-white px-2.5 py-1.5 rounded-[6px] cursor-pointer text-[#b31212] border-[#f3c1c1]" title="Remove graph" onMouseDown={onRemove}>Remove</button>
-            <button type="button" className="border border-[color:var(--color-border)] bg-white px-2.5 py-1.5 rounded-[6px] cursor-pointer" title="Close" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</button>
+            <button type="button" className="border border-[var(--color-danger)] bg-[var(--color-popover)] px-2.5 py-1.5 rounded-[6px] cursor-pointer text-[var(--color-danger)] hover:bg-[var(--color-elev)] focus-visible:shadow-[var(--shadow-danger)]" title="Remove graph" onMouseDown={onRemove}>Remove</button>
+            <button type="button" className="border border-[var(--color-border)] bg-[var(--color-popover)] px-2.5 py-1.5 rounded-[6px] cursor-pointer hover:bg-[var(--color-elev)] focus-visible:shadow-[var(--shadow-focus)] focus-visible:border-[var(--color-accent)]" title="Close" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</button>
           </div>
         </div>
       )}
