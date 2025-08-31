@@ -29,7 +29,7 @@ export function openSlashMenu(blockId: string) {
 }
 
 export function SlashMenu() {
-  const { refs, updateHtml, addParagraphChild, documentId, createRemote } = useEditor();
+  const { refs, updateHtml, addParagraphChild, documentId, createRemote, blocks } = useEditor();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const [blockId, setBlockId] = useState<string | null>(null);
@@ -105,11 +105,14 @@ export function SlashMenu() {
       const ce = e as CustomEvent<OpenDetail>;
       const bid = ce.detail?.blockId;
       if (!bid) return;
+      // Only open for paragraph-type blocks
+      const targetBlock = blocks.find(b => b.id === bid);
+      if (!targetBlock || targetBlock.type !== 'paragraph') return;
       openAtCaret(bid);
     };
     window.addEventListener(SLASH_MENU_EVENT, openListener as EventListener);
     return () => window.removeEventListener(SLASH_MENU_EVENT, openListener as EventListener);
-  }, []);
+  }, [blocks]);
 
   // Broadcast visibility so other floating UIs (e.g., FloatingToolbar) can suspend while the slash menu is open
   useEffect(() => {

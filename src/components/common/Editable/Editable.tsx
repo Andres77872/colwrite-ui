@@ -23,12 +23,14 @@ export function Editable({
   placeholder,
   className,
   style,
+  slashEnabled = false,
 }: {
   id: string;
   html: string;
   placeholder?: string;
   className?: string;
   style?: CSSProperties;
+  slashEnabled?: boolean;
 }) {
   const { addBlockAfter, removeBlock, updateHtml, refs, setActive, activeId } = useEditor();
   const pointerDownRef = useRef(false);
@@ -126,7 +128,7 @@ export function Editable({
         const inEquation = !!(document.activeElement as HTMLElement | null)?.closest?.('.equation-inline') || !!anchorEl?.closest('[data-child-id] .equation-inline');
         const inGraph = !!(document.activeElement as HTMLElement | null)?.closest?.('.graph-inline') || !!anchorEl?.closest('[data-child-id] .graph-inline');
         if (inAiSuggest || inAiBeat || inTable || inCitation || inEquation || inGraph) return;
-        if (e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (slashEnabled && e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
           // Open slash menu and prevent literal '/'
           e.preventDefault();
           openSlashMenu(id);

@@ -66,7 +66,7 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
 
   return (
     <>
-      <Editable className="paragraph-block" id={block.id} html={block.html} placeholder="Type to write…" style={editableStyle} />
+      <Editable className="paragraph-block" id={block.id} html={block.html} placeholder="Type to write…" style={editableStyle} slashEnabled />
       {mounts.map(({ id, el }: { id: string; el: HTMLElement }) => {
         const child = (block.children || []).find(c => c.id === id);
         if (!child) return null;

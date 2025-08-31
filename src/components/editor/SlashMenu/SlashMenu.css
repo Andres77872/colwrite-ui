@@ -1,4 +1,4 @@
-.slash-menu { position: fixed; z-index: 120; background: #fff; border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-md); padding: 6px; width: 320px; max-height: 320px; overflow: auto; }
+.slash-menu { position: fixed; z-index: 150; background: #fff; border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-md); padding: 6px; width: 320px; max-height: 320px; overflow: auto; }
 .slash-search { width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 8px; margin-bottom: 6px; }
 .slash-menu-group { display: flex; flex-direction: column; gap: 2px; }
 .slash-group-title { padding: 4px 10px; font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.04em; }
