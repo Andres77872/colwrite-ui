@@ -112,7 +112,7 @@
   transform: translateX(-50%); 
   transform-origin: top center; 
   min-width: 200px; 
-  z-index: 1000;
+  z-index: 1100;
   animation: bc-pop 120ms ease-out both;
 }
 .block-add-inline .block-menu::before { 
@@ -403,5 +403,9 @@
   }
 }
 
-/* Raise row z-index when center editor is open so it overlays neighbors */
-.block-row:has(.bc-center-editor) { z-index: 4; }
+/* Raise row z-index ONLY when the center editor dropdown is open
+   (otherwise every row would sit above neighbors and occlude the add menu) */
+.block-row:has(.bc-center-editor .editor-menu),
+.block-row:has(.bc-center-editor .editor-btn.is-open) { 
+  z-index: 4; 
+}
