@@ -4,7 +4,7 @@ import { useEditor, type Doc, type Block } from '../../../editor';
 import type { OpenAIChatMessage } from '../../../services';
 import { streamDocumentAiChat } from '../../../services';
 import { useChatSessions } from '../../chat/ChatSessionsContext';
-import { listMessages } from '../../../services/chats';
+import { listMessages, listThreads } from '../../../services/chats';
 import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
 import { ChatRefTags } from './ChatRefTags';
 import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
@@ -188,6 +188,11 @@ export function ChatAssistant() {
     }
   }, [visibleMessages, isStreaming]);
 
+  // Improve UX: open the assistant when a chat gets selected
+  useEffect(() => {
+    if (selectedChatId) setExpanded(true);
+  }, [selectedChatId]);
+
   const ensureDocumentId = async (): Promise<string> => {
     if (documentId) return documentId;
     const id = await createRemote();
@@ -211,9 +216,15 @@ export function ChatAssistant() {
         lastExtrasKeyRef.current = null;
 
         // Fetch conversation along the current branch
-        const threadId = (selectedThreadId ?? undefined) as number | undefined;
-        if (typeof threadId !== 'number') return; // need a pivot to load branch
-        const res = await listMessages(documentId, selectedChatId, threadId);
+        let pivot: number | undefined = (selectedThreadId ?? undefined) as number | undefined;
+        if (typeof pivot !== 'number') {
+          // Fallback: fetch threads and pick the latest by id
+          const thr = await listThreads(documentId, selectedChatId, 100, 0);
+          const ids = (thr.threads || []).map(t => t.id).filter((n: any) => typeof n === 'number');
+          if (ids.length) pivot = Math.max(...ids);
+        }
+        if (typeof pivot !== 'number') return; // nothing to load yet
+        const res = await listMessages(documentId, selectedChatId, pivot);
         const base: ChatMessage[] = [
           { role: 'system', content: 'You are a helpful writing assistant embedded in a document editor. Provide concise, actionable suggestions. When relevant, reference the current document context.' },
           ...res.messages.map((m) => ({ role: m.role as any, content: m.content }))
@@ -248,7 +259,7 @@ export function ChatAssistant() {
       await streamDocumentAiChat(id, nextMessages, {
         signal: controller.signal,
         chatId: selectedChatId,
-        threadId: selectedThreadId ?? undefined,
+        threadId: typeof selectedThreadId === 'number' ? selectedThreadId : undefined,
         onHeaders: (headers) => {
           const newChatId = headers.get('x-chat-id');
           if (newChatId && !selectedChatId) setSelectedChatId(newChatId);
