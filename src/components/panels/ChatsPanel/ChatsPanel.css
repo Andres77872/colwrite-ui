@@ -1,0 +1,69 @@
+/* Main layout */
+.chats-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Search */
+.chats-panel .search {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+/* List */
+.chats-panel .list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  overflow-y: auto;
+  flex: 1;
+}
+.chats-panel .item {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  gap: var(--sp-3);
+  align-items: center;
+  padding: var(--sp-3);
+}
+.chats-panel .item:hover { background: var(--color-elev); }
+.chats-panel .item.selected { background: rgba(59,130,246,0.06); border-color: var(--color-accent); }
+.chats-panel .item:focus { outline: 2px solid rgba(59,130,246,0.25); outline-offset: 2px; }
+.chats-panel .item-icon {
+  width: 32px; height: 32px; border-radius: var(--radius-sm);
+  display: grid; place-items: center; background: var(--color-elev);
+  border: 1px solid var(--color-border);
+}
+.chats-panel .item-title { font-weight: 600; }
+.chats-panel .item-meta { font-size: var(--fs-sm); }
+.chats-panel .item-actions { display: flex; gap: var(--sp-2); }
+.chats-panel .item-actions { opacity: 0; transition: opacity 120ms ease; }
+.chats-panel .item:hover .item-actions,
+.chats-panel .item.selected .item-actions,
+.chats-panel .item .item-actions:focus-within { opacity: 1; }
+.chats-panel .item-actions .btn { padding: 4px 8px; font-size: var(--fs-sm); }
+
+/* Pager */
+.chats-panel .pager { padding-top: var(--sp-2); border-top: 1px solid var(--color-border); }
+
+/* Error */
+.chats-panel .error { 
+  color: var(--color-danger);
+  background: rgba(239, 68, 68, 0.08);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  font-size: var(--fs-sm);
+}
+
+/* Empty states */
+.chats-panel .empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: var(--sp-8) var(--sp-4); text-align: center;
+}
+.chats-panel .empty-icon { font-size: 42px; margin-bottom: var(--sp-2); opacity: 0.5; }
+.chats-panel .empty-title { font-weight: 600; margin-bottom: var(--sp-1); }
+.chats-panel .empty-text { font-size: var(--fs-sm); }
