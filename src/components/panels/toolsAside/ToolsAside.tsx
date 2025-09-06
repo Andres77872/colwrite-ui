@@ -3,6 +3,8 @@ import { usePanels } from '../panelsContext';
 import { JsonPanel } from '../JsonPanel';
 import { ArxivPanel } from '../ArxivPanel';
 import { ColpaliPanel } from '../ColpaliPanel';
+import { LibraryPanel } from '../LibraryPanel';
+import { ChatsPanel } from '../ChatsPanel/ChatsPanel';
 
 function Placeholder({ title, description }: { title: string; description?: string }) {
   return (
@@ -23,11 +25,11 @@ export function ToolsAside() {
       {activeTool === 'json' && <JsonPanel />}
       {activeTool === 'arxiv' && <ArxivPanel />}
       {activeTool === 'colpali' && <ColpaliPanel />}
-      {activeTool === 'library' && (
-        <Placeholder title="Library" description="Coming soon: your saved papers and datasets." />
-      )}
+      {activeTool === 'library' && <LibraryPanel />}
+      {activeTool === 'chats' && <ChatsPanel />}
     </div>
   );
 }
+
 
 

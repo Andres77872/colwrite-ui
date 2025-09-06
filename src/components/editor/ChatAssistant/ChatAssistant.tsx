@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor, type Doc, type Block } from '../../../editor';
 import type { OpenAIChatMessage } from '../../../services';
 import { streamDocumentAiChat } from '../../../services';
+import { useChatSessions } from '../../chat/ChatSessionsContext';
+import { listMessages } from '../../../services/chats';
 import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
 import { ChatRefTags } from './ChatRefTags';
 import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
@@ -154,6 +156,7 @@ function applyPatchesToDoc(cur: Doc, patches: AnyPatch[]): Doc | null {
 
 export function ChatAssistant() {
   const { documentId, createRemote, doc, setFromJSON } = useEditor();
+  const { selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId } = useChatSessions();
   const [expanded, setExpanded] = useState<boolean>(() => {
     try { return localStorage.getItem('chat.expanded') === '1'; } catch { return false; }
   });
@@ -191,6 +194,38 @@ export function ChatAssistant() {
     return id;
   };
 
+  // Load messages for the selected chat when selection changes
+  useEffect(() => {
+    (async () => {
+      try {
+        if (!documentId || !selectedChatId) return;
+        // If streaming, stop first
+        if (abortRef.current) {
+          try { abortRef.current.abort(); } catch {}
+          abortRef.current = null;
+        }
+        setIsStreaming(false);
+        // Reset any transient extras state
+        extrasFilterRef.current = { inExtras: false, carry: '', buf: '' };
+        setExtrasActive(false);
+        lastExtrasKeyRef.current = null;
+
+        // Fetch conversation along the current branch
+        const threadId = (selectedThreadId ?? undefined) as number | undefined;
+        if (typeof threadId !== 'number') return; // need a pivot to load branch
+        const res = await listMessages(documentId, selectedChatId, threadId);
+        const base: ChatMessage[] = [
+          { role: 'system', content: 'You are a helpful writing assistant embedded in a document editor. Provide concise, actionable suggestions. When relevant, reference the current document context.' },
+          ...res.messages.map((m) => ({ role: m.role as any, content: m.content }))
+        ];
+        setMessages(base);
+        if (typeof res.pivotThreadId === 'number') setSelectedThreadId(res.pivotThreadId);
+      } catch {
+        // ignore load errors here; UI remains usable
+      }
+    })();
+  }, [documentId, selectedChatId, selectedThreadId]);
+
   const onSend = async () => {
     const text = input.trim();
     if (!text || isStreaming) return;
@@ -212,6 +247,12 @@ export function ChatAssistant() {
 
       await streamDocumentAiChat(id, nextMessages, {
         signal: controller.signal,
+        chatId: selectedChatId,
+        threadId: selectedThreadId ?? undefined,
+        onHeaders: (headers) => {
+          const newChatId = headers.get('x-chat-id');
+          if (newChatId && !selectedChatId) setSelectedChatId(newChatId);
+        },
         onChunk: (delta, chunk) => {
           // 1) Update assistant message text (filter out <EXTRAS_JSON> blocks) and extract inline extras
           const { text: clean, extras: inlineExtras } = filterAndExtractExtras(extrasFilterRef.current, delta || '');

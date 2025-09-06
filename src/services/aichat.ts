@@ -22,7 +22,15 @@ function buildUrl(path: string): string {
 export async function streamDocumentAiChat(
   documentId: string,
   messages: OpenAIChatMessage[],
-  opts?: { signal?: AbortSignal; onChunk?: (delta: string, chunk: AiChatChunk) => void }
+  opts?: {
+    signal?: AbortSignal;
+    onChunk?: (delta: string, chunk: AiChatChunk) => void;
+    // Optional chat session headers per API docs
+    chatId?: string | null;
+    threadId?: number | null;
+    // Observe response headers (e.g., to retrieve x-chat-id created by server)
+    onHeaders?: (headers: Headers) => void;
+  }
 ): Promise<void> {
   if (!documentId) throw new Error('Missing document id');
   const res = await fetch(buildUrl(`/document/aichat/${encodeURIComponent(documentId)}`), {
@@ -30,6 +38,8 @@ export async function streamDocumentAiChat(
     headers: {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
+      ...(opts?.chatId ? { 'x-chat-id': String(opts.chatId) } : {}),
+      ...(typeof opts?.threadId === 'number' ? { 'x-thread-id': String(opts.threadId) } : {}),
     },
     body: JSON.stringify({ messages }),
     signal: opts?.signal,
@@ -40,6 +50,11 @@ export async function streamDocumentAiChat(
     const text = await res.text().catch(() => '');
     throw new Error(text || res.statusText);
   }
+
+  // Allow caller to read headers (e.g., x-chat-id for a newly created chat)
+  try {
+    opts?.onHeaders?.(res.headers);
+  } catch {}
 
   const reader = res.body?.getReader();
   if (!reader) return;

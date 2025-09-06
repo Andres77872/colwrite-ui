@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 
-export type ToolId = 'json' | 'arxiv' | 'colpali' | 'library';
+export type ToolId = 'json' | 'arxiv' | 'colpali' | 'library' | 'chats';
 
 type PanelsContextValue = {
   activeTool: ToolId | null;

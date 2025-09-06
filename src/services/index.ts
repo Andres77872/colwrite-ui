@@ -5,3 +5,4 @@ export * from './auth';
 export * from './arxiv';
 export * from './colpali';
 export * from './aichat';
+export * from './chats';

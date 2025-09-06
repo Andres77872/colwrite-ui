@@ -10,27 +10,30 @@ import { SlashMenu } from './components/editor/SlashMenu'
 import { PanelsProvider, ToolsRail, ToolsAside } from './components/panels'
 import { Sidebar } from './components/layout/Sidebar'
 import { Topbar } from './components/layout/Topbar'
+import { ChatSessionsProvider } from './components/chat/ChatSessionsContext'
 
 function App() {
   const [leftCollapsed, setLeftCollapsed] = useState<boolean>(false)
   return (
     <EditorProvider>
-      <PanelsProvider>
-        <AppShell
-          header={<Topbar />}
-          left={<Sidebar collapsed={leftCollapsed} onToggle={() => setLeftCollapsed(v => !v)} />}
-          main={<>
-            <Canvas />
-            <ChatAssistant />
-            <DocumentFooter />
-            <FloatingToolbar />
-            <SlashMenu />
-          </>}
-          right={<ToolsRail />}
-          aside={<ToolsAside />}
-          leftCollapsed={leftCollapsed}
-        />
-      </PanelsProvider>
+      <ChatSessionsProvider>
+        <PanelsProvider>
+          <AppShell
+            header={<Topbar />}
+            left={<Sidebar collapsed={leftCollapsed} onToggle={() => setLeftCollapsed(v => !v)} />}
+            main={<>
+              <Canvas />
+              <ChatAssistant />
+              <DocumentFooter />
+              <FloatingToolbar />
+              <SlashMenu />
+            </>}
+            right={<ToolsRail />}
+            aside={<ToolsAside />}
+            leftCollapsed={leftCollapsed}
+          />
+        </PanelsProvider>
+      </ChatSessionsProvider>
     </EditorProvider>
   )
 }

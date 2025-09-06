@@ -25,6 +25,7 @@ export function ToolsRail() {
         {btn('arxiv', 'arXiv references search', '🧭')}
         {btn('colpali', 'ColPali search', '🔎')}
         {btn('library', 'Library', '📚')}
+        {btn('chats', 'Document chats', '💬')}
       </div>
       <div className="tr-footer"><span className="muted">v0.1</span></div>
     </div>
