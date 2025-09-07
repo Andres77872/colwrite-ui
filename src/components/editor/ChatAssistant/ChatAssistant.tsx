@@ -1,6 +1,6 @@
 import './ChatAssistant.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useEditor, type Doc, type Block } from '../../../editor';
+import { useEditor } from '../../../editor';
 import type { OpenAIChatMessage } from '../../../services';
 import { streamDocumentAiChat } from '../../../services';
 import { useChatSessions } from '../../chat/ChatSessionsContext';
@@ -10,16 +10,6 @@ import { ChatRefTags } from './ChatRefTags';
 import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
 
 type ChatMessage = OpenAIChatMessage;
-
-// --- Patch application helpers (module scope) ---
-type InsertPatch = { op: 'insert'; block: Block; beforeOf?: string | null; afterOf?: string | null };
-type UpdatePatch = { op: 'update'; blockId: string; fields: Partial<Block> };
-type DeletePatch = { op: 'delete'; blockId: string };
-type AnyPatch = InsertPatch | UpdatePatch | DeletePatch;
-
-function cloneDoc(d: Doc): Doc {
-  return { ...d, blocks: d.blocks.slice() };
-}
 
 // --- Streaming extras tag filter (module scope) ---
 type ExtrasFilterState = { inExtras: boolean; carry: string; buf: string };
@@ -90,81 +80,28 @@ function filterAndExtractExtras(state: ExtrasFilterState, incoming: string): { t
   return { text: outParts.join(''), extras: extrasOut };
 }
 
-function normalizeBlock(b: Block): Block {
-  if (b.type === 'paragraph') {
-    const pb = b as any;
-    return { ...pb, children: Array.isArray(pb.children) ? pb.children : [], columns: typeof pb.columns === 'number' ? pb.columns : 1 } as Block;
-  }
-  return b;
-}
+// normalizeBlock removed – we don't apply extras patches in the UI stream anymore.
 
-function applyPatchesToDoc(cur: Doc, patches: AnyPatch[]): Doc | null {
-  try {
-    let next = cloneDoc(cur);
-    for (const p of patches) {
-      if (p.op === 'insert') {
-        const blk = normalizeBlock((p as InsertPatch).block);
-        const { beforeOf, afterOf } = p as InsertPatch;
-        const byId = (id?: string | null) => next.blocks.findIndex(b => b.id === id);
-        if (beforeOf === null) {
-          next.blocks = next.blocks.concat([blk]);
-          continue;
-        }
-        if (afterOf === null) {
-          next.blocks = [blk, ...next.blocks];
-          continue;
-        }
-        if (typeof beforeOf === 'string') {
-          const idx = byId(beforeOf);
-          if (idx >= 0) {
-            const out = next.blocks.slice();
-            out.splice(idx, 0, blk);
-            next.blocks = out;
-            continue;
-          }
-        }
-        if (typeof afterOf === 'string') {
-          const idx = byId(afterOf);
-          if (idx >= 0) {
-            const out = next.blocks.slice();
-            out.splice(idx + 1, 0, blk);
-            next.blocks = out;
-            continue;
-          }
-        }
-        // Fallback: append
-        next.blocks = next.blocks.concat([blk]);
-      } else if (p.op === 'update') {
-        const { blockId, fields } = p as UpdatePatch;
-        const idx = next.blocks.findIndex(b => b.id === blockId);
-        if (idx === -1) continue;
-        const curBlk = next.blocks[idx] as any;
-        const merged = normalizeBlock({ ...curBlk, ...fields } as Block);
-        const out = next.blocks.slice();
-        out[idx] = merged;
-        next.blocks = out;
-      } else if (p.op === 'delete') {
-        const { blockId } = p as DeletePatch;
-        next.blocks = next.blocks.filter(b => b.id !== blockId);
-      }
-    }
-    return next;
-  } catch {
-    return null;
-  }
+// (Removed patch application helpers; extras are not applied during streaming.)
+
+// --- Utilities ---
+// Remove any <EXTRAS_JSON>{...}</EXTRAS_JSON> blocks from a text content string.
+function stripExtrasTags(text: string | undefined | null): { text: string; hadExtras: boolean } {
+  if (typeof text !== 'string' || !text) return { text: '', hadExtras: false };
+  const re = /<EXTRAS_JSON>[\s\S]*?<\/EXTRAS_JSON>/g; // non-greedy across lines
+  const hadExtras = re.test(text);
+  const cleaned = text.replace(re, '');
+  return { text: cleaned, hadExtras };
 }
 
 export function ChatAssistant() {
-  const { documentId, createRemote, doc, setFromJSON } = useEditor();
+  const { documentId, createRemote } = useEditor();
   const { selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId } = useChatSessions();
   const [expanded, setExpanded] = useState<boolean>(() => {
     try { return localStorage.getItem('chat.expanded') === '1'; } catch { return false; }
   });
-  const docRef = useRef<Doc>(doc);
-  useEffect(() => { docRef.current = doc; }, [doc]);
   const extrasFilterRef = useRef<ExtrasFilterState>({ inExtras: false, carry: '', buf: '' });
   const [extrasActive, setExtrasActive] = useState<boolean>(false);
-  const lastExtrasKeyRef = useRef<string | null>(null);
   const [input, setInput] = useState<string>('');
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
     { role: 'system', content: 'You are a helpful writing assistant embedded in a document editor. Provide concise, actionable suggestions. When relevant, reference the current document context.' },
@@ -181,6 +118,37 @@ export function ChatAssistant() {
   }, [expanded]);
 
   const visibleMessages = useMemo(() => messages.filter(m => m.role !== 'system'), [messages]);
+  
+  // Helpers to reset chat UI and start a brand new chat
+  const resetChatUI = (clearMessages: boolean = true) => {
+    // Stop any ongoing stream
+    if (abortRef.current) {
+      try { abortRef.current.abort(); } catch {}
+      abortRef.current = null;
+    }
+    setIsStreaming(false);
+    // Reset extras/feedback state
+    extrasFilterRef.current = { inExtras: false, carry: '', buf: '' };
+    setExtrasActive(false);
+    // Clear input and error
+    setError('');
+    setInput('');
+    // Optionally reset messages to just the system prompt
+    if (clearMessages) {
+      setMessages([
+        { role: 'system', content: 'You are a helpful writing assistant embedded in a document editor. Provide concise, actionable suggestions. When relevant, reference the current document context.' },
+      ]);
+    }
+  };
+
+  const onNewChat = () => {
+    // Clear UI and forget the selected chat/thread
+    resetChatUI(true);
+    setSelectedChatId(null);
+    setSelectedThreadId(null);
+    // Put caret at start for quick typing
+    requestAnimationFrame(() => inputHostRef.current?.setSelectionRange(0, 0));
+  };
 
   useEffect(() => {
     if (listRef.current) {
@@ -192,6 +160,11 @@ export function ChatAssistant() {
   useEffect(() => {
     if (selectedChatId) setExpanded(true);
   }, [selectedChatId]);
+
+  // Clear the chat UI when the document changes
+  useEffect(() => {
+    resetChatUI(true);
+  }, [documentId]);
 
   const ensureDocumentId = async (): Promise<string> => {
     if (documentId) return documentId;
@@ -213,7 +186,6 @@ export function ChatAssistant() {
         // Reset any transient extras state
         extrasFilterRef.current = { inExtras: false, carry: '', buf: '' };
         setExtrasActive(false);
-        lastExtrasKeyRef.current = null;
 
         // Fetch conversation along the current branch
         let pivot: number | undefined = (selectedThreadId ?? undefined) as number | undefined;
@@ -227,7 +199,10 @@ export function ChatAssistant() {
         const res = await listMessages(documentId, selectedChatId, pivot);
         const base: ChatMessage[] = [
           { role: 'system', content: 'You are a helpful writing assistant embedded in a document editor. Provide concise, actionable suggestions. When relevant, reference the current document context.' },
-          ...res.messages.map((m) => ({ role: m.role as any, content: m.content }))
+          ...res.messages.map((m) => {
+            const { text } = stripExtrasTags(m.content);
+            return { role: m.role as any, content: text } as ChatMessage;
+          })
         ];
         setMessages(base);
         if (typeof res.pivotThreadId === 'number') setSelectedThreadId(res.pivotThreadId);
@@ -245,7 +220,6 @@ export function ChatAssistant() {
     // Reset extras state for a fresh stream
     extrasFilterRef.current = { inExtras: false, carry: '', buf: '' };
     setExtrasActive(false);
-    lastExtrasKeyRef.current = null;
 
     const nextMessages: ChatMessage[] = [...messages, { role: 'user', content: text }, { role: 'assistant', content: '' }];
     setMessages(nextMessages);
@@ -277,34 +251,14 @@ export function ChatAssistant() {
             }
             return out;
           });
-          setExtrasActive(extrasFilterRef.current.inExtras);
-
-          // 2) Apply streaming document patches if provided
+          // 2) Subtle feedback only: detect presence of extras but do NOT apply changes
           try {
             const sseExtras: any = (chunk as any)?.extras ?? null;
-            const lastInline = inlineExtras.length ? inlineExtras[inlineExtras.length - 1] : null;
-            const extras: any = sseExtras ?? lastInline;
-            if (!extras) return;
-
-            const key = (() => {
-              try { return JSON.stringify(extras); } catch { return null; }
-            })();
-            if (key && key === lastExtrasKeyRef.current) return; // avoid duplicate applications
-
-            if (extras.nextDocument && typeof extras.nextDocument === 'object') {
-              docRef.current = extras.nextDocument as Doc;
-              setFromJSON(JSON.stringify(docRef.current));
-            } else if (Array.isArray(extras.patches) && extras.patches.length > 0) {
-              const base = docRef.current;
-              const nextDoc = applyPatchesToDoc(base, extras.patches);
-              if (nextDoc) {
-                docRef.current = nextDoc;
-                setFromJSON(JSON.stringify(nextDoc));
-              }
-            }
-            if (key) lastExtrasKeyRef.current = key;
+            const hasInline = inlineExtras && inlineExtras.length > 0;
+            const hasAny = Boolean(sseExtras) || hasInline || extrasFilterRef.current.inExtras;
+            if (hasAny) setExtrasActive(true);
           } catch {
-            // Ignore malformed extras; UI continues streaming text
+            // ignore
           }
         },
       });
@@ -316,7 +270,6 @@ export function ChatAssistant() {
       // Ensure feedback is cleared
       extrasFilterRef.current = { inExtras: false, carry: '', buf: '' };
       setExtrasActive(false);
-      lastExtrasKeyRef.current = null;
     }
   };
 
@@ -348,6 +301,9 @@ export function ChatAssistant() {
               <div className="title">Assistant</div>
               <div className="subtitle">Helps you edit and refine your document</div>
             </div>
+            <div>
+              <button className="btn" onClick={onNewChat} title="Start a new chat">New chat</button>
+            </div>
           </div>
           <div className="chat-body" ref={listRef}>
             {visibleMessages.length === 0 && (
@@ -359,7 +315,7 @@ export function ChatAssistant() {
               </div>
             ))}
             {isStreaming && extrasActive && (
-              <div className="extras-feedback"><span className="spinner" /> Generating document changes…</div>
+              <div className="extras-feedback"><span className="spinner" /> Processing changes…</div>
             )}
             {error && <div className="error">{error}</div>}
           </div>
