@@ -11,9 +11,15 @@ import { PanelsProvider, ToolsRail, ToolsAside } from './components/panels'
 import { Sidebar } from './components/layout/Sidebar'
 import { Topbar } from './components/layout/Topbar'
 import { ChatSessionsProvider } from './components/chat/ChatSessionsContext'
+import { useAuth } from './components/auth/AuthContext'
+import { LandingPage } from './components/auth/LandingPage'
 
 function App() {
+  const { user } = useAuth();
   const [leftCollapsed, setLeftCollapsed] = useState<boolean>(false)
+  if (!user) {
+    return <LandingPage />
+  }
   return (
     <EditorProvider>
       <ChatSessionsProvider>
