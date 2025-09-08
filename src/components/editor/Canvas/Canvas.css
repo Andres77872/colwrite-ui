@@ -147,3 +147,21 @@
 .empty-sub { color: #6b7280; font-size: 14px; margin-bottom: 16px; }
 .empty-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 8px; }
 .empty-hint { color: #9ca3af; font-size: 12px; }
+
+/* Canvas mini landing (first-time, no documents) */
+.canvas-landing { display: flex; justify-content: center; padding: 48px 16px 16px; }
+.landing-card {
+  max-width: 820px;
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: #ffffff;
+  padding: 24px;
+}
+.landing-features { 
+  margin: 0; 
+  padding-left: 1.25rem; 
+  color: #4b5563; 
+  line-height: 1.6; 
+}
+.landing-features li { margin: 4px 0; }

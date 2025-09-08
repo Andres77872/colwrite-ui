@@ -2,6 +2,8 @@ import './Canvas.css';
 import { DocumentHeader } from '../DocumentChrome';
 import { useEditor } from '../../../editor';
 import { Fragment, useRef, useState } from 'react';
+import type { Doc } from '../../../editor/types';
+import { uid } from '../../../lib/uid';
 import type { DragEvent } from 'react';
 import { BlockControls } from '../BlockControls';
 import { ParagraphBlock } from '../blocks/ParagraphBlock';
@@ -9,11 +11,15 @@ import { HeadingBlock } from '../blocks/HeadingBlock';
 import { DividerBlock } from '../blocks/DividerBlock';
 
 export function Canvas() {
-  const { blocks, activeId, setActive, reorderBlock, addBlockAtStart, refs, updateHtml } = useEditor();
+  const { blocks, activeId, setActive, reorderBlock, addBlockAtStart, refs, updateHtml, documentId, createRemote, setFromJSON, hasAnyRemoteDocs } = useEditor();
   const [overId, setOverId] = useState<string | null>(null);
   const [overPos, setOverPos] = useState<'before' | 'after' | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [insertIndex, setInsertIndex] = useState<number | null>(null);
+  const [creating, setCreating] = useState<boolean>(false);
+
+  const showLanding = (hasAnyRemoteDocs === false) && !documentId;
+  const isCheckingDocs = (hasAnyRemoteDocs === null) && !documentId;
 
   const clearDnd = () => {
     setOverId(null);
@@ -68,6 +74,41 @@ export function Canvas() {
     }
   };
 
+  // Build a gentle intro document with a few hints
+  const buildIntroDoc = (): Doc => ({
+    version: 1,
+    name: 'Welcome to ColWrite',
+    blocks: [
+      { id: uid(), type: 'heading', level: 2, html: 'Welcome to ColWrite' },
+      { id: uid(), type: 'paragraph', html: 'This is your workspace. Use the / key to insert blocks like headings, equations, citations, and more. Select text to format.' , children: [], columns: 1 },
+      { id: uid(), type: 'divider' },
+      { id: uid(), type: 'heading', level: 3, html: 'Quick things you can do' },
+      { id: uid(), type: 'paragraph', html: '• Ask the Assistant for outlines, rewrites, and summaries.\n• Insert citations and equations inline.\n• Organize with headings and dividers.' , children: [], columns: 1 },
+    ],
+  });
+
+  const createFirstDoc = async () => {
+    try {
+      setCreating(true);
+      const intro = buildIntroDoc();
+      setFromJSON(JSON.stringify(intro));
+      await createRemote(intro);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const startBlank = async () => {
+    try {
+      setCreating(true);
+      const blank: Doc = { version: 1, name: 'Untitled document', blocks: [] };
+      setFromJSON(JSON.stringify(blank));
+      await createRemote(blank);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div
       className="canvas"
@@ -82,6 +123,8 @@ export function Canvas() {
         }
       }}
       onMouseDown={(e) => {
+        // When showing landing, ignore clicks
+        if (showLanding) return;
         // When empty, allow clicking anywhere on the canvas background to enable keyboard capture
         if (blocks.length === 0) {
           const target = e.target as HTMLElement | null;
@@ -92,6 +135,7 @@ export function Canvas() {
         }
       }}
       onKeyDown={(e) => {
+        if (showLanding) return;
         if (blocks.length > 0) return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === 'Enter') {
@@ -136,38 +180,76 @@ export function Canvas() {
         clearDnd();
       }}
     >
-      <DocumentHeader />
-      {blocks.length === 0 && (
-        <div className="empty-doc">
-          <div className="empty-card">
-            <div className="empty-title">Start writing</div>
-            <div className="empty-sub">Add your first block to begin. You can always use '/' to open the command menu.</div>
-            <div className="empty-actions">
-              <button
-                className="btn primary"
-                onClick={() => {
-                  const id = addBlockAtStart('paragraph');
-                  queueMicrotask(() => refs.current[id]?.focus());
-                }}
-              >New text block</button>
-              <button
-                className="btn"
-                onClick={() => {
-                  const id = addBlockAtStart('heading');
-                  queueMicrotask(() => refs.current[id]?.focus());
-                }}
-              >Add heading</button>
-              <button
-                className="btn"
-                onClick={() => {
-                  addBlockAtStart('divider');
-                }}
-              >Insert divider</button>
-            </div>
-            <div className="empty-hint">Tip: Press '/' inside a text block for quick actions and inserts.</div>
+      {isCheckingDocs ? (
+        <div className="canvas-landing">
+          <div className="landing-card">
+            <div className="muted">Preparing your workspace…</div>
           </div>
         </div>
-      )}
+      ) : showLanding ? (
+        <div className="canvas-landing">
+          <div className="landing-card">
+            <div className="row" style={{ alignItems: 'center', gap: 'var(--sp-3)' }}>
+              <div className="brand-logo" aria-hidden>CW</div>
+              <div>
+                <div className="brand-title" style={{ fontSize: '20px' }}>ColWrite</div>
+                <div className="muted">Assistant writer for arXiv papers</div>
+              </div>
+            </div>
+            <div className="stack" style={{ marginTop: 'var(--sp-4)' }}>
+              <p>
+                Create your first document to get started. ColWrite combines a clean canvas with an AI assistant and quick insert commands.
+              </p>
+              <ul className="landing-features">
+                <li>📝 Block-based editor with “/” commands</li>
+                <li>🤖 Inline Assistant for outlines, rewrites, and summaries</li>
+                <li>🔗 Citations and references support</li>
+                <li>∑ Equations and simple graphs</li>
+                <li>💾 Autosave and versioned remote storage</li>
+              </ul>
+            </div>
+            <div className="row" style={{ marginTop: 'var(--sp-4)', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn primary" onClick={createFirstDoc} disabled={creating}>
+                {creating ? 'Creating…' : 'Create your first document'}
+              </button>
+              <button className="btn" onClick={startBlank} disabled={creating}>Start blank</button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <DocumentHeader />
+          {blocks.length === 0 && (
+            <div className="empty-doc">
+              <div className="empty-card">
+                <div className="empty-title">Start writing</div>
+                <div className="empty-sub">Add your first block to begin. You can always use '/' to open the command menu.</div>
+                <div className="empty-actions">
+                  <button
+                    className="btn primary"
+                    onClick={() => {
+                      const id = addBlockAtStart('paragraph');
+                      queueMicrotask(() => refs.current[id]?.focus());
+                    }}
+                  >New text block</button>
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      const id = addBlockAtStart('heading');
+                      queueMicrotask(() => refs.current[id]?.focus());
+                    }}
+                  >Add heading</button>
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      addBlockAtStart('divider');
+                    }}
+                  >Insert divider</button>
+                </div>
+                <div className="empty-hint">Tip: Press '/' inside a text block for quick actions and inserts.</div>
+              </div>
+            </div>
+          )}
       {blocks.map((b, i) => {
         const isCollapsed = (b as any).collapsed === true;
         const isAiHidden = (b as any).aiHidden === true;
@@ -215,21 +297,22 @@ export function Canvas() {
           </Fragment>
         );
       })}
-      {/* Tail dropzone to allow dropping at the very end */}
-      <div
-        className={["dnd-tail", insertIndex === blocks.length ? 'active' : ''].join(' ')}
-        onDragOver={(e) => {
-          const types = Array.from(e.dataTransfer.types || []);
-          const isBlockDrag = types.includes('application/x-block-id') || types.includes('text/plain');
-          if (!isBlockDrag) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'move';
-          setOverId(null);
-          setOverPos(null);
-          setInsertIndex(blocks.length);
-        }}
-      />
-      
+          {/* Tail dropzone to allow dropping at the very end */}
+          <div
+            className={["dnd-tail", insertIndex === blocks.length ? 'active' : ''].join(' ')}
+            onDragOver={(e) => {
+              const types = Array.from(e.dataTransfer.types || []);
+              const isBlockDrag = types.includes('application/x-block-id') || types.includes('text/plain');
+              if (!isBlockDrag) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              setOverId(null);
+              setOverPos(null);
+              setInsertIndex(blocks.length);
+            }}
+          />
+        </>
+      )}
     </div>
   );
 }

@@ -43,6 +43,8 @@ export type EditorContextValue = {
   lastSavedAt: number | null;
   isAutoSaving: boolean;
   lastSaveSource: 'auto' | 'manual' | null;
+  // Remote document availability (null while loading)
+  hasAnyRemoteDocs: boolean | null;
 };
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -66,6 +68,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
   const [lastSaveSource, setLastSaveSource] = useState<'auto' | 'manual' | null>(null);
   const autoSaveTimerRef = useRef<number | null>(null);
+  const [hasAnyRemoteDocs, setHasAnyRemoteDocs] = useState<boolean | null>(null);
 
   // Auto-save
   useEffect(() => {
@@ -75,10 +78,19 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
   // Debounced remote auto-save (5 seconds after last change)
   useEffect(() => {
+    // Wait until we know whether the account has any remote documents
+    // to avoid auto-creating the first document without an explicit user action.
+    if (hasAnyRemoteDocs === null) return;
+
     if (autoSaveTimerRef.current !== null) {
       clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = null;
     }
+
+    // If there are no remote documents yet and this session has no documentId,
+    // don't schedule an autosave that would auto-create the first document.
+    if (hasAnyRemoteDocs === false && !documentId) return;
+
     autoSaveTimerRef.current = window.setTimeout(async () => {
       setIsAutoSaving(true);
       try {
@@ -95,12 +107,28 @@ export function EditorProvider({ children }: { children: ReactNode }) {
         autoSaveTimerRef.current = null;
       }
     };
-  }, [doc]);
+  }, [doc, hasAnyRemoteDocs, documentId]);
 
   // Persist current document id
   useEffect(() => {
     saveDocumentId(documentId);
   }, [documentId]);
+
+  // Determine whether the account has any remote documents to tailor
+  // the initial Canvas experience and gate autosave behavior.
+  useEffect(() => {
+    let canceled = false;
+    (async () => {
+      try {
+        const res = await apiListDocuments(1, 1);
+        if (!canceled) setHasAnyRemoteDocs((res.count || 0) > 0);
+      } catch {
+        // On error, assume true to avoid blocking normal autosave flows.
+        if (!canceled) setHasAnyRemoteDocs(true);
+      }
+    })();
+    return () => { canceled = true; };
+  }, []);
 
   // One-time migration: convert inline AIBeat markup embedded in paragraph HTML
   // into paragraph children and placeholder spans.
@@ -270,6 +298,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const payload = docOverride ?? doc;
     const res = await apiCreateDocument(payload);
     setDocumentId(res.document_id);
+    setHasAnyRemoteDocs(true);
     return res.document_id;
   };
 
@@ -304,6 +333,12 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const deleteRemote = async (id: string): Promise<void> => {
     await apiDeleteDocument(id);
     if (documentId === id) setDocumentId(null);
+    try {
+      const res = await apiListDocuments(1, 1);
+      setHasAnyRemoteDocs((res.count || 0) > 0);
+    } catch {
+      // On error, leave the previous value; UX will rely on existing state.
+    }
   };
 
   const listRemote = async (page = 1, limit = 10, query?: string): Promise<{ documents: any[]; count: number }> => {
@@ -360,6 +395,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     lastSavedAt,
     isAutoSaving,
     lastSaveSource,
+    hasAnyRemoteDocs,
   };
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;
