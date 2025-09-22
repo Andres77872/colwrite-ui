@@ -1,3 +1,4 @@
+import { emitRequireLogin } from './session';
 // Prefer relative base during development to avoid browser CORS via Vite proxy
 export const API_BASE: string = (import.meta as any)?.env?.VITE_API_BASE ?? '/api';
 
@@ -9,7 +10,12 @@ function buildUrl(path: string): string {
 
 async function handleJson<T>(res: Response): Promise<T> {
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
   if (!res.ok) {
     let msg = res.statusText;
     if (data) {
@@ -17,6 +23,9 @@ async function handleJson<T>(res: Response): Promise<T> {
       else if (Array.isArray(data.detail)) {
         msg = data.detail.map((d: any) => d?.msg || d?.message || JSON.stringify(d)).join('; ');
       } else if (typeof data.detail === 'string') msg = data.detail;
+    }
+    if (res.status === 401 || res.status === 403) {
+      emitRequireLogin();
     }
     const err = new Error(msg);
     (err as any).status = res.status;

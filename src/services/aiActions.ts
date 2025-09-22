@@ -1,4 +1,5 @@
 import { API_BASE } from './api';
+import { emitRequireLogin } from './session';
 
 export type AiAction = 'search-for-references' | 'add-details' | 'more-concise';
 
@@ -31,10 +32,14 @@ export async function streamAiAction(
     },
     body: JSON.stringify(req),
     signal: opts?.signal,
+    credentials: 'include',
   });
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    if (res.status === 401 || res.status === 403) {
+      emitRequireLogin();
+    }
     throw new Error(text || res.statusText);
   }
 

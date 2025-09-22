@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { login, setSessionTokenCookie, clearSessionTokenCookie } from '../../services';
+import { login, setSessionTokenCookie, clearSessionTokenCookie, UNAUTHORIZED_EVENT } from '../../services';
 // Reuse modal styles from Topbar for the auth dialog
 import '../layout/Topbar/Topbar.css';
 
@@ -30,8 +30,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch { /* no-op */ }
   }, []);
 
+  // Listen for global unauthorized events to force re-authentication
+  useEffect(() => {
+    const onUnauthorized = () => {
+      // Ensure any stored session artifacts are cleared and prompt login
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+        // Remove any stray token entries if they exist
+        localStorage.removeItem('session_token');
+      } catch { /* no-op */ }
+      setUser(null);
+      clearSessionTokenCookie();
+      setAuthOpen(true);
+    };
+    // Casts to satisfy TS for custom event names
+    window.addEventListener(UNAUTHORIZED_EVENT as any, onUnauthorized as EventListener);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT as any, onUnauthorized as EventListener);
+  }, []);
+
   const logout = () => {
-    try { localStorage.removeItem(STORAGE_KEY); } catch { /* no-op */ }
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem('session_token');
+    } catch { /* no-op */ }
     setUser(null);
     clearSessionTokenCookie();
   };

@@ -1,4 +1,5 @@
 import { API_BASE } from './api';
+import { emitRequireLogin } from './session';
 
 function buildUrl(path: string): string {
   const base = API_BASE.replace(/\/$/, '');
@@ -17,9 +18,13 @@ export async function streamAiBeat(
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify(body),
     signal: opts?.signal,
+    credentials: 'include',
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    if (res.status === 401 || res.status === 403) {
+      emitRequireLogin();
+    }
     throw new Error(text || res.statusText);
   }
   const reader = res.body?.getReader();

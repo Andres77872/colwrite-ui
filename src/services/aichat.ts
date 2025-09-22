@@ -1,4 +1,5 @@
 import { API_BASE } from './api';
+import { emitRequireLogin } from './session';
 
 export type OpenAIChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool' | 'function';
@@ -48,6 +49,9 @@ export async function streamDocumentAiChat(
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    if (res.status === 401 || res.status === 403) {
+      emitRequireLogin();
+    }
     throw new Error(text || res.statusText);
   }
 
