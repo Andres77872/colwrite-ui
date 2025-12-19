@@ -1,20 +1,16 @@
-import './ParagraphBlock.css';
 import type { ParagraphBlock as P } from '../../../../editor';
 import { Editable } from '../../../common/Editable';
 import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useEditor } from '../../../../editor';
 import { createPortal } from 'react-dom';
 import { AiBeatInline, TableInline, CitationInline, EquationInline, GraphInline } from './Inlines';
+import { cn } from '@/lib/utils';
 
 export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P }) {
   const { refs, updateParagraphChild, removeParagraphChild, updateHtml, documentId, createRemote } = useEditor();
   const [mounts, setMounts] = useState<Array<{ id: string; el: HTMLElement }>>([]);
-  // Reserved for future stabilization if we need to diff placeholder sets more aggressively
-  // const prevIdsKeyRef = useRef<string>('');
 
   // Mount child components referenced inside HTML placeholders.
-  // Also re-mount automatically whenever the Editable DOM subtree mutates
-  // (e.g., when the caret leaves and Editable restores sanitized HTML).
   useEffect(() => {
     const host = refs.current[block.id];
     if (!host) return;
@@ -32,12 +28,9 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
       setMounts(next);
     };
 
-    // Initial mount
     mountIntoPlaceholders();
 
-    // Observe any DOM changes that could replace placeholders
     const observer = new MutationObserver((records) => {
-      // Recompute mounts only when placeholders are added/removed or their data-child-id changes
       let relevant = false;
       for (const rec of records) {
         if (rec.type === 'attributes') {
@@ -51,22 +44,26 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
     });
     observer.observe(host, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-child-id'] });
 
-    return () => {
-      observer.disconnect();
-      // Do not call setState in cleanup to avoid re-render loops while dependencies change
-    };
+    return () => observer.disconnect();
   }, [block.id, block.children, refs]);
 
   const columns = Math.max(1, Math.min(6, Math.floor(block.columns || 1)));
   const editableStyle = useMemo(() => ({
     columnCount: columns,
-    columnGap: columns > 1 ? 24 : undefined,
+    columnGap: columns > 1 ? '2rem' : undefined,
     columnRule: columns > 1 ? '1px solid var(--color-border)' : undefined,
   } as CSSProperties), [columns]);
 
   return (
-    <>
-      <Editable className="paragraph-block" id={block.id} html={block.html} placeholder="Type to write…" style={editableStyle} slashEnabled />
+    <div className={cn("paragraph-block w-full", columns > 1 && "multi-column")}>
+      <Editable 
+        id={block.id} 
+        html={block.html} 
+        placeholder="Type something, or press '/' for commands…" 
+        style={editableStyle} 
+        slashEnabled 
+        className="text-[15px] leading-relaxed"
+      />
       {mounts.map(({ id, el }: { id: string; el: HTMLElement }) => {
         const child = (block.children || []).find(c => c.id === id);
         if (!child) return null;
@@ -123,6 +120,6 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
           id,
         );
       })}
-    </>
+    </div>
   );
 });

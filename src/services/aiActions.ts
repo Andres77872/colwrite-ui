@@ -1,7 +1,7 @@
 import { API_BASE } from './api';
 import { emitRequireLogin } from './session';
 
-export type AiAction = 'search-for-references' | 'add-details' | 'more-concise';
+export type AiAction = 'search-for-references' | 'add-details' | 'more-concise' | 'improve' | 'grammar' | 'continue' | 'rephrase' | 'shorter' | 'longer' | 'translate';
 
 export type AiActionRequest = {
   message: string;

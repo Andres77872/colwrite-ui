@@ -1,6 +1,10 @@
-import './DocumentHeader.css';
 import { useEffect, useRef, useState } from 'react';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import { useEditor } from '../../../editor';
+import { FilePlus, Save, Trash2 } from 'lucide-react';
 
 export function DocumentHeader() {
   const { doc, setDocName, saveRemote, deleteRemote, newLocal, documentId, lastSavedAt, isAutoSaving, lastSaveSource } = useEditor();
@@ -32,7 +36,6 @@ export function DocumentHeader() {
     const trimmed = (next || '').trim();
     const normalized = trimmed || 'Untitled document';
     setDocName(normalized);
-    // Save immediately with override so the request includes the latest name
     const override = { ...doc, name: normalized } as any;
     try { await saveRemote(override); } catch {}
   };
@@ -60,17 +63,25 @@ export function DocumentHeader() {
   })();
 
   return (
-    <div className="doc-header">
-      <div className="doc-title">
+    <div className={cn(
+      "sticky top-0 z-[5] bg-card border-b border-border",
+      "px-3 py-2 -mx-3 -mt-3 mb-3 rounded-t-lg",
+      "flex items-center justify-between gap-3 flex-wrap"
+    )}>
+      <div className="flex items-baseline gap-3 min-w-0">
         {!editing && (
-          <button className="doc-title-text as-button" title="Rename" onClick={() => setEditing(true)}>
+          <button
+            className="text-xl font-semibold bg-transparent border-none p-0 cursor-text text-left hover:underline decoration-primary/30 underline-offset-2"
+            title="Rename"
+            onClick={() => setEditing(true)}
+          >
             {title}
           </button>
         )}
         {editing && (
-          <input
+          <Input
             ref={inputRef}
-            className="doc-title-input"
+            className="text-xl font-semibold h-auto py-0.5 px-1.5 max-w-[300px]"
             defaultValue={title}
             onBlur={(e) => { setEditing(false); commitTitle(e.currentTarget.value); }}
             onKeyDown={(e) => {
@@ -79,20 +90,27 @@ export function DocumentHeader() {
             }}
           />
         )}
-        {documentId && <div className="doc-id">{documentId}</div>}
+        {documentId && (
+          <Badge variant="outline" className="text-xs font-mono">
+            {documentId.slice(0, 8)}
+          </Badge>
+        )}
       </div>
-      <div className="doc-actions">
-        <button className="btn" onClick={onNew} disabled={loading !== null}>New</button>
-        <button className="btn primary" onClick={onSave} disabled={loading !== null}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <Button variant="outline" size="sm" onClick={onNew} disabled={loading !== null}>
+          <FilePlus className="h-3.5 w-3.5 mr-1" />
+          New
+        </Button>
+        <Button size="sm" onClick={onSave} disabled={loading !== null}>
+          <Save className="h-3.5 w-3.5 mr-1" />
           {loading === 'save' ? 'Saving…' : (documentId ? 'Save' : 'Save (create)')}
-        </button>
-        <button className="btn danger" onClick={onDelete} disabled={!documentId || loading !== null}>
+        </Button>
+        <Button variant="destructive" size="sm" onClick={onDelete} disabled={!documentId || loading !== null}>
+          <Trash2 className="h-3.5 w-3.5 mr-1" />
           {loading === 'delete' ? 'Deleting…' : 'Delete'}
-        </button>
-        <div className="muted">{statusText}</div>
+        </Button>
+        <span className="text-muted-foreground text-sm">{statusText}</span>
       </div>
     </div>
   );
 }
-
-

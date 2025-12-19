@@ -1,5 +1,5 @@
-import './ChatTaggedInput.css';
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, useCallback } from 'react';
+import { cn } from '@/lib/utils';
 
 type SelectionRange = { start: number; end: number };
 
@@ -273,7 +273,13 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
     <div className="chat-tagged-input">
       <div
         ref={hostRef}
-        className="tagged-ce"
+        className={cn(
+          "tagged-ce min-h-[60px] max-h-[120px] overflow-auto p-2 text-sm",
+          "border border-input rounded-md bg-background",
+          "focus:outline-none focus:ring-2 focus:ring-ring",
+          "empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground empty:before:pointer-events-none",
+          isOverLimit && "border-destructive focus:ring-destructive"
+        )}
         contentEditable={!disabled}
         role="textbox"
         aria-multiline="true"
@@ -299,28 +305,22 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
           }
         }}
         onKeyDown={handleKeyDown}
-        style={{
-          borderColor: isOverLimit ? 'var(--color-danger, #dc3545)' : undefined,
-        }}
       />
       {showStatus && (
-        <div id="input-status" className="input-status">
-          <div className="input-hints">
-            <span>
-              <kbd>#</kbd> Reference
+        <div id="input-status" className="flex items-center justify-between mt-1 text-[10px] text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-0.5">
+              <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">#</kbd> Reference
             </span>
             {isFocused && (
               <>
-                <span>
-                  <kbd>⌘/Ctrl</kbd> + <kbd>⌫</kbd> Delete word
-                </span>
-                <span>
-                  <kbd>⌘/Ctrl</kbd> + <kbd>A</kbd> Select all
+                <span className="flex items-center gap-0.5">
+                  <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">⌘</kbd>+<kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">⌫</kbd> Delete word
                 </span>
               </>
             )}
           </div>
-          <div className="char-count" style={{ color: isOverLimit ? 'var(--color-danger, #dc3545)' : undefined }}>
+          <div className={cn(isOverLimit && "text-destructive")}>
             {charCount}{maxLength ? `/${maxLength}` : ''}
           </div>
         </div>

@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react';
-import './ColpaliPanel.css';
 import type { ColpaliArxivResult } from '../../../services/colpali';
 import { searchColpaliArxiv } from '../../../services/colpali';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 
 function PageBadge({ page }: { page?: number }) {
   if (typeof page !== 'number') return null;
-  return <span className="badge">p.{page}</span>;
+  return <Badge variant="secondary" className="text-xs">p.{page}</Badge>;
 }
 
 export function ColpaliPanel() {
@@ -56,26 +58,22 @@ export function ColpaliPanel() {
   }
 
   return (
-    <div className="colpali-panel" aria-busy={loading}>
-      <div className="row" style={{ justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-        <strong>ColPali Search</strong>
-        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-          <span className="muted">
-            {loading ? 'Searching…' : hasResults ? `${results.length} hits` : 'Semantic search over arXiv (ColPali)'}
-          </span>
-        </div>
+    <div className="flex flex-col gap-3 h-full" aria-busy={loading}>
+      {/* Status */}
+      <div className="text-xs text-muted-foreground">
+        {loading ? 'Searching…' : hasResults ? `${results.length} hits` : 'Semantic search'}
       </div>
 
-      <form className="search" onSubmit={onSearch}>
-        <input
-          className="input grow"
-          placeholder="Search arXiv with ColPali (e.g., 'ai on education')"
+      <form className="flex items-center gap-2" onSubmit={onSearch}>
+        <Input
+          className="flex-1"
+          placeholder="Search arXiv with ColPali..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           disabled={loading}
         />
         <select 
-          className="select" 
+          className="h-9 px-2 text-sm border border-input rounded-md bg-background"
           value={limit} 
           onChange={(e) => setLimit(Number(e.target.value))}
           disabled={loading}
@@ -84,21 +82,21 @@ export function ColpaliPanel() {
             <option key={n} value={n}>{n}</option>
           ))}
         </select>
-        <button className="btn" type="submit" disabled={loading || !query.trim()}>
+        <Button type="submit" size="sm" disabled={loading || !query.trim()}>
           {loading ? 'Searching…' : 'Search'}
-        </button>
+        </Button>
       </form>
 
-      {error && <div className="error" role="alert" aria-live="polite">{error}</div>}
+      {error && <div className="text-sm text-destructive" role="alert" aria-live="polite">{error}</div>}
 
       {hasResults && domains.length > 0 && (
-        <div className="summary">
-          <span className="muted">Sources: </span>
+        <div className="text-sm">
+          <span className="text-muted-foreground">Sources: </span>
           <span>{domains.join(', ')}</span>
         </div>
       )}
 
-      <div className="results">
+      <div className="space-y-3 overflow-auto">
         {results.map((r, idx) => {
           const key = `${r.id}-${r.page}-${idx}`;
           const isExpanded = expanded.has(key);
@@ -107,42 +105,41 @@ export function ColpaliPanel() {
           const img = r.page_image || '';
           const hasImg = Boolean(img);
           return (
-            <div className="result card" key={key}>
-              <div className="result-header">
-                <div className="rank">#{idx + 1}</div>
+            <div className="bg-card border border-border rounded-lg p-3" key={key}>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-xs text-muted-foreground">#{idx + 1}</span>
                 <PageBadge page={r.page} />
               </div>
-              <h3 className="title">
+              <h3 className="text-sm font-medium mb-1">
                 {r.url ? (
-                  <a className="title-link" href={r.url} target="_blank" rel="noreferrer">
+                  <a className="text-primary hover:underline" href={r.url} target="_blank" rel="noreferrer">
                     {r.title || '(untitled)'}
                   </a>
                 ) : (
                   r.title || '(untitled)'
                 )}
               </h3>
-              <div className="meta muted">
-                {r.authors && <span className="authors">{r.authors}</span>}
-                {r.date && <span className="date"> · {new Date(r.date).toLocaleDateString()}</span>}
-                {r.version && <span className="date"> · v{r.version}</span>}
+              <div className="text-xs text-muted-foreground mb-2">
+                {r.authors && <span>{r.authors}</span>}
+                {r.date && <span> · {new Date(r.date).toLocaleDateString()}</span>}
+                {r.version && <span> · v{r.version}</span>}
               </div>
 
-              <div className="content">
+              <div className="flex gap-3">
                 {hasImg && (
-                  <div className="thumb">
-                    {/* note: API returns .png; service normalizes to .jpg */}
-                    <img src={img} alt="page preview" loading="lazy" />
+                  <div className="w-20 h-28 shrink-0 bg-muted rounded overflow-hidden">
+                    <img src={img} alt="page preview" loading="lazy" className="w-full h-full object-cover" />
                   </div>
                 )}
-                <div className="abstract-wrapper">
+                <div className="flex-1 min-w-0">
                   {abstract && (
-                    <div className={`abstract ${isExpanded ? 'expanded' : 'collapsed'}`}>
+                    <div className="text-xs text-foreground/80">
                       {isExpanded ? abstract : short}
                     </div>
                   )}
                   {abstract.length > 240 && (
                     <button 
-                      className="expand-btn" 
+                      className="text-xs text-primary hover:underline mt-1" 
                       onClick={() => toggleExpanded(key)}
                       aria-expanded={isExpanded}
                     >
@@ -152,15 +149,15 @@ export function ColpaliPanel() {
                 </div>
               </div>
 
-              <div className="actions">
+              <div className="flex items-center gap-3 text-xs mt-2">
                 {r.url && (
-                  <a className="action-link" href={r.url} target="_blank" rel="noreferrer">📄 arXiv</a>
+                  <a className="text-muted-foreground hover:text-foreground" href={r.url} target="_blank" rel="noreferrer">📄 arXiv</a>
                 )}
                 {typeof r.id === 'string' && (
-                  <a className="action-link" href={`https://arxiv.org/pdf/${r.id}.pdf`} target="_blank" rel="noreferrer">📥 PDF</a>
+                  <a className="text-muted-foreground hover:text-foreground" href={`https://arxiv.org/pdf/${r.id}.pdf`} target="_blank" rel="noreferrer">📥 PDF</a>
                 )}
                 {r.doi && (
-                  <a className="action-link" href={`https://doi.org/${r.doi}`} target="_blank" rel="noreferrer">🔗 DOI</a>
+                  <a className="text-muted-foreground hover:text-foreground" href={`https://doi.org/${r.doi}`} target="_blank" rel="noreferrer">🔗 DOI</a>
                 )}
               </div>
             </div>
@@ -169,18 +166,18 @@ export function ColpaliPanel() {
       </div>
 
       {!loading && !hasResults && !error && query.trim() && (
-        <div className="empty-state">
-          <div className="empty-icon">🔍</div>
-          <div className="empty-title">No hits found</div>
-          <div className="empty-text muted">Try broadening the query or rephrasing.</div>
+        <div className="text-center py-8">
+          <div className="text-3xl mb-2">🔍</div>
+          <div className="font-medium">No hits found</div>
+          <div className="text-sm text-muted-foreground">Try broadening the query or rephrasing.</div>
         </div>
       )}
 
       {!loading && !hasResults && !error && !query.trim() && (
-        <div className="empty-state">
-          <div className="empty-icon">🤖</div>
-          <div className="empty-title">ColPali semantic search</div>
-          <div className="empty-text muted">Find relevant pages from arXiv papers. Thumbnails are optimized (.jpg).</div>
+        <div className="text-center py-8">
+          <div className="text-3xl mb-2">🤖</div>
+          <div className="font-medium">ColPali semantic search</div>
+          <div className="text-sm text-muted-foreground">Find relevant pages from arXiv papers.</div>
         </div>
       )}
     </div>

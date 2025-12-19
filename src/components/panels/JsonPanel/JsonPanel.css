@@ -1,2 +1,0 @@
-.json-panel { display: flex; flex-direction: column; gap: var(--sp-2); height: 100%; }
-.json-panel .textarea { flex: 1; min-height: 200px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: var(--fs-sm); line-height: 1.5; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--color-border); }

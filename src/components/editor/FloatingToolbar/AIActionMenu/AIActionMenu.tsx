@@ -1,71 +1,57 @@
-import './AIActionMenu.css';
-import { useEffect, useRef, useState } from 'react';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Sparkles, Wand2, CheckCircle, ArrowRight, RefreshCw, Minimize2, Maximize2, Languages } from 'lucide-react';
 import type { AiAction } from '../../../../services';
 
-export function AIActionMenu({ onAction, disabled = false }: { onAction: (action: AiAction, e: React.MouseEvent) => void; disabled?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
+interface AIActionMenuProps {
+  disabled?: boolean;
+  onAction: (action: AiAction, e: React.MouseEvent) => void;
+}
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!open) return;
-      if (e.key === 'Escape') setOpen(false);
-    };
-    const onDocMouseDown = (e: MouseEvent) => {
-      if (!open) return;
-      const target = e.target as Node | null;
-      if (rootRef.current && target && rootRef.current.contains(target)) return;
-      setOpen(false);
-    };
-    document.addEventListener('keydown', onKey);
-    document.addEventListener('mousedown', onDocMouseDown);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('mousedown', onDocMouseDown);
-    };
-  }, [open]);
+const actions: { icon: typeof Wand2; label: string; action: AiAction }[] = [
+  { icon: Wand2, label: 'Improve writing', action: 'improve' },
+  { icon: CheckCircle, label: 'Fix grammar', action: 'grammar' },
+  { icon: ArrowRight, label: 'Continue writing', action: 'continue' },
+  { icon: RefreshCw, label: 'Rephrase', action: 'rephrase' },
+  { icon: Minimize2, label: 'Make shorter', action: 'shorter' },
+  { icon: Maximize2, label: 'Make longer', action: 'longer' },
+  { icon: Languages, label: 'Translate', action: 'translate' },
+];
 
-  // Close the dropdown when disabled becomes true
-  useEffect(() => {
-    if (disabled && open) setOpen(false);
-  }, [disabled, open]);
-
-  const handleToggleMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (disabled) return;
-    setOpen(v => !v);
-  };
-
-  const call = (action: AiAction) => (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (disabled) return;
-    onAction(action, e);
-    setOpen(false);
-  };
-
+export function AIActionMenu({ disabled, onAction }: AIActionMenuProps) {
   return (
-    <div className="ai-menu" ref={rootRef} onMouseDown={(e) => { /* Keep selection */ e.preventDefault(); e.stopPropagation(); }}>
-      <button className="ai-toggle" title="AI Actions" onMouseDown={handleToggleMouseDown} aria-haspopup="menu" aria-expanded={open} disabled={disabled} aria-disabled={disabled}>
-        ✨ AI
-      </button>
-      {open && (
-        <div className="ai-list" role="menu">
-          <button role="menuitem" className="ai-item" onMouseDown={call('search-for-references')}>
-            <span className="ai-icn">🔎</span>
-            <span className="ai-label">Search for references</span>
-          </button>
-          <button role="menuitem" className="ai-item" onMouseDown={call('add-details')}>
-            <span className="ai-icn">➕</span>
-            <span className="ai-label">Add details</span>
-          </button>
-          <button role="menuitem" className="ai-item" onMouseDown={call('more-concise')}>
-            <span className="ai-icn">➖</span>
-            <span className="ai-label">More concise</span>
-          </button>
-        </div>
-      )}
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          className="gap-1.5 font-semibold"
+          disabled={disabled}
+        >
+          <Sparkles className="h-4 w-4" />
+          AI
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[220px]">
+        {actions.map((item) => (
+          <DropdownMenuItem 
+            key={item.action} 
+            className="gap-2"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onAction(item.action, e);
+            }}
+          >
+            <item.icon className="h-4 w-4" />
+            {item.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

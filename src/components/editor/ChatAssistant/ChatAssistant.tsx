@@ -1,5 +1,6 @@
-import './ChatAssistant.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import { useEditor } from '../../../editor';
 import type { OpenAIChatMessage } from '../../../services';
 import { streamDocumentAiChat } from '../../../services';
@@ -8,6 +9,8 @@ import { listMessages, listThreads } from '../../../services/chats';
 import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
 import { ChatRefTags } from './ChatRefTags';
 import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
+import type { Block, Doc } from '../../../editor/types';
+import { uid } from '../../../lib/uid';
 
 type ChatMessage = OpenAIChatMessage;
 
@@ -80,9 +83,233 @@ function filterAndExtractExtras(state: ExtrasFilterState, incoming: string): { t
   return { text: outParts.join(''), extras: extrasOut };
 }
 
-// normalizeBlock removed – we don't apply extras patches in the UI stream anymore.
+// Patch application helpers for processing extras JSON
+type PatchOperation = {
+  op: 'insert' | 'update' | 'delete';
+  block?: Block;
+  beforeOf?: string | null;
+  afterOf?: string | null;
+  blockId?: string;
+  fields?: Record<string, any>;
+};
 
-// (Removed patch application helpers; extras are not applied during streaming.)
+
+// Normalize a raw block to ensure it has the required properties
+function normalizeBlock(rawBlock: any): Block {
+  if (!rawBlock || typeof rawBlock !== 'object') {
+    return { id: uid(), type: 'paragraph', html: '', children: [], columns: 1 };
+  }
+  
+  const id = rawBlock.id || uid();
+  const type = rawBlock.type || 'paragraph';
+  
+  if (type === 'paragraph') {
+    return {
+      id,
+      type: 'paragraph',
+      html: rawBlock.html || '',
+      children: Array.isArray(rawBlock.children) ? rawBlock.children : [],
+      columns: typeof rawBlock.columns === 'number' ? rawBlock.columns : 1,
+      ...(rawBlock.aiHidden && { aiHidden: rawBlock.aiHidden }),
+      ...(rawBlock.locked && { locked: rawBlock.locked }),
+      ...(rawBlock.collapsed && { collapsed: rawBlock.collapsed }),
+    };
+  }
+  
+  if (type === 'heading') {
+    return {
+      id,
+      type: 'heading',
+      level: ([1, 2, 3].includes(rawBlock.level) ? rawBlock.level : 2) as 1 | 2 | 3,
+      html: rawBlock.html || '',
+      ...(rawBlock.aiHidden && { aiHidden: rawBlock.aiHidden }),
+      ...(rawBlock.locked && { locked: rawBlock.locked }),
+      ...(rawBlock.collapsed && { collapsed: rawBlock.collapsed }),
+    };
+  }
+  
+  if (type === 'divider') {
+    return {
+      id,
+      type: 'divider',
+      ...(rawBlock.aiHidden && { aiHidden: rawBlock.aiHidden }),
+      ...(rawBlock.locked && { locked: rawBlock.locked }),
+      ...(rawBlock.collapsed && { collapsed: rawBlock.collapsed }),
+    };
+  }
+  
+  // Fallback to paragraph
+  return { id, type: 'paragraph', html: '', children: [], columns: 1 };
+}
+
+// Apply patches with intelligent ordering to avoid inversion issues
+function applyPatchesIntelligently(patches: PatchOperation[], editor: any): void {
+  if (!patches || patches.length === 0) return;
+  
+  console.log('Received patches:', patches.map(p => ({
+    op: p.op,
+    type: p.block?.type,
+    beforeOf: p.beforeOf,
+    afterOf: p.afterOf,
+    blockId: p.blockId
+  })));
+  
+  // Separate patches by operation type
+  const insertPatches = patches.filter(p => p.op === 'insert');
+  const updatePatches = patches.filter(p => p.op === 'update');
+  const deletePatches = patches.filter(p => p.op === 'delete');
+  
+  // Apply deletes first
+  deletePatches.forEach(patch => applyPatch(patch, editor));
+  
+  // For inserts, apply in structured order to preserve expected layout
+  if (insertPatches.length > 0) {
+    const appliedIds = new Set<string>(editor.blocks.map((b: Block) => b.id));
+    const groupPrepend = insertPatches.filter(p => p.afterOf === null);
+    const groupAppend = insertPatches.filter(p => p.beforeOf === null);
+    const groupAfterRef = insertPatches.filter(p => typeof p.afterOf === 'string' && p.afterOf !== '');
+    const groupBeforeRef = insertPatches.filter(p => typeof p.beforeOf === 'string' && p.beforeOf !== '');
+    const groupNoPlacement = insertPatches.filter(p => p.afterOf == null && p.beforeOf == null); // both undefined
+
+    // 1) Prepend group: apply in reverse to maintain top-down order at the start
+    if (groupPrepend.length) {
+      for (let i = groupPrepend.length - 1; i >= 0; i--) {
+        const p = groupPrepend[i];
+        applyPatch(p, editor);
+        const id = p.block?.id; if (id) appliedIds.add(id);
+      }
+    }
+
+    // 2) Resolve after/before references in multiple passes
+    const pendingRef: PatchOperation[] = [...groupAfterRef, ...groupBeforeRef];
+    let safety = pendingRef.length * 3;
+    while (pendingRef.length && safety-- > 0) {
+      const nextRound: PatchOperation[] = [];
+      for (const p of pendingRef) {
+        const id = p.block?.id; if (!id) continue;
+        const hasAfter = typeof p.afterOf === 'string' && p.afterOf;
+        const hasBefore = typeof p.beforeOf === 'string' && p.beforeOf;
+        if (hasAfter && appliedIds.has(p.afterOf as string)) {
+          applyPatch(p, editor);
+          appliedIds.add(id);
+          continue;
+        }
+        if (hasBefore && appliedIds.has(p.beforeOf as string)) {
+          applyPatch(p, editor);
+          appliedIds.add(id);
+          continue;
+        }
+        nextRound.push(p);
+      }
+      if (nextRound.length === pendingRef.length) break;
+      pendingRef.splice(0, pendingRef.length, ...nextRound);
+    }
+    // Apply unresolved references with defaults
+    for (const p of pendingRef) applyPatch(p, editor);
+
+    // 3) Append group: apply in given order to maintain top-down order at the end
+    for (const p of groupAppend) {
+      applyPatch(p, editor);
+      const id = p.block?.id; if (id) appliedIds.add(id);
+    }
+
+    // 4) No-placement group: default to append
+    for (const p of groupNoPlacement) {
+      applyPatch(p, editor);
+    }
+  }
+  
+  // Apply updates last
+  updatePatches.forEach(patch => applyPatch(patch, editor));
+}
+
+// (removed unused sortInsertPatches)
+
+// Apply a single patch operation using editor context methods
+function applyPatch(patch: PatchOperation, editor: any): void {
+  console.log('Applying patch:', JSON.stringify(patch, null, 2));
+  console.log('Current blocks before patch:', editor.blocks.map((b: Block) => ({ id: b.id, type: b.type, html: b.type !== 'divider' ? (b as any).html?.substring(0, 50) + '...' : 'divider' })));
+  
+  try {
+    switch (patch.op) {
+      case 'insert': {
+        if (!patch.block) return;
+        const normalizedBlock = normalizeBlock(patch.block);
+
+        // If a block with the same id already exists, skip insert
+        if (editor.blocks.some((b: Block) => b.id === normalizedBlock.id)) {
+          console.log('Block already exists, skipping insert:', normalizedBlock.id);
+          break;
+        }
+
+        // Server semantics: beforeOf === null -> append; afterOf === null -> prepend
+        if (patch.beforeOf === null) {
+          editor.appendBlockExact(normalizedBlock);
+        } else if (patch.afterOf === null) {
+          editor.insertBlockAtStartExact(normalizedBlock);
+        } else if (typeof patch.afterOf === 'string' && patch.afterOf) {
+          editor.insertBlockAfterExact(patch.afterOf, normalizedBlock);
+        } else if (typeof patch.beforeOf === 'string' && patch.beforeOf) {
+          editor.insertBlockBeforeExact(patch.beforeOf, normalizedBlock);
+        } else {
+          // Default: append
+          editor.appendBlockExact(normalizedBlock);
+        }
+
+        console.log('After insert patch, blocks are:', editor.blocks.map((b: Block) => ({ id: b.id, type: b.type, html: b.type !== 'divider' ? (b as any).html?.substring(0, 50) + '...' : 'divider' })));
+        break;
+      }
+      
+      case 'update': {
+        if (!patch.blockId || !patch.fields) return;
+        const block = editor.blocks.find((b: Block) => b.id === patch.blockId);
+        if (!block) return;
+        
+        // Update the block fields
+        if ('html' in patch.fields && (block.type === 'paragraph' || block.type === 'heading')) {
+          editor.updateHtml(patch.blockId, patch.fields.html);
+        }
+        if ('columns' in patch.fields && block.type === 'paragraph') {
+          editor.setParagraphColumns(patch.blockId, patch.fields.columns);
+        }
+        if ('level' in patch.fields && block.type === 'heading') {
+          editor.setHeadingLevel(patch.blockId, patch.fields.level);
+        }
+        // Handle meta fields
+        if ('aiHidden' in patch.fields) {
+          const currentHidden = (block as any).aiHidden ?? false;
+          if (currentHidden !== patch.fields.aiHidden) {
+            editor.toggleAiHidden(patch.blockId);
+          }
+        }
+        if ('locked' in patch.fields) {
+          const currentLocked = (block as any).locked ?? false;
+          if (currentLocked !== patch.fields.locked) {
+            editor.toggleLocked(patch.blockId);
+          }
+        }
+        if ('collapsed' in patch.fields) {
+          const currentCollapsed = (block as any).collapsed ?? false;
+          if (currentCollapsed !== patch.fields.collapsed) {
+            editor.toggleCollapsed(patch.blockId);
+          }
+        }
+        break;
+      }
+      
+      case 'delete': {
+        if (!patch.blockId) return;
+        const block = editor.blocks.find((b: Block) => b.id === patch.blockId);
+        if (block) {
+          editor.removeBlock(patch.blockId);
+        }
+        break;
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to apply patch:', patch, error);
+  }
+}
 
 // --- Utilities ---
 // Remove any <EXTRAS_JSON>{...}</EXTRAS_JSON> blocks from a text content string.
@@ -95,12 +322,14 @@ function stripExtrasTags(text: string | undefined | null): { text: string; hadEx
 }
 
 export function ChatAssistant() {
-  const { documentId, createRemote } = useEditor();
+  const editor = useEditor();
+  const { documentId, createRemote } = editor;
   const { selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId } = useChatSessions();
   const [expanded, setExpanded] = useState<boolean>(() => {
     try { return localStorage.getItem('chat.expanded') === '1'; } catch { return false; }
   });
   const extrasFilterRef = useRef<ExtrasFilterState>({ inExtras: false, carry: '', buf: '' });
+  const latestExtrasRef = useRef<any | null>(null);
   const [extrasActive, setExtrasActive] = useState<boolean>(false);
   const [input, setInput] = useState<string>('');
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
@@ -219,6 +448,7 @@ export function ChatAssistant() {
     setInput('');
     // Reset extras state for a fresh stream
     extrasFilterRef.current = { inExtras: false, carry: '', buf: '' };
+    latestExtrasRef.current = null;
     setExtrasActive(false);
 
     const nextMessages: ChatMessage[] = [...messages, { role: 'user', content: text }, { role: 'assistant', content: '' }];
@@ -251,14 +481,23 @@ export function ChatAssistant() {
             }
             return out;
           });
-          // 2) Subtle feedback only: detect presence of extras but do NOT apply changes
+          // 2) Track latest extras only; apply once at end to avoid inversion
           try {
             const sseExtras: any = (chunk as any)?.extras ?? null;
             const hasInline = inlineExtras && inlineExtras.length > 0;
             const hasAny = Boolean(sseExtras) || hasInline || extrasFilterRef.current.inExtras;
-            if (hasAny) setExtrasActive(true);
-          } catch {
-            // ignore
+
+            if (hasAny) {
+              setExtrasActive(true);
+              if (sseExtras && typeof sseExtras === 'object') {
+                latestExtrasRef.current = sseExtras;
+              } else if (hasInline) {
+                // Keep the last inline extras object as the latest
+                latestExtrasRef.current = inlineExtras[inlineExtras.length - 1];
+              }
+            }
+          } catch (error) {
+            console.warn('Error buffering extras:', error);
           }
         },
       });
@@ -267,9 +506,28 @@ export function ChatAssistant() {
     } finally {
       setIsStreaming(false);
       abortRef.current = null;
-      // Ensure feedback is cleared
-      extrasFilterRef.current = { inExtras: false, carry: '', buf: '' };
-      setExtrasActive(false);
+      // Apply latest buffered extras once to avoid order inversion
+      try {
+        const extras = latestExtrasRef.current;
+        if (extras && typeof extras === 'object') {
+          if (extras.nextDocument && typeof extras.nextDocument === 'object') {
+            const doc = extras.nextDocument as Doc;
+            if (doc.blocks && Array.isArray(doc.blocks)) {
+              editor.setFromJSON(JSON.stringify(doc));
+              if (doc.name) editor.setDocName(doc.name);
+            }
+          } else if (extras.patches && Array.isArray(extras.patches)) {
+            applyPatchesIntelligently(extras.patches, editor);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to apply buffered extras:', err);
+      } finally {
+        // Ensure feedback is cleared
+        extrasFilterRef.current = { inExtras: false, carry: '', buf: '' };
+        latestExtrasRef.current = null;
+        setExtrasActive(false);
+      }
     }
   };
 
@@ -284,44 +542,70 @@ export function ChatAssistant() {
   };
 
   return (
-    <div className={["chat-assistant", expanded ? 'expanded' : 'collapsed'].join(' ')}>
-      <button
-        className={["chat-quick-toggle", 'btn'].join(' ')}
+    <div className={cn(
+      "chat-assistant fixed bottom-4 right-4 z-50",
+      expanded ? "w-[380px]" : "w-auto"
+    )}>
+      <Button
+        variant="outline"
+        size="sm"
+        className={cn(
+          "shadow-md",
+          expanded && "hidden"
+        )}
         onClick={() => setExpanded(v => !v)}
         aria-expanded={expanded}
         title={expanded ? 'Hide assistant' : 'Show assistant'}
       >
-        {expanded ? 'Hide Assistant' : 'Assistant'}
-      </button>
+        {expanded ? 'Hide Assistant' : '✨ Assistant'}
+      </Button>
 
-      {expanded ? (
-        <div className="chat-panel">
-          <div className="chat-header row">
-            <div className="grow">
-              <div className="title">Assistant</div>
-              <div className="subtitle">Helps you edit and refine your document</div>
+      {expanded && (
+        <div className="bg-card border border-border rounded-lg shadow-lg flex flex-col max-h-[500px]">
+          <div className="flex items-center justify-between p-3 border-b border-border">
+            <div className="flex-1">
+              <div className="font-semibold text-sm">Assistant</div>
+              <div className="text-xs text-muted-foreground">Helps you edit and refine your document</div>
             </div>
-            <div>
-              <button className="btn" onClick={onNewChat} title="Start a new chat">New chat</button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={onNewChat} title="Start a new chat">New</Button>
+              <Button variant="ghost" size="sm" onClick={() => setExpanded(false)} title="Hide assistant">×</Button>
             </div>
           </div>
-          <div className="chat-body" ref={listRef}>
+          <div className="flex-1 overflow-auto p-3 space-y-3 min-h-[200px]" ref={listRef}>
             {visibleMessages.length === 0 && (
-              <div className="empty">Ask for suggestions, rewriting, structure, summaries, or references.</div>
+              <div className="text-center text-muted-foreground text-sm py-8">
+                Ask for suggestions, rewriting, structure, summaries, or references.
+              </div>
             )}
             {visibleMessages.map((m, idx) => (
-              <div key={idx} className={["msg", m.role].join(' ')}>
-                <div className="bubble">{m.role === 'user' ? (<ChatRefTags text={m.content} />) : m.content}</div>
+              <div 
+                key={idx} 
+                className={cn(
+                  "flex",
+                  m.role === 'user' ? "justify-end" : "justify-start"
+                )}
+              >
+                <div className={cn(
+                  "max-w-[85%] px-3 py-2 rounded-lg text-sm whitespace-pre-wrap",
+                  m.role === 'user' 
+                    ? "bg-primary text-primary-foreground" 
+                    : "bg-muted text-foreground"
+                )}>
+                  {m.role === 'user' ? (<ChatRefTags text={m.content} />) : m.content}
+                </div>
               </div>
             ))}
             {isStreaming && extrasActive && (
-              <div className="extras-feedback"><span className="spinner" /> Processing changes…</div>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <span className="animate-spin">⚙️</span> Processing changes…
+              </div>
             )}
-            {error && <div className="error">{error}</div>}
+            {error && <div className="text-sm text-destructive">{error}</div>}
           </div>
-          <div className="chat-input">
-            <div className="row">
-              <div className="chat-textarea-wrap">
+          <div className="p-3 border-t border-border">
+            <div className="flex items-end gap-2">
+              <div className="chat-textarea-wrap flex-1 relative">
                 <ChatTaggedInput
                   ref={inputHostRef}
                   value={input}
@@ -350,19 +634,12 @@ export function ChatAssistant() {
                 />
               </div>
               {!isStreaming ? (
-                <button className="btn primary" onClick={onSend} disabled={!input.trim()}>Send</button>
+                <Button onClick={onSend} disabled={!input.trim()}>Send</Button>
               ) : (
-                <button className="btn danger" onClick={onStop}>Stop</button>
+                <Button variant="destructive" onClick={onStop}>Stop</Button>
               )}
             </div>
-
           </div>
-        </div>
-      ) : (
-        <div className="chat-collapsed-row">
-          <button className="chat-toggle btn" onClick={() => setExpanded(true)} aria-expanded={expanded}>
-            <span className="dot" /> Assistant
-          </button>
         </div>
       )}
     </div>

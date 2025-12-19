@@ -1,5 +1,5 @@
-import './ChatRefPicker.css';
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { cn } from '@/lib/utils';
 import type { RefObject, SetStateAction } from 'react';
 import { useEditor } from '../../../../editor';
 import type { Block } from '../../../../editor';
@@ -300,27 +300,39 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   return (
     <>
       {refOpen && (
-        <div ref={refMenuRef} className="chat-ref-menu" role="menu">
-          <div className="ref-section">
-            <div className="ref-title">References</div>
-            <div className="ref-items">
+        <div 
+          ref={refMenuRef} 
+          className="chat-ref-menu absolute bottom-full mb-1 left-0 z-50 bg-popover border border-border rounded-lg shadow-lg min-w-[220px]" 
+          role="menu"
+        >
+          <div className="p-2">
+            <div className="text-xs font-semibold text-muted-foreground mb-2 px-2">References</div>
+            <div className="space-y-0.5">
               <button 
-                className={`ref-item ${menuIndex === 0 ? 'selected' : ''}`} 
+                className={cn(
+                  "w-full flex flex-col items-start px-2 py-1.5 rounded text-left",
+                  "hover:bg-accent transition-colors",
+                  menuIndex === 0 && "bg-accent"
+                )}
                 onMouseDown={(e) => e.preventDefault()} 
                 onClick={onSelectThis}
                 onMouseEnter={() => setMenuIndex(0)}
               >
-                <span className="ref-item-title">this</span>
-                <span className="ref-item-desc">Reference current document</span>
+                <span className="text-sm font-medium">this</span>
+                <span className="text-xs text-muted-foreground">Reference current document</span>
               </button>
               <button 
-                className={`ref-item ${menuIndex === 1 ? 'selected' : ''}`} 
+                className={cn(
+                  "w-full flex flex-col items-start px-2 py-1.5 rounded text-left",
+                  "hover:bg-accent transition-colors",
+                  menuIndex === 1 && "bg-accent"
+                )}
                 onMouseDown={(e) => e.preventDefault()} 
                 onClick={onSelectDocuments}
                 onMouseEnter={() => setMenuIndex(1)}
               >
-                <span className="ref-item-title">documents</span>
-                <span className="ref-item-desc">Reference another document</span>
+                <span className="text-sm font-medium">documents</span>
+                <span className="text-xs text-muted-foreground">Reference another document</span>
               </button>
             </div>
           </div>
@@ -328,12 +340,17 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       )}
 
       {refResultsOpen && (
-        <div ref={refResultsRef} className="chat-ref-results" style={{ left: refResultsLeft }} role="menu">
-          <div className="ref-section">
+        <div 
+          ref={refResultsRef} 
+          className="chat-ref-results absolute bottom-full mb-1 z-50 bg-popover border border-border rounded-lg shadow-lg min-w-[280px] max-w-[340px]" 
+          style={{ left: refResultsLeft }} 
+          role="menu"
+        >
+          <div className="p-2">
             {navigationStack.length > 1 && (
-              <div className="ref-header">
+              <div className="mb-2">
                 <button 
-                  className="ref-back-btn" 
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors" 
                   onClick={navigateBack}
                   onMouseDown={(e) => e.preventDefault()}
                   title="Go back"
@@ -344,25 +361,29 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
             )}
             {refResultsType === 'documents' && (
               <>
-                <div className="ref-title">Documents</div>
-                {refLoading && <div className="ref-loading">Loading documents…</div>}
-                {refError && <div className="ref-error">{refError}</div>}
+                <div className="text-xs font-semibold text-muted-foreground mb-2 px-2">Documents</div>
+                {refLoading && <div className="text-sm text-muted-foreground px-2 py-4 text-center">Loading documents…</div>}
+                {refError && <div className="text-sm text-destructive px-2">{refError}</div>}
                 {!refLoading && !refError && (
-                  <div className="ref-list">
+                  <div className="space-y-0.5">
                     {(refDocs || []).map((d, idx) => (
-                      <div key={d._id} className="ref-item-wrapper">
+                      <div key={d._id} className="flex items-center gap-1">
                         <button 
-                          className={`ref-item ${resultsIndex === idx ? 'selected' : ''}`} 
+                          className={cn(
+                            "flex-1 flex flex-col items-start px-2 py-1.5 rounded text-left",
+                            "hover:bg-accent transition-colors",
+                            resultsIndex === idx && "bg-accent"
+                          )}
                           onMouseDown={(e) => e.preventDefault()} 
                           onClick={() => insertDocumentReference(d)}
                           onMouseEnter={() => setResultsIndex(idx)}
                           title="Select this document"
                         >
-                          <span className="ref-item-title">{d.name || d._id}</span>
-                          <span className="ref-item-desc">{d._id}</span>
+                          <span className="text-sm font-medium truncate max-w-[200px]">{d.name || d._id}</span>
+                          <span className="text-xs text-muted-foreground truncate max-w-[200px]">{d._id}</span>
                         </button>
                         <button 
-                          className="ref-item-action" 
+                          className="px-2 py-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors" 
                           onMouseDown={(e) => e.preventDefault()} 
                           onClick={() => onOpenDocBlocks(d)}
                           title="Explore document blocks"
@@ -371,7 +392,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                         </button>
                       </div>
                     ))}
-                    {(!refDocs || refDocs.length === 0) && <div className="ref-empty">No documents</div>}
+                    {(!refDocs || refDocs.length === 0) && <div className="text-sm text-muted-foreground px-2 py-4 text-center">No documents</div>}
                   </div>
                 )}
               </>
@@ -379,31 +400,37 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
 
             {(refResultsType === 'this-blocks' || refResultsType === 'doc-blocks') && (
               <>
-                <div className="ref-title">{refResultsType === 'this-blocks' ? 'This document blocks' : `Blocks: ${refDocContext?.name || refDocContext?._id || ''}`}</div>
-                {refLoading && <div className="ref-loading">Loading blocks…</div>}
-                {refError && <div className="ref-error">{refError}</div>}
+                <div className="text-xs font-semibold text-muted-foreground mb-2 px-2">
+                  {refResultsType === 'this-blocks' ? 'This document blocks' : `Blocks: ${refDocContext?.name || refDocContext?._id || ''}`}
+                </div>
+                {refLoading && <div className="text-sm text-muted-foreground px-2 py-4 text-center">Loading blocks…</div>}
+                {refError && <div className="text-sm text-destructive px-2">{refError}</div>}
                 {!refLoading && !refError && (
-                  <div className="ref-list scroll">
+                  <div className="space-y-0.5 max-h-[200px] overflow-auto">
                     {(refBlocks || []).map((b, idx) => (
                       <button
                         key={b.id}
-                        className={`ref-item ${resultsIndex === idx ? 'selected' : ''}`}
+                        className={cn(
+                          "w-full flex flex-col items-start px-2 py-1.5 rounded text-left",
+                          "hover:bg-accent transition-colors",
+                          resultsIndex === idx && "bg-accent"
+                        )}
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={() => onPickBlock(refResultsType === 'this-blocks' ? 'this' : 'doc', b)}
                         onMouseEnter={() => setResultsIndex(idx)}
                       >
-                        <span className="ref-item-title">{labelForBlock(b, idx)}</span>
-                        <span className="ref-item-desc">{b.type}</span>
+                        <span className="text-sm truncate max-w-full">{labelForBlock(b, idx)}</span>
+                        <span className="text-xs text-muted-foreground">{b.type}</span>
                       </button>
                     ))}
-                    {(!refBlocks || refBlocks.length === 0) && <div className="ref-empty">No blocks</div>}
+                    {(!refBlocks || refBlocks.length === 0) && <div className="text-sm text-muted-foreground px-2 py-4 text-center">No blocks</div>}
                   </div>
                 )}
               </>
             )}
           </div>
-          <div className="ref-footer">
-            <div className="ref-hints">
+          <div className="border-t border-border px-2 py-1.5">
+            <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
               <span>↑↓ Navigate</span>
               <span>← Back</span>
               <span>Enter Select</span>

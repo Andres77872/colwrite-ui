@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import './DocumentsMenu.css';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { useEditor } from '../../../editor';
+import { RefreshCw, Plus, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 
 export function DocumentsMenu() {
   const { listRemote, loadRemote, createRemote, deleteRemote, documentId } = useEditor();
@@ -23,19 +26,17 @@ export function DocumentsMenu() {
       setItems(res.documents || []);
       setCount(res.count || 0);
     } catch (e) {
-      // no-op display handled elsewhere if desired
+      // no-op
     } finally {
       setLoading(false);
     }
   };
 
-  // Debounce search input
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query.trim()), 350);
     return () => clearTimeout(t);
   }, [query]);
 
-  // Reset to page 1 on new search term
   useEffect(() => {
     setPage(1);
   }, [debouncedQuery]);
@@ -49,7 +50,6 @@ export function DocumentsMenu() {
     try {
       setCreating(true);
       await createRemote({ name: 'New document', blocks: [] });
-      // Optionally auto-load is already the current document after create
       await fetchList();
     } finally {
       setCreating(false);
@@ -65,7 +65,6 @@ export function DocumentsMenu() {
     try {
       setDeletingId(id);
       await deleteRemote(id);
-      // If the last item on the last page was removed, move back a page
       const nextCount = Math.max(0, count - 1);
       const nextTotalPages = Math.max(1, Math.ceil(nextCount / limit));
       if (page > nextTotalPages) setPage(nextTotalPages);
@@ -79,34 +78,37 @@ export function DocumentsMenu() {
   const next = () => setPage((p) => Math.min(totalPages, p + 1));
 
   return (
-    <div className="documents-menu">
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-        <strong>Documents</strong>
-        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-          <button className="btn" onClick={fetchList} disabled={loading}>Refresh</button>
-          <button className="btn primary" onClick={onCreate} disabled={creating}>New</button>
+    <div className="flex flex-col gap-3">
+      <div className="flex justify-between items-center">
+        <strong className="text-sm">Documents</strong>
+        <div className="flex gap-2 items-center">
+          <Button variant="outline" size="sm" onClick={fetchList} disabled={loading}>
+            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+          </Button>
+          <Button size="sm" onClick={onCreate} disabled={creating}>
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            New
+          </Button>
         </div>
       </div>
 
-      <div className="row">
-        <input
-          className="input grow"
-          type="search"
-          placeholder="Search documents…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          aria-label="Search documents"
-        />
-      </div>
+      <Input
+        type="search"
+        placeholder="Search documents…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        aria-label="Search documents"
+        className="h-8"
+      />
 
-      <div className="muted" style={{ fontSize: 12 }}>
+      <div className="text-muted-foreground text-xs">
         Page {page} / {totalPages} · {count} total
       </div>
 
-      <div className="list">
-        {loading && <div className="muted">Loading…</div>}
+      <div className="flex flex-col gap-2">
+        {loading && <div className="text-muted-foreground text-sm">Loading…</div>}
         {!loading && items.length === 0 && (
-          <div className="muted">No documents yet. Create one to get started.</div>
+          <div className="text-muted-foreground text-sm">No documents yet. Create one to get started.</div>
         )}
         {!loading && items.map((d: any) => {
           const id: string = String(d._id || d.id || d.document_id || '');
@@ -114,29 +116,42 @@ export function DocumentsMenu() {
           const title: string = String(d.title || d.name || '(untitled)');
           const isActive = documentId === id;
           return (
-            <div key={id} className={`doc-row${isActive ? ' active' : ''}`} onClick={() => onLoad(id)}>
-              <div className="doc-main">
-                <div className="doc-title">{title}</div>
-                <div className="doc-sub muted">{id}</div>
+            <div 
+              key={id} 
+              className={cn(
+                "flex items-center justify-between gap-2 px-2 py-2 rounded-lg",
+                "cursor-pointer border border-transparent transition-colors",
+                "hover:bg-accent",
+                isActive && "border-border bg-primary/5"
+              )}
+              onClick={() => onLoad(id)}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="text-sm truncate font-medium">{title}</div>
+                <div className="text-xs text-muted-foreground truncate">{id}</div>
               </div>
-              <div className="doc-actions">
-                <button
-                  className="btn danger"
-                  onClick={(e) => { e.stopPropagation(); onDelete(id); }}
-                  disabled={deletingId === id}
-                  title="Delete document"
-                >
-                  Delete
-                </button>
-              </div>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-destructive hover:bg-destructive/10"
+                onClick={(e) => { e.stopPropagation(); onDelete(id); }}
+                disabled={deletingId === id}
+                title="Delete document"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
             </div>
           );
         })}
       </div>
 
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-        <button className="btn" onClick={prev} disabled={page <= 1}>Prev</button>
-        <button className="btn" onClick={next} disabled={page >= totalPages}>Next</button>
+      <div className="flex justify-between items-center mt-2">
+        <Button variant="outline" size="sm" onClick={prev} disabled={page <= 1}>
+          <ChevronLeft className="h-3.5 w-3.5" />
+        </Button>
+        <Button variant="outline" size="sm" onClick={next} disabled={page >= totalPages}>
+          <ChevronRight className="h-3.5 w-3.5" />
+        </Button>
       </div>
     </div>
   );

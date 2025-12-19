@@ -1,7 +1,9 @@
-import './EquationInline.css';
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import type { ParagraphChild } from '../../../../../../editor';
 import { serializeEditableHtml } from '../../../../../../components/common/Editable/Editable';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 export function EquationInline({
   blockId,
@@ -114,18 +116,30 @@ export function EquationInline({
   };
 
   return (
-    <span ref={rootRef} className="equation-inline" role="group" aria-label="Equation" contentEditable={false as any} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+    <span 
+      ref={rootRef} 
+      className="equation-inline inline-block align-baseline relative" 
+      role="group" 
+      aria-label="Equation" 
+      contentEditable={false as any} 
+      onMouseDown={(e) => e.stopPropagation()} 
+      onClick={(e) => e.stopPropagation()}
+    >
       <button
         type="button"
-        className="equation-pill"
+        className={cn(
+          "inline-flex items-center gap-1 px-1.5 py-0.5",
+          "bg-amber-950/40 text-amber-400 border border-amber-700/50 rounded",
+          "hover:bg-amber-900/50 transition-colors cursor-pointer font-mono text-sm"
+        )}
         title="Edit equation"
         onMouseDown={(e) => { e.preventDefault(); setOpen(v => !v); }}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v); } }}
       >
-        <span className="equation-label">
+        <span>
           {latex ? (
             katexHtml ? (
-              <span className="katex-inline" dangerouslySetInnerHTML={{ __html: katexHtml }} />
+              <span dangerouslySetInnerHTML={{ __html: katexHtml }} />
             ) : (
               <code>{pillText}</code>
             )
@@ -133,14 +147,17 @@ export function EquationInline({
             'Equation'
           )}
         </span>
-        <span className="caret" aria-hidden>▾</span>
+        <span className="text-xs opacity-60" aria-hidden>▾</span>
       </button>
       {open && (
-        <div className="equation-editor" onMouseDown={(e) => e.stopPropagation()}>
-          <div className="row">
-            <label className="lab">LaTeX</label>
-            <input
-              className="inp"
+        <div 
+          className="absolute left-0 top-full mt-1 z-50 bg-popover border border-border rounded-lg shadow-lg p-3 min-w-[280px]" 
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs text-muted-foreground w-20 shrink-0">LaTeX</label>
+            <Input
+              className="h-8 text-sm font-mono"
               type="text"
               placeholder="E=mc^2"
               value={latex}
@@ -151,39 +168,39 @@ export function EquationInline({
               }}
             />
           </div>
-          <div className="row">
-            <label className="lab">Numbered</label>
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs text-muted-foreground w-20 shrink-0">Numbered</label>
             <input
-              className="inp-chk"
               type="checkbox"
+              className="h-4 w-4 rounded border-border"
               checked={numbered}
               onChange={(e) => setNumbered(e.target.checked)}
             />
           </div>
-          <div className="row">
-            <label className="lab">Label ID</label>
-            <input
-              className="inp"
+          <div className="flex items-center gap-2 mb-3">
+            <label className="text-xs text-muted-foreground w-20 shrink-0">Label ID</label>
+            <Input
+              className="h-8 text-sm"
               type="text"
               placeholder="eq:mass-energy"
               value={labelId}
               onChange={(e) => setLabelId(e.target.value)}
             />
           </div>
-          <div className="preview">
+          <div className="p-3 bg-muted rounded-md text-center mb-3 min-h-[40px] flex items-center justify-center">
             {latex ? (
               katexHtml ? (
-                <span className="katex-preview" dangerouslySetInnerHTML={{ __html: katexHtml }} />
+                <span dangerouslySetInnerHTML={{ __html: katexHtml }} />
               ) : (
-                <code>{latex}</code>
+                <code className="font-mono text-sm">{latex}</code>
               )
             ) : (
-              'Equation preview'
+              <span className="text-muted-foreground text-sm">Equation preview</span>
             )}
           </div>
-          <div className="actions">
-            <button type="button" className="btn danger" title="Remove equation" onMouseDown={onRemove}>Remove</button>
-            <button type="button" className="btn" title="Close" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</button>
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="destructive" size="sm" onMouseDown={onRemove}>Remove</Button>
+            <Button type="button" variant="outline" size="sm" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</Button>
           </div>
         </div>
       )}

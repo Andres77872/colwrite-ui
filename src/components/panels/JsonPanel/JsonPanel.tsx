@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
-import './JsonPanel.css';
+import { cn } from '@/lib/utils';
 import { useEditor } from '../../../editor';
 import { createDocument, saveDocument, loadDocument, listDocuments, deleteDocument } from '../../../services';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { RefreshCw, Upload, Save, Plus, Trash2, List, Loader2 } from 'lucide-react';
 
 export function JsonPanel() {
   const { getJSON, setFromJSON, save, doc } = useEditor();
@@ -92,49 +96,149 @@ export function JsonPanel() {
   };
 
   return (
-    <div className="json-panel">
-      <div className="row" style={{ justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-        <strong>Document JSON</strong>
-        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-          <input
-            className="input"
-            placeholder="Document ID"
-            value={documentId}
-            onChange={(e) => setDocumentId(e.target.value)}
-            style={{ minWidth: 280 }}
-          />
-          <button className="btn" disabled={loading} onClick={onCreate}>Create</button>
-          <button className="btn" disabled={loading} onClick={onSaveById}>Save by ID</button>
-          <button className="btn" disabled={loading} onClick={onLoadById}>Load by ID</button>
-          <button className="btn danger" disabled={loading} onClick={onDeleteById}>Delete</button>
-          <button className="btn" disabled={loading} onClick={onList}>List</button>
+    <div className="flex flex-col gap-3 h-full">
+      {/* Document ID Input */}
+      <div className="space-y-2">
+        <Input
+          className="font-mono text-xs"
+          placeholder="Document ID"
+          value={documentId}
+          onChange={(e) => setDocumentId(e.target.value)}
+        />
+        
+        {/* API Actions */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Button 
+            variant="outline" 
+            size="sm" 
+            disabled={loading} 
+            onClick={onCreate}
+            className="gap-1.5"
+          >
+            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+            Create
+          </Button>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            disabled={loading} 
+            onClick={onSaveById}
+            className="gap-1.5"
+          >
+            <Save className="h-3 w-3" />
+            Save
+          </Button>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            disabled={loading} 
+            onClick={onLoadById}
+            className="gap-1.5"
+          >
+            <Upload className="h-3 w-3" />
+            Load
+          </Button>
+          <Button 
+            variant="destructive" 
+            size="sm" 
+            disabled={loading} 
+            onClick={onDeleteById}
+            className="gap-1.5"
+          >
+            <Trash2 className="h-3 w-3" />
+            Delete
+          </Button>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            disabled={loading} 
+            onClick={onList}
+            className="gap-1.5"
+          >
+            <List className="h-3 w-3" />
+            List
+          </Button>
         </div>
       </div>
 
-      <div className="row" style={{ justifyContent: 'space-between', marginTop: 8 }}>
-        <div className="row" style={{ gap: 8 }}>
-          <button className="btn" onClick={() => setText(getJSON())}>Refresh</button>
-          <button className="btn" onClick={onLoad}>Apply JSON</button>
-          <button className="btn primary" onClick={save}>Save (local)</button>
-        </div>
+      {/* Divider */}
+      <div className="h-px bg-border" />
+
+      {/* Local Actions */}
+      <div className="flex items-center gap-1.5">
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          onClick={() => setText(getJSON())}
+          className="gap-1.5"
+        >
+          <RefreshCw className="h-3 w-3" />
+          Refresh
+        </Button>
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          onClick={onLoad}
+          className="gap-1.5"
+        >
+          <Upload className="h-3 w-3" />
+          Apply JSON
+        </Button>
+        <Button 
+          size="sm" 
+          onClick={save}
+          className="gap-1.5 ml-auto"
+        >
+          <Save className="h-3 w-3" />
+          Save (local)
+        </Button>
       </div>
 
-      <textarea className="textarea" value={text} onChange={(e) => setText(e.target.value)} />
+      {/* JSON Editor */}
+      <Textarea 
+        className={cn(
+          "flex-1 min-h-[200px] font-mono text-xs",
+          "bg-muted/30 border-muted",
+          "focus:bg-background",
+          "resize-none"
+        )} 
+        value={text} 
+        onChange={(e) => setText(e.target.value)} 
+        placeholder="Document JSON..."
+      />
 
+      {/* Documents List */}
       {documents.length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          <div className="muted" style={{ marginBottom: 4 }}>Found {count} documents</div>
-          <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+        <div className="border-t border-border pt-3 space-y-2">
+          <div className="text-xs text-muted-foreground">
+            Found {count} document{count !== 1 ? 's' : ''}
+          </div>
+          <div className="space-y-1 max-h-[200px] overflow-auto">
             {documents.map((d: any) => {
               const id = d._id || d.id || '';
               const title = d.title || '(untitled)';
+              const isSelected = documentId === String(id);
+              
               return (
-                <li key={id} style={{ cursor: 'pointer' }} onClick={() => setDocumentId(String(id))}>
-                  <span className="muted">{String(id)}</span> — {String(title)}
-                </li>
+                <button 
+                  key={id} 
+                  className={cn(
+                    "w-full text-left text-sm p-2 rounded-md",
+                    "border border-transparent",
+                    "transition-colors cursor-pointer",
+                    "hover:bg-accent/50",
+                    isSelected && "bg-primary/10 border-primary/30"
+                  )}
+                  onClick={() => setDocumentId(String(id))}
+                >
+                  <div className="font-mono text-xs text-muted-foreground truncate">
+                    {String(id)}
+                  </div>
+                  <div className="truncate">{String(title)}</div>
+                </button>
               );
             })}
-          </ul>
+          </div>
         </div>
       )}
     </div>

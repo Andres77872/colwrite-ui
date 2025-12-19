@@ -11,10 +11,19 @@ export type EditorContextValue = {
   documentId: string | null;
   activeId: string | null;
   setActive: (id: string | null) => void;
+  // Global menu state - ensures only one block menu is open at a time
+  openMenuBlockId: string | null;
+  openMenuType: 'add' | 'options' | null;
+  setBlockMenu: (blockId: string | null, type: 'add' | 'options' | null) => void;
   setDocMeta: (meta: Partial<Doc>) => void;
   setDocName: (name: string) => void;
   addBlockAtStart: (type: Block['type']) => string;
   addBlockAfter: (afterId: string, type: Block['type']) => string;
+  // Exact placement helpers that preserve provided block IDs (used by AI patches)
+  insertBlockAtStartExact: (block: Block) => void;
+  insertBlockAfterExact: (afterId: string, block: Block) => void;
+  insertBlockBeforeExact: (beforeId: string, block: Block) => void;
+  appendBlockExact: (block: Block) => void;
   moveBlock: (id: string, dir: -1 | 1) => void;
   reorderBlock: (id: string, toIndex: number) => void;
   removeBlock: (id: string) => void;
@@ -66,6 +75,14 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const [documentId, setDocumentId] = useState<string | null>(() => loadDocumentId());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
+  // Global menu state - only one block menu open at a time
+  const [openMenuBlockId, setOpenMenuBlockId] = useState<string | null>(null);
+  const [openMenuType, setOpenMenuType] = useState<'add' | 'options' | null>(null);
+  
+  const setBlockMenu = (blockId: string | null, type: 'add' | 'options' | null) => {
+    setOpenMenuBlockId(blockId);
+    setOpenMenuType(type);
+  };
   const [lastSaveSource, setLastSaveSource] = useState<'auto' | 'manual' | null>(null);
   const autoSaveTimerRef = useRef<number | null>(null);
   const [hasAnyRemoteDocs, setHasAnyRemoteDocs] = useState<boolean | null>(null);
@@ -191,6 +208,30 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     });
     return newId;
   };
+
+  // --- Exact placement helpers (preserve provided id and full block data) ---
+  const insertBlockAtStartExact = (block: Block) => setBlocks(prev => [block, ...prev]);
+  const appendBlockExact = (block: Block) => setBlocks(prev => [...prev, block]);
+  const insertBlockAfterExact = (afterId: string, block: Block) => setBlocks(prev => {
+    const idx = prev.findIndex(b => b.id === afterId);
+    const out = [...prev];
+    if (idx === -1) {
+      out.push(block);
+    } else {
+      out.splice(idx + 1, 0, block);
+    }
+    return out;
+  });
+  const insertBlockBeforeExact = (beforeId: string, block: Block) => setBlocks(prev => {
+    const idx = prev.findIndex(b => b.id === beforeId);
+    const out = [...prev];
+    if (idx === -1) {
+      out.unshift(block);
+    } else {
+      out.splice(idx, 0, block);
+    }
+    return out;
+  });
 
   const moveBlock = (id: string, dir: -1 | 1) => setBlocks(prev => {
     const idx = prev.findIndex(b => b.id === id);
@@ -366,10 +407,17 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     documentId,
     activeId,
     setActive: setActiveId,
+    openMenuBlockId,
+    openMenuType,
+    setBlockMenu,
     setDocMeta,
     setDocName,
     addBlockAtStart,
     addBlockAfter,
+    insertBlockAtStartExact,
+    insertBlockAfterExact,
+    insertBlockBeforeExact,
+    appendBlockExact,
     moveBlock,
     reorderBlock,
     removeBlock,

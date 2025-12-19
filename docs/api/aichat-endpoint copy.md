@@ -133,6 +133,7 @@ Placement rules (for inserts):
 - Provide either `beforeOf` or `afterOf` to identify the position relative to other block ids.
 - `beforeOf: null` ⇒ insert as the last block (append).
 - `afterOf: null` ⇒ insert as the first block (prepend).
+- If both are omitted or undefined, defaults to appending at the end.
 
 Update rules:
 - When updating a paragraph’s `html`, preserve placeholders so they remain consistent with `children`.
@@ -295,15 +296,18 @@ function insertBlock(block, beforeOf, afterOf) {
   let insertIndex;
   
   if (beforeOf === null) {
-    // Insert at end
-    insertIndex = blocks.length;
-  } else if (afterOf === null) {
-    // Insert at start
+    // Insert at start - nothing comes before it
     insertIndex = 0;
+  } else if (afterOf === null) {
+    // Insert at end - nothing comes after it
+    insertIndex = blocks.length;
   } else if (beforeOf) {
     insertIndex = blocks.findIndex(b => b.id === beforeOf);
   } else if (afterOf) {
     insertIndex = blocks.findIndex(b => b.id === afterOf) + 1;
+  } else {
+    // Default: append at end if both are undefined
+    insertIndex = blocks.length;
   }
   
   // Validate block before inserting

@@ -1,7 +1,7 @@
-import './ChatRefTags.css';
 import { Fragment, type CSSProperties } from 'react';
 import { useEditor } from '../../../../editor';
 import type { Block } from '../../../../editor';
+import { cn } from '@/lib/utils';
 
 export type ChatRefTag = {
   kind: 'document' | 'block';
@@ -91,13 +91,12 @@ export function ChatRefTags({
   const { parts } = parseRefs(text);
 
   return (
-    <span className={["ref-tags", className || ''].join(' ').trim()} style={{ whiteSpace: 'pre-wrap', ...style }}>
+    <span className={cn("ref-tags", className)} style={{ whiteSpace: 'pre-wrap', ...style }}>
       {parts.map((p, idx) => {
         if (typeof p === 'string') {
           return <Fragment key={idx}>{p}</Fragment>;
         }
         const isDoc = p.kind === 'document';
-        const isBlock = p.kind === 'block';
         const label = isDoc
           ? `Doc ${shorten(p.docId || '')}`
           : (p.source === 'this'
@@ -108,28 +107,27 @@ export function ChatRefTags({
           : (p.source === 'this'
               ? `Block in this doc: ${p.blockId}`
               : `Block ${p.blockId} in Document ${p.docId}`);
-        const classNames = [
-          'ref-tag',
-          isDoc ? 'doc' : '',
-          isBlock ? 'block' : '',
-          interactive ? 'interactive' : '',
-        ].filter(Boolean).join(' ');
 
         const content = (
-          <span className={classNames} title={title}
-                onMouseDown={interactive ? (e) => e.preventDefault() : undefined}
-                onClick={interactive ? () => onTagClick?.(p.start, p.refText) : undefined}
+          <span 
+            className={cn(
+              "inline-flex items-center gap-0.5 mx-0.5",
+              isDoc ? "bg-blue-100 text-blue-800" : "bg-violet-100 text-violet-800",
+              "px-1.5 py-0.5 rounded text-xs",
+              interactive && "cursor-pointer hover:opacity-80"
+            )}
+            title={title}
+            onMouseDown={interactive ? (e) => e.preventDefault() : undefined}
+            onClick={interactive ? () => onTagClick?.(p.start, p.refText) : undefined}
           >
-            <span className="ref-tag-pill">
-              <span className="ref-tag-icon" aria-hidden>
-                {isDoc ? '📄' : '🔖'}
-              </span>
-              <span className="ref-tag-text">{label}</span>
+            <span className="flex items-center gap-1">
+              <span aria-hidden>{isDoc ? '📄' : '🔖'}</span>
+              <span>{label}</span>
             </span>
             {interactive && (
               <button
                 type="button"
-                className="ref-tag-remove"
+                className="ml-1 hover:text-destructive transition-colors"
                 aria-label="Remove reference"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={(e) => { e.stopPropagation(); onTagRemove?.(p.start, p.refText); }}

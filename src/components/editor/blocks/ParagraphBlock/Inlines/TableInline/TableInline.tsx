@@ -1,7 +1,7 @@
-import './TableInline.css';
 import { useEffect, useMemo, useState, useRef, type MutableRefObject, type ChangeEvent, type MouseEvent, type KeyboardEvent } from 'react';
 import type { ParagraphChild } from '../../../../../../editor';
 import { serializeEditableHtml } from '../../../../../../components/common/Editable/Editable';
+import { Button } from '@/components/ui/button';
 
 export function TableInline({
   blockId,
@@ -134,25 +134,40 @@ export function TableInline({
   };
 
   return (
-    <span className="table-inline" contentEditable={false as any} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-      <div className="table-toolbar">
-        <span className="stat">Cols: {cols}</span>
-        <button type="button" className="tbtn" title="Add column" onMouseDown={(e) => { e.preventDefault(); setCols(c => c + 1); }}>+ Col</button>
-        <button type="button" className="tbtn" title="Remove column" onMouseDown={(e) => { e.preventDefault(); setCols(c => Math.max(1, c - 1)); }}>− Col</button>
-        <span className="stat">Rows: {rows}</span>
-        <button type="button" className="tbtn" title="Add row" onMouseDown={(e) => { e.preventDefault(); setRows(r => r + 1); }}>+ Row</button>
-        <button type="button" className="tbtn" title="Remove row" onMouseDown={(e) => { e.preventDefault(); setRows(r => Math.max(1, r - 1)); }}>− Row</button>
-        <label className="topt"><input type="checkbox" checked={header} onChange={(e) => setHeader(e.target.checked)} /> Header</label>
-        <button type="button" className="tbtn danger" title="Remove table" onMouseDown={onRemove}>×</button>
+    <span 
+      className="table-inline block my-3 bg-card border border-border rounded-lg overflow-hidden" 
+      contentEditable={false as any} 
+      onMouseDown={(e) => e.stopPropagation()} 
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center gap-2 p-2 bg-muted/50 border-b border-border flex-wrap">
+        <span className="text-xs text-muted-foreground">Cols: {cols}</span>
+        <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-xs" onMouseDown={(e) => { e.preventDefault(); setCols(c => c + 1); }}>+ Col</Button>
+        <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-xs" onMouseDown={(e) => { e.preventDefault(); setCols(c => Math.max(1, c - 1)); }}>− Col</Button>
+        <span className="text-xs text-muted-foreground ml-2">Rows: {rows}</span>
+        <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-xs" onMouseDown={(e) => { e.preventDefault(); setRows(r => r + 1); }}>+ Row</Button>
+        <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-xs" onMouseDown={(e) => { e.preventDefault(); setRows(r => Math.max(1, r - 1)); }}>− Row</Button>
+        <label className="flex items-center gap-1 text-xs text-muted-foreground ml-2">
+          <input type="checkbox" className="h-3.5 w-3.5" checked={header} onChange={(e) => setHeader(e.target.checked)} />
+          Header
+        </label>
+        <Button type="button" variant="destructive" size="sm" className="h-6 w-6 p-0 text-xs ml-auto" onMouseDown={onRemove}>×</Button>
       </div>
-      <div className="table-wrap">
-        <table>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-sm">
           {header && (
             <thead>
               <tr>
                 {grid[0].map((_, c) => (
-                  <th key={`h-${c}`}>
-                    <input ref={setCellRef(0, c)} value={grid[0][c]} onChange={onCellInput(0, c)} onKeyDown={onCellKeyDown(0, c)} placeholder={`H${c + 1}`} />
+                  <th key={`h-${c}`} className="border border-border bg-muted/30 p-0">
+                    <input 
+                      ref={setCellRef(0, c)} 
+                      value={grid[0][c]} 
+                      onChange={onCellInput(0, c)} 
+                      onKeyDown={onCellKeyDown(0, c)} 
+                      placeholder={`H${c + 1}`}
+                      className="w-full min-w-[80px] px-2 py-1.5 bg-transparent border-0 outline-none focus:bg-primary/5 font-medium"
+                    />
                   </th>
                 ))}
               </tr>
@@ -163,8 +178,15 @@ export function TableInline({
               (!header || r > 0) && (
                 <tr key={`r-${r}`}>
                   {row.map((_, c) => (
-                    <td key={`c-${r}-${c}`}>
-                      <input ref={setCellRef(r, c)} value={grid[r][c]} onChange={onCellInput(r, c)} onKeyDown={onCellKeyDown(r, c)} placeholder={header ? `R${r}${c + 1}` : `R${r + 1}${c + 1}`} />
+                    <td key={`c-${r}-${c}`} className="border border-border p-0">
+                      <input 
+                        ref={setCellRef(r, c)} 
+                        value={grid[r][c]} 
+                        onChange={onCellInput(r, c)} 
+                        onKeyDown={onCellKeyDown(r, c)} 
+                        placeholder={header ? `R${r}${c + 1}` : `R${r + 1}${c + 1}`}
+                        className="w-full min-w-[80px] px-2 py-1.5 bg-transparent border-0 outline-none focus:bg-primary/5"
+                      />
                     </td>
                   ))}
                 </tr>

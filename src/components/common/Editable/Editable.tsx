@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import './Editable.css';
+import { cn } from '@/lib/utils';
 import { useEditor } from '../../../editor';
 import { useLayoutEffect, useRef } from 'react';
 import { openSlashMenu, isSlashMenuOpen } from '../../editor/SlashMenu/SlashMenu';
@@ -59,7 +59,12 @@ export function Editable({
   }, [html, activeId, id, refs]);
   return (
     <div
-      className={['editable', className].filter(Boolean).join(' ')}
+      className={cn(
+        "min-h-[1.5em] w-full outline-none whitespace-pre-wrap break-words",
+        "focus:outline-none focus-visible:outline-none",
+        "selection:bg-primary/20",
+        className
+      )}
       ref={(el) => { refs.current[id] = el; }}
       contentEditable
       suppressContentEditableWarning

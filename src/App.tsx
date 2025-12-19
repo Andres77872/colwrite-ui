@@ -1,7 +1,5 @@
-import { useState } from 'react'
 import { EditorProvider } from './editor'
 import { AppShell } from './components/layout/AppShell'
-// Header actions moved into DocumentHeader within Canvas
 import { Canvas } from './components/editor/Canvas'
 import { ChatAssistant } from './components/editor/ChatAssistant'
 import { DocumentFooter } from './components/editor/DocumentChrome'
@@ -16,17 +14,18 @@ import { LandingPage } from './components/auth/LandingPage'
 
 function App() {
   const { user } = useAuth();
-  const [leftCollapsed, setLeftCollapsed] = useState<boolean>(false)
+  
   if (!user) {
     return <LandingPage />
   }
+  
   return (
     <EditorProvider>
       <ChatSessionsProvider>
         <PanelsProvider>
           <AppShell
             header={<Topbar />}
-            left={<Sidebar collapsed={leftCollapsed} onToggle={() => setLeftCollapsed(v => !v)} />}
+            left={<Sidebar />}
             main={<>
               <Canvas />
               <ChatAssistant />
@@ -36,7 +35,6 @@ function App() {
             </>}
             right={<ToolsRail />}
             aside={<ToolsAside />}
-            leftCollapsed={leftCollapsed}
           />
         </PanelsProvider>
       </ChatSessionsProvider>

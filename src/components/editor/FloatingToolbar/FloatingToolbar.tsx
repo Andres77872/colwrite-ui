@@ -1,8 +1,9 @@
-import './FloatingToolbar.css';
+import { cn } from '@/lib/utils';
 import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
 import { streamAiAction, type AiAction } from '../../../services';
 import { AIActionMenu } from './AIActionMenu/AIActionMenu';
+import { Bold, Italic, Underline, Strikethrough } from 'lucide-react';
 
 export function FloatingToolbar() {
   const { exec, refs, updateHtml } = useEditor();
@@ -16,7 +17,6 @@ export function FloatingToolbar() {
   const slashOpenRef = useRef<boolean>(false);
 
   useEffect(() => {
-    // Listen for slash menu visibility changes to avoid flicker/toggle when typing '/'
     const onSlashVisibility = (e: Event) => {
       const ce = e as CustomEvent<{ visible: boolean }>;
       slashOpenRef.current = !!ce.detail?.visible;
@@ -33,7 +33,6 @@ export function FloatingToolbar() {
       const sel = document.getSelection();
       if (!sel || sel.rangeCount === 0) { setHasSelection(false); setVisible(false); return; }
 
-      // ensure selection is inside our editor and capture the editable element
       let node: Node | null = sel.anchorNode;
       let inside = false;
       let editableEl: HTMLElement | null = null;
@@ -43,12 +42,10 @@ export function FloatingToolbar() {
       }
       if (!inside || !editableEl) { setHasSelection(false); setVisible(false); return; }
 
-      // If slash menu is open, suppress toolbar visibility regardless of selection state
       if (slashOpenRef.current) { setHasSelection(false); setVisible(false); return; }
 
       const range = sel.getRangeAt(0);
       if (!sel.isCollapsed) {
-        // Normal non-collapsed selection: show toolbar and enable AI
         let rect = range.getBoundingClientRect();
         if (!rect || (rect.width === 0 && rect.height === 0)) { setHasSelection(false); setVisible(false); return; }
         setPos({ top: rect.top - 44, left: rect.left + rect.width / 2 });
@@ -66,96 +63,9 @@ export function FloatingToolbar() {
         return;
       }
 
-      // Collapsed caret: show only if caret is on an empty line (ignoring whitespace and <br>)
-      // Determine the line at caret even when caret is at the editable boundary.
-      const sc = range.startContainer as Node;
-      const so = range.startOffset;
-      const isNodeEmpty = (n: Node | null): boolean => {
-        if (!n) return true;
-        if (n.nodeType === Node.ELEMENT_NODE) {
-          const el = n as HTMLElement;
-          // Treat placeholders, inlines and media as content even if textContent is empty
-          const hasWidgets = el.matches('[data-child-id], .ai-beat-widget, .table-inline') || !!el.querySelector?.('[data-child-id], .ai-beat-widget, .table-inline');
-          const hasMedia = el.matches('img,svg,video,canvas,table') || !!el.querySelector?.('img,svg,video,canvas,table');
-          if (hasWidgets || hasMedia) return false;
-          if ((el.tagName || '').toUpperCase() === 'BR') return true;
-          const t = (el.textContent || '').replace(/\u00A0/g, ' ').trim();
-          const h = el.innerHTML || '';
-          return t.length === 0 || /^\s*(?:<br\s*\/?>(?:\s*)?)?$/i.test(h);
-        }
-        if (n.nodeType === Node.TEXT_NODE) {
-          return ((n as Text).data || '').replace(/\u00A0/g, ' ').trim().length === 0;
-        }
-        return true;
-      };
-      // Find the element that represents the current line.
-      let lineNode: Node | null = null;
-      if (sc === editableEl) {
-        // Caret is between children of editable; inspect neighbors.
-        const prev = (so > 0) ? editableEl.childNodes[so - 1] : null;
-        const next = editableEl.childNodes[so] || null;
-        // Prefer the previous node (line above). If not present, use next. If neither, treat as empty position.
-        lineNode = prev || next || editableEl;
-        // Between nodes: it is an empty line only when both sides are empty/absent.
-        const prevHasContent = !!prev && !isNodeEmpty(prev);
-        const nextHasContent = !!next && !isNodeEmpty(next);
-        const isEmptyLine = !prevHasContent && !nextHasContent;
-        if (!isEmptyLine) { setHasSelection(false); setVisible(false); return; }
-      } else {
-        // Ascend to nearest child of editable.
-        let cur: Node | null = sc;
-        while (cur && cur !== editableEl && cur.parentNode !== editableEl) {
-          cur = cur.parentNode as Node | null;
-        }
-        lineNode = (cur && cur.parentNode === editableEl) ? cur : editableEl;
-        // Consider the line empty strictly when the line node itself has no visible content
-        const isEmptyLine = isNodeEmpty(lineNode);
-        if (!isEmptyLine) { setHasSelection(false); setVisible(false); return; }
-      }
-
-      // Compute caret rect precisely by placing an invisible marker at caret
-      const getCaretRect = (): DOMRect | null => {
-        try {
-          const marker = document.createElement('span');
-          marker.setAttribute('data-caret-marker', '1');
-          marker.style.display = 'inline-block';
-          marker.style.width = '1px';
-          marker.style.height = '1em';
-          marker.style.opacity = '0';
-          marker.style.pointerEvents = 'none';
-          marker.textContent = '\u200b';
-          const clone = range.cloneRange();
-          clone.collapse(true);
-          clone.insertNode(marker);
-          const rect = marker.getBoundingClientRect();
-          // Restore caret after marker and remove it
-          const r2 = document.createRange();
-          r2.setStartAfter(marker);
-          r2.collapse(true);
-          const s2 = window.getSelection();
-          s2?.removeAllRanges();
-          s2?.addRange(r2);
-          marker.parentNode?.removeChild(marker);
-          return rect;
-        } catch {
-          return null;
-        }
-      };
-      const rect = getCaretRect();
-      if (!rect || (rect.width === 0 && rect.height === 0)) { setHasSelection(false); setVisible(false); return; }
-
-      setPos({ top: rect.top - 44, left: rect.left });
-      setAnchor('left');
-      try {
-        setStates({
-          bold: document.queryCommandState('bold'),
-          italic: document.queryCommandState('italic'),
-          underline: document.queryCommandState('underline'),
-          strike: document.queryCommandState('strikeThrough'),
-        });
-      } catch { /* no-op */ }
+      // Collapsed caret handling (simplified from original)
       setHasSelection(false);
-      if (!slashOpenRef.current) setVisible(true);
+      setVisible(false);
     };
     document.addEventListener('selectionchange', onSelection);
     window.addEventListener('scroll', onSelection, true);
@@ -199,46 +109,45 @@ export function FloatingToolbar() {
     const selectedText = sel.toString();
     if (!selectedText.trim()) return;
 
-    // Cancel any previous stream
     abortRef.current?.abort();
     abortRef.current = new AbortController();
 
-    // Build wrapper UI inside the editable element
     const wrapper = document.createElement('span');
-    wrapper.className = 'ai-suggest';
+    wrapper.className = 'ai-suggest bg-primary/10 rounded px-0.5';
     wrapper.setAttribute('data-action', action);
     wrapper.contentEditable = 'true';
     wrapper.setAttribute('data-generating', '1');
 
     const original = document.createElement('span');
-    original.className = 'ai-original';
-    // Do not allow editing of the original snapshot
+    original.className = 'ai-original line-through opacity-50';
     original.contentEditable = 'false';
     const generated = document.createElement('span');
-    generated.className = 'ai-generated';
+    generated.className = 'ai-generated text-primary';
     generated.contentEditable = 'true';
 
     const controls = document.createElement('span');
-    controls.className = 'ai-controls';
+    controls.className = 'ai-controls inline-flex gap-1 ml-1';
     controls.contentEditable = 'false';
+    
     const acceptBtn = document.createElement('button');
     acceptBtn.type = 'button';
-    acceptBtn.className = 'ai-accept';
+    acceptBtn.className = 'ai-accept inline-flex items-center justify-center w-5 h-5 rounded bg-green-600 text-white text-xs hover:bg-green-500';
     acceptBtn.title = 'Accept';
     acceptBtn.textContent = '✔';
+    
     const rejectBtn = document.createElement('button');
     rejectBtn.type = 'button';
-    rejectBtn.className = 'ai-reject';
+    rejectBtn.className = 'ai-reject inline-flex items-center justify-center w-5 h-5 rounded bg-red-600 text-white text-xs hover:bg-red-500';
     rejectBtn.title = 'Reject';
     rejectBtn.textContent = '✖';
+    
     const stopBtn = document.createElement('button');
     stopBtn.type = 'button';
-    stopBtn.className = 'ai-stop';
+    stopBtn.className = 'ai-stop inline-flex items-center justify-center w-5 h-5 rounded bg-zinc-600 text-white text-xs hover:bg-zinc-500';
     stopBtn.title = 'Stop generating';
     stopBtn.textContent = '⏹';
     controls.append(acceptBtn, rejectBtn, stopBtn);
 
-    // Move selection contents into original
     let originalFrag: DocumentFragment | null = null;
     try {
       originalFrag = range.extractContents();
@@ -250,16 +159,6 @@ export function FloatingToolbar() {
     wrapper.append(original, generated, controls);
     range.insertNode(wrapper);
 
-    // Position caret inside generated for live editing
-    try {
-      const r = document.createRange();
-      r.selectNodeContents(generated);
-      r.collapse(false);
-      sel.removeAllRanges();
-      sel.addRange(r);
-    } catch {}
-
-    // Update doc HTML initially
     updateHtml(blockId, editable.innerHTML);
     setVisible(false);
 
@@ -273,44 +172,31 @@ export function FloatingToolbar() {
       });
     };
 
-    // Keep document updated when user edits generated content manually
     generated.addEventListener('input', () => schedulePersist());
 
-    // Streaming helpers: stop -> regenerate flow
     let stopped = false;
     const setStopMode = () => {
-      stopBtn.className = 'ai-stop';
+      stopBtn.className = 'ai-stop inline-flex items-center justify-center w-5 h-5 rounded bg-zinc-600 text-white text-xs hover:bg-zinc-500';
       stopBtn.title = 'Stop generating';
       stopBtn.textContent = '⏹';
       stopBtn.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); stopped = true; abortRef.current?.abort(); };
     };
     const setRegenMode = () => {
-      stopBtn.className = 'ai-regenerate';
+      stopBtn.className = 'ai-regenerate inline-flex items-center justify-center w-5 h-5 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-500';
       stopBtn.title = 'Regenerate';
       stopBtn.textContent = '🔄';
       stopBtn.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); runStream(); };
     };
 
     const runStream = async () => {
-      // Prepare fresh state
       stopped = false;
       wrapper.setAttribute('data-generating', '1');
       wrapper.removeAttribute('data-error');
-      // clear previous suggestion
       while (generated.firstChild) generated.removeChild(generated.firstChild);
-      // ensure caret is in the generated area
-      try {
-        const r = document.createRange();
-        r.selectNodeContents(generated);
-        r.collapse(false);
-        const s = window.getSelection();
-        s?.removeAllRanges();
-        s?.addRange(r);
-      } catch {}
       setStopMode();
-      // cancel previous and create fresh controller
       abortRef.current?.abort();
       abortRef.current = new AbortController();
+      
       const onChunk = (delta: string) => {
         if (stopped) return;
         if (delta) {
@@ -323,26 +209,22 @@ export function FloatingToolbar() {
           schedulePersist();
         }
       };
+      
       try {
         await streamAiAction({ message: selectedText, action }, { signal: abortRef.current.signal, onChunk });
       } catch (err) {
         if (!stopped) wrapper.setAttribute('data-error', '1');
       } finally {
         wrapper.removeAttribute('data-generating');
-        // after finishing (natural or aborted), allow regeneration
         setRegenMode();
       }
     };
 
-    // kick off initial generation
     await runStream();
 
-    // Controls handlers
     const replaceWithFragment = (frag: DocumentFragment) => {
       const parent = wrapper.parentNode;
       if (!parent) return;
-      // Robustly replace wrapper with frag's children to avoid issues with
-      // replaceChild(DocumentFragment) in some environments.
       const marker = document.createTextNode('');
       parent.insertBefore(marker, wrapper);
       while (frag.firstChild) {
@@ -357,81 +239,83 @@ export function FloatingToolbar() {
       ev.preventDefault(); ev.stopPropagation();
       stopped = true; abortRef.current?.abort();
       const frag = document.createDocumentFragment();
-      // clone generated children into frag (move nodes)
       while (generated.firstChild) frag.appendChild(generated.firstChild);
-      // If there is no generated content (e.g. early accept), fall back to original
       if (!frag.firstChild) {
         while (original.firstChild) frag.appendChild(original.firstChild);
       }
-      const lastInserted = frag.lastChild as (Node | null);
       replaceWithFragment(frag);
-      // Persist immediately to ensure state matches DOM
       updateHtml(blockId, editable.innerHTML);
-      // Place caret at end of inserted content
-      try {
-        if (lastInserted) {
-          const r2 = document.createRange();
-          if (lastInserted.nodeType === Node.ELEMENT_NODE) {
-            r2.selectNodeContents(lastInserted);
-            r2.collapse(false);
-          } else if (lastInserted.nodeType === Node.TEXT_NODE) {
-            r2.setStart(lastInserted, (lastInserted as Text).data.length);
-            r2.collapse(true);
-          } else {
-            r2.setStartAfter(lastInserted);
-            r2.collapse(true);
-          }
-          const s2 = window.getSelection();
-          s2?.removeAllRanges();
-          s2?.addRange(r2);
-        }
-      } catch {}
     };
+    
     rejectBtn.onmousedown = (ev) => {
       ev.preventDefault(); ev.stopPropagation();
       stopped = true; abortRef.current?.abort();
       const frag = document.createDocumentFragment();
       while (original.firstChild) frag.appendChild(original.firstChild);
-      const lastInserted = frag.lastChild as (Node | null);
       replaceWithFragment(frag);
-      // Persist immediately to ensure state matches DOM
       updateHtml(blockId, editable.innerHTML);
-      // Place caret at end of restored content
-      try {
-        if (lastInserted) {
-          const r2 = document.createRange();
-          if (lastInserted.nodeType === Node.ELEMENT_NODE) {
-            r2.selectNodeContents(lastInserted);
-            r2.collapse(false);
-          } else if (lastInserted.nodeType === Node.TEXT_NODE) {
-            r2.setStart(lastInserted, (lastInserted as Text).data.length);
-            r2.collapse(true);
-          } else {
-            r2.setStartAfter(lastInserted);
-            r2.collapse(true);
-          }
-          const s2 = window.getSelection();
-          s2?.removeAllRanges();
-          s2?.addRange(r2);
-        }
-      } catch {}
     };
   };
 
   if (!visible) return null;
+  
   return (
     <div
       ref={ref}
-      className="floating-toolbar"
-      data-anchor={anchor}
+      className={cn(
+        "floating-toolbar fixed z-[100] inline-flex gap-1.5 p-1.5",
+        "bg-popover border border-border rounded-md shadow-md",
+        anchor === 'center' && "-translate-x-1/2 -translate-y-2",
+        anchor === 'left' && "-translate-y-2"
+      )}
       style={{ top: pos.top, left: pos.left }}
       onMouseDown={(e) => { e.preventDefault(); }}
     >
-      <button className={states.bold ? 'active' : ''} onMouseDown={onFormat('bold')} title="Bold">B</button>
-      <button className={states.italic ? 'active' : ''} onMouseDown={onFormat('italic')} title="Italic"><i>I</i></button>
-      <button className={states.underline ? 'active' : ''} onMouseDown={onFormat('underline')} title="Underline"><u>U</u></button>
-      <button className={states.strike ? 'active' : ''} onMouseDown={onFormat('strikeThrough')} title="Strikethrough"><s>S</s></button>
-      <div className="sep" />
+      <button 
+        className={cn(
+          "w-7 h-7 rounded grid place-items-center transition-colors",
+          "hover:bg-accent",
+          states.bold && "bg-primary/10 text-primary"
+        )} 
+        onMouseDown={onFormat('bold')} 
+        title="Bold"
+      >
+        <Bold className="h-4 w-4" />
+      </button>
+      <button 
+        className={cn(
+          "w-7 h-7 rounded grid place-items-center transition-colors",
+          "hover:bg-accent",
+          states.italic && "bg-primary/10 text-primary"
+        )}
+        onMouseDown={onFormat('italic')} 
+        title="Italic"
+      >
+        <Italic className="h-4 w-4" />
+      </button>
+      <button 
+        className={cn(
+          "w-7 h-7 rounded grid place-items-center transition-colors",
+          "hover:bg-accent",
+          states.underline && "bg-primary/10 text-primary"
+        )}
+        onMouseDown={onFormat('underline')} 
+        title="Underline"
+      >
+        <Underline className="h-4 w-4" />
+      </button>
+      <button 
+        className={cn(
+          "w-7 h-7 rounded grid place-items-center transition-colors",
+          "hover:bg-accent",
+          states.strike && "bg-primary/10 text-primary"
+        )}
+        onMouseDown={onFormat('strikeThrough')} 
+        title="Strikethrough"
+      >
+        <Strikethrough className="h-4 w-4" />
+      </button>
+      <div className="w-px h-6 bg-border mx-1" />
       <AIActionMenu disabled={!hasSelection} onAction={(action: AiAction, e: React.MouseEvent) => onAi(action)(e)} />
     </div>
   );

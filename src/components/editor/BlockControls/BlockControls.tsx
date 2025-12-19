@@ -1,235 +1,293 @@
-import './BlockControls.css';
+import { cn } from '@/lib/utils';
 import { useEditor } from '../../../editor';
-import { useEffect, useRef, useState, type KeyboardEventHandler } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { 
+  GripVertical, Plus, Eye, EyeOff, Lock, Unlock, 
+  ChevronRight, ChevronDown, Trash2, Type, 
+  Heading2, Minus 
+} from 'lucide-react';
 
-export function BlockControls({ id }: { id: string }) {
-  const { addBlockAfter, moveBlock, removeBlock, toggleAiHidden, toggleLocked, toggleCollapsed, blocks, setParagraphColumns, setHeadingLevel } = useEditor();
-  const [open, setOpen] = useState(false);
-  const [colsOpen, setColsOpen] = useState(false);
-  const [headingOpen, setHeadingOpen] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
-  const addBtnRef = useRef<HTMLButtonElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const colsRef = useRef<HTMLDivElement | null>(null);
-  const headingRef = useRef<HTMLDivElement | null>(null);
-  const block = blocks.find(b => b.id === id);
+interface MenuProps {
+  open: boolean;
+  onClose: () => void;
+  position: { top: number; left: number };
+  children: React.ReactNode;
+}
+
+function FloatingMenu({ open, onClose, position, children }: MenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!ref.current) return;
-      const target = e.target as Node;
-      if (!ref.current.contains(target)) {
-        setOpen(false);
-        setColsOpen(false);
-        setHeadingOpen(false);
+    if (!open) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onClose();
       }
     };
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, []);
 
-  const add = (type: Parameters<typeof addBlockAfter>[1]) => {
-    addBlockAfter(id, type);
-    setOpen(false);
-  };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
 
-  // When menu opens, focus first item
-  useEffect(() => {
-    if (!open) return;
-    const first = menuRef.current?.querySelector<HTMLButtonElement>('button');
-    first?.focus();
-  }, [open]);
+    // Delay to prevent immediate close from the same click
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleEscape);
+    }, 10);
 
-  const onAddKeyDown: KeyboardEventHandler = (e) => {
-    if (!open) return;
-    const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('button') || []);
-    const currentIndex = items.findIndex((el) => el === document.activeElement);
-    if (e.key === 'Escape') {
-      setOpen(false);
-      addBtnRef.current?.focus();
-      e.preventDefault();
-    } else if (e.key === 'ArrowDown') {
-      const next = items[(currentIndex + 1) % items.length];
-      next?.focus();
-      e.preventDefault();
-    } else if (e.key === 'ArrowUp') {
-      const prev = items[(currentIndex - 1 + items.length) % items.length];
-      prev?.focus();
-      e.preventDefault();
-    } else if (e.key === 'Home') {
-      items[0]?.focus();
-      e.preventDefault();
-    } else if (e.key === 'End') {
-      items[items.length - 1]?.focus();
-      e.preventDefault();
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      className="fixed z-[9999] bg-popover border border-border rounded-lg shadow-2xl py-1 min-w-[180px] animate-in fade-in-0 zoom-in-95 duration-100"
+      style={{ top: position.top, left: position.left }}
+    >
+      {children}
+    </div>,
+    document.body
+  );
+}
+
+export function BlockControls({ id }: { id: string }) {
+  const { 
+    addBlockAfter, removeBlock, toggleAiHidden, toggleLocked, 
+    toggleCollapsed, blocks, setParagraphColumns, setHeadingLevel, refs,
+    openMenuBlockId, openMenuType, setBlockMenu
+  } = useEditor();
+  
+  const addBtnRef = useRef<HTMLButtonElement>(null);
+  const optsBtnRef = useRef<HTMLButtonElement>(null);
+  const positionRef = useRef({ top: 0, left: 0 });
+  
+  const block = blocks.find(b => b.id === id);
+  
+  // This block's menu is open if global state matches
+  const isAddMenuOpen = openMenuBlockId === id && openMenuType === 'add';
+  const isOptionsMenuOpen = openMenuBlockId === id && openMenuType === 'options';
+  const hasAnyMenuOpen = isAddMenuOpen || isOptionsMenuOpen;
+
+  const openMenu = useCallback((type: 'add' | 'options', btnRef: React.RefObject<HTMLButtonElement | null>) => {
+    if (!btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    positionRef.current = { top: rect.top, left: rect.right + 8 };
+    
+    // Toggle: if same menu, close; otherwise open new
+    if (openMenuBlockId === id && openMenuType === type) {
+      setBlockMenu(null, null);
+    } else {
+      setBlockMenu(id, type);
     }
-  };
+  }, [id, openMenuBlockId, openMenuType, setBlockMenu]);
+
+  const closeMenu = useCallback(() => {
+    setBlockMenu(null, null);
+  }, [setBlockMenu]);
+
+  const handleAddBlock = useCallback((type: 'paragraph' | 'heading' | 'divider') => {
+    const newId = addBlockAfter(id, type);
+    closeMenu();
+    queueMicrotask(() => refs.current[newId]?.focus());
+  }, [id, addBlockAfter, closeMenu, refs]);
 
   return (
-    <div className={["block-controls", open ? "open" : ""].filter(Boolean).join(" ")} ref={ref}>
-      <div className="bc-left">
-        <button
-          className="icon drag-handle"
-          title="Drag to reorder"
-          type="button"
-          aria-label="Drag to reorder"
-          draggable
-          data-drag-handle="true"
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.preventDefault()}
-          onDragStart={(e) => {
-            e.dataTransfer.setData('text/plain', id);
-            e.dataTransfer.setData('application/x-block-id', id);
-            e.dataTransfer.effectAllowed = 'move';
-            if (e.currentTarget) {
-              e.dataTransfer.setDragImage(e.currentTarget as Element, 8, 8);
-            }
-          }}
-        >
-          ⋮⋮
-        </button>
-      </div>
-      {/* Centered editor controls (edition) */}
-      {(block?.type === 'paragraph' || block?.type === 'heading') && (
-        <div className="bc-center-editor" role="group" aria-label="Block editor" onMouseDown={(e) => e.stopPropagation()}>
-          <div className="bc-editor-card" role="toolbar" aria-label="Block edition">
-            {block?.type === 'paragraph' && (
-              <div style={{ position: 'relative' }} ref={colsRef}>
-                <button
-                  className={["editor-btn", colsOpen ? "is-open" : ""].filter(Boolean).join(" ")}
-                  title="Columns"
-                  type="button"
-                  aria-haspopup="menu"
-                  aria-expanded={colsOpen}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => { setColsOpen(v => !v); setHeadingOpen(false); }}
-                >
-                  <span className="editor-icon" aria-hidden>▦</span>
-                  <span className="editor-label">Columns</span>
-                  <span className="editor-value">{String((block as any)?.columns || 1)}</span>
-                </button>
-                {colsOpen && (
-                  <div className="editor-menu" role="menu">
-                    <div className="segmented" role="group" aria-label="Columns options">
-                      {[1,2,3,4].map(n => (
-                        <button
-                          role="menuitemradio"
-                          aria-checked={n === (block as any)?.columns || (n===1 && !(block as any)?.columns)}
-                          key={n}
-                          className={["seg-btn", n === ((block as any)?.columns || 1) ? "active" : ""].filter(Boolean).join(" ")}
-                          type="button"
-                          title={`${n} column${n>1?'s':''}`}
-                          onClick={() => { setParagraphColumns(id, n); setColsOpen(false); }}
-                        >
-                          {n}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            {block?.type === 'heading' && (
-              <div style={{ position: 'relative' }} ref={headingRef}>
-                <button
-                  className={["editor-btn", headingOpen ? "is-open" : ""].filter(Boolean).join(" ")}
-                  title="Heading level"
-                  type="button"
-                  aria-haspopup="menu"
-                  aria-expanded={headingOpen}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => { setHeadingOpen(v => !v); setColsOpen(false); }}
-                >
-                  <span className="editor-icon" aria-hidden>H</span>
-                  <span className="editor-label">Level</span>
-                  <span className="editor-value">{String((block as any)?.level || 2)}</span>
-                </button>
-                {headingOpen && (
-                  <div className="editor-menu" role="menu">
-                    <div className="segmented" role="group" aria-label="Heading level">
-                      {[1,2,3].map(l => (
-                        <button
-                          role="menuitemradio"
-                          aria-checked={l === (block as any)?.level}
-                          key={l}
-                          className={["seg-btn", l === (block as any)?.level ? "active" : ""].filter(Boolean).join(" ")}
-                          type="button"
-                          title={`Heading ${l}`}
-                          onClick={() => { setHeadingLevel(id, l as 1|2|3); setHeadingOpen(false); }}
-                        >
-                          H{l}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+    <div
+      className={cn(
+        "absolute left-0 top-1 flex items-center gap-1",
+        "opacity-0 group-hover:opacity-100 transition-opacity",
+        hasAnyMenuOpen && "opacity-100"
       )}
+      style={{ transform: 'translateX(calc(-100% - 4px))' }}
+    >
+      {/* Add Button */}
+      <button
+        ref={addBtnRef}
+        type="button"
+        className={cn(
+          "w-6 h-6 flex items-center justify-center rounded",
+          "text-muted-foreground hover:text-foreground hover:bg-accent",
+          isAddMenuOpen && "bg-accent text-foreground"
+        )}
+        title="Add block"
+        onClick={() => openMenu('add', addBtnRef)}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <Plus className="w-4 h-4" />
+      </button>
 
-      {/* Right-aligned actions */}
-      <div className="bc-top-right">
-        <button 
-          className={["icon", (block as any)?.aiHidden ? "active-ai-hidden" : ""].filter(Boolean).join(" ")} 
-          title={(block as any)?.aiHidden ? 'Show to AI' : 'Hide from AI'} 
-          type="button" 
-          onClick={() => toggleAiHidden(id)}
-        >
-          {(block as any)?.aiHidden ? '🙈' : '👁️'}
-        </button>
-        <button 
-          className={["icon", (block as any)?.locked ? "active-locked" : ""].filter(Boolean).join(" ")} 
-          title={(block as any)?.locked ? 'Unlock' : 'Lock'} 
-          type="button" 
-          onClick={() => toggleLocked(id)}
-        >
-          {(block as any)?.locked ? '🔓' : '🔒'}
-        </button>
-        <button 
-          className={["icon", (block as any)?.collapsed ? "active-collapsed" : ""].filter(Boolean).join(" ")} 
-          title={(block as any)?.collapsed ? 'Expand' : 'Collapse'} 
-          type="button" 
-          onClick={() => toggleCollapsed(id)}
-        >
-          {(block as any)?.collapsed ? '▾' : '▸'}
-        </button>
-        <button className="icon danger" title="Delete" type="button" aria-label="Delete block" onClick={() => removeBlock(id)}>🗑</button>
-      </div>
-      <div className={["block-add-inline", open ? "open" : ""].filter(Boolean).join(" ")}>
-        <div className="bottom-controls">
-          <button className="icon" title="Move up" type="button" aria-label="Move block up" onClick={() => moveBlock(id, -1)}>↑</button>
-          <button
-            ref={addBtnRef}
-            className="icon add-inline-btn"
-            title="Add block"
-            type="button"
-            aria-haspopup="menu"
-            aria-expanded={open}
-            onClick={() => setOpen(v => !v)}
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowDown' && !open) {
-                setOpen(true);
-                e.preventDefault();
-              } else if (e.key === 'Escape' && open) {
-                setOpen(false);
-                e.preventDefault();
-              }
-            }}
-          >
-            ＋
-          </button>
-          <button className="icon" title="Move down" type="button" aria-label="Move block down" onClick={() => moveBlock(id, 1)}>↓</button>
+      {/* Drag Handle / Options */}
+      <button
+        ref={optsBtnRef}
+        type="button"
+        className={cn(
+          "w-6 h-6 flex items-center justify-center rounded cursor-grab",
+          "text-muted-foreground hover:text-foreground hover:bg-accent",
+          "active:cursor-grabbing",
+          isOptionsMenuOpen && "bg-accent text-foreground"
+        )}
+        title="Drag to reorder, click for options"
+        draggable
+        onClick={() => openMenu('options', optsBtnRef)}
+        onMouseDown={(e) => e.stopPropagation()}
+        onDragStart={(e) => {
+          e.dataTransfer.setData('text/plain', id);
+          e.dataTransfer.setData('application/x-block-id', id);
+          e.dataTransfer.effectAllowed = 'move';
+          closeMenu();
+        }}
+      >
+        <GripVertical className="w-4 h-4" />
+      </button>
+
+      {/* Add Block Menu */}
+      <FloatingMenu 
+        open={isAddMenuOpen} 
+        onClose={closeMenu} 
+        position={positionRef.current}
+      >
+        <div className="px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-b border-border">
+          Add Block
         </div>
-        {open && (
-          <div className="block-menu" role="menu" ref={menuRef} onKeyDown={onAddKeyDown}>
-            <button role="menuitem" onClick={() => add('paragraph')}><span className="mi">✍️</span> Text</button>
-            <button role="menuitem" onClick={() => add('heading')}><span className="mi">🔠</span> Heading</button>
-            <button role="menuitem" onClick={() => add('divider')}><span className="mi">━</span> Divider</button>
+        <div className="py-1">
+          <MenuItem icon={<Type className="w-4 h-4" />} label="Paragraph" onClick={() => handleAddBlock('paragraph')} />
+          <MenuItem icon={<Heading2 className="w-4 h-4" />} label="Heading" onClick={() => handleAddBlock('heading')} />
+          <MenuItem icon={<Minus className="w-4 h-4" />} label="Divider" onClick={() => handleAddBlock('divider')} />
+        </div>
+      </FloatingMenu>
+
+      {/* Options Menu */}
+      <FloatingMenu 
+        open={isOptionsMenuOpen} 
+        onClose={closeMenu} 
+        position={positionRef.current}
+      >
+        {/* Block Type Header */}
+        <div className="px-3 py-2 border-b border-border flex items-center gap-2">
+          {block?.type === 'paragraph' && <><Type className="w-4 h-4 text-muted-foreground" /><span className="text-sm font-medium">Paragraph</span></>}
+          {block?.type === 'heading' && <><Heading2 className="w-4 h-4 text-muted-foreground" /><span className="text-sm font-medium">Heading {(block as any)?.level || 2}</span></>}
+          {block?.type === 'divider' && <><Minus className="w-4 h-4 text-muted-foreground" /><span className="text-sm font-medium">Divider</span></>}
+        </div>
+
+        {/* Paragraph: Columns */}
+        {block?.type === 'paragraph' && (
+          <div className="px-3 py-2 border-b border-border">
+            <div className="text-[10px] font-semibold text-muted-foreground uppercase mb-2">Columns</div>
+            <div className="flex gap-1">
+              {[1, 2, 3, 4].map(n => (
+                <button
+                  key={n}
+                  type="button"
+                  className={cn(
+                    "flex-1 h-7 rounded text-xs font-medium border",
+                    n === ((block as any)?.columns || 1)
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border hover:bg-accent"
+                  )}
+                  onClick={() => { setParagraphColumns(id, n); closeMenu(); }}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
           </div>
         )}
-      </div>
+
+        {/* Heading: Level */}
+        {block?.type === 'heading' && (
+          <div className="px-3 py-2 border-b border-border">
+            <div className="text-[10px] font-semibold text-muted-foreground uppercase mb-2">Level</div>
+            <div className="flex gap-1">
+              {[1, 2, 3].map(l => (
+                <button
+                  key={l}
+                  type="button"
+                  className={cn(
+                    "flex-1 h-7 rounded text-xs font-bold border",
+                    l === ((block as any)?.level || 2)
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border hover:bg-accent"
+                  )}
+                  onClick={() => { setHeadingLevel(id, l as 1|2|3); closeMenu(); }}
+                >
+                  H{l}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Insert Below */}
+        <div className="py-1 border-b border-border">
+          <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground uppercase">Insert Below</div>
+          <MenuItem icon={<Type className="w-3.5 h-3.5" />} label="Paragraph" onClick={() => handleAddBlock('paragraph')} />
+          <MenuItem icon={<Heading2 className="w-3.5 h-3.5" />} label="Heading" onClick={() => handleAddBlock('heading')} />
+          <MenuItem icon={<Minus className="w-3.5 h-3.5" />} label="Divider" onClick={() => handleAddBlock('divider')} />
+        </div>
+
+        {/* Actions */}
+        <div className="py-1">
+          <MenuItem
+            icon={(block as any)?.aiHidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            label={(block as any)?.aiHidden ? 'Show to AI' : 'Hide from AI'}
+            onClick={() => { toggleAiHidden(id); closeMenu(); }}
+            className={(block as any)?.aiHidden ? 'text-pink-400' : ''}
+          />
+          <MenuItem
+            icon={(block as any)?.locked ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+            label={(block as any)?.locked ? 'Unlock' : 'Lock'}
+            onClick={() => { toggleLocked(id); closeMenu(); }}
+            className={(block as any)?.locked ? 'text-amber-400' : ''}
+          />
+          <MenuItem
+            icon={(block as any)?.collapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            label={(block as any)?.collapsed ? 'Expand' : 'Collapse'}
+            onClick={() => { toggleCollapsed(id); closeMenu(); }}
+          />
+          <MenuItem
+            icon={<Trash2 className="w-3.5 h-3.5" />}
+            label="Delete"
+            onClick={() => { removeBlock(id); closeMenu(); }}
+            className="text-destructive hover:bg-destructive/10"
+          />
+        </div>
+      </FloatingMenu>
     </div>
+  );
+}
+
+// Simple menu item component
+function MenuItem({ 
+  icon, 
+  label, 
+  onClick, 
+  className 
+}: { 
+  icon: React.ReactNode; 
+  label: string; 
+  onClick: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-left",
+        "hover:bg-accent transition-colors",
+        className
+      )}
+      onClick={onClick}
+    >
+      <span className="text-muted-foreground">{icon}</span>
+      <span>{label}</span>
+    </button>
   );
 }

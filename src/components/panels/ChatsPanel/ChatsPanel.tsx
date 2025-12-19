@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import './ChatsPanel.css';
 import { useEditor } from '../../../editor';
 import { createChat, deleteChat, listChats, updateChatTitle, type ChatItem } from '../../../services/chats';
 import { useChatSessions } from '../../chat/ChatSessionsContext';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 function Title({ chat }: { chat: ChatItem }) {
   const title = (chat.title || '').trim();
   if (title) return <span>{title}</span>;
   const idTail = chat.chat_id.slice(0, 8);
-  return <span className="muted">Untitled chat · {idTail}</span>;
+  return <span className="text-muted-foreground">Untitled chat · {idTail}</span>;
 }
 
 export function ChatsPanel() {
@@ -118,32 +120,38 @@ export function ChatsPanel() {
   }
 
   return (
-    <div className="chats-panel" aria-busy={loading}>
-      <div className="row" style={{ justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-        <strong>Chats</strong>
-        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-          <span className="muted">{documentId ? (loading ? 'Loading…' : `${count} total`) : 'Save your document to create chats'}</span>
-          <button className="btn" onClick={() => refresh()} disabled={loading || !documentId}>Refresh</button>
-          <button className="btn primary" onClick={onCreate} disabled={loading || !documentId}>New</button>
+    <div className="flex flex-col gap-3 h-full" aria-busy={loading}>
+      {/* Actions */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground">
+          {documentId ? (loading ? 'Loading…' : `${count} total`) : 'Save document first'}
+        </span>
+        <div className="flex items-center gap-1.5">
+          <Button variant="ghost" size="sm" onClick={() => refresh()} disabled={loading || !documentId}>
+            Refresh
+          </Button>
+          <Button size="sm" onClick={onCreate} disabled={loading || !documentId}>
+            New Chat
+          </Button>
         </div>
       </div>
 
-      <form className="search" onSubmit={(e) => e.preventDefault()}>
-        <input
-          className="input grow"
-          placeholder="Search chats by title or id"
+      <form className="flex items-center gap-2" onSubmit={(e) => e.preventDefault()}>
+        <Input
+          className="flex-1"
+          placeholder="Search chats..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           disabled={loading}
         />
         {query && (
-          <button className="btn" onClick={() => setQuery('')} type="button">Clear</button>
+          <Button variant="outline" size="sm" onClick={() => setQuery('')} type="button">Clear</Button>
         )}
       </form>
 
-      {error && <div className="error" role="alert" aria-live="polite">{error}</div>}
+      {error && <div className="text-sm text-destructive" role="alert" aria-live="polite">{error}</div>}
 
-      <div className="list" role="list">
+      <div className="space-y-2 overflow-auto" role="list">
         {filtered.map((c) => {
           const isSelected = c.chat_id === selectedChatId;
           const isRenaming = renamingId === c.chat_id;
@@ -151,7 +159,10 @@ export function ChatsPanel() {
             <div
               key={c.chat_id}
               role="listitem"
-              className={`item card${isSelected ? ' selected' : ''}`}
+              className={cn(
+                "flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors",
+                isSelected ? "bg-primary/10 border-primary" : "bg-card border-border hover:bg-accent"
+              )}
               aria-selected={isSelected}
               tabIndex={0}
               onClick={() => { setSelectedChatId(c.chat_id); setSelectedThreadId(typeof c.last_thread_id === 'number' ? c.last_thread_id : null); }}
@@ -163,13 +174,13 @@ export function ChatsPanel() {
                 }
               }}
             >
-              <div className="item-icon">💬</div>
-              <div className="item-main">
+              <div className="text-lg">💬</div>
+              <div className="flex-1 min-w-0">
                 {!isRenaming ? (
-                  <div className="item-title"><Title chat={c} /></div>
+                  <div className="text-sm font-medium truncate"><Title chat={c} /></div>
                 ) : (
-                  <input
-                    className="input"
+                  <Input
+                    className="h-7 text-sm"
                     value={renameValue}
                     onChange={(e) => setRenameValue(e.target.value)}
                     onClick={(e) => e.stopPropagation()}
@@ -180,21 +191,21 @@ export function ChatsPanel() {
                     onBlur={() => { if (renamingId === c.chat_id) commitRename(c.chat_id); }}
                   />
                 )}
-                <div className="item-meta muted">
+                <div className="text-xs text-muted-foreground">
                   {c.updated_at ? new Date(c.updated_at).toLocaleString() : '—'}
                   {typeof c.last_thread_id === 'number' ? ` · thread #${c.last_thread_id}` : ''}
                 </div>
               </div>
-              <div className="item-actions">
+              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                 {!isRenaming ? (
                   <>
-                    <button className="btn ghost" title="Rename chat" onClick={(e) => { e.stopPropagation(); startRename(c); }}>Rename</button>
-                    <button className="btn danger" title="Delete chat" onClick={(e) => { e.stopPropagation(); onDelete(c.chat_id); }}>Delete</button>
+                    <Button variant="ghost" size="sm" onClick={() => startRename(c)}>Rename</Button>
+                    <Button variant="destructive" size="sm" onClick={() => onDelete(c.chat_id)}>Delete</Button>
                   </>
                 ) : (
                   <>
-                    <button className="btn primary" title="Save title" onClick={(e) => { e.stopPropagation(); commitRename(c.chat_id); }}>Save</button>
-                    <button className="btn" title="Cancel" onClick={(e) => { e.stopPropagation(); setRenamingId(null); setRenameValue(''); }}>Cancel</button>
+                    <Button size="sm" onClick={() => commitRename(c.chat_id)}>Save</Button>
+                    <Button variant="outline" size="sm" onClick={() => { setRenamingId(null); setRenameValue(''); }}>Cancel</Button>
                   </>
                 )}
               </div>
@@ -203,27 +214,29 @@ export function ChatsPanel() {
         })}
 
         {documentId && !loading && !items.length && (
-          <div className="empty-state">
-            <div className="empty-icon">💬</div>
-            <div className="empty-title">No chats yet</div>
-            <div className="empty-text muted">Start a new session to keep a history of your assistant conversations.</div>
+          <div className="text-center py-8">
+            <div className="text-3xl mb-2">💬</div>
+            <div className="font-medium">No chats yet</div>
+            <div className="text-sm text-muted-foreground">Start a new session to keep a history of your assistant conversations.</div>
           </div>
         )}
 
         {!documentId && (
-          <div className="empty-state">
-            <div className="empty-icon">💾</div>
-            <div className="empty-title">No document ID</div>
-            <div className="empty-text muted">Create or save your document to enable chats.</div>
+          <div className="text-center py-8">
+            <div className="text-3xl mb-2">💾</div>
+            <div className="font-medium">No document ID</div>
+            <div className="text-sm text-muted-foreground">Create or save your document to enable chats.</div>
           </div>
         )}
       </div>
 
-      <div className="pager row" style={{ justifyContent: 'space-between' }}>
-        <div className="muted">Page {count ? `${Math.min(count, (page-1)*limit+1)}–${Math.min(page*limit, count)} of ${count}` : '—'}</div>
-        <div className="row" style={{ gap: 8 }}>
-          <button className="btn" onClick={() => setPage(p => Math.max(1, p-1))} disabled={!canPaginate.prev}>Prev</button>
-          <button className="btn" onClick={() => setPage(p => p+1)} disabled={!canPaginate.next}>Next</button>
+      <div className="flex items-center justify-between pt-2 border-t border-border">
+        <div className="text-xs text-muted-foreground">
+          {count ? `${Math.min(count, (page-1)*limit+1)}–${Math.min(page*limit, count)} of ${count}` : '—'}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p-1))} disabled={!canPaginate.prev}>Prev</Button>
+          <Button variant="outline" size="sm" onClick={() => setPage(p => p+1)} disabled={!canPaginate.next}>Next</Button>
         </div>
       </div>
     </div>

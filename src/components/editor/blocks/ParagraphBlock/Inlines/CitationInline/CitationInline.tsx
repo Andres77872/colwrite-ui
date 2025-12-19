@@ -1,8 +1,10 @@
-import './CitationInline.css';
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import type { ParagraphChild } from '../../../../../../editor';
 import { serializeEditableHtml } from '../../../../../../components/common/Editable/Editable';
 import { useEditor } from '../../../../../../editor';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 export function CitationInline({
   blockId,
@@ -122,40 +124,65 @@ export function CitationInline({
   };
 
   return (
-    <span ref={rootRef} className="citation-inline" role="group" aria-label="Citation" contentEditable={false as any} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-      <button type="button" className="citation-pill" title="Edit citation" onMouseDown={(e) => { e.preventDefault(); setOpen(v => !v); }} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v); } } }>
-        <span className="citation-label">{pillText}</span>
-        <span className="caret" aria-hidden>▾</span>
+    <span 
+      ref={rootRef} 
+      className="citation-inline inline-block align-baseline relative" 
+      role="group" 
+      aria-label="Citation" 
+      contentEditable={false as any} 
+      onMouseDown={(e) => e.stopPropagation()} 
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button 
+        type="button" 
+        className={cn(
+          "inline-flex items-center gap-1 px-1.5 py-0.5 text-sm",
+          "bg-emerald-950/40 text-emerald-400 border border-emerald-700/50 rounded",
+          "hover:bg-emerald-900/50 transition-colors cursor-pointer"
+        )}
+        title="Edit citation" 
+        onMouseDown={(e) => { e.preventDefault(); setOpen(v => !v); }} 
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v); } }}
+      >
+        <span>{pillText}</span>
+        <span className="text-xs opacity-60" aria-hidden>▾</span>
       </button>
       {open && (
-        <div className="citation-popover" onMouseDown={(e) => e.stopPropagation()}>
-          <div className="row">
-            <label className="lab">Keys</label>
-            <input className="inp" type="text" placeholder="smith2020, doe2021" value={keysStr} onChange={(e) => setKeysStr(e.target.value)} />
+        <div 
+          className="absolute left-0 top-full mt-1 z-50 bg-popover border border-border rounded-lg shadow-lg p-3 min-w-[240px]" 
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs text-muted-foreground w-16 shrink-0">Keys</label>
+            <Input className="h-8 text-sm" type="text" placeholder="smith2020, doe2021" value={keysStr} onChange={(e) => setKeysStr(e.target.value)} />
           </div>
-          <div className="row">
-            <label className="lab">Style</label>
-            <select className="inp" value={style} onChange={(e) => setStyle(e.target.value as any)}>
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs text-muted-foreground w-16 shrink-0">Style</label>
+            <select 
+              className="flex-1 h-8 px-2 text-sm border border-input rounded-md bg-background"
+              value={style} 
+              onChange={(e) => setStyle(e.target.value as any)}
+            >
               <option value="numeric">Numeric</option>
               <option value="author-year">Author–year</option>
               <option value="ieee">IEEE</option>
             </select>
           </div>
-          <div className="row">
-            <label className="lab">Prefix</label>
-            <input className="inp" type="text" placeholder="see" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs text-muted-foreground w-16 shrink-0">Prefix</label>
+            <Input className="h-8 text-sm" type="text" placeholder="see" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
           </div>
-          <div className="row">
-            <label className="lab">Locator</label>
-            <input className="inp" type="text" placeholder="p. 12" value={locator} onChange={(e) => setLocator(e.target.value)} />
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs text-muted-foreground w-16 shrink-0">Locator</label>
+            <Input className="h-8 text-sm" type="text" placeholder="p. 12" value={locator} onChange={(e) => setLocator(e.target.value)} />
           </div>
-          <div className="row">
-            <label className="lab">Suffix</label>
-            <input className="inp" type="text" placeholder="ch. 2" value={suffix} onChange={(e) => setSuffix(e.target.value)} />
+          <div className="flex items-center gap-2 mb-3">
+            <label className="text-xs text-muted-foreground w-16 shrink-0">Suffix</label>
+            <Input className="h-8 text-sm" type="text" placeholder="ch. 2" value={suffix} onChange={(e) => setSuffix(e.target.value)} />
           </div>
-          <div className="actions">
-            <button type="button" className="btn danger" title="Remove citation" onMouseDown={onRemove}>Remove</button>
-            <button type="button" className="btn" title="Close" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</button>
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="destructive" size="sm" onMouseDown={onRemove}>Remove</Button>
+            <Button type="button" variant="outline" size="sm" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</Button>
           </div>
         </div>
       )}

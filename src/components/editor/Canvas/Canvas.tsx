@@ -1,4 +1,5 @@
-import './Canvas.css';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import { DocumentHeader } from '../DocumentChrome';
 import { useEditor } from '../../../editor';
 import { Fragment, useRef, useState } from 'react';
@@ -9,9 +10,95 @@ import { BlockControls } from '../BlockControls';
 import { ParagraphBlock } from '../blocks/ParagraphBlock';
 import { HeadingBlock } from '../blocks/HeadingBlock';
 import { DividerBlock } from '../blocks/DividerBlock';
+import { Plus, ChevronRight, Type, Heading2, Minus } from 'lucide-react';
+
+// Add block bar component at the bottom of the editor
+function AddBlockBar({ 
+  onAdd, 
+  insertIndex, 
+  blocksLength, 
+  onDragOver 
+}: { 
+  onAdd: (type: 'paragraph' | 'heading' | 'divider') => void;
+  insertIndex: number | null;
+  blocksLength: number;
+  onDragOver: (e: React.DragEvent) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close menu on outside click
+  useState(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  });
+
+  return (
+    <div
+      ref={ref}
+      className={cn(
+        "relative py-4 pl-10",
+        insertIndex === blocksLength && "before:content-[''] before:absolute before:left-10 before:right-0 before:top-2 before:h-0.5 before:bg-primary before:rounded-full"
+      )}
+      onDragOver={onDragOver}
+    >
+      <div className="relative inline-block">
+        <button
+          className={cn(
+            "flex items-center gap-2 text-muted-foreground text-sm",
+            "hover:text-foreground px-3 py-1.5 rounded-md",
+            "border border-transparent hover:border-border hover:bg-accent/50",
+            "transition-colors",
+            menuOpen && "border-border bg-accent text-foreground"
+          )}
+          onClick={() => setMenuOpen(v => !v)}
+        >
+          <Plus className="h-4 w-4" />
+          <span>Add a block</span>
+        </button>
+
+        {menuOpen && (
+          <div className={cn(
+            "absolute top-full left-0 mt-1 z-50",
+            "bg-popover border border-border rounded-lg shadow-xl",
+            "py-1 min-w-[180px]",
+            "animate-in fade-in-0 zoom-in-95 duration-100"
+          )}>
+            <button
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left hover:bg-accent"
+              onClick={() => { onAdd('paragraph'); setMenuOpen(false); }}
+            >
+              <Type className="h-4 w-4 text-muted-foreground" />
+              <span>Paragraph</span>
+            </button>
+            <button
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left hover:bg-accent"
+              onClick={() => { onAdd('heading'); setMenuOpen(false); }}
+            >
+              <Heading2 className="h-4 w-4 text-muted-foreground" />
+              <span>Heading</span>
+            </button>
+            <button
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left hover:bg-accent"
+              onClick={() => { onAdd('divider'); setMenuOpen(false); }}
+            >
+              <Minus className="h-4 w-4 text-muted-foreground" />
+              <span>Divider</span>
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function Canvas() {
-  const { blocks, activeId, setActive, reorderBlock, addBlockAtStart, refs, updateHtml, documentId, createRemote, setFromJSON, hasAnyRemoteDocs } = useEditor();
+  const { blocks, activeId, setActive, reorderBlock, addBlockAtStart, addBlockAfter, refs, updateHtml, documentId, createRemote, setFromJSON, hasAnyRemoteDocs } = useEditor();
   const [overId, setOverId] = useState<string | null>(null);
   const [overPos, setOverPos] = useState<'before' | 'after' | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -40,7 +127,6 @@ export function Canvas() {
     setInsertIndex(pos === 'before' ? idx : idx + 1);
   };
 
-
   const updateIndicatorFromPoint = (y: number) => {
     const root = containerRef.current;
     if (!root) return;
@@ -67,14 +153,12 @@ export function Canvas() {
       }
     }
     if (!updated) {
-      // Below the last row -> show end dropzone
       setOverId(null);
       setOverPos(null);
       setInsertIndex(rows.length);
     }
   };
 
-  // Build a gentle intro document with a few hints
   const buildIntroDoc = (): Doc => ({
     version: 1,
     name: 'Welcome to ColWrite',
@@ -111,24 +195,21 @@ export function Canvas() {
 
   return (
     <div
-      className="canvas"
+      className="canvas min-h-full flex flex-col outline-none"
       ref={containerRef}
       tabIndex={0}
       onDragEnd={clearDnd}
       onDragOverCapture={(e) => {
-        // Allow dropping anywhere on the canvas for our block drag
         if (Array.from(e.dataTransfer.types || []).includes('application/x-block-id')) {
           e.preventDefault();
           updateIndicatorFromPoint(e.clientY);
         }
       }}
       onMouseDown={(e) => {
-        // When showing landing, ignore clicks
         if (showLanding) return;
-        // When empty, allow clicking anywhere on the canvas background to enable keyboard capture
         if (blocks.length === 0) {
           const target = e.target as HTMLElement | null;
-          const insideUi = !!target?.closest?.('.empty-card, .btn, .floating-toolbar, .slash-menu');
+          const insideUi = !!target?.closest?.('.empty-card, button, .floating-toolbar, .slash-menu');
           if (!insideUi) {
             (e.currentTarget as HTMLDivElement).focus();
           }
@@ -181,137 +262,163 @@ export function Canvas() {
       }}
     >
       {isCheckingDocs ? (
-        <div className="canvas-landing">
-          <div className="landing-card">
-            <div className="muted">Preparing your workspace…</div>
+        <div className="flex justify-center pt-12 px-4 pb-4">
+          <div className="max-w-[720px] w-full border border-dashed border-border rounded-lg bg-accent p-6 text-center">
+            <div className="text-muted-foreground">Preparing your workspace…</div>
           </div>
         </div>
       ) : showLanding ? (
-        <div className="canvas-landing">
-          <div className="landing-card">
-            <div className="row" style={{ alignItems: 'center', gap: 'var(--sp-3)' }}>
-              <div className="brand-logo" aria-hidden>CW</div>
+        <div className="flex justify-center pt-12 px-4 pb-4">
+          <div className="max-w-[720px] w-full border border-dashed border-border rounded-lg bg-accent p-6">
+            <div className="flex items-center gap-3">
+              <div className="w-7 h-7 rounded-md grid place-items-center bg-gradient-to-br from-primary to-primary/80 text-white font-bold text-sm">
+                CW
+              </div>
               <div>
-                <div className="brand-title" style={{ fontSize: '20px' }}>ColWrite</div>
-                <div className="muted">Assistant writer for arXiv papers</div>
+                <div className="font-bold text-xl">ColWrite</div>
+                <div className="text-muted-foreground">Assistant writer for arXiv papers</div>
               </div>
             </div>
-            <div className="stack" style={{ marginTop: 'var(--sp-4)' }}>
+            <div className="flex flex-col gap-3 mt-4">
               <p>
                 Create your first document to get started. ColWrite combines a clean canvas with an AI assistant and quick insert commands.
               </p>
-              <ul className="landing-features">
-                <li>📝 Block-based editor with “/” commands</li>
+              <ul className="list-none space-y-1 text-sm">
+                <li>📝 Block-based editor with "/" commands</li>
                 <li>🤖 Inline Assistant for outlines, rewrites, and summaries</li>
                 <li>🔗 Citations and references support</li>
                 <li>∑ Equations and simple graphs</li>
                 <li>💾 Autosave and versioned remote storage</li>
               </ul>
             </div>
-            <div className="row" style={{ marginTop: 'var(--sp-4)', gap: 8, flexWrap: 'wrap' }}>
-              <button className="btn primary" onClick={createFirstDoc} disabled={creating}>
+            <div className="flex gap-2 flex-wrap mt-4">
+              <Button onClick={createFirstDoc} disabled={creating}>
                 {creating ? 'Creating…' : 'Create your first document'}
-              </button>
-              <button className="btn" onClick={startBlank} disabled={creating}>Start blank</button>
+              </Button>
+              <Button variant="outline" onClick={startBlank} disabled={creating}>Start blank</Button>
             </div>
           </div>
         </div>
       ) : (
-        <>
+        <div className="document-container max-w-[800px] w-full mx-auto px-4">
           <DocumentHeader />
+          
           {blocks.length === 0 && (
-            <div className="empty-doc">
-              <div className="empty-card">
-                <div className="empty-title">Start writing</div>
-                <div className="empty-sub">Add your first block to begin. You can always use '/' to open the command menu.</div>
-                <div className="empty-actions">
-                  <button
-                    className="btn primary"
+            <div className="py-8">
+              <div className="empty-card border border-dashed border-border rounded-lg bg-accent/50 p-8 text-center">
+                <h3 className="font-semibold text-lg text-foreground mb-2">Start writing</h3>
+                <p className="text-muted-foreground text-sm mb-6">
+                  Add your first block to begin. Use '/' to open the command menu.
+                </p>
+                <div className="flex gap-3 justify-center flex-wrap">
+                  <Button
                     onClick={() => {
                       const id = addBlockAtStart('paragraph');
                       queueMicrotask(() => refs.current[id]?.focus());
                     }}
-                  >New text block</button>
-                  <button
-                    className="btn"
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    New text block
+                  </Button>
+                  <Button
+                    variant="outline"
                     onClick={() => {
                       const id = addBlockAtStart('heading');
                       queueMicrotask(() => refs.current[id]?.focus());
                     }}
-                  >Add heading</button>
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      addBlockAtStart('divider');
-                    }}
-                  >Insert divider</button>
+                  >Add heading</Button>
                 </div>
-                <div className="empty-hint">Tip: Press '/' inside a text block for quick actions and inserts.</div>
               </div>
             </div>
           )}
-      {blocks.map((b, i) => {
-        const isCollapsed = (b as any).collapsed === true;
-        const isAiHidden = (b as any).aiHidden === true;
-        const isLocked = (b as any).locked === true;
-        const classes = [
-          'row block-row',
-          b.id === activeId ? 'active' : '',
-          isCollapsed ? 'collapsed' : '',
-          isAiHidden ? 'ai-hidden' : '',
-          isLocked ? 'locked' : '',
-          overId === b.id && overPos === 'before' ? 'drag-over-top' : '',
-          overId === b.id && overPos === 'after' ? 'drag-over-bottom' : '',
-        ].filter(Boolean).join(' ');
-        return (
-          <Fragment key={b.id}>
-          {insertIndex === i && <div className="dnd-insertion" />}
-          <div
-            className={classes}
-            data-block-id={b.id}
-            onClick={() => setActive(b.id)}
-            onDragEnter={(e) => handleDragOver(e as unknown as DragEvent<HTMLDivElement>, i)}
-            onDragOver={(e) => handleDragOver(e, i)}
-          >
-            <BlockControls id={b.id} />
-            {isCollapsed ? (
-              <div className="grow">
-                <div className="block-collapsed">
-                  <span className="bc-arrow">▸</span>
-                  <span className="bc-label">
-                    {b.type === 'paragraph' ? 'Paragraph' : b.type === 'heading' ? 'Heading' : 'Divider'}
-                  </span>
-                  {('html' in b) && (b as any).html ? (
-                    <span className="bc-preview" dangerouslySetInnerHTML={{ __html: ((b as any).html || '').replace(/<[^>]*>/g, '').slice(0, 60) }} />
-                  ) : null}
-                </div>
-              </div>
-            ) : (
-              <div className="grow">
-                {b.type === 'paragraph' && <ParagraphBlock block={b} />}
-                {b.type === 'heading' && <HeadingBlock block={b} />}
-                {b.type === 'divider' && <DividerBlock />}
-              </div>
-            )}
+
+          {/* Blocks container */}
+          <div className="blocks-container py-4">
+            {blocks.map((b, i) => {
+              const isCollapsed = (b as any).collapsed === true;
+              const isAiHidden = (b as any).aiHidden === true;
+              const isLocked = (b as any).locked === true;
+              return (
+                <Fragment key={b.id}>
+                  {insertIndex === i && <div className="h-0.5 bg-primary rounded-full my-1 ml-8" />}
+                  <div
+                    className={cn(
+                      "block-row group relative pl-10",
+                      "py-1 pr-2",
+                      "rounded-sm transition-colors duration-75",
+                      "hover:bg-accent/20",
+                      b.id === activeId && "bg-primary/5",
+                      isCollapsed && "bg-muted/20",
+                      isAiHidden && "bg-pink-950/10 border-l-2 border-pink-500/50",
+                      isLocked && !isAiHidden && "bg-amber-950/10 border-l-2 border-amber-500/50",
+                      isAiHidden && isLocked && "bg-red-950/10 border-l-2 border-red-500/50",
+                      overId === b.id && overPos === 'before' && "before:content-[''] before:absolute before:left-8 before:right-0 before:-top-0.5 before:h-0.5 before:bg-primary before:rounded-full",
+                      overId === b.id && overPos === 'after' && "after:content-[''] after:absolute after:left-8 after:right-0 after:-bottom-0.5 after:h-0.5 after:bg-primary after:rounded-full",
+                    )}
+                    data-block-id={b.id}
+                    onClick={() => setActive(b.id)}
+                    onDragEnter={(e) => handleDragOver(e as unknown as DragEvent<HTMLDivElement>, i)}
+                    onDragOver={(e) => handleDragOver(e, i)}
+                  >
+                    {/* Block controls - positioned in left gutter */}
+                    <BlockControls id={b.id} />
+
+                    {/* Block content */}
+                    <div className="block-content w-full min-h-[1.5rem]">
+                      {isCollapsed ? (
+                        <div className={cn(
+                          "inline-flex items-center gap-2 text-muted-foreground text-sm",
+                          "px-3 py-1.5 rounded bg-card/60 border border-border/50",
+                          "hover:bg-card hover:border-border cursor-pointer"
+                        )}>
+                          <ChevronRight className="h-3 w-3" />
+                          <span className="font-medium text-foreground/80 text-[13px]">
+                            {b.type === 'paragraph' ? 'Paragraph' : b.type === 'heading' ? 'Heading' : 'Divider'}
+                          </span>
+                          {('html' in b) && (b as any).html && (
+                            <span className="opacity-60 max-w-[400px] truncate text-[13px]" dangerouslySetInnerHTML={{ __html: ((b as any).html || '').replace(/<[^>]*>/g, '').slice(0, 50) }} />
+                          )}
+                        </div>
+                      ) : (
+                        <>
+                          {b.type === 'paragraph' && <ParagraphBlock block={b} />}
+                          {b.type === 'heading' && <HeadingBlock block={b} />}
+                          {b.type === 'divider' && <DividerBlock />}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </Fragment>
+              );
+            })}
           </div>
-          </Fragment>
-        );
-      })}
-          {/* Tail dropzone to allow dropping at the very end */}
-          <div
-            className={["dnd-tail", insertIndex === blocks.length ? 'active' : ''].join(' ')}
-            onDragOver={(e) => {
-              const types = Array.from(e.dataTransfer.types || []);
-              const isBlockDrag = types.includes('application/x-block-id') || types.includes('text/plain');
-              if (!isBlockDrag) return;
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-              setOverId(null);
-              setOverPos(null);
-              setInsertIndex(blocks.length);
-            }}
-          />
-        </>
+
+          {/* Bottom add block area */}
+          {blocks.length > 0 && (
+            <AddBlockBar 
+              onAdd={(type) => {
+                const lastBlock = blocks[blocks.length - 1];
+                const id = addBlockAfter(lastBlock.id, type);
+                queueMicrotask(() => refs.current[id]?.focus());
+              }}
+              insertIndex={insertIndex}
+              blocksLength={blocks.length}
+              onDragOver={(e) => {
+                const types = Array.from(e.dataTransfer.types || []);
+                const isBlockDrag = types.includes('application/x-block-id') || types.includes('text/plain');
+                if (!isBlockDrag) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                setOverId(null);
+                setOverPos(null);
+                setInsertIndex(blocks.length);
+              }}
+            />
+          )}
+
+          {/* Bottom padding for scrolling */}
+          <div className="h-32" />
+        </div>
       )}
     </div>
   );

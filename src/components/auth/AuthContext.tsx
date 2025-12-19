@@ -1,8 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { login, setSessionTokenCookie, clearSessionTokenCookie, UNAUTHORIZED_EVENT } from '../../services';
-// Reuse modal styles from Topbar for the auth dialog
-import '../layout/Topbar/Topbar.css';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 export type User = { name: string; email: string };
 
@@ -128,51 +129,83 @@ function AuthDialog({ onClose, onSuccess }: { onClose: () => void; onSuccess: ()
   };
 
   return createPortal((
-    <div className="auth-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="auth-modal card" onClick={(e) => e.stopPropagation()}>
-        <div className="auth-head">
-          <div className="brand-logo">CW</div>
-          <div className="brand-title">Welcome to ColWrite</div>
+    <div 
+      className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4" 
+      role="dialog" 
+      aria-modal="true" 
+      onClick={onClose}
+    >
+      <div 
+        className="bg-card border border-border rounded-lg shadow-lg max-w-md w-full p-6" 
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 rounded-md grid place-items-center bg-gradient-to-br from-primary to-primary/80 text-white font-bold text-lg">
+            CW
+          </div>
+          <div className="text-xl font-semibold">Welcome to ColWrite</div>
         </div>
-        <div className="auth-tabs" role="tablist" aria-label="Authentication">
-          <button role="tab" aria-selected={mode === 'signin'} className={`auth-tab${mode === 'signin' ? ' active' : ''}`} onClick={() => setMode('signin')}>Sign in</button>
-          <button role="tab" aria-selected={mode === 'register'} className={`auth-tab${mode === 'register' ? ' active' : ''}`} onClick={() => setMode('register')}>Create account</button>
+        <div className="flex border-b border-border mb-4" role="tablist" aria-label="Authentication">
+          <button 
+            role="tab" 
+            aria-selected={mode === 'signin'} 
+            className={cn(
+              "px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+              mode === 'signin' ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+            )} 
+            onClick={() => setMode('signin')}
+          >
+            Sign in
+          </button>
+          <button 
+            role="tab" 
+            aria-selected={mode === 'register'} 
+            className={cn(
+              "px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+              mode === 'register' ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+            )} 
+            onClick={() => setMode('register')}
+          >
+            Create account
+          </button>
         </div>
 
-        <form className="stack" onSubmit={submit}>
+        <form className="flex flex-col gap-4" onSubmit={submit}>
           {mode === 'register' && (
-            <label className="stack">
-              <span className="muted">Name</span>
-              <input className="input" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ada Lovelace" />
+            <label className="flex flex-col gap-1.5">
+              <span className="text-sm text-muted-foreground">Name</span>
+              <Input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ada Lovelace" />
             </label>
           )}
           {mode === 'signin' ? (
             <>
-              <label className="stack">
-                <span className="muted">Username or email</span>
-                <input className="input" required type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="you@uni.edu or username" />
+              <label className="flex flex-col gap-1.5">
+                <span className="text-sm text-muted-foreground">Username or email</span>
+                <Input required type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="you@uni.edu or username" />
               </label>
-              <label className="stack">
-                <span className="muted">Password</span>
-                <input className="input" required type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+              <label className="flex flex-col gap-1.5">
+                <span className="text-sm text-muted-foreground">Password</span>
+                <Input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
               </label>
             </>
           ) : (
-            <label className="stack">
-              <span className="muted">Email</span>
-              <input className="input" required type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@uni.edu" />
+            <label className="flex flex-col gap-1.5">
+              <span className="text-sm text-muted-foreground">Email</span>
+              <Input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@uni.edu" />
             </label>
           )}
-          {error && <div className="error-text">{error}</div>}
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
-            <button type="button" className="btn" onClick={onClose} disabled={loading}>Cancel</button>
-            <button type="submit" className="btn primary" disabled={loading}>{loading ? 'Please wait…' : (mode === 'signin' ? 'Continue' : 'Create account')}</button>
+          {error && <div className="text-sm text-destructive">{error}</div>}
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+            <Button type="submit" disabled={loading}>
+              {loading ? 'Please wait…' : (mode === 'signin' ? 'Continue' : 'Create account')}
+            </Button>
           </div>
         </form>
-        <div className="muted" style={{ fontSize: '12px', marginTop: 6 }}>By continuing you agree to the Terms and Privacy Policy.</div>
-        <div className="alpha-notice">
-          <div className="alpha-title">Alpha Version Notice</div>
-          <div className="alpha-text">This project is currently in alpha development. Login and registration functionality may change in future updates. User accounts and data may be deleted without prior notification during development phases.</div>
+        <div className="text-xs text-muted-foreground mt-3">By continuing you agree to the Terms and Privacy Policy.</div>
+        <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-md">
+          <div className="text-sm font-medium text-amber-800">Alpha Version Notice</div>
+          <div className="text-xs text-amber-700 mt-1">This project is currently in alpha development. Login and registration functionality may change in future updates. User accounts and data may be deleted without prior notification during development phases.</div>
         </div>
       </div>
     </div>

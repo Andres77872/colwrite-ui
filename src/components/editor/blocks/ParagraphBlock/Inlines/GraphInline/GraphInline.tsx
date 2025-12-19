@@ -1,8 +1,10 @@
-import './GraphInline.css';
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import type { ParagraphChild } from '../../../../../../editor';
 import { serializeEditableHtml } from '../../../../../../components/common/Editable/Editable';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 export function GraphInline({
   blockId,
@@ -280,16 +282,16 @@ export function GraphInline({
     const stroke = colors[0] || '#6366f1';
     return (
       <svg className="figure-svg" width={width} height={height} aria-label="Graph">
-        <rect x="0" y="0" width={width} height={height} fill="#fff" />
+        <rect x="0" y="0" width={width} height={height} fill="transparent" />
         {/* grid */}
         {ticks.map((t, i) => (
-          <line key={`g${i}`} x1={ml} y1={Math.round(tickY(t))} x2={width - mr} y2={Math.round(tickY(t))} stroke="rgba(0,0,0,0.06)" strokeWidth="1" />
+          <line key={`g${i}`} x1={ml} y1={Math.round(tickY(t))} x2={width - mr} y2={Math.round(tickY(t))} stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
         ))}
         {/* axes */}
-        <line x1={ml} y1={mt} x2={ml} y2={height - mb} stroke="#333" strokeWidth="1" />
-        <line x1={ml} y1={height - mb} x2={width - mr} y2={height - mb} stroke="#333" strokeWidth="1" />
+        <line x1={ml} y1={mt} x2={ml} y2={height - mb} stroke="rgba(255,255,255,0.4)" strokeWidth="1" />
+        <line x1={ml} y1={height - mb} x2={width - mr} y2={height - mb} stroke="rgba(255,255,255,0.4)" strokeWidth="1" />
         {/* zero line */}
-        {minV < 0 && maxV > 0 ? <line x1={ml} y1={Math.round(zeroY)} x2={width - mr} y2={Math.round(zeroY)} stroke="rgba(0,0,0,0.3)" strokeDasharray="4 3" /> : null}
+        {minV < 0 && maxV > 0 ? <line x1={ml} y1={Math.round(zeroY)} x2={width - mr} y2={Math.round(zeroY)} stroke="rgba(255,255,255,0.3)" strokeDasharray="4 3" /> : null}
         {/* series */}
         {kind === 'bar' ? barRects : (
           <polyline fill="none" stroke={stroke} strokeWidth="2" points={linePts} strokeLinejoin="round" strokeLinecap="round" />
@@ -297,11 +299,11 @@ export function GraphInline({
         {/* x tick labels if labels present */}
         {labels.length ? labels.map((lab, i) => {
           const x = ml + i * step + step / 2;
-          return <text key={`xl${i}`} x={Math.round(x)} y={height - 10} textAnchor="middle" fontSize="11" fill="#555">{lab}</text>;
+          return <text key={`xl${i}`} x={Math.round(x)} y={height - 10} textAnchor="middle" fontSize="11" fill="rgba(255,255,255,0.6)">{lab}</text>;
         }) : null}
         {/* y axis labels */}
         {ticks.map((t, i) => (
-          <text key={`yl${i}`} x={ml - 6} y={Math.round(tickY(t))} textAnchor="end" dy="0.35em" fontSize="11" fill="#555">{Number(t.toFixed(2)).toString()}</text>
+          <text key={`yl${i}`} x={ml - 6} y={Math.round(tickY(t))} textAnchor="end" dy="0.35em" fontSize="11" fill="rgba(255,255,255,0.6)">{Number(t.toFixed(2)).toString()}</text>
         ))}
       </svg>
     );
@@ -334,12 +336,12 @@ export function GraphInline({
     const legend = values.map((_, i) => (
       <g key={`lg${i}`} transform={`translate(${legendX}, ${legendY + i * rowH})`}>
         <rect x={0} y={-10} width={12} height={12} fill={colors[i] || '#6366f1'} rx={2} ry={2} />
-        <text x={18} y={0} fontSize="12" fill="#555" alignmentBaseline="middle">{labels[i] || `Slice ${i + 1}`}</text>
+        <text x={18} y={0} fontSize="12" fill="rgba(255,255,255,0.7)" alignmentBaseline="middle">{labels[i] || `Slice ${i + 1}`}</text>
       </g>
     ));
     return (
       <svg className="figure-svg" width={width} height={height} aria-label="Graph">
-        <rect x="0" y="0" width={width} height={height} fill="#fff" />
+        <rect x="0" y="0" width={width} height={height} fill="transparent" />
         {segments}
         {legend}
       </svg>
@@ -349,7 +351,7 @@ export function GraphInline({
   return (
     <span
       ref={rootRef}
-      className="graph-inline"
+      className="graph-inline block my-3 relative"
       role="group"
       aria-label="Graph"
       contentEditable={false as any}
@@ -357,66 +359,82 @@ export function GraphInline({
       onClick={(e) => e.stopPropagation()}
     >
       <figure
-        className="graph-figure"
+        className={cn(
+          "bg-card border border-border rounded-lg p-4 cursor-pointer",
+          "hover:border-primary/50 hover:shadow-md transition-all",
+          "flex flex-col items-center"
+        )}
         role="button"
         tabIndex={0}
         title="Edit graph"
         onMouseDown={(e) => { e.preventDefault(); setOpen(v => !v); }}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v); } }}
       >
-        <div className="chart-box" aria-hidden>
+        <div className="w-full max-w-[420px]" aria-hidden>
           {chartReady ? (
             <canvas ref={pillCanvasRef} width={420} height={240} />
           ) : (kind === 'pie' ? figureFallbackPie : figureFallbackBarLine) || null}
         </div>
-        {(title || labels.length) && (
-          <figcaption className="caption">{title || `${capKind} (${values.length})`}</figcaption>
+        {(title || labels.length > 0) && (
+          <figcaption className="mt-2 text-sm text-muted-foreground text-center">
+            {title || `${capKind} (${values.length})`}
+          </figcaption>
         )}
       </figure>
       {open && (
-        <div className="graph-editor" onMouseDown={(e) => e.stopPropagation()}>
-          <div className="row">
-            <label className="lab">Type</label>
-            <select className="inp" value={kind} onChange={(e) => setKind(e.target.value as any)}>
+        <div 
+          className="absolute left-0 top-full mt-2 z-50 bg-popover border border-border rounded-lg shadow-lg p-4 min-w-[320px]" 
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs text-muted-foreground w-16 shrink-0">Type</label>
+            <select 
+              className="flex-1 h-8 px-2 text-sm border border-input rounded-md bg-background"
+              value={kind} 
+              onChange={(e) => setKind(e.target.value as any)}
+            >
               <option value="bar">Bar</option>
               <option value="line">Line</option>
               <option value="pie">Pie</option>
             </select>
           </div>
-          <div className="row">
-            <label className="lab">Values</label>
-            <input
-              className="inp"
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs text-muted-foreground w-16 shrink-0">Values</label>
+            <Input
+              className="h-8 text-sm"
               type="text"
               placeholder="1, 2, 3"
               value={valuesStr}
               onChange={(e) => setValuesStr(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setOpen(false); } if (e.key === 'Escape') { e.preventDefault(); const init = initialRef.current; setKind(init.kind as any); setValuesStr(init.valuesStr); setLabelsStr(init.labelsStr); setColorsStr(init.colorsStr); setTitle(init.title); setOpen(false); } }}
+              onKeyDown={(e) => { 
+                if (e.key === 'Enter') { e.preventDefault(); setOpen(false); } 
+                if (e.key === 'Escape') { e.preventDefault(); const init = initialRef.current; setKind(init.kind as any); setValuesStr(init.valuesStr); setLabelsStr(init.labelsStr); setColorsStr(init.colorsStr); setTitle(init.title); setOpen(false); } 
+              }}
             />
           </div>
-          <div className="row">
-            <label className="lab">Labels</label>
-            <input className="inp" type="text" placeholder="A, B, C" value={labelsStr} onChange={(e) => setLabelsStr(e.target.value)} />
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs text-muted-foreground w-16 shrink-0">Labels</label>
+            <Input className="h-8 text-sm" type="text" placeholder="A, B, C" value={labelsStr} onChange={(e) => setLabelsStr(e.target.value)} />
           </div>
-          <div className="row">
-            <label className="lab">Colors</label>
-            <input className="inp" type="text" placeholder="#6366f1, #22c55e" value={colorsStr} onChange={(e) => setColorsStr(e.target.value)} />
+          <div className="flex items-center gap-2 mb-2">
+            <label className="text-xs text-muted-foreground w-16 shrink-0">Colors</label>
+            <Input className="h-8 text-sm" type="text" placeholder="#6366f1, #22c55e" value={colorsStr} onChange={(e) => setColorsStr(e.target.value)} />
           </div>
-          <div className="row">
-            <label className="lab">Title</label>
-            <input className="inp" type="text" placeholder="Optional" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <div className="flex items-center gap-2 mb-3">
+            <label className="text-xs text-muted-foreground w-16 shrink-0">Title</label>
+            <Input className="h-8 text-sm" type="text" placeholder="Optional" value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
-          <div className="preview">
+          <div className="p-2 bg-muted rounded-md flex items-center justify-center mb-3 min-h-[80px]">
             {chartReady ? (
               <canvas ref={canvasRef} width={160} height={80} />
             ) : (
-              fallbackBars || <div className="placeholder">Graph preview</div>
+              fallbackBars || <div className="text-muted-foreground text-sm">Graph preview</div>
             )}
           </div>
-          {error && <div className="error" role="alert">{error}</div>}
-          <div className="actions">
-            <button type="button" className="btn danger" title="Remove graph" onMouseDown={onRemove}>Remove</button>
-            <button type="button" className="btn" title="Close" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</button>
+          {error && <div className="text-sm text-destructive mb-2" role="alert">{error}</div>}
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="destructive" size="sm" onMouseDown={onRemove}>Remove</Button>
+            <Button type="button" variant="outline" size="sm" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</Button>
           </div>
         </div>
       )}
