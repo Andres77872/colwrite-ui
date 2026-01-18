@@ -1,0 +1,517 @@
+@import "tailwindcss";
+
+/* ============================================
+   COLWRITE DESIGN SYSTEM - TAILWIND CSS 4
+   Modern Dark Theme
+   ============================================ */
+
+@theme {
+  /* ----------------------------------------
+   * COLORS - Modern Dark Theme
+   * Refined dark palette with subtle blue undertones
+   * ---------------------------------------- */
+  
+  /* Background colors - deep dark with subtle blue tint */
+  --color-background: #0a0a0f;
+  --color-foreground: #f0f2f5;
+  
+  /* Card/Panel colors - elevated surfaces */
+  --color-card: #12121a;
+  --color-card-foreground: #f0f2f5;
+  
+  /* Popover colors - slightly elevated */
+  --color-popover: #16161f;
+  --color-popover-foreground: #f0f2f5;
+  
+  /* Primary (accent) colors - vibrant blue */
+  --color-primary: #6366f1;
+  --color-primary-foreground: #ffffff;
+  
+  /* Secondary colors - subtle surfaces */
+  --color-secondary: #1e1e2a;
+  --color-secondary-foreground: #e2e4e9;
+  
+  /* Muted colors - subdued elements */
+  --color-muted: #1a1a24;
+  --color-muted-foreground: #71717a;
+  
+  /* Accent hover colors - interactive highlight */
+  --color-accent: #1f1f2e;
+  --color-accent-foreground: #f0f2f5;
+  
+  /* Destructive (danger) colors */
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+  
+  /* Border and input - subtle boundaries */
+  --color-border: #2a2a3a;
+  --color-input: #1e1e2a;
+  --color-ring: #6366f1;
+  
+  /* Additional semantic colors */
+  --color-success: #22c55e;
+  --color-success-foreground: #ffffff;
+  --color-warning: #f59e0b;
+  --color-warning-foreground: #000000;
+  --color-info: #0ea5e9;
+  --color-info-foreground: #ffffff;
+  
+  /* Extended palette for specific use cases */
+  --color-elevated: #1a1a24;
+  --color-accent-dark: #4f46e5;
+  
+  /* Dark mode specific - block highlights */
+  --color-block-hover: #14141e;
+  --color-block-active: #181825;
+  --color-block-collapsed: #111118;
+  
+  /* ----------------------------------------
+   * SPACING (4px base grid)
+   * ---------------------------------------- */
+  --spacing-0: 0px;
+  --spacing-0-5: 2px;
+  --spacing-1: 4px;
+  --spacing-1-5: 6px;
+  --spacing-2: 8px;
+  --spacing-2-5: 10px;
+  --spacing-3: 12px;
+  --spacing-3-5: 14px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-7: 28px;
+  --spacing-8: 32px;
+  --spacing-9: 36px;
+  --spacing-10: 40px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+  
+  /* ----------------------------------------
+   * BORDER RADIUS
+   * ---------------------------------------- */
+  --radius-none: 0px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
+  
+  /* ----------------------------------------
+   * SHADOWS - Dark mode optimized
+   * ---------------------------------------- */
+  --shadow-xs: 0 1px 0 rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  
+  /* Glow effects for primary elements */
+  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.15);
+  --shadow-glow-sm: 0 0 10px rgba(99, 102, 241, 0.1);
+  
+  /* ----------------------------------------
+   * TYPOGRAPHY
+   * ---------------------------------------- */
+  
+  /* Font families */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  
+  /* Font sizes with line heights */
+  --font-size-xs: 12px;
+  --line-height-xs: 16px;
+  
+  --font-size-sm: 13px;
+  --line-height-sm: 18px;
+  
+  --font-size-base: 14px;
+  --line-height-base: 20px;
+  
+  --font-size-lg: 16px;
+  --line-height-lg: 24px;
+  
+  --font-size-xl: 20px;
+  --line-height-xl: 28px;
+  
+  --font-size-2xl: 28px;
+  --line-height-2xl: 36px;
+  
+  --font-size-3xl: 36px;
+  --line-height-3xl: 44px;
+  
+  /* ----------------------------------------
+   * ANIMATIONS
+   * ---------------------------------------- */
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+  --animate-fade-in: fade-in 0.15s ease-out;
+  --animate-fade-out: fade-out 0.15s ease-out;
+  --animate-slide-in-up: slide-in-up 0.15s ease-out;
+  --animate-slide-in-down: slide-in-down 0.15s ease-out;
+  --animate-scale-in: scale-in 0.12s ease-out;
+  --animate-spin: spin 1s linear infinite;
+  --animate-pulse: pulse 1.1s ease-in-out infinite;
+  
+  /* ----------------------------------------
+   * Z-INDEX SCALE
+   * ---------------------------------------- */
+  --z-dropdown: 50;
+  --z-sticky: 100;
+  --z-fixed: 150;
+  --z-modal-backdrop: 200;
+  --z-modal: 250;
+  --z-popover: 300;
+  --z-tooltip: 400;
+}
+
+/* ============================================
+   KEYFRAME ANIMATIONS
+   ============================================ */
+
+@keyframes accordion-down {
+  from { height: 0; opacity: 0; }
+  to { height: var(--radix-accordion-content-height); opacity: 1; }
+}
+
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); opacity: 1; }
+  to { height: 0; opacity: 0; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes slide-in-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in-down {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.5); }
+  70% { box-shadow: 0 0 0 6px rgba(99, 102, 241, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+}
+
+/* ============================================
+   BASE LAYER
+   ============================================ */
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    @apply border-border;
+  }
+  
+  html {
+    @apply h-full;
+    -webkit-text-size-adjust: 100%;
+  }
+  
+  body {
+    @apply h-full bg-background text-foreground font-sans antialiased;
+  }
+  
+  #root {
+    @apply h-full;
+  }
+  
+  img, svg, video {
+    @apply block max-w-full;
+  }
+  
+  button, input, select, textarea {
+    font: inherit;
+    color: inherit;
+  }
+  
+  button {
+    @apply cursor-pointer;
+  }
+  
+  ::selection {
+    @apply bg-primary/30;
+  }
+  
+  /* Scrollbar styling (WebKit) - Dark theme */
+  ::-webkit-scrollbar {
+    @apply w-2.5 h-2.5;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-white/10 rounded-full;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-white/20;
+  }
+  
+  ::-webkit-scrollbar-corner {
+    @apply bg-transparent;
+  }
+}
+
+/* ============================================
+   UTILITY COMPONENTS
+   ============================================ */
+
+@layer components {
+  /* Card utility */
+  .card {
+    @apply bg-card border border-border rounded-lg shadow-sm;
+  }
+  
+  /* Stack layouts */
+  .stack {
+    @apply flex flex-col gap-3;
+  }
+  
+  .row {
+    @apply flex items-center gap-3;
+  }
+  
+  /* Divider */
+  .divider {
+    @apply h-px bg-border my-3;
+  }
+  
+  /* ContentEditable placeholder */
+  [contenteditable][data-placeholder]:empty::before {
+    content: attr(data-placeholder);
+    @apply text-muted-foreground pointer-events-none;
+  }
+
+  /* ----------------------------------------
+     Block Editor System - Notion/Jupyter Style
+     ---------------------------------------- */
+  
+  /* Document container */
+  .document-container {
+    @apply relative;
+  }
+
+  /* Canvas - main editing area */
+  .canvas {
+    @apply min-h-full;
+  }
+
+  /* Blocks container */
+  .blocks-container {
+    @apply space-y-0.5;
+  }
+
+  /* Block row - wrapper for each block */
+  .block-row {
+    @apply relative;
+    min-height: 1.5rem;
+  }
+
+  /* Block content area */
+  .block-content {
+    @apply relative;
+  }
+
+  /* Paragraph block */
+  .paragraph-block {
+    @apply relative;
+  }
+
+  .paragraph-block.multi-column {
+    @apply pr-2;
+  }
+
+  /* Heading block */
+  .heading-block {
+    @apply relative;
+  }
+
+  /* Divider block */
+  .divider-block {
+    @apply relative select-none;
+  }
+
+  /* Block controls - gutter area */
+  .block-controls {
+    pointer-events: auto;
+  }
+
+  /* Block selection styles */
+  .block-row[data-selected="true"] {
+    @apply bg-primary/10;
+  }
+
+  /* Focus ring for editable content */
+  [contenteditable]:focus-visible {
+    @apply outline-none;
+  }
+
+  /* Smooth text rendering for editables */
+  [contenteditable] {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* ----------------------------------------
+     Panel System Utilities
+     ---------------------------------------- */
+  
+  /* Panel container */
+  .panel {
+    @apply bg-card border border-border rounded-lg overflow-hidden;
+    @apply flex flex-col;
+  }
+  
+  /* Panel header */
+  .panel-header {
+    @apply flex items-center justify-between gap-2 px-3 py-2.5;
+    @apply border-b border-border;
+    @apply bg-gradient-to-b from-card to-transparent;
+    @apply sticky top-0 z-10;
+  }
+  
+  /* Panel content */
+  .panel-content {
+    @apply flex-1 overflow-auto p-3;
+  }
+  
+  /* Panel footer */
+  .panel-footer {
+    @apply border-t border-border p-3;
+    @apply bg-gradient-to-t from-card to-transparent;
+  }
+  
+  /* Resize handle hover zone */
+  .resize-handle-zone {
+    @apply relative;
+  }
+  
+  .resize-handle-zone::before {
+    content: '';
+    @apply absolute inset-y-0 -left-1 -right-1;
+    @apply cursor-col-resize;
+  }
+}
+
+/* ============================================
+   PANEL ANIMATIONS
+   ============================================ */
+
+@keyframes panel-slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes panel-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes panel-collapse {
+  from {
+    opacity: 1;
+    width: var(--panel-width);
+  }
+  to {
+    opacity: 0;
+    width: 0;
+  }
+}
+
+@keyframes panel-expand {
+  from {
+    opacity: 0;
+    width: 0;
+  }
+  to {
+    opacity: 1;
+    width: var(--panel-width);
+  }
+}
+
+/* Panel animation classes */
+.animate-panel-slide-in-left {
+  animation: panel-slide-in-left 0.2s ease-out;
+}
+
+.animate-panel-slide-in-right {
+  animation: panel-slide-in-right 0.2s ease-out;
+}
+
+/* ============================================
+   RESIZE HANDLE STYLES
+   ============================================ */
+
+/* Ensure smooth resizing without text selection */
+.resizing * {
+  user-select: none !important;
+  cursor: col-resize !important;
+}
+
+/* Resize handle visual feedback */
+[data-resize-handle] {
+  @apply relative transition-colors duration-150;
+}
+
+[data-resize-handle]:hover,
+[data-resize-handle][data-dragging="true"] {
+  @apply bg-primary/20;
+}
+
+[data-resize-handle]::after {
+  content: '';
+  @apply absolute inset-0;
+  @apply pointer-events-none;
+  @apply transition-opacity duration-150;
+  @apply opacity-0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-primary),
+    transparent
+  );
+}
+
+[data-resize-handle]:hover::after,
+[data-resize-handle][data-dragging="true"]::after {
+  @apply opacity-30;
+}
