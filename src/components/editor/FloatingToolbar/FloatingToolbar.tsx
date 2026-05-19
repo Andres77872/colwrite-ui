@@ -1,12 +1,13 @@
 import { cn } from '@/lib/utils';
 import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '../../../editor';
-import { streamAiAction, type AiAction } from '../../../services';
+import { dispatchAction } from '../../../services/actionDispatcher';
+import type { AiAction } from '../../../config/aiActions';
 import { AIActionMenu } from './AIActionMenu/AIActionMenu';
 import { Bold, Italic, Underline, Strikethrough } from 'lucide-react';
 
 export function FloatingToolbar() {
-  const { exec, refs, updateHtml } = useEditor();
+  const { exec, refs, updateHtml, documentId } = useEditor();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const [anchor, setAnchor] = useState<'center' | 'left'>('center');
@@ -97,7 +98,7 @@ export function FloatingToolbar() {
     return { el, id: found };
   };
 
-  const onAi = (action: AiAction) => async (e: React.MouseEvent) => {
+  const onAi = (action: AiAction, language?: string) => async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const sel = document.getSelection();
@@ -211,7 +212,7 @@ export function FloatingToolbar() {
       };
       
       try {
-        await streamAiAction({ message: selectedText, action }, { signal: abortRef.current.signal, onChunk });
+        await dispatchAction({ selectedText, action, documentId: documentId ?? '', signal: abortRef.current.signal, onToken: onChunk, language });
       } catch (err) {
         if (!stopped) wrapper.setAttribute('data-error', '1');
       } finally {
@@ -316,7 +317,7 @@ export function FloatingToolbar() {
         <Strikethrough className="h-4 w-4" />
       </button>
       <div className="w-px h-6 bg-border mx-1" />
-      <AIActionMenu disabled={!hasSelection} onAction={(action: AiAction, e: React.MouseEvent) => onAi(action)(e)} />
+      <AIActionMenu disabled={!hasSelection} onAction={(action: AiAction, e: React.MouseEvent, language?: string) => onAi(action, language)(e)} />
     </div>
   );
 }

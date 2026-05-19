@@ -13,7 +13,10 @@ export type LoginResponse = {
 };
 
 export async function login(req: LoginRequest): Promise<LoginResponse> {
-  // Do not send cookies on login requests
-  return post<LoginResponse>('/auth/login', req, { credentials: 'omit' });
+  return post<LoginResponse>('/auth/login', req, { credentials: 'include' });
+}
+
+export async function logout(): Promise<void> {
+  await post<{ success: boolean; message: string }>('/auth/logout', undefined, { credentials: 'include' });
 }
 

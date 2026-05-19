@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { login, setSessionTokenCookie, clearSessionTokenCookie, UNAUTHORIZED_EVENT } from '../../services';
+import { login, logout as logoutApi, clearSessionTokenCookie, UNAUTHORIZED_EVENT } from '../../services';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,6 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = () => {
+    logoutApi().catch(() => { /* backend call best-effort; always clean up local state */ });
     try {
       localStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem('session_token');
@@ -61,7 +62,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loginWithCredentials = async (usernameOrEmail: string, password: string) => {
     const resp = await login({ username: usernameOrEmail.trim(), password });
     if (!resp?.session_token) throw new Error(resp?.message || 'Login failed');
-    setSessionTokenCookie(resp.session_token);
     const u: User = { name: resp.user?.username || usernameOrEmail || 'User', email: resp.user?.email || '' };
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(u)); } catch { /* no-op */ }
     setUser(u);
