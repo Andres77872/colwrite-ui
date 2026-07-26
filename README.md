@@ -29,11 +29,10 @@ The project uses Vite 8’s default Rolldown/Oxc toolchain, Lightning CSS proces
 or legacy browser target is configured.
 
 The development proxy keeps `/api/agent` unchanged and rewrites other `/api` requests by removing
-the `/api` prefix. The following optional Vite environment variables override service bases:
-
-- `VITE_API_BASE`
-- `VITE_ARZ_API`
-- `VITE_COLPALI_BASE`
+the `/api` prefix. Environment variables supplied by the OS take precedence, while `.env` provides
+local fallback values. Copy `.env.example` to `.env` when local overrides are needed; the supported
+variables, defaults, and browser-exposure notes are documented in
+[`.env.example`](./.env.example).
 
 ## TypeScript 7/6 bridge
 

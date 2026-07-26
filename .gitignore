@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Local environment files may contain machine-specific or sensitive values.
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
