@@ -1,323 +1,384 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
-import { useEffect, useRef, useState } from 'react';
-import { useEditor } from '../../../editor';
-import { dispatchAction } from '../../../services/actionDispatcher';
-import type { AiAction } from '../../../config/aiActions';
+import { useEditor } from '@/editor';
+import { dispatchAction } from '@/services/actionDispatcher';
+import type { AiAction } from '@/config/aiActions';
 import { AIActionMenu } from './AIActionMenu/AIActionMenu';
-import { Bold, Italic, Underline, Strikethrough } from 'lucide-react';
+import {
+  clearChildPlaceholders,
+  serializeEditableHtml,
+} from '@/components/common/Editable/Editable';
+import { Bold, Italic, Strikethrough, Underline } from 'lucide-react';
 
+const TOOLBAR_HEIGHT = 44;
+const VIEWPORT_MARGIN = 8;
+/** Roughly the toolbar's width; used only to keep it inside the viewport. */
+const ESTIMATED_WIDTH = 260;
+
+type FormatStateKey = 'bold' | 'italic' | 'underline' | 'strike';
+
+interface FormatButton {
+  command: string;
+  stateKey: FormatStateKey;
+  label: string;
+  icon: typeof Bold;
+  shortcut?: string;
+}
+
+const FORMAT_BUTTONS: readonly FormatButton[] = [
+  { command: 'bold', stateKey: 'bold', label: 'Bold', icon: Bold, shortcut: '⌘B' },
+  { command: 'italic', stateKey: 'italic', label: 'Italic', icon: Italic, shortcut: '⌘I' },
+  { command: 'underline', stateKey: 'underline', label: 'Underline', icon: Underline, shortcut: '⌘U' },
+  { command: 'strikeThrough', stateKey: 'strike', label: 'Strikethrough', icon: Strikethrough },
+];
+
+type FormatState = Record<FormatStateKey, boolean>;
+
+const EMPTY_STATE: FormatState = { bold: false, italic: false, underline: false, strike: false };
+
+/**
+ * FloatingToolbar — appears over a text selection with formatting and AI actions.
+ *
+ * It locates the active field by walking up to an element with the `editable`
+ * class. That class was never rendered, so until it was added to `Editable`
+ * this toolbar could not appear at all and the AI action menu was unreachable.
+ */
 export function FloatingToolbar() {
   const { exec, refs, updateHtml, documentId } = useEditor();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
-  const [anchor, setAnchor] = useState<'center' | 'left'>('center');
-  const [states, setStates] = useState({ bold: false, italic: false, underline: false, strike: false });
-  const [hasSelection, setHasSelection] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
+  const [states, setStates] = useState<FormatState>(EMPTY_STATE);
   const abortRef = useRef<AbortController | null>(null);
-  const slashOpenRef = useRef<boolean>(false);
+  const slashOpenRef = useRef(false);
+  // The last non-collapsed range inside an editable. Keeping it lets menu
+  // items run from the keyboard, where opening the menu moves DOM focus away
+  // from the text and a live `getSelection()` read is no longer reliable.
+  const savedRangeRef = useRef<Range | null>(null);
 
   useEffect(() => {
-    const onSlashVisibility = (e: Event) => {
-      const ce = e as CustomEvent<{ visible: boolean }>;
-      slashOpenRef.current = !!ce.detail?.visible;
-      if (slashOpenRef.current) {
-        setVisible(false);
-      }
+    const onSlashVisibility = (event: Event) => {
+      const detail = (event as CustomEvent<{ visible: boolean }>).detail;
+      slashOpenRef.current = Boolean(detail?.visible);
+      if (slashOpenRef.current) setVisible(false);
     };
     window.addEventListener('colwrite:slash-menu-visibility', onSlashVisibility as EventListener);
-    return () => window.removeEventListener('colwrite:slash-menu-visibility', onSlashVisibility as EventListener);
+    return () =>
+      window.removeEventListener('colwrite:slash-menu-visibility', onSlashVisibility as EventListener);
   }, []);
 
   useEffect(() => {
-    const onSelection = () => {
-      const sel = document.getSelection();
-      if (!sel || sel.rangeCount === 0) { setHasSelection(false); setVisible(false); return; }
-
-      let node: Node | null = sel.anchorNode;
-      let inside = false;
-      let editableEl: HTMLElement | null = null;
-      while (node) {
-        if ((node as HTMLElement).classList && (node as HTMLElement).classList.contains('editable')) { inside = true; editableEl = node as HTMLElement; break; }
-        node = (node as Node).parentNode;
-      }
-      if (!inside || !editableEl) { setHasSelection(false); setVisible(false); return; }
-
-      if (slashOpenRef.current) { setHasSelection(false); setVisible(false); return; }
-
-      const range = sel.getRangeAt(0);
-      if (!sel.isCollapsed) {
-        let rect = range.getBoundingClientRect();
-        if (!rect || (rect.width === 0 && rect.height === 0)) { setHasSelection(false); setVisible(false); return; }
-        setPos({ top: rect.top - 44, left: rect.left + rect.width / 2 });
-        setAnchor('center');
-        try {
-          setStates({
-            bold: document.queryCommandState('bold'),
-            italic: document.queryCommandState('italic'),
-            underline: document.queryCommandState('underline'),
-            strike: document.queryCommandState('strikeThrough'),
-          });
-        } catch { /* no-op */ }
-        setHasSelection(true);
-        setVisible(true);
+    const onSelectionChange = () => {
+      const selection = document.getSelection();
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed || slashOpenRef.current) {
+        setVisible(false);
         return;
       }
 
-      // Collapsed caret handling (simplified from original)
-      setHasSelection(false);
-      setVisible(false);
+      let node: Node | null = selection.anchorNode;
+      let editable: HTMLElement | null = null;
+      while (node) {
+        if (node instanceof HTMLElement && node.classList.contains('editable')) {
+          editable = node;
+          break;
+        }
+        node = node.parentNode;
+      }
+      if (!editable) {
+        setVisible(false);
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      if (!rect || (rect.width === 0 && rect.height === 0)) {
+        setVisible(false);
+        return;
+      }
+
+      savedRangeRef.current = range.cloneRange();
+
+      // Keep the toolbar on screen: flip below the selection when there is no
+      // room above, and clamp horizontally so it never runs off either edge.
+      const preferredTop = rect.top - TOOLBAR_HEIGHT;
+      const top =
+        preferredTop < VIEWPORT_MARGIN ? rect.bottom + VIEWPORT_MARGIN : preferredTop;
+      const half = ESTIMATED_WIDTH / 2;
+      const left = Math.min(
+        Math.max(rect.left + rect.width / 2, half + VIEWPORT_MARGIN),
+        window.innerWidth - half - VIEWPORT_MARGIN,
+      );
+
+      setPos({ top, left });
+      try {
+        setStates({
+          bold: document.queryCommandState('bold'),
+          italic: document.queryCommandState('italic'),
+          underline: document.queryCommandState('underline'),
+          strike: document.queryCommandState('strikeThrough'),
+        });
+      } catch {
+        setStates(EMPTY_STATE);
+      }
+      setVisible(true);
     };
-    document.addEventListener('selectionchange', onSelection);
-    window.addEventListener('scroll', onSelection, true);
-    window.addEventListener('resize', onSelection);
+
+    document.addEventListener('selectionchange', onSelectionChange);
+    window.addEventListener('scroll', onSelectionChange, true);
+    window.addEventListener('resize', onSelectionChange);
     return () => {
-      document.removeEventListener('selectionchange', onSelection);
-      window.removeEventListener('scroll', onSelection, true);
-      window.removeEventListener('resize', onSelection);
+      document.removeEventListener('selectionchange', onSelectionChange);
+      window.removeEventListener('scroll', onSelectionChange, true);
+      window.removeEventListener('resize', onSelectionChange);
     };
   }, []);
 
-  const onFormat = (cmd: string) => (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    exec(cmd);
+  // Abort any in-flight generation if the toolbar unmounts.
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const onFormat = (command: string) => (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    exec(command);
   };
 
-  const findEditableAndBlockId = (node: Node | null): { el: HTMLDivElement | null; id: string | null } => {
-    let cur: Node | null = node;
-    while (cur) {
-      if ((cur as HTMLElement).classList && (cur as HTMLElement).classList.contains('editable')) break;
-      cur = (cur as Node).parentNode;
+  const findBlockId = (node: Node | null): { el: HTMLDivElement | null; id: string | null } => {
+    let current: Node | null = node;
+    while (current) {
+      if (current instanceof HTMLElement && current.classList.contains('editable')) break;
+      current = current.parentNode;
     }
-    const el = (cur as HTMLDivElement) || null;
+    const el = (current as HTMLDivElement | null) ?? null;
     if (!el) return { el: null, id: null };
-    let found: string | null = null;
-    const map = refs.current || {};
-    for (const [id, dom] of Object.entries(map)) { if (dom === el) { found = id; break; } }
-    return { el, id: found };
+    const entry = Object.entries(refs.current || {}).find(([, dom]) => dom === el);
+    return { el, id: entry?.[0] ?? null };
   };
 
-  const onAi = (action: AiAction, language?: string) => async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const sel = document.getSelection();
-    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
-    const range = sel.getRangeAt(0);
-    const { el: editable, id: blockId } = findEditableAndBlockId(range.commonAncestorContainer);
-    if (!editable || !blockId) return;
+  const onAi = useCallback(
+    async (action: AiAction, language?: string) => {
+      const range = savedRangeRef.current;
+      if (!range || range.collapsed) return;
 
-    const selectedText = sel.toString();
-    if (!selectedText.trim()) return;
+      const { el: editable, id: blockId } = findBlockId(range.commonAncestorContainer);
+      if (!editable || !blockId) return;
 
-    abortRef.current?.abort();
-    abortRef.current = new AbortController();
+      const selectedText = range.toString();
+      if (!selectedText.trim()) return;
 
-    const wrapper = document.createElement('span');
-    wrapper.className = 'ai-suggest bg-primary/10 rounded px-0.5';
-    wrapper.setAttribute('data-action', action);
-    wrapper.contentEditable = 'true';
-    wrapper.setAttribute('data-generating', '1');
-
-    const original = document.createElement('span');
-    original.className = 'ai-original line-through opacity-50';
-    original.contentEditable = 'false';
-    const generated = document.createElement('span');
-    generated.className = 'ai-generated text-primary';
-    generated.contentEditable = 'true';
-
-    const controls = document.createElement('span');
-    controls.className = 'ai-controls inline-flex gap-1 ml-1';
-    controls.contentEditable = 'false';
-    
-    const acceptBtn = document.createElement('button');
-    acceptBtn.type = 'button';
-    acceptBtn.className = 'ai-accept inline-flex items-center justify-center w-5 h-5 rounded bg-green-600 text-white text-xs hover:bg-green-500';
-    acceptBtn.title = 'Accept';
-    acceptBtn.textContent = '✔';
-    
-    const rejectBtn = document.createElement('button');
-    rejectBtn.type = 'button';
-    rejectBtn.className = 'ai-reject inline-flex items-center justify-center w-5 h-5 rounded bg-red-600 text-white text-xs hover:bg-red-500';
-    rejectBtn.title = 'Reject';
-    rejectBtn.textContent = '✖';
-    
-    const stopBtn = document.createElement('button');
-    stopBtn.type = 'button';
-    stopBtn.className = 'ai-stop inline-flex items-center justify-center w-5 h-5 rounded bg-zinc-600 text-white text-xs hover:bg-zinc-500';
-    stopBtn.title = 'Stop generating';
-    stopBtn.textContent = '⏹';
-    controls.append(acceptBtn, rejectBtn, stopBtn);
-
-    let originalFrag: DocumentFragment | null = null;
-    try {
-      originalFrag = range.extractContents();
-    } catch {
-      originalFrag = document.createDocumentFragment();
-      originalFrag.append(document.createTextNode(selectedText));
-    }
-    if (originalFrag) original.append(originalFrag);
-    wrapper.append(original, generated, controls);
-    range.insertNode(wrapper);
-
-    updateHtml(blockId, editable.innerHTML);
-    setVisible(false);
-
-    let rafPending = false;
-    const schedulePersist = () => {
-      if (rafPending) return;
-      rafPending = true;
-      requestAnimationFrame(() => {
-        rafPending = false;
-        updateHtml(blockId, editable.innerHTML);
-      });
-    };
-
-    generated.addEventListener('input', () => schedulePersist());
-
-    let stopped = false;
-    const setStopMode = () => {
-      stopBtn.className = 'ai-stop inline-flex items-center justify-center w-5 h-5 rounded bg-zinc-600 text-white text-xs hover:bg-zinc-500';
-      stopBtn.title = 'Stop generating';
-      stopBtn.textContent = '⏹';
-      stopBtn.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); stopped = true; abortRef.current?.abort(); };
-    };
-    const setRegenMode = () => {
-      stopBtn.className = 'ai-regenerate inline-flex items-center justify-center w-5 h-5 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-500';
-      stopBtn.title = 'Regenerate';
-      stopBtn.textContent = '🔄';
-      stopBtn.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); runStream(); };
-    };
-
-    const runStream = async () => {
-      stopped = false;
-      wrapper.setAttribute('data-generating', '1');
-      wrapper.removeAttribute('data-error');
-      while (generated.firstChild) generated.removeChild(generated.firstChild);
-      setStopMode();
       abortRef.current?.abort();
-      abortRef.current = new AbortController();
-      
-      const onChunk = (delta: string) => {
-        if (stopped) return;
-        if (delta) {
-          const last = generated.lastChild;
-          if (last && last.nodeType === Node.TEXT_NODE) {
-            (last as Text).data += delta;
-          } else {
-            generated.append(document.createTextNode(delta));
-          }
-          schedulePersist();
+
+      // Structure: [original (struck through)][generated][accept/reject/stop]
+      const wrapper = document.createElement('span');
+      wrapper.className = 'ai-suggest';
+      wrapper.setAttribute('data-action', action);
+      wrapper.contentEditable = 'true';
+      wrapper.setAttribute('data-generating', '1');
+
+      const original = document.createElement('span');
+      original.className = 'ai-original';
+      original.contentEditable = 'false';
+
+      const generated = document.createElement('span');
+      generated.className = 'ai-generated';
+      generated.contentEditable = 'true';
+
+      const controls = document.createElement('span');
+      controls.className = 'ai-controls';
+      controls.contentEditable = 'false';
+
+      const makeControl = (className: string, title: string, glyph: string) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = className;
+        button.title = title;
+        button.setAttribute('aria-label', title);
+        button.textContent = glyph;
+        return button;
+      };
+
+      const acceptBtn = makeControl('ai-accept', 'Accept suggestion', '✓');
+      const rejectBtn = makeControl('ai-reject', 'Reject suggestion', '✕');
+      const stopBtn = makeControl('ai-stop', 'Stop generating', '■');
+      controls.append(acceptBtn, rejectBtn, stopBtn);
+
+      let originalFrag: DocumentFragment;
+      try {
+        originalFrag = range.extractContents();
+      } catch {
+        originalFrag = document.createDocumentFragment();
+        originalFrag.append(document.createTextNode(selectedText));
+      }
+      original.append(originalFrag);
+      wrapper.append(original, generated, controls);
+      range.insertNode(wrapper);
+
+      /**
+       * Persist the block as if the suggestion were not there.
+       *
+       * The suggestion UI — struck-through original, streaming text, and the
+       * ✓/✕/■ buttons — lives inside the contenteditable, so the raw
+       * `innerHTML` contains all of it. Storing that put literal buttons into
+       * the saved document (within one frame, via the localStorage effect),
+       * and navigating away mid-suggestion made it permanent. Until the user
+       * accepts or rejects, the document's committed state is the original.
+       */
+      const persistPreSuggestion = () => {
+        const clone = editable.cloneNode(true) as HTMLDivElement;
+        clone.querySelectorAll('.ai-suggest').forEach((node) => {
+          const pristine = node.querySelector('.ai-original');
+          node.replaceWith(...Array.from(pristine?.childNodes ?? []));
+        });
+        clearChildPlaceholders(clone);
+        updateHtml(blockId, clone.innerHTML);
+      };
+
+      persistPreSuggestion();
+      setVisible(false);
+
+      let rafPending = false;
+      const schedulePersist = () => {
+        if (rafPending) return;
+        rafPending = true;
+        requestAnimationFrame(() => {
+          rafPending = false;
+          persistPreSuggestion();
+        });
+      };
+      generated.addEventListener('input', schedulePersist);
+
+      let stopped = false;
+
+      const setStopMode = () => {
+        stopBtn.className = 'ai-stop';
+        stopBtn.title = 'Stop generating';
+        stopBtn.setAttribute('aria-label', 'Stop generating');
+        stopBtn.textContent = '■';
+        stopBtn.onmousedown = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          stopped = true;
+          abortRef.current?.abort();
+        };
+      };
+
+      const setRegenerateMode = () => {
+        stopBtn.className = 'ai-regenerate';
+        stopBtn.title = 'Regenerate';
+        stopBtn.setAttribute('aria-label', 'Regenerate suggestion');
+        stopBtn.textContent = '↻';
+        stopBtn.onmousedown = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void runStream();
+        };
+      };
+
+      const runStream = async () => {
+        stopped = false;
+        wrapper.setAttribute('data-generating', '1');
+        wrapper.removeAttribute('data-error');
+        generated.replaceChildren();
+        setStopMode();
+
+        abortRef.current?.abort();
+        const controller = new AbortController();
+        abortRef.current = controller;
+
+        try {
+          await dispatchAction({
+            selectedText,
+            action,
+            documentId: documentId ?? '',
+            signal: controller.signal,
+            language,
+            onToken: (delta) => {
+              if (stopped || !delta) return;
+              const last = generated.lastChild;
+              if (last && last.nodeType === Node.TEXT_NODE) {
+                (last as Text).data += delta;
+              } else {
+                generated.append(document.createTextNode(delta));
+              }
+              schedulePersist();
+            },
+          });
+        } catch {
+          if (!stopped) wrapper.setAttribute('data-error', '1');
+        } finally {
+          wrapper.removeAttribute('data-generating');
+          setRegenerateMode();
         }
       };
-      
-      try {
-        await dispatchAction({ selectedText, action, documentId: documentId ?? '', signal: abortRef.current.signal, onToken: onChunk, language });
-      } catch (err) {
-        if (!stopped) wrapper.setAttribute('data-error', '1');
-      } finally {
-        wrapper.removeAttribute('data-generating');
-        setRegenMode();
-      }
-    };
 
-    await runStream();
+      const replaceWith = (frag: DocumentFragment) => {
+        wrapper.replaceWith(frag);
+        // The wrapper is gone by now, but raw innerHTML would still bake the
+        // rendered internals of any inline widget into its placeholder span.
+        updateHtml(blockId, serializeEditableHtml(editable));
+      };
 
-    const replaceWithFragment = (frag: DocumentFragment) => {
-      const parent = wrapper.parentNode;
-      if (!parent) return;
-      const marker = document.createTextNode('');
-      parent.insertBefore(marker, wrapper);
-      while (frag.firstChild) {
-        parent.insertBefore(frag.firstChild, marker);
-      }
-      parent.removeChild(wrapper);
-      parent.removeChild(marker);
-      schedulePersist();
-    };
+      acceptBtn.onmousedown = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        stopped = true;
+        abortRef.current?.abort();
+        const frag = document.createDocumentFragment();
+        frag.append(...Array.from(generated.childNodes));
+        // Accepting an empty generation keeps the original rather than
+        // silently deleting the selected text.
+        if (!frag.firstChild) frag.append(...Array.from(original.childNodes));
+        replaceWith(frag);
+      };
 
-    acceptBtn.onmousedown = (ev) => {
-      ev.preventDefault(); ev.stopPropagation();
-      stopped = true; abortRef.current?.abort();
-      const frag = document.createDocumentFragment();
-      while (generated.firstChild) frag.appendChild(generated.firstChild);
-      if (!frag.firstChild) {
-        while (original.firstChild) frag.appendChild(original.firstChild);
-      }
-      replaceWithFragment(frag);
-      updateHtml(blockId, editable.innerHTML);
-    };
-    
-    rejectBtn.onmousedown = (ev) => {
-      ev.preventDefault(); ev.stopPropagation();
-      stopped = true; abortRef.current?.abort();
-      const frag = document.createDocumentFragment();
-      while (original.firstChild) frag.appendChild(original.firstChild);
-      replaceWithFragment(frag);
-      updateHtml(blockId, editable.innerHTML);
-    };
-  };
+      rejectBtn.onmousedown = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        stopped = true;
+        abortRef.current?.abort();
+        const frag = document.createDocumentFragment();
+        frag.append(...Array.from(original.childNodes));
+        replaceWith(frag);
+      };
+
+      await runStream();
+    },
+    [documentId, refs, updateHtml],
+  );
 
   if (!visible) return null;
-  
+
   return (
     <div
-      ref={ref}
+      role="toolbar"
+      aria-label="Text formatting"
       className={cn(
-        "floating-toolbar fixed z-[100] inline-flex gap-1.5 p-1.5",
-        "bg-popover border border-border rounded-md shadow-md",
-        anchor === 'center' && "-translate-x-1/2 -translate-y-2",
-        anchor === 'left' && "-translate-y-2"
+        'floating-toolbar fixed inline-flex -translate-x-1/2 -translate-y-2 items-center gap-1 p-1',
+        'rounded-lg border border-border bg-popover shadow-lg z-[var(--z-floating)]',
+        'animate-in fade-in-0 zoom-in-95',
       )}
       style={{ top: pos.top, left: pos.left }}
-      onMouseDown={(e) => { e.preventDefault(); }}
+      // Keep the text selection alive while interacting with the toolbar.
+      onMouseDown={(event) => event.preventDefault()}
     >
-      <button 
-        className={cn(
-          "w-7 h-7 rounded grid place-items-center transition-colors",
-          "hover:bg-accent",
-          states.bold && "bg-primary/10 text-primary"
-        )} 
-        onMouseDown={onFormat('bold')} 
-        title="Bold"
-      >
-        <Bold className="h-4 w-4" />
-      </button>
-      <button 
-        className={cn(
-          "w-7 h-7 rounded grid place-items-center transition-colors",
-          "hover:bg-accent",
-          states.italic && "bg-primary/10 text-primary"
-        )}
-        onMouseDown={onFormat('italic')} 
-        title="Italic"
-      >
-        <Italic className="h-4 w-4" />
-      </button>
-      <button 
-        className={cn(
-          "w-7 h-7 rounded grid place-items-center transition-colors",
-          "hover:bg-accent",
-          states.underline && "bg-primary/10 text-primary"
-        )}
-        onMouseDown={onFormat('underline')} 
-        title="Underline"
-      >
-        <Underline className="h-4 w-4" />
-      </button>
-      <button 
-        className={cn(
-          "w-7 h-7 rounded grid place-items-center transition-colors",
-          "hover:bg-accent",
-          states.strike && "bg-primary/10 text-primary"
-        )}
-        onMouseDown={onFormat('strikeThrough')} 
-        title="Strikethrough"
-      >
-        <Strikethrough className="h-4 w-4" />
-      </button>
-      <div className="w-px h-6 bg-border mx-1" />
-      <AIActionMenu disabled={!hasSelection} onAction={(action: AiAction, e: React.MouseEvent, language?: string) => onAi(action, language)(e)} />
+      {FORMAT_BUTTONS.map(({ command, stateKey, label, icon: Icon, shortcut }) => (
+        <button
+          key={command}
+          type="button"
+          className={cn(
+            'grid h-7 w-7 place-items-center rounded-sm transition-colors hover:bg-accent',
+            states[stateKey] && 'bg-primary/15 text-primary',
+          )}
+          onMouseDown={onFormat(command)}
+          aria-label={shortcut ? `${label} (${shortcut})` : label}
+          aria-pressed={states[stateKey]}
+          title={shortcut ? `${label} · ${shortcut}` : label}
+        >
+          <Icon aria-hidden="true" className="h-4 w-4" />
+        </button>
+      ))}
+
+      <div role="separator" aria-orientation="vertical" className="mx-1 h-5 w-px bg-border" />
+
+      <AIActionMenu onAction={onAi} />
     </div>
   );
 }

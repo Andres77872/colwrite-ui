@@ -1,79 +1,75 @@
-# GraphInline — Development Plan
+# GraphInline — Reference
 
-This document specifies how to implement the `GraphInline` component for small inline charts (bar, line, pie) inside paragraph text.
+How inline figures (small charts) work in the editor.
 
 References:
-- `src/components/editor/blocks/ParagraphBlock/ParagraphBlock.tsx`
-- `src/components/common/Editable/Editable.tsx`
+- `src/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/GraphInline.tsx`
+- `src/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/ChartFigure.tsx` (SVG renderer)
+- `src/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/chartScale.ts` (scale + palette)
+- `src/components/editor/SlashMenu/items/graph.ts`
 - `src/editor/types.ts`
-- `src/components/editor/SlashMenu/items/*`
 
 ## Status
 
-- Implemented.
-- UI component: `src/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/GraphInline.tsx`
-- Slash menu item: `src/components/editor/SlashMenu/items/graph.ts`
-- Mounted via portals in: `src/components/editor/blocks/ParagraphBlock/ParagraphBlock.tsx`
+- Implemented as a block-level figure widget (not a pill).
+- Chart.js was dropped: `ChartFigure` renders plain SVG from theme tokens, so
+  figures draw on the first frame and work offline.
 
 ## Purpose
-- Insert compact, non-intrusive charts in-flow with text for quick data cues (means, trends, proportions).
-- Supported kinds (MVP): `bar`, `line`, `pie`.
+- Compact charts in the document flow for quick data cues (means, trends,
+  proportions).
+- Kinds: `bar`, `line`, `area`, `pie`.
 
-## Type additions (src/editor/types.ts)
+## Data contract (src/editor/types.ts)
 ```ts
 export type GraphChild = {
   id: string;
   type: 'graph';
-  kind: 'bar' | 'line' | 'pie';
+  kind: 'bar' | 'line' | 'area' | 'pie';
   data: {
-    values: number[];       // length 1..12 typical; finite numbers only
-    labels?: string[];      // optional; if present must match values.length
-    colors?: string[];      // optional; if present must match values.length (used esp. for pie)
+    values: number[];       // finite numbers only
+    labels?: string[];      // padded/trimmed to values.length by the editor
+    colors?: string[];      // optional per-point overrides (esp. pie slices)
   };
-  title?: string;           // optional short label
+  title?: string;
+  caption?: string;         // rendered under the figure
+  xLabel?: string;          // cartesian kinds only
+  yLabel?: string;
 };
 ```
-Extend `ParagraphChild` union to include `GraphChild`.
 
-## Slash menu item (src/components/editor/SlashMenu/items/graph.ts)
-- Export `graphItem: SlashItem` with `id: 'graph'`, `label: 'Graph'`, `group: 'insert'`.
-- onSelect:
-  1) Insert placeholder `<span data-child-id={id} contenteditable="false"></span>` at caret + trailing space.
-  2) `updateHtml(blockId, serializeEditableHtml(editable))`.
-  3) `addParagraphChild(blockId, { id, type: 'graph', kind: 'bar', data: { values: [1,2,3], labels: ['A','B','C'] } })`.
+## Slash menu item
+- `graphItem` (label "Figure", `group: 'insert'`) seeds placeholder data
+  (`values: [3, 5, 2]`, `labels: ['A', 'B', 'C']`) — a shaped chart shows what
+  to do next; a blank axis does not.
 
-## Inline component (src/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/GraphInline.tsx)
-- Props: `{ blockId, child, updateParagraphChild, removeParagraphChild, updateHtml, refs }`.
-- Root: `<span className="graph-inline" contentEditable={false} ...>`; stop event propagation on mouse/keys.
-- UI:
-  - Pill shows tiny icon + label, e.g., `Bar (3)` / `Line (5)` / `Pie (4)`.
-  - Click toggles an inline editor popover `.graph-editor` with:
-    - Kind switch: `bar | line | pie` (segmented control or select).
-    - Values input: comma-separated numbers (e.g., `1, 2, 3`). Parse to `number[]` with validation.
-    - Labels input (optional): comma-separated strings; must match `values.length` if present.
-    - Colors input (optional): comma-separated CSS colors; for pie, one per slice.
-    - Preview area:
-      - Preferred: render using Chart.js on a `<canvas width=160 height=72>`.
-      - Fallback: lightweight inline SVG preview for bar/line or textual summary where JS lib is unavailable.
-    - Actions: `Remove` (×) and `Done`.
-- Behavior:
-  - Debounced `updateParagraphChild(blockId, child.id, { kind, data, title })` on field changes (≈60–150ms).
-  - Remove flow: delete placeholder → `removeParagraphChild(blockId, child.id)` → `updateHtml(blockId, serializeEditableHtml(editable))`.
-  - Keep rendered preview DOM out of persisted `html` (serialization cleans internals of `data-child-id`).
+## UI
+- Shell: shared `InlineFigureShell` — bordered card whose header (kind switch,
+  settings, remove) materialises on hover/focus, plus an optional caption strip.
+- Header: kind toggle buttons (bar / line / area / pie) and a settings popover:
+  - Title, and for cartesian kinds X/Y axis labels.
+  - Data edited as **rows** (colour swatch + label + value + remove, "Add
+    point") — labels are padded to the value count on every edit, so the two
+    can never drift apart.
+  - Caption.
+  - A warning appears when a pie exceeds `MAX_PIE_SLICES` (6).
+- Chart (`ChartFigure`):
+  - Y axis snapped to round 1/2/5×10ⁿ ticks and always including zero
+    (`linearScale`).
+  - One direct value label, on the peak; the axis carries the rest.
+  - Hover shows a tooltip (label + value); hit targets are the full band.
+  - Pie: slices with a legend (label + percentage); identity never rests on
+    colour alone.
+  - Series colours come from `--color-series-*` tokens in fixed order; grid and
+    axis from `--color-chart-grid` / `--color-chart-axis`.
 
-## Optional preview library (Chart.js)
-- For richer preview inside the popover, optionally include Chart.js in `index.html` so `window.Chart` is available:
-```html
-<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin="anonymous"></script>
-```
-- The component should detect availability: `const hasChart = !!(window as any)?.Chart;` and fallback if absent.
+## Behaviour
+- All edits write straight through `updateParagraphChild` (no debounced shadow
+  state).
+- Remove flow: placeholder deleted first, then `removeParagraphChild`, then
+  re-serialize via `serializeEditableHtml`.
 
-## ParagraphBlock integration
-- Add portal case in `ParagraphBlock.tsx`:
-  - `child.type === 'graph'` → `<GraphInline ... />`.
-- Follow prop pattern used by `CitationInline` and `EquationInline`.
-
-## Example JSON usage
+## Example JSON
 ```json
 {
   "id": "p1",
@@ -84,31 +80,25 @@ Extend `ParagraphChild` union to include `GraphChild`.
       "id": "g1",
       "type": "graph",
       "kind": "line",
-      "data": { "values": [1, 3, 2, 5], "labels": ["Q1","Q2","Q3","Q4"] },
-      "title": "Quarterly"
+      "data": { "values": [1, 3, 2, 5], "labels": ["Q1", "Q2", "Q3", "Q4"] },
+      "title": "Quarterly",
+      "caption": "Figure 1. Score by quarter."
     }
   ]
 }
 ```
 
+## Validation constraints
+- `values`: finite numbers (non-finite entries are filtered at render).
+- `labels` are kept the same length as `values` by the row editor.
+- Pie: non-positive values are dropped; all-zero shows an empty-state hint.
+  Past `MAX_PIE_SLICES` the chart still renders but the settings popover warns.
+
 ## Styling & accessibility
-- Wrapper class `.graph-inline`; popover/editor `.graph-editor`.
-- Use small, unobtrusive chip styles consistent with other inlines; respect paragraph columns.
-- `role="group"`, `aria-label="Graph"`; inputs/buttons have `title` attributes; Esc closes popover.
+- `role="group"`, `aria-label="Figure"`; SVG has `role="img"` with a summary
+  label; hit targets cover full bands rather than 2px marks.
 
-## Validation constraints (MVP)
-- `values`: finite numbers; length 1..12 (soft limit for readability).
-- If `labels` provided, `labels.length === values.length`.
-- If `colors` provided, `colors.length === values.length`.
-- Pie: all values ≥ 0 and not all zero.
-- On parse errors, show inline validation and do not commit invalid state.
-
-## Persistence and serialization
-- All state (`kind`, `data`, `title`) lives in paragraph `children`.
-- Persist paragraph `html` via `serializeEditableHtml(...)` so only placeholders remain in `html`.
-
-## Future extensions (post-MVP)
-- Multi-series bar/line support (`series: Array<{label, values, color}>`).
+## Future extensions
+- Multi-series bar/line (`series: Array<{ label, values, color }>`).
 - Axis options (yMin/yMax, log scale), units/suffixes.
 - Import from a selected table range or CSV paste.
-- Export snapshot as SVG/PNG for figures.

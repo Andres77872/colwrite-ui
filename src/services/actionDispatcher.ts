@@ -46,23 +46,37 @@ export async function dispatchAction(
   if (onStatus) handlers.onStatus = onStatus;
   if (onError) handlers.onError = onError;
 
-  let message: string;
+  // Whatever the agent streams back is spliced straight into the document in
+  // place of the selection, so every branch has to end with an instruction to
+  // return the replacement text and nothing else — a preamble like "Here is
+  // the improved version:" would be written into the user's paragraph.
+  const REPLACEMENT_ONLY =
+    'Reply with the replacement text only — no preamble, no explanation, no quotes, no markdown fences.';
+
+  let instruction: string;
 
   if (config.dispatch === 'agent_chat') {
     if (action === 'translate') {
       const targetLang = language ?? config.defaultLanguage ?? 'es-MX';
-      message = `Translate the following text to ${targetLang}: ${selectedText}`;
+      instruction = `Translate the following text to ${targetLang}.`;
     } else {
-      message = `${config.systemPrompt}\n\n${selectedText}`;
+      instruction = config.systemPrompt ?? '';
     }
   } else {
-    // agent_tool
+    // agent_tool — name the tool so the agent routes through it, but the
+    // user still only ever sees the resulting text.
     const toolName = config.toolName ?? action;
-    message = `Apply the tool ${toolName} on the following text: ${selectedText}`;
+    instruction = `Use the ${toolName} tool on the following text.`;
   }
 
+  const message = `${instruction}\n${REPLACEMENT_ONLY}\n\n${selectedText}`;
+
   await streamAgentChat(
-    { message, document_id: documentId },
+    // 'rewrite' withholds the document tools server-side. The caller shows
+    // this result behind an accept/reject prompt and applies it itself; the
+    // agent editing the stored document in parallel meant the user's "reject"
+    // did not actually reject anything.
+    { message, document_id: documentId, mode: 'rewrite' },
     handlers,
     { signal },
   );

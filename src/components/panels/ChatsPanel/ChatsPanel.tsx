@@ -1,244 +1,396 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useEditor } from '../../../editor';
-import { createChat, deleteChat, listChats, updateChatTitle, type ChatItem } from '../../../services/chats';
-import { useChatSessions } from '../../chat/ChatSessionsContext';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEditor } from '@/editor';
+import { createChat, deleteChat, listChats, updateChatTitle, type ChatItem } from '@/services/chats';
+import { useChatSessions } from '@/components/chat/ChatSessionsContext';
 import { cn } from '@/lib/utils';
+import { formatDateTime } from '@/lib/text';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Skeleton, Spinner } from '@/components/ui/spinner';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useToast } from '@/components/ui/toast';
+import {
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+  MessageSquare,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Save,
+  Trash2,
+} from 'lucide-react';
 
-function Title({ chat }: { chat: ChatItem }) {
-  const title = (chat.title || '').trim();
-  if (title) return <span>{title}</span>;
-  const idTail = chat.chat_id.slice(0, 8);
-  return <span className="text-muted-foreground">Untitled chat · {idTail}</span>;
+const PAGE_SIZE = 10;
+
+function chatLabel(chat: ChatItem): string {
+  return chat.title?.trim() || `Untitled chat · ${chat.chat_id.slice(0, 8)}`;
 }
 
 export function ChatsPanel() {
   const { documentId } = useEditor();
   const { selectedChatId, setSelectedChatId, setSelectedThreadId } = useChatSessions();
-  const [items, setItems] = useState<ChatItem[]>([]);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState<string>('');
-  const [page, setPage] = useState<number>(1);
-  const limit = 10;
-  const [count, setCount] = useState<number>(0);
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState<string>('');
+  const confirm = useConfirm();
+  const { toast } = useToast();
 
-  const canPaginate = useMemo(() => ({
-    prev: page > 1,
-    next: page * limit < count,
-  }), [page, limit, count]);
+  const [items, setItems] = useState<ChatItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  // Background list loads report in place; toasts are reserved for actions the
+  // user actually initiated (create, delete, rename).
+  const [listError, setListError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [count, setCount] = useState(0);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(count / PAGE_SIZE)), [count]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return items;
-    return items.filter(c => (c.title || '').toLowerCase().includes(q) || c.chat_id.includes(q));
+    return items.filter(
+      (c) => (c.title ?? '').toLowerCase().includes(q) || c.chat_id.includes(q),
+    );
   }, [items, query]);
 
-  useEffect(() => {
-    if (!documentId) { setItems([]); setCount(0); return; }
-    let cancelled = false;
-    async function run() {
+  const refresh = useCallback(
+    async (targetPage = page) => {
+      if (!documentId) {
+        setItems([]);
+        setCount(0);
+        return;
+      }
+      setLoading(true);
       try {
-        setLoading(true);
-        setError(null);
-        const offset = (page - 1) * limit;
-        const res = await listChats(documentId!, limit, offset);
+        const res = await listChats(documentId, PAGE_SIZE, (targetPage - 1) * PAGE_SIZE);
+        setItems(res.chats ?? []);
+        setCount(res.count ?? 0);
+        setListError(null);
+      } catch (error) {
+        setListError(error instanceof Error ? error.message : 'Request failed');
+        setItems([]);
+        setCount(0);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [documentId, page],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!documentId) {
+        setItems([]);
+        setCount(0);
+        return;
+      }
+      setLoading(true);
+      try {
+        const res = await listChats(documentId, PAGE_SIZE, (page - 1) * PAGE_SIZE);
         if (cancelled) return;
-        setItems(res.chats || []);
-        setCount(res.count || 0);
-      } catch (e: any) {
+        setItems(res.chats ?? []);
+        setCount(res.count ?? 0);
+        setListError(null);
+      } catch (error) {
         if (cancelled) return;
-        setError(e?.message || 'Failed to load chats');
+        setListError(error instanceof Error ? error.message : 'Request failed');
+        setItems([]);
+        setCount(0);
       } finally {
         if (!cancelled) setLoading(false);
       }
-    }
-    run();
-    return () => { cancelled = true; };
-  }, [documentId, page, limit]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [documentId, page]);
+
+  const selectChat = (chat: ChatItem) => {
+    setSelectedChatId(chat.chat_id);
+    setSelectedThreadId(typeof chat.last_thread_id === 'number' ? chat.last_thread_id : null);
+  };
 
   async function onCreate() {
     if (!documentId) return;
+    setLoading(true);
     try {
-      setLoading(true);
       const res = await createChat(documentId);
-      await refresh();
+      await refresh(page);
       setSelectedChatId(res.chat_id);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to create chat');
+      setSelectedThreadId(null);
+    } catch (error) {
+      toast({
+        title: 'Could not create chat',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'error',
+      });
     } finally {
       setLoading(false);
     }
   }
 
-  async function onDelete(id: string) {
+  async function onDelete(chat: ChatItem) {
     if (!documentId) return;
-    const ok = window.confirm('Delete this chat? This cannot be undone.');
+    const ok = await confirm({
+      title: `Delete “${chatLabel(chat)}”?`,
+      description: 'The conversation and its messages are removed permanently.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
     if (!ok) return;
+
+    setLoading(true);
     try {
-      setLoading(true);
-      await deleteChat(documentId, id);
-      if (selectedChatId === id) setSelectedChatId(null);
-      await refresh();
-    } catch (e: any) {
-      setError(e?.message || 'Failed to delete chat');
+      await deleteChat(documentId, chat.chat_id);
+      if (selectedChatId === chat.chat_id) {
+        setSelectedChatId(null);
+        setSelectedThreadId(null);
+      }
+      const nextPage = Math.min(page, Math.max(1, Math.ceil(Math.max(0, count - 1) / PAGE_SIZE)));
+      setPage(nextPage);
+      await refresh(nextPage);
+    } catch (error) {
+      toast({
+        title: 'Could not delete chat',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'error',
+      });
     } finally {
       setLoading(false);
     }
-  }
-
-  function startRename(chat: ChatItem) {
-    setRenamingId(chat.chat_id);
-    setRenameValue(chat.title || '');
   }
 
   async function commitRename(chatId: string) {
-    if (!documentId) return;
+    if (!documentId || renamingId !== chatId) return;
+    const nextTitle = renameValue.trim();
+    setRenamingId(null);
+    setRenameValue('');
     try {
-      setLoading(true);
-      await updateChatTitle(documentId, chatId, renameValue.trim() || '');
-      setRenamingId(null);
-      setRenameValue('');
-      await refresh();
-    } catch (e: any) {
-      setError(e?.message || 'Failed to rename chat');
-    } finally {
-      setLoading(false);
+      await updateChatTitle(documentId, chatId, nextTitle);
+      await refresh(page);
+    } catch (error) {
+      toast({
+        title: 'Could not rename chat',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'error',
+      });
     }
   }
 
-  async function refresh() {
-    if (!documentId) return;
-    try {
-      const res = await listChats(documentId, limit, (page - 1) * limit);
-      setItems(res.chats || []);
-      setCount(res.count || 0);
-    } catch {}
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameValue('');
   }
 
+  if (!documentId) {
+    return (
+      <EmptyState
+        icon={MessageSquare}
+        title="No document yet"
+        description="Save this document to start keeping assistant conversations with it."
+        className="h-full"
+      />
+    );
+  }
+
+  const showSkeleton = loading && items.length === 0;
+
   return (
-    <div className="flex flex-col gap-3 h-full" aria-busy={loading}>
-      {/* Actions */}
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">
-          {documentId ? (loading ? 'Loading…' : `${count} total`) : 'Save document first'}
-        </span>
-        <div className="flex items-center gap-1.5">
-          <Button variant="ghost" size="sm" onClick={() => refresh()} disabled={loading || !documentId}>
-            Refresh
-          </Button>
-          <Button size="sm" onClick={onCreate} disabled={loading || !documentId}>
-            New Chat
-          </Button>
-        </div>
-      </div>
-
-      <form className="flex items-center gap-2" onSubmit={(e) => e.preventDefault()}>
+    <div className="flex h-full flex-col gap-3" aria-busy={loading}>
+      <div className="flex items-center gap-1.5">
         <Input
-          className="flex-1"
-          placeholder="Search chats..."
+          type="search"
+          className="h-8 flex-1"
+          placeholder="Filter chats…"
+          aria-label="Filter chats"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          disabled={loading}
+          onChange={(event) => setQuery(event.target.value)}
         />
-        {query && (
-          <Button variant="outline" size="sm" onClick={() => setQuery('')} type="button">Clear</Button>
-        )}
-      </form>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => refresh(page)}
+          disabled={loading}
+          aria-label="Refresh chat list"
+          title="Refresh"
+        >
+          <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+        </Button>
+      </div>
 
-      {error && <div className="text-sm text-destructive" role="alert" aria-live="polite">{error}</div>}
+      <Button size="sm" onClick={onCreate} disabled={loading} className="w-full">
+        {loading ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
+        New chat
+      </Button>
 
-      <div className="space-y-2 overflow-auto" role="list">
-        {filtered.map((c) => {
-          const isSelected = c.chat_id === selectedChatId;
-          const isRenaming = renamingId === c.chat_id;
-          return (
-            <div
-              key={c.chat_id}
-              role="listitem"
-              className={cn(
-                "flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors",
-                isSelected ? "bg-primary/10 border-primary" : "bg-card border-border hover:bg-accent"
-              )}
-              aria-selected={isSelected}
-              tabIndex={0}
-              onClick={() => { setSelectedChatId(c.chat_id); setSelectedThreadId(typeof c.last_thread_id === 'number' ? c.last_thread_id : null); }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  setSelectedChatId(c.chat_id);
-                  setSelectedThreadId(typeof c.last_thread_id === 'number' ? c.last_thread_id : null);
-                }
-              }}
-            >
-              <div className="text-lg">💬</div>
-              <div className="flex-1 min-w-0">
-                {!isRenaming ? (
-                  <div className="text-sm font-medium truncate"><Title chat={c} /></div>
-                ) : (
-                  <Input
-                    className="h-7 text-sm"
-                    value={renameValue}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') { e.preventDefault(); commitRename(c.chat_id); }
-                      if (e.key === 'Escape') { e.preventDefault(); setRenamingId(null); setRenameValue(''); }
-                    }}
-                    onBlur={() => { if (renamingId === c.chat_id) commitRename(c.chat_id); }}
-                  />
-                )}
-                <div className="text-xs text-muted-foreground">
-                  {c.updated_at ? new Date(c.updated_at).toLocaleString() : '—'}
-                  {typeof c.last_thread_id === 'number' ? ` · thread #${c.last_thread_id}` : ''}
+      <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
+        {showSkeleton &&
+          Array.from({ length: 3 }).map((_, index) => (
+            <li key={index} className="rounded-lg border border-border p-3">
+              <Skeleton className="mb-2 h-3.5 w-2/3" />
+              <Skeleton className="h-3 w-1/3" />
+            </li>
+          ))}
+
+        {!showSkeleton &&
+          filtered.map((chat) => {
+            const isSelected = chat.chat_id === selectedChatId;
+            const isRenaming = renamingId === chat.chat_id;
+
+            return (
+              <li key={chat.chat_id}>
+                <div
+                  className={cn(
+                    'group flex items-center gap-1 rounded-lg border transition-colors',
+                    isSelected ? 'border-primary bg-primary/10' : 'border-border bg-card hover:bg-accent',
+                  )}
+                >
+                  {isRenaming ? (
+                    <div className="flex flex-1 items-center gap-1 p-2">
+                      <Input
+                        autoFocus
+                        className="h-7 flex-1"
+                        aria-label="Chat title"
+                        value={renameValue}
+                        onChange={(event) => setRenameValue(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            commitRename(chat.chat_id);
+                          }
+                          if (event.key === 'Escape') {
+                            event.preventDefault();
+                            cancelRename();
+                          }
+                        }}
+                        onBlur={() => commitRename(chat.chat_id)}
+                      />
+                      <Button
+                        size="icon-sm"
+                        // Without this, blur fires first and commits the rename
+                        // before the click ever reaches the button.
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => commitRename(chat.chat_id)}
+                        aria-label="Save chat title"
+                      >
+                        <Save className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => selectChat(chat)}
+                        aria-current={isSelected ? 'true' : undefined}
+                        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-2.5 text-left"
+                      >
+                        <MessageSquare
+                          aria-hidden="true"
+                          className={cn(
+                            'h-4 w-4 shrink-0',
+                            isSelected ? 'text-primary' : 'text-muted-foreground',
+                          )}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span
+                            className={cn(
+                              'block truncate text-sm font-medium',
+                              !chat.title?.trim() && 'text-muted-foreground',
+                            )}
+                          >
+                            {chatLabel(chat)}
+                          </span>
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {formatDateTime(chat.updated_at) || 'No activity yet'}
+                          </span>
+                        </span>
+                      </button>
+                      <div className="mr-1.5 flex flex-shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => {
+                            setRenamingId(chat.chat_id);
+                            setRenameValue(chat.title ?? '');
+                          }}
+                          aria-label={`Rename ${chatLabel(chat)}`}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() => onDelete(chat)}
+                          aria-label={`Delete ${chatLabel(chat)}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </>
+                  )}
                 </div>
-              </div>
-              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                {!isRenaming ? (
-                  <>
-                    <Button variant="ghost" size="sm" onClick={() => startRename(c)}>Rename</Button>
-                    <Button variant="destructive" size="sm" onClick={() => onDelete(c.chat_id)}>Delete</Button>
-                  </>
-                ) : (
-                  <>
-                    <Button size="sm" onClick={() => commitRename(c.chat_id)}>Save</Button>
-                    <Button variant="outline" size="sm" onClick={() => { setRenamingId(null); setRenameValue(''); }}>Cancel</Button>
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })}
+              </li>
+            );
+          })}
 
-        {documentId && !loading && !items.length && (
-          <div className="text-center py-8">
-            <div className="text-3xl mb-2">💬</div>
-            <div className="font-medium">No chats yet</div>
-            <div className="text-sm text-muted-foreground">Start a new session to keep a history of your assistant conversations.</div>
-          </div>
+        {!loading && listError && (
+          <li
+            role="alert"
+            className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-center"
+          >
+            <p className="flex items-center justify-center gap-1.5 text-sm font-medium text-destructive">
+              <AlertCircle aria-hidden="true" className="h-3.5 w-3.5" />
+              Could not load chats
+            </p>
+            <p className="mt-1 break-words text-xs text-muted-foreground">{listError}</p>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => refresh(page)}>
+              Retry
+            </Button>
+          </li>
         )}
 
-        {!documentId && (
-          <div className="text-center py-8">
-            <div className="text-3xl mb-2">💾</div>
-            <div className="font-medium">No document ID</div>
-            <div className="text-sm text-muted-foreground">Create or save your document to enable chats.</div>
-          </div>
+        {!loading && !listError && items.length === 0 && (
+          <EmptyState
+            icon={MessageSquare}
+            title="No chats yet"
+            description="Start a conversation to keep a history of your assistant sessions."
+          />
         )}
-      </div>
 
-      <div className="flex items-center justify-between pt-2 border-t border-border">
-        <div className="text-xs text-muted-foreground">
-          {count ? `${Math.min(count, (page-1)*limit+1)}–${Math.min(page*limit, count)} of ${count}` : '—'}
+        {!loading && items.length > 0 && filtered.length === 0 && (
+          <EmptyState icon={MessageSquare} title="No matches" description="Try a different filter." />
+        )}
+      </ul>
+
+      {totalPages > 1 && (
+        <div className="flex flex-shrink-0 items-center justify-between border-t border-border pt-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1 || loading}
+            aria-label="Previous page"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </Button>
+          <span className="text-2xs tabular-nums text-muted-foreground">
+            {Math.min(count, (page - 1) * PAGE_SIZE + 1)}–{Math.min(page * PAGE_SIZE, count)} of {count}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages || loading}
+            aria-label="Next page"
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p-1))} disabled={!canPaginate.prev}>Prev</Button>
-          <Button variant="outline" size="sm" onClick={() => setPage(p => p+1)} disabled={!canPaginate.next}>Next</Button>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

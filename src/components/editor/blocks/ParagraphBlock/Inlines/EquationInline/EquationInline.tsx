@@ -1,209 +1,255 @@
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import type { ParagraphChild } from '../../../../../../editor';
-import { serializeEditableHtml } from '../../../../../../components/common/Editable/Editable';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { EquationChild } from '@/editor';
+import type { InlineWidgetProps } from '../types';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { useEditor } from '@/editor';
+import { katexStatus, onKatexStatus, renderLatex, type KatexStatus } from '@/lib/katex';
+import {
+  InlinePill,
+  InlinePopover,
+  SettingsCheck,
+  SettingsFooter,
+  SettingsRow,
+  stopEditorEvents,
+  useInlineChild,
+} from '../shared';
+import { AlertCircle } from 'lucide-react';
 
-export function EquationInline({
-  blockId,
-  child,
-  updateParagraphChild,
-  removeParagraphChild,
-  updateHtml,
-  refs,
-}: {
-  blockId: string;
-  child: ParagraphChild;
-  updateParagraphChild: (blockId: string, childId: string, next: Partial<ParagraphChild>) => void;
-  removeParagraphChild: (blockId: string, childId: string) => void;
-  updateHtml: (id: string, html: string) => void;
-  refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
-}) {
+/**
+ * Type-guard wrapper. It declares no hooks, so returning early here is safe;
+ * the guard used to sit above the content component's hooks, which meant a
+ * child whose type changed in place rendered fewer hooks than the previous
+ * pass and crashed React.
+ */
+export function EquationInline({ child, ...rest }: InlineWidgetProps) {
   if (child.type !== 'equation') return null;
+  return <EquationInlineContent child={child} {...rest} />;
+}
 
-  // Local UI state
-  const [latex, setLatex] = useState(child.latex || '');
-  const [numbered, setNumbered] = useState(!!child.numbered);
-  const [labelId, setLabelId] = useState(child.labelId || '');
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLSpanElement | null>(null);
-  const initialRef = useRef<{ latex: string; numbered: boolean; labelId: string }>({ latex: child.latex || '', numbered: !!child.numbered, labelId: child.labelId || '' });
-  const [katexReady, setKatexReady] = useState(() => !!(typeof window !== 'undefined' && (window as any)?.katex));
+/** Symbols an author reaches for constantly and cannot type. */
+const PALETTE: Array<{ label: string; insert: string; caret?: number }> = [
+  { label: '𝑥ⁿ', insert: '^{}', caret: 2 },
+  { label: '𝑥ₙ', insert: '_{}', caret: 2 },
+  { label: 'a⁄b', insert: '\\frac{}{}', caret: 6 },
+  { label: '√', insert: '\\sqrt{}', caret: 6 },
+  { label: '∑', insert: '\\sum_{i=1}^{n} ' },
+  { label: '∫', insert: '\\int_{a}^{b} ' },
+  { label: '∂', insert: '\\partial ' },
+  { label: '∞', insert: '\\infty ' },
+  { label: 'α', insert: '\\alpha ' },
+  { label: 'β', insert: '\\beta ' },
+  { label: 'θ', insert: '\\theta ' },
+  { label: 'λ', insert: '\\lambda ' },
+  { label: 'μ', insert: '\\mu ' },
+  { label: 'σ', insert: '\\sigma ' },
+  { label: '≈', insert: '\\approx ' },
+  { label: '≤', insert: '\\leq ' },
+  { label: '≥', insert: '\\geq ' },
+  { label: '×', insert: '\\times ' },
+  { label: '→', insert: '\\to ' },
+  { label: '𝐯', insert: '\\mathbf{}', caret: 8 },
+];
 
-  // Sync when identity changes
-  useEffect(() => {
-    setLatex(child.latex || '');
-    setNumbered(!!child.numbered);
-    setLabelId(child.labelId || '');
-    initialRef.current = { latex: child.latex || '', numbered: !!child.numbered, labelId: child.labelId || '' };
-  }, [child.id]);
+/** Watch KaTeX so the widget re-renders the moment it becomes available. */
+function useKatexStatus(): KatexStatus {
+  const [status, setStatus] = useState<KatexStatus>(katexStatus);
+  useEffect(() => onKatexStatus(setStatus), []);
+  return status;
+}
 
-  // Debounced persistence to JSON
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      const next: ParagraphChild = {
-        ...(child as any),
-        latex,
-        numbered,
-        labelId,
-      } as any;
-      if (JSON.stringify(child) !== JSON.stringify(next)) {
-        updateParagraphChild(blockId, child.id, { latex, numbered, labelId } as any);
+function EquationInlineContent(props: InlineWidgetProps<EquationChild>) {
+  const { child } = props;
+  const { patch, remove } = useInlineChild(props);
+  const { blocks } = useEditor();
+  const status = useKatexStatus();
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const latex = child.latex ?? '';
+  const display = child.display === true;
+
+  const rendered = useMemo(
+    // `status` is not read in the body but is what makes this recompute once
+    // the script lands — without it the first render's failure would stick.
+    () => (latex.trim() && status === 'ready' ? renderLatex(latex, display) : null),
+    [latex, display, status],
+  );
+  const hasError = rendered != null && !rendered.ok && status === 'ready';
+
+  /**
+   * Equation number, counted across the whole document.
+   *
+   * The old citation and equation widgets both numbered within their own
+   * paragraph, so a paper had several "(1)"s. Numbering is a document-level
+   * property; anything else is wrong on the page.
+   */
+  const number = useMemo(() => {
+    let count = 0;
+    for (const block of blocks) {
+      if (block.type !== 'paragraph') continue;
+      for (const candidate of block.children ?? []) {
+        if (candidate.type !== 'equation' || !candidate.numbered || !candidate.display) continue;
+        count += 1;
+        if (candidate.id === child.id) return count;
       }
-    }, 60);
-    return () => window.clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [latex, numbered, labelId]);
-
-  // Close popover on outside click
-  useEffect(() => {
-    if (!open) return;
-    const onDocMouseDown = (e: MouseEvent) => {
-      const t = e.target as HTMLElement | null;
-      const inside = !!t && !!rootRef.current && rootRef.current.contains(t);
-      if (!inside) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDocMouseDown, true);
-    return () => document.removeEventListener('mousedown', onDocMouseDown, true);
-  }, [open]);
-
-  const pillText = useMemo(() => {
-    const txt = (latex || '').trim();
-    return txt ? (txt.length > 80 ? txt.slice(0, 80) + '…' : txt) : 'Equation';
-  }, [latex]);
-
-  // Detect when KaTeX becomes available (script may load after component mounts)
-  useEffect(() => {
-    if (katexReady) return;
-    let timer: number | null = null;
-    let tries = 0;
-    const check = () => {
-      if ((window as any)?.katex) {
-        setKatexReady(true);
-        return;
-      }
-      if (tries++ < 40) { // ~6s max at 150ms
-        timer = window.setTimeout(check, 150);
-      }
-    };
-    check();
-    return () => { if (timer) window.clearTimeout(timer); };
-  }, [katexReady]);
-
-  // Optional KaTeX rendering for preview (uses global window.katex if present)
-  const katexHtml = useMemo(() => {
-    const src = (latex || '').trim();
-    if (!src) return '';
-    const k = (window as any)?.katex;
-    if (!k || typeof k.renderToString !== 'function') return '';
-    try {
-      return k.renderToString(src, { displayMode: false, throwOnError: false });
-    } catch {
-      return '';
     }
-  }, [latex, katexReady]);
+    return count || 1;
+  }, [blocks, child.id]);
 
-  const onRemove = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const host = refs.current[blockId];
-    const el = host?.querySelector(`[data-child-id="${child.id}"]`);
-    el?.parentNode?.removeChild(el as any);
-    removeParagraphChild(blockId, child.id);
-    const editable = refs.current[blockId];
-    if (editable) updateHtml(blockId, serializeEditableHtml(editable));
+  const insert = (snippet: string, caretOffset?: number) => {
+    const el = inputRef.current;
+    const start = el?.selectionStart ?? latex.length;
+    const end = el?.selectionEnd ?? latex.length;
+    const next = latex.slice(0, start) + snippet + latex.slice(end);
+    patch({ latex: next });
+    requestAnimationFrame(() => {
+      const position = start + (caretOffset ?? snippet.length);
+      el?.focus();
+      el?.setSelectionRange(position, position);
+    });
   };
 
-  return (
-    <span 
-      ref={rootRef} 
-      className="equation-inline inline-block align-baseline relative" 
-      role="group" 
-      aria-label="Equation" 
-      contentEditable={false as any} 
-      onMouseDown={(e) => e.stopPropagation()} 
-      onClick={(e) => e.stopPropagation()}
-    >
-      <button
-        type="button"
-        className={cn(
-          "inline-flex items-center gap-1 px-1.5 py-0.5",
-          "bg-amber-950/40 text-amber-400 border border-amber-700/50 rounded",
-          "hover:bg-amber-900/50 transition-colors cursor-pointer font-mono text-sm"
-        )}
-        title="Edit equation"
-        onMouseDown={(e) => { e.preventDefault(); setOpen(v => !v); }}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v); } }}
+  const preview = (className?: string) => {
+    if (!latex.trim()) {
+      return <span className="text-sm text-muted-foreground">Empty equation</span>;
+    }
+    if (status === 'loading') {
+      return <code className={cn('font-mono text-sm opacity-60', className)}>{latex}</code>;
+    }
+    if (rendered?.ok) {
+      // KaTeX output is markup it generated from the author's own LaTeX, and
+      // the source never leaves this editor — but it is still the one place
+      // markup is injected, so it is confined to this branch.
+      return <span className={className} dangerouslySetInnerHTML={{ __html: rendered.html }} />;
+    }
+    return <code className={cn('font-mono text-sm', className)}>{latex}</code>;
+  };
+
+  const editor = (close: () => void) => (
+    <div className="w-[22rem] max-w-[80vw]">
+      <SettingsRow
+        label="LaTeX"
+        htmlFor={`latex-${child.id}`}
+        hint="Shift+Enter adds a line; Enter finishes."
       >
-        <span>
-          {latex ? (
-            katexHtml ? (
-              <span dangerouslySetInnerHTML={{ __html: katexHtml }} />
-            ) : (
-              <code>{pillText}</code>
-            )
-          ) : (
-            'Equation'
-          )}
-        </span>
-        <span className="text-xs opacity-60" aria-hidden>▾</span>
-      </button>
-      {open && (
-        <div 
-          className="absolute left-0 top-full mt-1 z-50 bg-popover border border-border rounded-lg shadow-lg p-3 min-w-[280px]" 
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center gap-2 mb-2">
-            <label className="text-xs text-muted-foreground w-20 shrink-0">LaTeX</label>
-            <Input
-              className="h-8 text-sm font-mono"
-              type="text"
-              placeholder="E=mc^2"
-              value={latex}
-              onChange={(e) => setLatex(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') { e.preventDefault(); setOpen(false); }
-                if (e.key === 'Escape') { e.preventDefault(); const init = initialRef.current; setLatex(init.latex); setNumbered(init.numbered); setLabelId(init.labelId); setOpen(false); }
-              }}
-            />
-          </div>
-          <div className="flex items-center gap-2 mb-2">
-            <label className="text-xs text-muted-foreground w-20 shrink-0">Numbered</label>
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-border"
-              checked={numbered}
-              onChange={(e) => setNumbered(e.target.checked)}
-            />
-          </div>
-          <div className="flex items-center gap-2 mb-3">
-            <label className="text-xs text-muted-foreground w-20 shrink-0">Label ID</label>
-            <Input
-              className="h-8 text-sm"
-              type="text"
-              placeholder="eq:mass-energy"
-              value={labelId}
-              onChange={(e) => setLabelId(e.target.value)}
-            />
-          </div>
-          <div className="p-3 bg-muted rounded-md text-center mb-3 min-h-[40px] flex items-center justify-center">
-            {latex ? (
-              katexHtml ? (
-                <span dangerouslySetInnerHTML={{ __html: katexHtml }} />
-              ) : (
-                <code className="font-mono text-sm">{latex}</code>
-              )
-            ) : (
-              <span className="text-muted-foreground text-sm">Equation preview</span>
-            )}
-          </div>
-          <div className="flex items-center justify-end gap-2">
-            <Button type="button" variant="destructive" size="sm" onMouseDown={onRemove}>Remove</Button>
-            <Button type="button" variant="outline" size="sm" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</Button>
-          </div>
-        </div>
+        <Textarea
+          id={`latex-${child.id}`}
+          ref={inputRef}
+          rows={2}
+          value={latex}
+          placeholder="E = mc^2"
+          onChange={(event) => patch({ latex: event.target.value })}
+          onKeyDown={(event) => {
+            // Plain Enter confirms — the pattern the table's cells and the
+            // widget docs share. Shift+Enter is the escape hatch, because
+            // multi-line LaTeX (aligned, cases) is ordinary maths, not an edge.
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              close();
+            }
+          }}
+          className="min-h-0 resize-y px-2 py-1.5 font-mono"
+        />
+      </SettingsRow>
+
+      <div className="mb-2 flex flex-wrap gap-0.5">
+        {PALETTE.map((symbol) => (
+          <button
+            key={symbol.label}
+            type="button"
+            title={symbol.insert.trim()}
+            onClick={() => insert(symbol.insert, symbol.caret)}
+            className="h-7 min-w-7 rounded-sm px-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            {symbol.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mb-2 space-y-1.5">
+        <SettingsCheck
+          id={`display-${child.id}`}
+          label="Display on its own line"
+          checked={display}
+          onChange={(checked) => patch({ display: checked })}
+        />
+        <SettingsCheck
+          id={`numbered-${child.id}`}
+          label="Numbered"
+          checked={display && child.numbered === true}
+          disabled={!display}
+          hint={display ? undefined : 'Only display equations are numbered'}
+          onChange={(checked) => patch({ numbered: checked })}
+        />
+      </div>
+
+      {display && child.numbered && (
+        <SettingsRow label="Label" htmlFor={`label-${child.id}`} hint="Used for cross-references.">
+          <Input
+            id={`label-${child.id}`}
+            type="text"
+            value={child.labelId ?? ''}
+            placeholder="eq:mass-energy"
+            onChange={(event) => patch({ labelId: event.target.value })}
+            className="h-8 px-2"
+          />
+        </SettingsRow>
       )}
+
+      <div className="min-h-[3rem] rounded-md bg-muted px-3 py-2 text-center">{preview()}</div>
+
+      {hasError && (
+        <p role="alert" className="mt-1.5 flex items-start gap-1.5 text-xs text-destructive">
+          <AlertCircle aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 break-words">{rendered.error}</span>
+        </p>
+      )}
+      {status === 'unavailable' && (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Typesetting is unavailable offline — the LaTeX is saved and will render once the page can
+          reach the maths library again.
+        </p>
+      )}
+
+      <SettingsFooter onRemove={remove} onDone={close} />
+    </div>
+  );
+
+  /* ----------------------------------------
+     One popover, two triggers: inline maths sits in the run of text as a
+     pill; display maths takes a centred line of its own with a right-aligned
+     number, the way it appears in a paper.
+     ---------------------------------------- */
+
+  const trigger = display ? (
+    <button
+      type="button"
+      className="grid w-full grid-cols-[1fr_auto] items-center gap-2 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-border hover:bg-card"
+      title="Edit equation"
+    >
+      <span className="overflow-x-auto text-center">{preview('text-base')}</span>
+      {child.numbered && (
+        <span className="shrink-0 tabular-nums text-sm text-muted-foreground">({number})</span>
+      )}
+    </button>
+  ) : (
+    <InlinePill tone={hasError ? 'error' : 'default'} title={hasError ? rendered.error : 'Edit equation'}>
+      {preview('text-sm')}
+    </InlinePill>
+  );
+
+  return (
+    <span
+      className={display ? 'equation-inline my-3 block' : 'equation-inline relative inline-block align-baseline'}
+      role="group"
+      aria-label={display ? 'Display equation' : 'Equation'}
+      contentEditable={false}
+      {...stopEditorEvents}
+    >
+      <InlinePopover align={display ? 'center' : 'start'} contentClassName="w-auto p-3" trigger={trigger}>
+        {editor}
+      </InlinePopover>
     </span>
   );
 }

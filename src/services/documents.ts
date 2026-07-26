@@ -36,16 +36,38 @@ function toEditorDoc(payload: unknown): Doc {
   return { version: 1, blocks: [] };
 }
 
-// Create a new document, returns generated document_id
-export async function createDocument(doc: NewDocInput): Promise<{ document_id: string }> {
-  const payload = toBackendDocument(doc);
-  return post<{ document_id: string }>('/document/create', { document: payload });
+/** HTTP status the backend uses for an optimistic-concurrency failure. */
+export const VERSION_CONFLICT_STATUS = 409;
+
+export function isVersionConflict(error: unknown): boolean {
+  return (error as { status?: number } | null)?.status === VERSION_CONFLICT_STATUS;
 }
 
-// Update an existing document by ID
-export async function saveDocument(documentId: string, doc: NewDocInput): Promise<{ status: string; message: string }> {
+// Create a new document, returns generated document_id
+export async function createDocument(
+  doc: NewDocInput,
+): Promise<{ document_id: string; version?: number }> {
   const payload = toBackendDocument(doc);
-  return put<{ status: string; message: string }>(`/document/save/${encodeURIComponent(documentId)}`, { document: payload });
+  return post<{ document_id: string; version?: number }>('/document/create', { document: payload });
+}
+
+/**
+ * Update an existing document by ID.
+ *
+ * The response carries the post-save `version`. Saves are optimistically
+ * locked on that number, so the caller MUST adopt it — otherwise it keeps
+ * resending the version it loaded with and every save after the first is
+ * rejected.
+ */
+export async function saveDocument(
+  documentId: string,
+  doc: NewDocInput,
+): Promise<{ status: string; message: string; version?: number }> {
+  const payload = toBackendDocument(doc);
+  return put<{ status: string; message: string; version?: number }>(
+    `/document/save/${encodeURIComponent(documentId)}`,
+    { document: payload },
+  );
 }
 
 // Load a document by ID and return our Doc shape

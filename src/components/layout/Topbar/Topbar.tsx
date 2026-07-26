@@ -9,74 +9,102 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/components/auth/AuthContext';
-import { ChevronDown, LogOut, User } from 'lucide-react';
+import { usePanels } from '@/components/panels/panelsContext';
+import { BrandMark, APP_NAME, APP_TAGLINE } from '@/components/common/Brand';
+import { ChevronDown, LogOut, Menu, User } from 'lucide-react';
+
+/** Two-letter monogram from a display name or email local-part. */
+function initialsFor(nameOrEmail: string): string {
+  const parts = nameOrEmail
+    .replace(/@.*/, '')
+    .split(/[\s._-]+/g)
+    .filter(Boolean);
+  const first = parts[0]?.[0] ?? 'C';
+  const second = parts[1]?.[0] ?? parts[0]?.[1] ?? 'W';
+  return `${first}${second}`.toUpperCase();
+}
 
 export function Topbar() {
-  const { user, openAuth, logout } = useAuth();
+  const { user, logout } = useAuth();
+  const { isDesktop, setMobileNavOpen } = usePanels();
 
-  const initials = useMemo(() => {
-    if (!user) return '';
-    const parts = (user.name || user.email || '?').replace(/@.*/, '').split(/[\s._-]+/g).filter(Boolean);
-    const [a, b] = [parts[0]?.[0] || 'C', parts[1]?.[0] || 'W'];
-    return `${a}${b}`.toUpperCase();
-  }, [user]);
+  const initials = useMemo(
+    () => (user ? initialsFor(user.name || user.email || '?') : ''),
+    [user],
+  );
+
+  // App renders LandingPage when there is no user, so the topbar is only ever
+  // shown to a signed-in account; a signed-out branch here would be dead code.
+  if (!user) return null;
+
+  const displayName = user.name || user.email?.split('@')[0] || 'Account';
 
   return (
-    <div className="flex items-center justify-between gap-3 px-3 py-2 bg-card border border-border/60 rounded-xl relative z-10 w-full">
-      {/* Brand */}
-      <a href="#" className="flex items-center gap-2.5 text-inherit no-underline" aria-label="ColWrite home">
-        <div className="w-7 h-7 rounded-md grid place-items-center bg-primary/90 text-white font-bold text-xs">
-          CW
-        </div>
-        <div>
-          <div className="font-semibold text-sm">ColWrite</div>
-          <div className="text-xs text-muted-foreground">Assistant writer for arXiv papers</div>
-        </div>
-      </a>
-
-      {/* Actions */}
-      <div className="flex items-center gap-2">
-        {!user && (
-          <Button size="sm" onClick={() => openAuth()}>
-            Sign in
+    <div className="relative flex w-full items-center justify-between gap-3 rounded-xl border border-border/60 bg-card px-3 py-2 z-[var(--z-sticky)]">
+      <div className="flex min-w-0 items-center gap-2">
+        {!isDesktop && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setMobileNavOpen(true)}
+            aria-label="Open navigation"
+          >
+            <Menu className="h-4 w-4" />
           </Button>
         )}
-        
-        {user && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="gap-2 h-auto py-1.5 px-2">
-                <div className="w-6 h-6 rounded-md bg-primary/90 text-white grid place-items-center font-bold text-xs">
-                  {initials}
-                </div>
-                <div className="text-left hidden sm:block">
-                  <div className="font-medium text-sm">{user.name || user.email?.split('@')[0]}</div>
-                  <div className="text-[11px] text-muted-foreground">{user.email}</div>
-                </div>
-                <ChevronDown className="h-3.5 w-3.5 opacity-50" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel>
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs text-muted-foreground">Signed in as</span>
-                  <span className="font-medium text-sm truncate">{user.email}</span>
-                </div>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem>
-                <User className="mr-2 h-4 w-4" />
-                Profile
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={logout} className="text-destructive">
-                <LogOut className="mr-2 h-4 w-4" />
-                Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+
+        {/* Presentational lockup: there is no other page to navigate to, so
+            this is deliberately not a link to `#`. */}
+        <div className="flex min-w-0 items-center gap-2.5">
+          <BrandMark size="md" />
+          <div className="min-w-0">
+            <div className="text-base font-semibold leading-tight">{APP_NAME}</div>
+            <div className="hidden truncate text-xs text-muted-foreground sm:block">
+              {APP_TAGLINE}
+            </div>
+          </div>
+        </div>
       </div>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-auto gap-2 px-2 py-1.5">
+            <span
+              aria-hidden="true"
+              className="grid h-6 w-6 place-items-center rounded-md bg-secondary text-2xs font-bold text-secondary-foreground"
+            >
+              {initials}
+            </span>
+            <span className="hidden text-left sm:block">
+              <span className="block text-sm font-medium leading-tight">{displayName}</span>
+              {user.email && (
+                <span className="block text-2xs leading-tight text-muted-foreground">
+                  {user.email}
+                </span>
+              )}
+            </span>
+            <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 opacity-50" />
+            <span className="sr-only">Account menu</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuLabel>
+            <span className="block text-xs font-normal text-muted-foreground">Signed in as</span>
+            <span className="block truncate text-sm font-medium">{user.email || displayName}</span>
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled>
+            <User aria-hidden="true" className="mr-2 h-4 w-4" />
+            Profile
+            <span className="ml-auto text-2xs text-muted-foreground">Soon</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={logout} className="text-destructive focus:text-destructive">
+            <LogOut aria-hidden="true" className="mr-2 h-4 w-4" />
+            Sign out
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

@@ -40,7 +40,7 @@ export function ChatSessionsProvider({ children }: { children: React.ReactNode }
       const key = keyForDoc(documentId);
       if (!key) return;
       if (id) localStorage.setItem(key, id); else localStorage.removeItem(key);
-    } catch {}
+    } catch { /* persisted selection is optional */ }
   }, [documentId]);
 
   const setSelectedThreadId = useCallback((id: number | null) => {

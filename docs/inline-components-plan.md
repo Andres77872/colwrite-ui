@@ -17,10 +17,11 @@ Ground-truth code references:
 
 ## Architectural principles (current)
 - __Placeholders__: Paragraph `html` contains empty placeholders `<span data-child-id="ID" contenteditable="false"></span>`; actual state lives in `ParagraphBlock.children`.
-- __Portals__: `ParagraphBlock.tsx` queries placeholders and mounts React inline components with `createPortal` into each matching span.
+- __Portals__: `ParagraphBlock.tsx` queries placeholders and mounts React inline components with `createPortal` into each matching span, dispatched through the `INLINE_WIDGETS` registry (one entry per child type).
 - __Serialization__: `serializeEditableHtml(...)` cleans rendered internals inside `data-child-id` elements and persists only sanitized HTML.
-- __Insert/remove__: Slash menu items insert placeholders and call `addParagraphChild(...)`. Inline UIs remove themselves by deleting the placeholder, calling `removeParagraphChild(...)`, and persisting updated HTML.
-- __Editing__: `Editable.tsx` intercepts `/` to open the slash menu unless the caret is inside an inline (via `contentEditable=false` and CSS class checks).
+- __Insert/remove__: Slash menu items insert placeholders and call `addParagraphChild(...)` (via `insertInlineChild`). Inline UIs remove themselves by deleting the placeholder, calling `removeParagraphChild(...)`, and persisting updated HTML (via the shared `useInlineChild` hook).
+- __Editing__: `Editable.tsx` treats any `[data-child-id]` descendant as widget territory: `/`, Backspace and Enter there are the widget's business, not the paragraph's. Widget roots spread the shared `stopEditorEvents`.
+- __Shared chrome__ (`Inlines/shared/InlineShell.tsx`): one visual language — `InlinePill` (in-flow triggers, primary tint, destructive for errors), `InlineFigureShell` (block widgets: table, figure), `InlinePopover` (all editing panels), `SettingsRow` / `SettingsCheck` / `SettingsFooter`, built on the app's `Input` / `Textarea` / `Checkbox` primitives.
 
 ## Goals
 - Provide core scientific authoring inlines: Citation, Equation (inline math), Footnote, Cross-reference, Variable token.
@@ -44,11 +45,12 @@ export type CitationChild = {
   prefix?: string;          // e.g., 'see', 'cf.'
   suffix?: string;          // e.g., 'ch. 2', 'pp. 21–24'
   locator?: string;         // page/section locator if needed
+  sources?: CitationSource[]; // resolved title/authors/year/venue/url per key
 };
 ```
 - __UI/UX__:
-  - Renders as a small pill, e.g., `[1]` (numeric) or `(Smith, 2020)`.
-  - Click/Enter opens a popover: search/add/remove keys; set style; edit prefix/suffix.
+  - Renders as a small pill, e.g., `[1]` (numeric) or `(Smith, 2020)`. Numbering counts citations across the whole document, computed at render time.
+  - Click opens a popover: arXiv search/attach/detach sources, paste-a-key, style control with apply-to-all, prefix/locator/suffix.
   - Keyboard: Enter to confirm, Esc to close; Tab cycles fields.
   - Class: `citation-inline`.
 - __Slash menu__: `citation` (group: `insert`). On select: insert placeholder + add child with empty `keys: []`, default `style: 'numeric'`.
@@ -63,21 +65,22 @@ export type CitationChild = {
 }
 ```
 
-### 2) EquationInline (inline math)
-- __Purpose__: Inline LaTeX math (not block display). Suitable for `E=mc^2` within sentences.
+### 2) EquationInline (inline and display math)
+- __Purpose__: LaTeX math, both inline within sentences and display on its own centred line (implemented as `display?: boolean`, with optional document-wide numbering).
 - __JSON shape__:
 ```ts
 export type EquationChild = {
   id: string;
   type: 'equation';
   latex: string;            // LaTeX math content without $ delimiters
-  numbered?: boolean;       // seldom used for inline; reserved for future
+  display?: boolean;        // own centred line rather than the run of text
+  numbered?: boolean;       // display equations only
   labelId?: string;         // optional anchor for cross-referencing
 };
 ```
 - __UI/UX__:
-  - Renders LaTeX (KaTeX later; initial MVP can show plaintext until math renderer is integrated).
-  - Click toggles an inline editor textbox; Enter confirms; Esc cancels.
+  - Renders via KaTeX (CDN global wrapped by `src/lib/katex.ts`), with monospace source fallback while it loads and a destructive tone on render errors.
+  - Click opens the editor popover; Enter finishes, Shift+Enter adds a line; Esc closes.
   - Class: `equation-inline`.
 - __Slash menu__: `equation` (alias `math`). Insert placeholder and add child `{ latex: '' }`.
 - __Removal__: Close button; persist HTML via `serializeEditableHtml`.
@@ -190,15 +193,11 @@ export type ParagraphChild =
 ```
 
 ### Rendering in `ParagraphBlock.tsx`
-- Add cases to the portal mapping:
-  - `child.type === 'citation'` → `<CitationInline ... />`
-  - `child.type === 'equation'` → `<EquationInline ... />`
-  - `child.type === 'footnote'` → `<FootnoteInline ... />`
-  - `child.type === 'xref'` → `<XRefInline ... />`
-  - `child.type === 'var'` → `<VarInline ... />`
-- Follow `AiBeatInline` and `TableInline` patterns:
-  - Receive `blockId`, `child`, `updateParagraphChild`, `removeParagraphChild`, `updateHtml`, `refs`.
-  - Set wrapper `contentEditable={false}` and stop propagation on mouse events.
+- The portal dispatch is a registry, `INLINE_WIDGETS: Record<ParagraphChild['type'], ComponentType<AiBeatWidgetProps>>` — adding a widget is one entry, not a new branch:
+  - `aiBeat` → `AiBeatInline`, `table` → `TableInline`, `citation` → `CitationInline`, `equation` → `EquationInline`, `graph` → `GraphInline`
+  - `footnote` → `FootnoteInline`, `xref` → `<XRefInline />`, `var` → `<VarInline />` (planned)
+- Every widget receives the same six props (`blockId`, `child`, `updateParagraphChild`, `removeParagraphChild`, `updateHtml`, `refs`); AI Beat's two extras (`documentId`, `createRemote`) ride along in `AiBeatWidgetProps` and are ignored by the others.
+- Widget roots set `contentEditable={false}`, spread `stopEditorEvents`, and carry `role="group"` + `aria-label`.
 
 ### Slash menu items
 - Add slash items in `src/components/editor/SlashMenu/items/`:
@@ -227,7 +226,10 @@ export type ParagraphChild =
 - MVP alternative: update identical-name var children opportunistically in the inline component via `updateParagraphChild` scans.
 
 ### Styling/UI consistency
-- Use small chips/pills with subtle borders; follow button/toggle patterns from `AiBeatInline`/`TableInline`.
+- In-flow widgets render as the shared `InlinePill` — one primary-tinted treatment for every text-level construct; the destructive tone is reserved for errors (e.g. a citation with no source, unrenderable LaTeX). Borrowing chart-series or block-state colours for pills was an explicit anti-pattern.
+- Block widgets render in the shared `InlineFigureShell`: bordered card, controls that surface on hover/focus, optional caption strip.
+- All editing happens in the shared `InlinePopover` (Radix — portals out of the paragraph, so panels are never clipped by scrolling wrappers) with `SettingsRow` / `SettingsCheck` fields and one `SettingsFooter` (Remove / Done).
+- Fields use the app's `Input` / `Textarea` / `Checkbox` primitives; per-widget CSS files are gone — styling is Tailwind against the theme tokens.
 - Classes per component: `.citation-inline`, `.equation-inline`, `.footnote-inline`, `.xref-inline`, `.var-inline`.
 - Respect paragraph column layout via the host `Editable` styles (no fixed widths).
 - Ensure focus rings and keyboard navigation mirror existing components.
@@ -248,8 +250,8 @@ export type ParagraphChild =
 
 ## File scaffolding (per inline)
 - Component: `src/components/editor/blocks/ParagraphBlock/Inlines/<Name>Inline/<Name>Inline.tsx`
-- Styles: `src/components/editor/blocks/ParagraphBlock/Inlines/<Name>Inline/<Name>Inline.css`
-- Index: export from `src/components/editor/blocks/ParagraphBlock/Inlines/index.ts`
+- Registry entry in `INLINE_WIDGETS` (`ParagraphBlock.tsx`) + barrel export from `Inlines/index.ts`
+- Shared chrome from `Inlines/shared/` (no per-widget CSS files — Tailwind + theme tokens)
 - Slash item: `src/components/editor/SlashMenu/items/<name>.ts`
 
 ## QA checklist (per inline)
@@ -270,12 +272,11 @@ export type ParagraphChild =
 - Later: integrate KaTeX and CSL for polish.
 
 ## Open questions
-- Global citation style: document-level option or per-citation override? Where to store (doc meta vs provider state)?
+- Global citation style: document-level option or per-citation override? Where to store (doc meta vs provider state)? (Mitigated for now by the "apply to all citations" affordance in the citation popover.)
 - Cross-referencing headings: use hierarchical numbering (2.3) vs simple order?
 - Variable synchronization source of truth: doc meta map or first occurrence?
-- Accessibility details for popovers (roving tabindex vs focus trap)?
+- ~~Accessibility details for popovers (roving tabindex vs focus trap)?~~ Resolved: Radix Popover (non-modal, Esc to close, focus stays with the trigger region) via the shared `InlinePopover`.
 
 ## Non-goals (for now)
-- Block-level display equations (separate component/out of scope here).
 - Full bibliography management UI (library import, CSL processor).
 - Export to LaTeX/PDF; this doc only covers editor-side JSON and UI.

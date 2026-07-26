@@ -1,54 +1,60 @@
 import { useMemo } from 'react';
-import { cn } from '@/lib/utils';
-import { useEditor } from '../../../editor';
+import { useEditor } from '@/editor';
+import { countWords } from '@/lib/text';
 
+/**
+ * DocumentFooter — the status bar under the canvas.
+ *
+ * It previously listed block/heading/paragraph/divider counts: structural
+ * trivia that told a writer nothing. Word and character counts lead, with the
+ * structural totals kept as secondary detail.
+ */
 export function DocumentFooter() {
-  const { blocks } = useEditor();
+  const { blocks, documentId, hasAnyRemoteDocs } = useEditor();
 
   const stats = useMemo(() => {
-    let paragraphs = 0, headings = 0, dividers = 0, inlines = 0;
-    for (const b of blocks) {
-      if (b.type === 'paragraph') { paragraphs++; inlines += (b.children || []).length; }
-      else if (b.type === 'heading') headings++;
-      else if (b.type === 'divider') dividers++;
+    let words = 0;
+    let characters = 0;
+    let headings = 0;
+    let inlines = 0;
+
+    for (const block of blocks) {
+      if (block.type === 'heading') headings += 1;
+      if (block.type === 'paragraph') inlines += block.children?.length ?? 0;
+      if ('html' in block) {
+        const text = block.html
+          .replace(/<[^>]*>/g, ' ')
+          .replace(/&nbsp;/g, ' ')
+          .trim();
+        words += countWords(block.html);
+        characters += text.replace(/\s+/g, ' ').length;
+      }
     }
-    return { total: blocks.length, paragraphs, headings, dividers, inlines };
+
+    return { words, characters, blocks: blocks.length, headings, inlines };
   }, [blocks]);
 
+  // Nothing worth reporting on the welcome screen.
+  if (hasAnyRemoteDocs === false && !documentId) return null;
+
+  const items: Array<[string, number]> = [
+    ['words', stats.words],
+    ['characters', stats.characters],
+    ['blocks', stats.blocks],
+  ];
+  if (stats.headings > 0) items.push(['headings', stats.headings]);
+  if (stats.inlines > 0) items.push(['inline widgets', stats.inlines]);
+
   return (
-    <div className={cn(
-      "sticky bottom-0 z-10 flex flex-wrap gap-2",
-      "border-t border-border/50 -mx-4 -mb-4 mt-4 px-4 py-2",
-      "bg-card/95 backdrop-blur-sm"
-    )}>
-      <div className="inline-flex gap-1.5 items-center px-2 py-1 rounded-md text-xs bg-muted/50">
-        <span className="text-muted-foreground">Blocks</span>
-        <span className="font-medium">{stats.total}</span>
-      </div>
-      {stats.headings > 0 && (
-        <div className="inline-flex gap-1.5 items-center px-2 py-1 rounded-md text-xs bg-muted/50">
-          <span className="text-muted-foreground">Headings</span>
-          <span className="font-medium">{stats.headings}</span>
-        </div>
-      )}
-      {stats.paragraphs > 0 && (
-        <div className="inline-flex gap-1.5 items-center px-2 py-1 rounded-md text-xs bg-muted/50">
-          <span className="text-muted-foreground">Paragraphs</span>
-          <span className="font-medium">{stats.paragraphs}</span>
-        </div>
-      )}
-      {stats.dividers > 0 && (
-        <div className="inline-flex gap-1.5 items-center px-2 py-1 rounded-md text-xs bg-muted/50">
-          <span className="text-muted-foreground">Dividers</span>
-          <span className="font-medium">{stats.dividers}</span>
-        </div>
-      )}
-      {stats.inlines > 0 && (
-        <div className="inline-flex gap-1.5 items-center px-2 py-1 rounded-md text-xs bg-muted/50">
-          <span className="text-muted-foreground">Inline widgets</span>
-          <span className="font-medium">{stats.inlines}</span>
-        </div>
-      )}
+    <div className="flex flex-shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/50 bg-card px-4 py-2">
+      {items.map(([label, value]) => (
+        <span key={label} className="text-xs text-muted-foreground">
+          <span className="font-medium tabular-nums text-foreground/80">
+            {value.toLocaleString()}
+          </span>{' '}
+          {value === 1 ? label.replace(/s$/, '') : label}
+        </span>
+      ))}
     </div>
   );
 }

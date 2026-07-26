@@ -1,57 +1,55 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { isBoolean, isNumber, usePersistentState } from '@/hooks/usePersistentState';
+import { useIsDesktop } from '@/hooks/useMediaQuery';
 
 export type ToolId = 'json' | 'arxiv' | 'colpali' | 'library' | 'chats';
 
+const TOOL_IDS: readonly ToolId[] = ['json', 'arxiv', 'colpali', 'library', 'chats'];
+
+const isToolId = (value: unknown): value is ToolId | null =>
+  value === null || (typeof value === 'string' && (TOOL_IDS as readonly string[]).includes(value));
+
 /* ============================================
-   PANEL DIMENSIONS CONFIG
-   Default sizes for panels
+   PANEL DIMENSIONS
    ============================================ */
 
 export const PANEL_CONFIG = {
-  left: {
-    default: 260,
-    min: 200,
-    max: 400,
-    collapsed: 56,
-  },
-  right: {
-    default: 380,
-    min: 280,
-    max: 600,
-    collapsed: 0,
-  },
-  rail: {
-    width: 52,
-  },
+  left: { default: 260, min: 200, max: 400, collapsed: 56 },
+  right: { default: 380, min: 280, max: 640, collapsed: 0 },
+  rail: { width: 52 },
 } as const;
 
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
 /* ----------------------------------------
-   Context Types
+   Context
    ---------------------------------------- */
 
 type SetStateAction<T> = T | ((prev: T) => T);
 
 type PanelsContextValue = {
-  // Tool selection
   activeTool: ToolId | null;
   setTool: (tool: ToolId | null) => void;
-  
-  // Right panel (aside) state
+
+  /** Whether the right-hand tools panel is showing. */
   isOpen: boolean;
   open: () => void;
   close: () => void;
   toggle: () => void;
-  
-  // Panel dimensions - support functional updates
+
   leftWidth: number;
   setLeftWidth: (width: SetStateAction<number>) => void;
   rightWidth: number;
   setRightWidth: (width: SetStateAction<number>) => void;
-  
-  // Left sidebar collapse
+
   leftCollapsed: boolean;
   setLeftCollapsed: (collapsed: boolean) => void;
   toggleLeftCollapsed: () => void;
+
+  /** Below `md`, the sidebar becomes an overlay drawer rather than a column. */
+  isDesktop: boolean;
+  mobileNavOpen: boolean;
+  setMobileNavOpen: (open: boolean) => void;
 };
 
 const PanelsContext = createContext<PanelsContextValue | undefined>(undefined);
@@ -63,70 +61,128 @@ export function usePanels() {
 }
 
 export function PanelsProvider({ children }: { children: React.ReactNode }) {
-  // Tool selection state
-  const [activeTool, setActiveTool] = useState<ToolId | null>('json');
-  const [isOpen, setIsOpen] = useState<boolean>(true);
-  
-  // Panel dimensions state
-  const [leftWidth, setLeftWidthState] = useState<number>(PANEL_CONFIG.left.default);
-  const [rightWidth, setRightWidthState] = useState<number>(PANEL_CONFIG.right.default);
-  const [leftCollapsed, setLeftCollapsed] = useState<boolean>(false);
+  const isDesktop = useIsDesktop();
 
-  // Tool selection handlers
-  const setTool = useCallback((tool: ToolId | null) => {
-    setActiveTool(tool);
-    if (tool) setIsOpen(true);
-  }, []);
-
-  // Right panel handlers
-  const open = useCallback(() => setIsOpen(true), []);
-  const close = useCallback(() => setIsOpen(false), []);
-  const toggle = useCallback(() => setIsOpen(v => !v), []);
-  
-  // Left sidebar handlers
-  const toggleLeftCollapsed = useCallback(() => setLeftCollapsed(v => !v), []);
-  
-  // Panel width handlers - support both direct values and functional updates
-  const setLeftWidth = useCallback((width: SetStateAction<number>) => {
-    setLeftWidthState(width);
-  }, []);
-  
-  const setRightWidth = useCallback((width: SetStateAction<number>) => {
-    setRightWidthState(width);
-  }, []);
-
-  const value = useMemo(() => ({ 
-    activeTool, 
-    setTool, 
-    isOpen, 
-    open, 
-    close, 
-    toggle,
-    leftWidth,
-    setLeftWidth,
-    rightWidth,
-    setRightWidth,
-    leftCollapsed,
-    setLeftCollapsed,
-    toggleLeftCollapsed,
-  }), [
-    activeTool, 
-    setTool, 
-    isOpen, 
-    open, 
-    close, 
-    toggle,
-    leftWidth,
-    setLeftWidth,
-    rightWidth,
-    setRightWidth,
-    leftCollapsed,
-    toggleLeftCollapsed,
-  ]);
-
-  return (
-    <PanelsContext.Provider value={value}>{children}</PanelsContext.Provider>
+  // Layout choices survive a reload — re-dragging panels every session was
+  // the single most repeated interaction in the app.
+  const [activeTool, setActiveTool] = usePersistentState<ToolId | null>(
+    'panels.activeTool',
+    'json',
+    isToolId,
   );
+  // Two separate notions of "the tools panel is showing":
+  //   • desktop — a docked column, so the preference is worth remembering;
+  //   • mobile  — a full-height overlay, which must never be restored open on
+  //     load or the document is covered before the user has asked for anything.
+  const [desktopToolsOpen, setDesktopToolsOpen] = usePersistentState<boolean>(
+    'panels.rightOpen',
+    true,
+    isBoolean,
+  );
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
+
+  const isOpen = isDesktop ? desktopToolsOpen : mobileToolsOpen;
+  const setIsOpen = isDesktop ? setDesktopToolsOpen : setMobileToolsOpen;
+  const [leftWidth, setLeftWidthState] = usePersistentState<number>(
+    'panels.leftWidth',
+    PANEL_CONFIG.left.default,
+    isNumber,
+  );
+  const [rightWidth, setRightWidthState] = usePersistentState<number>(
+    'panels.rightWidth',
+    PANEL_CONFIG.right.default,
+    isNumber,
+  );
+  const [leftCollapsed, setLeftCollapsed] = usePersistentState<boolean>(
+    'panels.leftCollapsed',
+    false,
+    isBoolean,
+  );
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Drawers left open while resizing up to desktop would strand a backdrop
+  // over a layout that no longer has anything to dismiss.
+  useEffect(() => {
+    if (!isDesktop) return;
+    setMobileNavOpen(false);
+    setMobileToolsOpen(false);
+  }, [isDesktop]);
+
+  const setTool = useCallback(
+    (tool: ToolId | null) => {
+      setActiveTool(tool);
+      if (tool) setIsOpen(true);
+    },
+    [setActiveTool, setIsOpen],
+  );
+
+  const open = useCallback(() => setIsOpen(true), [setIsOpen]);
+  const close = useCallback(() => setIsOpen(false), [setIsOpen]);
+  const toggle = useCallback(() => setIsOpen((v) => !v), [setIsOpen]);
+  const toggleLeftCollapsed = useCallback(
+    () => setLeftCollapsed((v) => !v),
+    [setLeftCollapsed],
+  );
+
+  // Clamping lives here rather than in AppShell so persisted values from an
+  // older config, or a different viewport, can never restore an unusable width.
+  const setLeftWidth = useCallback(
+    (width: SetStateAction<number>) => {
+      setLeftWidthState((prev) => {
+        const next = typeof width === 'function' ? width(prev) : width;
+        return clamp(next, PANEL_CONFIG.left.min, PANEL_CONFIG.left.max);
+      });
+    },
+    [setLeftWidthState],
+  );
+
+  const setRightWidth = useCallback(
+    (width: SetStateAction<number>) => {
+      setRightWidthState((prev) => {
+        const next = typeof width === 'function' ? width(prev) : width;
+        return clamp(next, PANEL_CONFIG.right.min, PANEL_CONFIG.right.max);
+      });
+    },
+    [setRightWidthState],
+  );
+
+  const value = useMemo(
+    () => ({
+      activeTool,
+      setTool,
+      isOpen,
+      open,
+      close,
+      toggle,
+      leftWidth,
+      setLeftWidth,
+      rightWidth,
+      setRightWidth,
+      leftCollapsed,
+      setLeftCollapsed,
+      toggleLeftCollapsed,
+      isDesktop,
+      mobileNavOpen,
+      setMobileNavOpen,
+    }),
+    [
+      activeTool,
+      setTool,
+      isOpen,
+      open,
+      close,
+      toggle,
+      leftWidth,
+      setLeftWidth,
+      rightWidth,
+      setRightWidth,
+      leftCollapsed,
+      setLeftCollapsed,
+      toggleLeftCollapsed,
+      isDesktop,
+      mobileNavOpen,
+    ],
+  );
+
+  return <PanelsContext.Provider value={value}>{children}</PanelsContext.Provider>;
 }
-
-

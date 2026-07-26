@@ -39,31 +39,6 @@ function createChunkedResponse(chunks: string[]): Response {
   });
 }
 
-/**
- * Create a `Response` that never closes its stream (for abort testing).
- * The controller is stored so tests can close it manually.
- */
-function createInfiniteResponse(): {
-  response: Response;
-  close: () => void;
-} {
-  let controller!: ReadableStreamDefaultController;
-  const body = new ReadableStream({
-    start(c) {
-      controller = c;
-    },
-  });
-  return {
-    response: new Response(body),
-    close: () => {
-      try {
-        controller.close();
-      } catch {
-        // already closed
-      }
-    },
-  };
-}
 
 // ── Tests ──
 
@@ -279,11 +254,13 @@ describe('parseSSEStream', () => {
   // ── 14. Full integration sequence ──
   it('14. dispatches all callbacks in correct order for full integration sequence', async () => {
     const callOrder: string[] = [];
-    const onStatus = vi.fn(() => callOrder.push('status'));
-    const onToken = vi.fn(() => callOrder.push('token'));
-    const onToolCallStart = vi.fn(() => callOrder.push('tool_start'));
-    const onToolCallEnd = vi.fn(() => callOrder.push('tool_end'));
-    const onDone = vi.fn(() => callOrder.push('done'));
+    // Typed so `mock.calls[i][0]` is indexable; a bare `vi.fn(() => …)`
+    // infers an empty argument tuple.
+    const onStatus = vi.fn((..._args: unknown[]) => callOrder.push('status'));
+    const onToken = vi.fn((..._args: unknown[]) => callOrder.push('token'));
+    const onToolCallStart = vi.fn((..._args: unknown[]) => callOrder.push('tool_start'));
+    const onToolCallEnd = vi.fn((..._args: unknown[]) => callOrder.push('tool_end'));
+    const onDone = vi.fn((..._args: unknown[]) => callOrder.push('done'));
 
     const response = createMockResponse(
       'event: status\ndata: {"status":"thinking","detail":"Analyzing..."}\n\n'
@@ -388,5 +365,122 @@ describe('parseSSEStream', () => {
     );
     const result = await parseSSEStream(response, { onDone });
     expect(result).toEqual({ chatId: null, threadId: 5 });
+  });
+
+  // ── Tool Action: snake_case → camelCase mapping ──
+  it('maps snake_case tool_action payload to camelCase ToolAction', async () => {
+    const onToolAction = vi.fn();
+    const response = createMockResponse(
+      'event: tool_action\ndata: {"tool":"doc_edit","tool_call_id":"call_abc","actions":[{"op":"replace_block","blockId":"b1","block":{"html":"<p>hi</p>"}}],"document_id":"doc-123","version":5,"status":"applied"}\n\n',
+    );
+    await parseSSEStream(response, { onToolAction });
+    expect(onToolAction).toHaveBeenCalledTimes(1);
+    const action = onToolAction.mock.calls[0][0];
+    expect(action.toolCallId).toBe('call_abc');
+    expect(action.documentId).toBe('doc-123');
+    expect(action.version).toBe(5);
+    expect(action.status).toBe('applied');
+    expect(action.tool).toBe('doc_edit');
+    expect(action.actions).toHaveLength(1);
+    expect(action.actions[0]).toEqual({ op: 'replace_block', blockId: 'b1', block: { html: '<p>hi</p>' } });
+  });
+
+  // ── Tool Action: missing fields → safe defaults ──
+  it('provides safe defaults for missing fields in tool_action', async () => {
+    const onToolAction = vi.fn();
+    const response = createMockResponse(
+      'event: tool_action\ndata: {}\n\n',
+    );
+    await parseSSEStream(response, { onToolAction });
+    expect(onToolAction).toHaveBeenCalledTimes(1);
+    const action = onToolAction.mock.calls[0][0];
+    expect(action.tool).toBe('');
+    expect(action.toolCallId).toBe('');
+    expect(action.actions).toEqual([]);
+    expect(action.documentId).toBe('');
+    expect(action.version).toBe(0);
+    expect(action.status).toBe('applied');
+    expect(action.message).toBeUndefined();
+  });
+
+  // ── Tool Action: extra fields are dropped (whitelist semantics) ──
+  it('drops unknown extra fields from tool_action payload', async () => {
+    const onToolAction = vi.fn();
+    const response = createMockResponse(
+      'event: tool_action\ndata: {"tool":"doc_edit","tool_call_id":"call_abc","actions":[],"document_id":"doc-123","version":2,"status":"applied","operationResults":[{"ok":1}],"extra":"should_not_leak"}\n\n',
+    );
+    await parseSSEStream(response, { onToolAction });
+    expect(onToolAction).toHaveBeenCalledTimes(1);
+    const action = onToolAction.mock.calls[0][0];
+    // operationResults and extra must not appear
+    expect(action).not.toHaveProperty('operationResults');
+    expect(action).not.toHaveProperty('extra');
+    // Known fields must be correct
+    expect(action.toolCallId).toBe('call_abc');
+    expect(action.documentId).toBe('doc-123');
+    expect(action.version).toBe(2);
+  });
+
+  // ── Tool Action: null message → undefined ──
+  it('converts null message to undefined in tool_action', async () => {
+    const onToolAction = vi.fn();
+    const response = createMockResponse(
+      'event: tool_action\ndata: {"tool":"doc_edit","tool_call_id":"call_abc","actions":[],"document_id":"doc-123","version":2,"status":"error","message":null}\n\n',
+    );
+    await parseSSEStream(response, { onToolAction });
+    expect(onToolAction).toHaveBeenCalledTimes(1);
+    const action = onToolAction.mock.calls[0][0];
+    expect(action.message).toBeUndefined();
+    expect(action.status).toBe('error');
+  });
+
+  // ── Tool Action: multiple events with different tool_call_id ──
+  it('dispatches multiple tool_action events with distinct toolCallIds', async () => {
+    const onToolAction = vi.fn();
+    const response = createMockResponse(
+      'event: tool_action\ndata: {"tool":"doc_edit","tool_call_id":"call_1","actions":[],"document_id":"doc-123","version":1,"status":"applied"}\n\n'
+      + 'event: tool_action\ndata: {"tool":"doc_edit","tool_call_id":"call_2","actions":[],"document_id":"doc-123","version":2,"status":"applied"}\n\n',
+    );
+    await parseSSEStream(response, { onToolAction });
+    expect(onToolAction).toHaveBeenCalledTimes(2);
+    expect(onToolAction.mock.calls[0][0].toolCallId).toBe('call_1');
+    expect(onToolAction.mock.calls[1][0].toolCallId).toBe('call_2');
+    // Verify camelCase keys on both calls
+    expect(onToolAction.mock.calls[0][0].documentId).toBe('doc-123');
+    expect(onToolAction.mock.calls[1][0].documentId).toBe('doc-123');
+  });
+
+  // ── Tool Action: existing camelCase payload is also handled ──
+  it('passes through existing camelCase fields unscathed', async () => {
+    const onToolAction = vi.fn();
+    // If the backend ever switches to camelCase or a mixed format, the mapping
+    // should still produce correct output (explicit mapping favors correct types).
+    const response = createMockResponse(
+      'event: tool_action\ndata: {"tool":"doc_edit","toolCallId":"call_abc","actions":[],"documentId":"doc-123","version":3,"status":"applied"}\n\n',
+    );
+    await parseSSEStream(response, { onToolAction });
+    expect(onToolAction).toHaveBeenCalledTimes(1);
+    const action = onToolAction.mock.calls[0][0];
+    // camelCase keys map to themselves via String(data.toolCallId ?? '')
+    expect(action.toolCallId).toBe('call_abc');
+    expect(action.documentId).toBe('doc-123');
+    expect(action.version).toBe(3);
+  });
+
+  // ── Tool Action: non-tool-action events still dispatch correctly ──
+  it('tool_action mapping does not affect token or status events', async () => {
+    const onToolAction = vi.fn();
+    const onToken = vi.fn();
+    const onStatus = vi.fn();
+    const response = createMockResponse(
+      'event: token\ndata: {"content":"Hello"}\n\n'
+      + 'event: status\ndata: {"status":"thinking","detail":"Processing"}\n\n'
+      + 'event: tool_action\ndata: {"tool":"doc_edit","tool_call_id":"call_1","actions":[],"document_id":"doc-123","version":1,"status":"applied"}\n\n',
+    );
+    await parseSSEStream(response, { onToolAction, onToken, onStatus });
+    expect(onToken).toHaveBeenCalledWith('Hello');
+    expect(onStatus).toHaveBeenCalledWith('thinking', 'Processing');
+    expect(onToolAction).toHaveBeenCalledTimes(1);
+    expect(onToolAction.mock.calls[0][0].toolCallId).toBe('call_1');
   });
 });

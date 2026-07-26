@@ -3,87 +3,89 @@ import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
-  DropdownMenuSubTrigger,
   DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
 import { Sparkles } from 'lucide-react';
-import { AI_ACTION_REGISTRY, type AiAction, type AiActionGroup } from '../../../../config/aiActions';
+import { AI_ACTION_REGISTRY, type AiAction, type AiActionGroup } from '@/config/aiActions';
 
 interface AIActionMenuProps {
   disabled?: boolean;
-  onAction: (action: AiAction, e: React.MouseEvent, language?: string) => void;
+  onAction: (action: AiAction, language?: string) => void;
 }
 
-// ── Group ordering and labels ──
+const GROUP_ORDER: readonly AiActionGroup[] = ['edit', 'reference', 'transform'];
 
-const GROUP_ORDER: AiActionGroup[] = ['edit', 'reference', 'transform'];
 const GROUP_LABELS: Record<AiActionGroup, string> = {
   edit: 'Edit',
   reference: 'Reference',
   transform: 'Transform',
 };
 
+const CUSTOM_LANGUAGE = '__other__';
+
+/**
+ * AIActionMenu — the AI actions available for the current text selection.
+ *
+ * Items fire through Radix's `onSelect`, so they work from the keyboard as
+ * well as the mouse. The toolbar keeps the selection range in a ref, which is
+ * what makes that safe: opening the menu moves DOM focus off the text.
+ */
 export function AIActionMenu({ disabled, onAction }: AIActionMenuProps) {
-  const [customLang, setCustomLang] = useState('');
+  const [customLanguage, setCustomLanguage] = useState('');
   const [showCustomInput, setShowCustomInput] = useState(false);
 
-  // Build grouped actions from the registry, filtering hidden ones
-  const visibleActions = Object.values(AI_ACTION_REGISTRY).filter(
-    (a) => a.hidden !== true,
-  );
+  const visibleActions = Object.values(AI_ACTION_REGISTRY).filter((action) => !action.hidden);
 
-  const grouped = GROUP_ORDER.reduce<Record<AiActionGroup, typeof visibleActions>>(
-    (acc, group) => {
-      acc[group] = visibleActions.filter((a) => a.group === group);
-      return acc;
-    },
-    {} as Record<AiActionGroup, typeof visibleActions>,
-  );
-
-  const handleAction = (action: AiAction, e: React.MouseEvent, language?: string) => {
+  const run = (action: AiAction, language?: string) => {
     setShowCustomInput(false);
-    setCustomLang('');
-    onAction(action, e, language);
+    setCustomLanguage('');
+    onAction(action, language);
   };
 
-  const handleCustomLangConfirm = (action: AiAction, e: React.MouseEvent) => {
-    const lang = customLang.trim() || '__other__';
-    handleAction(action, e, lang);
+  const confirmCustomLanguage = () => {
+    const language = customLanguage.trim();
+    if (!language) return;
+    run('translate', language);
   };
-
-  // ── Render ──
 
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (open) return;
+        setShowCustomInput(false);
+        setCustomLanguage('');
+      }}
+    >
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="gap-1.5 font-semibold"
-          disabled={disabled}
-        >
-          <Sparkles className="h-4 w-4" />
+        <Button variant="ghost" size="sm" className="gap-1.5 font-semibold" disabled={disabled}>
+          <Sparkles aria-hidden="true" className="h-4 w-4" />
           AI
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-[220px]">
-        {GROUP_ORDER.map((group, groupIdx) => {
-          const items = grouped[group];
+
+      <DropdownMenuContent align="start" className="min-w-[15rem]">
+        {GROUP_ORDER.map((group, groupIndex) => {
+          const items = visibleActions.filter((action) => action.group === group);
           if (items.length === 0) return null;
 
           return (
-            <div key={group}>
-              {/* Separator before every group except the first */}
-              {groupIdx > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuGroup key={group}>
+              {groupIndex > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuLabel className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {GROUP_LABELS[group]}
+              </DropdownMenuLabel>
 
               {items.map((config) => {
                 const Icon = config.icon;
 
-                // ── Translate sub-menu ──
                 if (config.id === 'translate') {
                   return (
                     <DropdownMenuSub key={config.id}>
@@ -91,89 +93,81 @@ export function AIActionMenu({ disabled, onAction }: AIActionMenuProps) {
                         <Icon className="h-4 w-4" />
                         {config.label}
                       </DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent className="min-w-[180px]">
+                      <DropdownMenuSubContent className="min-w-[12rem]">
                         {showCustomInput ? (
-                          <div className="flex flex-col gap-1 p-2">
-                            <input
-                              type="text"
-                              className="w-full rounded border border-border bg-background px-2 py-1 text-sm outline-none focus:border-primary"
-                              placeholder="Type a language..."
+                          <div className="flex flex-col gap-1.5 p-2">
+                            <Input
                               autoFocus
-                              value={customLang}
-                              onChange={(e) => setCustomLang(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  const target = e.target as HTMLInputElement;
-                                  handleCustomLangConfirm('translate', e as unknown as React.MouseEvent);
+                              className="h-8"
+                              placeholder="Language name…"
+                              aria-label="Target language"
+                              value={customLanguage}
+                              onChange={(event) => setCustomLanguage(event.target.value)}
+                              // Radix menus type-ahead on printable keys; without
+                              // this the field loses focus on the first letter.
+                              onKeyDown={(event) => {
+                                event.stopPropagation();
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  confirmCustomLanguage();
                                 }
-                                if (e.key === 'Escape') {
+                                if (event.key === 'Escape') {
+                                  event.preventDefault();
                                   setShowCustomInput(false);
-                                  setCustomLang('');
+                                  setCustomLanguage('');
                                 }
                               }}
                             />
                             <Button
-                              variant="default"
                               size="sm"
                               className="w-full"
-                              disabled={!customLang.trim()}
-                              onMouseDown={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                handleCustomLangConfirm('translate', e);
-                              }}
+                              disabled={!customLanguage.trim()}
+                              onClick={confirmCustomLanguage}
                             >
-                              Apply
+                              Translate
                             </Button>
                           </div>
                         ) : (
-                          <>
-                            {config.supportedLanguages?.map((lang) => (
-                              <DropdownMenuItem
-                                key={lang.value}
-                                className="gap-2"
-                                onMouseDown={(e) => {
-                                  e.preventDefault();
-                                  if (lang.value === '__other__') {
-                                    setShowCustomInput(true);
-                                    setCustomLang('');
-                                  } else {
-                                    handleAction('translate', e, lang.value);
-                                  }
-                                }}
-                              >
-                                {lang.value === '__other__' ? (
-                                  <span className="text-muted-foreground">Other...</span>
-                                ) : (
-                                  lang.label
-                                )}
-                              </DropdownMenuItem>
-                            ))}
-                          </>
+                          config.supportedLanguages?.map((language) => (
+                            <DropdownMenuItem
+                              key={language.value}
+                              className="gap-2"
+                              onSelect={(event) => {
+                                if (language.value === CUSTOM_LANGUAGE) {
+                                  // Keep the menu open so the input can be used.
+                                  event.preventDefault();
+                                  setShowCustomInput(true);
+                                  setCustomLanguage('');
+                                  return;
+                                }
+                                run('translate', language.value);
+                              }}
+                            >
+                              {language.value === CUSTOM_LANGUAGE ? (
+                                <span className="text-muted-foreground">Other…</span>
+                              ) : (
+                                language.label
+                              )}
+                            </DropdownMenuItem>
+                          ))
                         )}
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
                   );
                 }
 
-                // ── Regular action item — direct-click ──
                 return (
                   <DropdownMenuItem
                     key={config.id}
                     className="gap-2"
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      handleAction(config.id, e);
-                    }}
+                    onSelect={() => run(config.id)}
                   >
                     <Icon className="h-4 w-4" />
                     {config.label}
                   </DropdownMenuItem>
                 );
               })}
-            </div>
+            </DropdownMenuGroup>
           );
         })}
       </DropdownMenuContent>

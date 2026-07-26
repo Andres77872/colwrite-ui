@@ -1,246 +1,168 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
-import { useEditor } from '../../../editor';
-import { createDocument, saveDocument, loadDocument, listDocuments, deleteDocument } from '../../../services';
+import { useEditor } from '@/editor';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { RefreshCw, Upload, Save, Plus, Trash2, List, Loader2 } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
+import { useToast } from '@/components/ui/toast';
+import { AlertCircle, Check, Copy, RotateCcw, Save, Wand2 } from 'lucide-react';
 
+/**
+ * JsonPanel — inspect and replace the current document's structure.
+ *
+ * This panel used to carry a second, parallel document API: a free-text
+ * "Document ID" field with its own Create / Save / Load / Delete / List
+ * buttons, each reporting through `window.alert`. That duplicated the sidebar
+ * document list and the header's save controls, and let the panel act on a
+ * different document than the one on screen. It now operates on the open
+ * document only, and persistence goes through the editor's normal save path.
+ */
 export function JsonPanel() {
-  const { getJSON, setFromJSON, save, doc } = useEditor();
-  const [text, setText] = useState('');
-  const [documentId, setDocumentId] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [documents, setDocuments] = useState<any[]>([]);
-  const [count, setCount] = useState<number>(0);
+  const { getJSON, setFromJSON, doc, documentId, saveRemote } = useEditor();
+  const { toast } = useToast();
 
+  const currentJson = useMemo(() => getJSON(), [getJSON]);
+  const [text, setText] = useState(currentJson);
+  const [dirty, setDirty] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<number | null>(null);
+
+  // Follow the document while the textarea is untouched. The previous version
+  // keyed this effect on the (unmemoised) `getJSON` identity, so it re-ran on
+  // every editor render and overwrote whatever was being typed here.
   useEffect(() => {
-    setText(getJSON());
-  }, [getJSON]);
+    if (dirty) return;
+    setText(currentJson);
+  }, [currentJson, dirty]);
 
-  const onLoad = () => {
+  useEffect(
+    () => () => {
+      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+    },
+    [],
+  );
+
+  const revert = () => {
+    setText(getJSON());
+    setDirty(false);
+    setParseError(null);
+  };
+
+  const format = () => {
+    try {
+      setText(JSON.stringify(JSON.parse(text), null, 2));
+      setParseError(null);
+    } catch (error) {
+      setParseError(error instanceof Error ? error.message : 'Invalid JSON');
+    }
+  };
+
+  const apply = () => {
     try {
       setFromJSON(text);
-    } catch (e) {
-      alert('Invalid JSON. Expecting an object with a blocks array.');
+      setDirty(false);
+      setParseError(null);
+      toast({ title: 'Document structure replaced', variant: 'success' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid JSON';
+      setParseError(message);
+      toast({ title: 'Could not apply JSON', description: message, variant: 'error' });
     }
   };
 
-  const onCreate = async () => {
+  const copy = async () => {
     try {
-      setLoading(true);
-      const res = await createDocument(doc);
-      setDocumentId(res.document_id);
-      alert(`Document created with id: ${res.document_id}`);
-    } catch (e: any) {
-      alert(`Create failed: ${e?.message || 'Unknown error'}`);
-    } finally {
-      setLoading(false);
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      toast({ title: 'Could not copy to clipboard', variant: 'error' });
     }
   };
 
-  const onSaveById = async () => {
-    if (!documentId) return alert('Enter a document ID first');
+  const save = async () => {
+    setSaving(true);
     try {
-      setLoading(true);
-      const res = await saveDocument(documentId, doc);
-      alert(res.message || 'Saved');
-    } catch (e: any) {
-      alert(`Save failed: ${e?.message || 'Unknown error'}`);
+      await saveRemote();
+      toast({ title: 'Document saved', variant: 'success' });
+    } catch (error) {
+      toast({
+        title: 'Save failed',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'error',
+      });
     } finally {
-      setLoading(false);
-    }
-  };
-
-  const onLoadById = async () => {
-    if (!documentId) return alert('Enter a document ID first');
-    try {
-      setLoading(true);
-      const loaded = await loadDocument(documentId);
-      setFromJSON(JSON.stringify(loaded));
-      setText(JSON.stringify(loaded, null, 2));
-    } catch (e: any) {
-      alert(`Load failed: ${e?.message || 'Unknown error'}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const onDeleteById = async () => {
-    if (!documentId) return alert('Enter a document ID first');
-    if (!confirm(`Delete document ${documentId}?`)) return;
-    try {
-      setLoading(true);
-      const res = await deleteDocument(documentId);
-      alert(res.message || 'Deleted');
-      setDocumentId('');
-    } catch (e: any) {
-      alert(`Delete failed: ${e?.message || 'Unknown error'}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const onList = async () => {
-    try {
-      setLoading(true);
-      const res = await listDocuments(1, 10);
-      setDocuments(res.documents || []);
-      setCount(res.count || 0);
-    } catch (e: any) {
-      alert(`List failed: ${e?.message || 'Unknown error'}`);
-    } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
   return (
-    <div className="flex flex-col gap-3 h-full">
-      {/* Document ID Input */}
-      <div className="space-y-2">
-        <Input
-          className="font-mono text-xs"
-          placeholder="Document ID"
-          value={documentId}
-          onChange={(e) => setDocumentId(e.target.value)}
-        />
-        
-        {/* API Actions */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <Button 
-            variant="outline" 
-            size="sm" 
-            disabled={loading} 
-            onClick={onCreate}
-            className="gap-1.5"
-          >
-            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-            Create
-          </Button>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            disabled={loading} 
-            onClick={onSaveById}
-            className="gap-1.5"
-          >
-            <Save className="h-3 w-3" />
-            Save
-          </Button>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            disabled={loading} 
-            onClick={onLoadById}
-            className="gap-1.5"
-          >
-            <Upload className="h-3 w-3" />
-            Load
-          </Button>
-          <Button 
-            variant="destructive" 
-            size="sm" 
-            disabled={loading} 
-            onClick={onDeleteById}
-            className="gap-1.5"
-          >
-            <Trash2 className="h-3 w-3" />
-            Delete
-          </Button>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            disabled={loading} 
-            onClick={onList}
-            className="gap-1.5"
-          >
-            <List className="h-3 w-3" />
-            List
-          </Button>
-        </div>
-      </div>
+    <div className="flex h-full flex-col gap-3">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+        <dt className="text-muted-foreground">Document</dt>
+        <dd className="truncate font-medium">{doc.name || 'Untitled document'}</dd>
+        <dt className="text-muted-foreground">ID</dt>
+        <dd className="truncate font-mono text-2xs">
+          {documentId ?? <span className="font-sans text-muted-foreground">Not saved yet</span>}
+        </dd>
+        <dt className="text-muted-foreground">Blocks</dt>
+        <dd className="tabular-nums">{doc.blocks.length}</dd>
+      </dl>
 
-      {/* Divider */}
-      <div className="h-px bg-border" />
-
-      {/* Local Actions */}
-      <div className="flex items-center gap-1.5">
-        <Button 
-          variant="ghost" 
-          size="sm" 
-          onClick={() => setText(getJSON())}
-          className="gap-1.5"
-        >
-          <RefreshCw className="h-3 w-3" />
-          Refresh
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button variant="ghost" size="sm" onClick={revert} disabled={!dirty}>
+          <RotateCcw className="h-3 w-3" />
+          Revert
         </Button>
-        <Button 
-          variant="ghost" 
-          size="sm" 
-          onClick={onLoad}
-          className="gap-1.5"
-        >
-          <Upload className="h-3 w-3" />
-          Apply JSON
+        <Button variant="ghost" size="sm" onClick={format}>
+          <Wand2 className="h-3 w-3" />
+          Format
         </Button>
-        <Button 
-          size="sm" 
-          onClick={save}
-          className="gap-1.5 ml-auto"
-        >
-          <Save className="h-3 w-3" />
-          Save (local)
+        <Button variant="ghost" size="sm" onClick={copy}>
+          {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
+          {copied ? 'Copied' : 'Copy'}
         </Button>
       </div>
 
-      {/* JSON Editor */}
-      <Textarea 
+      <Textarea
         className={cn(
-          "flex-1 min-h-[200px] font-mono text-xs",
-          "bg-muted/30 border-muted",
-          "focus:bg-background",
-          "resize-none"
-        )} 
-        value={text} 
-        onChange={(e) => setText(e.target.value)} 
-        placeholder="Document JSON..."
+          'min-h-[200px] flex-1 resize-none border-muted bg-muted/30 font-mono text-xs focus:bg-background',
+          parseError && 'border-destructive/60',
+        )}
+        value={text}
+        spellCheck={false}
+        aria-label="Document JSON"
+        aria-invalid={parseError !== null}
+        onChange={(event) => {
+          setText(event.target.value);
+          setDirty(true);
+          if (parseError) setParseError(null);
+        }}
+        placeholder="Document JSON…"
       />
 
-      {/* Documents List */}
-      {documents.length > 0 && (
-        <div className="border-t border-border pt-3 space-y-2">
-          <div className="text-xs text-muted-foreground">
-            Found {count} document{count !== 1 ? 's' : ''}
-          </div>
-          <div className="space-y-1 max-h-[200px] overflow-auto">
-            {documents.map((d: any) => {
-              const id = d._id || d.id || '';
-              const title = d.title || '(untitled)';
-              const isSelected = documentId === String(id);
-              
-              return (
-                <button 
-                  key={id} 
-                  className={cn(
-                    "w-full text-left text-sm p-2 rounded-md",
-                    "border border-transparent",
-                    "transition-colors cursor-pointer",
-                    "hover:bg-accent/50",
-                    isSelected && "bg-primary/10 border-primary/30"
-                  )}
-                  onClick={() => setDocumentId(String(id))}
-                >
-                  <div className="font-mono text-xs text-muted-foreground truncate">
-                    {String(id)}
-                  </div>
-                  <div className="truncate">{String(title)}</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+      {parseError && (
+        <p
+          role="alert"
+          className="flex items-start gap-1.5 text-xs text-destructive"
+        >
+          <AlertCircle aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 break-words">{parseError}</span>
+        </p>
       )}
+
+      <div className="flex flex-shrink-0 items-center gap-2">
+        <Button className="flex-1" onClick={apply} disabled={!dirty}>
+          Apply to document
+        </Button>
+        <Button variant="outline" onClick={save} disabled={saving}>
+          {saving ? <Spinner /> : <Save className="h-3.5 w-3.5" />}
+          Save
+        </Button>
+      </div>
     </div>
   );
 }

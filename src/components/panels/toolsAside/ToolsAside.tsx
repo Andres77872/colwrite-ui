@@ -1,122 +1,57 @@
-import { cn } from '@/lib/utils';
-import { usePanels, type ToolId } from '../panelsContext';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { PanelHeader } from '@/components/ui/resizable-panel';
+import { usePanels } from '../panelsContext';
+import { toolMeta } from '../toolsConfig';
 import { JsonPanel } from '../JsonPanel';
 import { ArxivPanel } from '../ArxivPanel';
 import { ColpaliPanel } from '../ColpaliPanel';
 import { LibraryPanel } from '../LibraryPanel';
-import { ChatsPanel } from '../ChatsPanel/ChatsPanel';
-import { 
-  FileCode, 
-  Search, 
-  ScanSearch, 
-  BookOpen, 
-  MessageSquare,
-  PanelRightClose,
-  X,
-} from 'lucide-react';
+import { ChatsPanel } from '../ChatsPanel';
+import { PanelRight, X } from 'lucide-react';
 
-/* ----------------------------------------
-   Panel Configuration
-   ---------------------------------------- */
+const PANEL_BY_TOOL = {
+  json: JsonPanel,
+  arxiv: ArxivPanel,
+  colpali: ColpaliPanel,
+  library: LibraryPanel,
+  chats: ChatsPanel,
+} as const;
 
-const panelConfig: Record<ToolId, { 
-  title: string; 
-  icon: React.ElementType;
-  description: string;
-}> = {
-  json: { 
-    title: 'Document JSON', 
-    icon: FileCode,
-    description: 'View and edit document structure',
-  },
-  arxiv: { 
-    title: 'arXiv Search', 
-    icon: Search,
-    description: 'Search academic papers',
-  },
-  colpali: { 
-    title: 'ColPali Search', 
-    icon: ScanSearch,
-    description: 'Visual document search',
-  },
-  library: { 
-    title: 'Library', 
-    icon: BookOpen,
-    description: 'Your document library',
-  },
-  chats: { 
-    title: 'Chats', 
-    icon: MessageSquare,
-    description: 'AI conversations about this document',
-  },
-};
-
-/* ----------------------------------------
-   Placeholder Component
-   ---------------------------------------- */
-
-function Placeholder({ title, description }: { title: string; description?: string }) {
-  return (
-    <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center">
-      <div className={cn(
-        "w-12 h-12 rounded-xl grid place-items-center",
-        "bg-muted/30 border border-border/50",
-      )}>
-        <PanelRightClose className="w-5 h-5 text-muted-foreground/60" />
-      </div>
-      <div className="space-y-1">
-        <div className="text-sm font-medium text-foreground/80">{title}</div>
-        {description && (
-          <p className="text-xs text-muted-foreground max-w-[180px]">{description}</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ----------------------------------------
-   Tools Aside Component
-   ---------------------------------------- */
-
+/**
+ * ToolsAside — hosts whichever tool the rail has selected.
+ */
 export function ToolsAside() {
   const { activeTool, close } = usePanels();
 
   if (!activeTool) {
     return (
-      <Placeholder 
-        title="Select a tool" 
-        description="Choose a tool from the rail" 
+      <EmptyState
+        icon={PanelRight}
+        title="No tool selected"
+        description="Pick a tool from the rail to open it here."
+        className="h-full"
       />
     );
   }
 
-  const config = panelConfig[activeTool];
-  const Icon = config.icon;
+  const meta = toolMeta(activeTool);
+  const Panel = PANEL_BY_TOOL[activeTool];
+  const Icon = meta.icon;
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      {/* Panel Header - Minimal design matching sidebar */}
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/50 flex-shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <Icon className="w-4 h-4 text-primary/70 flex-shrink-0" />
-          <span className="font-medium text-sm text-foreground/90 truncate">{config.title}</span>
-        </div>
-        <button
-          onClick={close}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-          aria-label="Close panel"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      </div>
-      
-      {/* Panel Content */}
-      <div className="flex-1 overflow-auto p-3">
-        {activeTool === 'json' && <JsonPanel />}
-        {activeTool === 'arxiv' && <ArxivPanel />}
-        {activeTool === 'colpali' && <ColpaliPanel />}
-        {activeTool === 'library' && <LibraryPanel />}
-        {activeTool === 'chats' && <ChatsPanel />}
+    <div className="flex h-full flex-col overflow-hidden">
+      <PanelHeader
+        title={meta.label}
+        icon={<Icon aria-hidden="true" className="h-4 w-4" />}
+        actions={
+          <Button variant="ghost" size="icon-sm" onClick={close} aria-label={`Close ${meta.label}`}>
+            <X aria-hidden="true" className="h-4 w-4" />
+          </Button>
+        }
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <Panel />
       </div>
     </div>
   );

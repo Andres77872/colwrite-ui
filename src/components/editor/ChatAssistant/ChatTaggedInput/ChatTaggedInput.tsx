@@ -130,7 +130,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
       range.collapse(true);
       sel.removeAllRanges();
       sel.addRange(range);
-    } catch {}
+    } catch { /* caret restore is best-effort */ }
   };
 
   const rebuildModelFromDOM = (): { text: string; caret: SelectionRange | null } => {
@@ -167,7 +167,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
         case 'a':
           // Select all - let browser handle this
           break;
-        case 'Backspace':
+        case 'Backspace': {
           // Delete word backwards
           e.preventDefault();
           const selection = window.getSelection();
@@ -180,6 +180,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
             }
           }
           break;
+        }
       }
     }
     

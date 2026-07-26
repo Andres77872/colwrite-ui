@@ -2,114 +2,206 @@ import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { useEditor } from '../../../editor';
-import { FilePlus, Save, Trash2 } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useToast } from '@/components/ui/toast';
+import { useEditor } from '@/editor';
+import { AlertCircle, Check, Cloud, CloudOff, FilePlus, Save, Trash2 } from 'lucide-react';
+
+const DEFAULT_TITLE = 'Untitled document';
 
 export function DocumentHeader() {
-  const { doc, setDocName, saveRemote, deleteRemote, newLocal, documentId, lastSavedAt, isAutoSaving, lastSaveSource } = useEditor();
-  const [loading, setLoading] = useState<null | 'save' | 'delete'>(null);
-  const [editing, setEditing] = useState<boolean>(false);
+  const {
+    doc,
+    setDocName,
+    saveRemote,
+    deleteRemote,
+    newLocal,
+    documentId,
+    lastSavedAt,
+    isAutoSaving,
+    lastSaveSource,
+    saveError,
+  } = useEditor();
+  const confirm = useConfirm();
+  const { toast } = useToast();
+
+  const [busy, setBusy] = useState<null | 'save' | 'delete'>(null);
+  const [editing, setEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const title = (doc.name || 'Untitled document');
+  const title = doc.name?.trim() || DEFAULT_TITLE;
 
   useEffect(() => {
     if (editing) queueMicrotask(() => inputRef.current?.select());
   }, [editing]);
 
-  const onNew = () => {
-    if (!confirm('Start a new document? Unsaved changes will be lost.')) return;
-    newLocal();
-  };
-
-  const onSave = async () => {
+  const commitTitle = async (next: string) => {
+    setEditing(false);
+    const normalized = next.trim() || DEFAULT_TITLE;
+    if (normalized === title) return;
+    setDocName(normalized);
     try {
-      setLoading('save');
-      await saveRemote();
-    } finally {
-      setLoading(null);
+      // Pass the new name explicitly: `doc` in this closure still holds the
+      // previous title when the save fires.
+      await saveRemote({ ...doc, name: normalized });
+    } catch (error) {
+      toast({
+        title: 'Renamed locally, but the save failed',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'error',
+      });
     }
   };
 
-  const commitTitle = async (next: string) => {
-    const trimmed = (next || '').trim();
-    const normalized = trimmed || 'Untitled document';
-    setDocName(normalized);
-    const override = { ...doc, name: normalized } as any;
-    try { await saveRemote(override); } catch {}
+  const onNew = async () => {
+    const ok = await confirm({
+      title: 'Start a new document?',
+      description: 'Unsaved changes to the current document will be lost.',
+      confirmLabel: 'Start new',
+    });
+    if (ok) newLocal();
+  };
+
+  const onSave = async () => {
+    setBusy('save');
+    try {
+      await saveRemote();
+      toast({ title: 'Document saved', variant: 'success' });
+    } catch (error) {
+      toast({
+        title: 'Save failed',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'error',
+      });
+    } finally {
+      setBusy(null);
+    }
   };
 
   const onDelete = async () => {
     if (!documentId) return;
-    if (!confirm(`Delete document ${documentId}?`)) return;
+    const ok = await confirm({
+      title: `Delete “${title}”?`,
+      description: 'This permanently removes the document and its chats. It cannot be undone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
+
+    setBusy('delete');
     try {
-      setLoading('delete');
       await deleteRemote(documentId);
       newLocal();
+      toast({ title: 'Document deleted', variant: 'success' });
+    } catch (error) {
+      toast({
+        title: 'Delete failed',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'error',
+      });
     } finally {
-      setLoading(null);
+      setBusy(null);
     }
   };
 
-  const statusText = (() => {
-    if (loading === 'save') return 'Saving…';
-    if (isAutoSaving) return 'Auto-saving…';
-    if (lastSavedAt) {
-      const time = new Date(lastSavedAt).toLocaleTimeString();
-      return lastSaveSource === 'auto' ? `Auto-saved ${time}` : `Saved ${time}`;
+  const status = (() => {
+    // A failed save outranks everything else: autosave errors were swallowed
+    // entirely, so a document that had silently stopped saving looked exactly
+    // like one that was saving fine.
+    if (saveError) {
+      return { icon: AlertCircle, text: 'Not saved', tone: 'text-destructive' };
     }
-    return '—';
+    if (busy === 'save' || isAutoSaving) {
+      return { icon: Spinner, text: 'Saving…', tone: 'text-muted-foreground' };
+    }
+    if (!documentId) {
+      return { icon: CloudOff, text: 'Not saved to the server yet', tone: 'text-muted-foreground' };
+    }
+    if (lastSavedAt) {
+      const time = new Date(lastSavedAt).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      return {
+        icon: Check,
+        text: `${lastSaveSource === 'auto' ? 'Autosaved' : 'Saved'} ${time}`,
+        tone: 'text-muted-foreground',
+      };
+    }
+    return { icon: Cloud, text: 'Synced', tone: 'text-muted-foreground' };
   })();
 
+  const StatusIcon = status.icon;
+
   return (
-    <div className={cn(
-      "sticky top-0 z-[5] bg-card border-b border-border",
-      "px-3 py-2 -mx-3 -mt-3 mb-3 rounded-t-lg",
-      "flex items-center justify-between gap-3 flex-wrap"
-    )}>
-      <div className="flex items-baseline gap-3 min-w-0">
-        {!editing && (
+    <div
+      className={cn(
+        'sticky top-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-2',
+        'border-b border-border bg-card/95 px-4 py-2.5 backdrop-blur-sm z-[var(--z-sticky)]',
+      )}
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {editing ? (
+          <Input
+            ref={inputRef}
+            className="h-8 max-w-sm text-xl font-semibold"
+            aria-label="Document title"
+            defaultValue={title}
+            onBlur={(event) => commitTitle(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                event.currentTarget.blur();
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                setEditing(false);
+              }
+            }}
+          />
+        ) : (
           <button
-            className="text-xl font-semibold bg-transparent border-none p-0 cursor-text text-left hover:underline decoration-primary/30 underline-offset-2"
-            title="Rename"
+            type="button"
+            className="min-w-0 truncate rounded-sm text-left text-xl font-semibold decoration-primary/40 underline-offset-4 hover:underline"
+            title="Rename document"
             onClick={() => setEditing(true)}
           >
             {title}
+            <span className="sr-only"> — click to rename</span>
           </button>
         )}
-        {editing && (
-          <Input
-            ref={inputRef}
-            className="text-xl font-semibold h-auto py-0.5 px-1.5 max-w-[300px]"
-            defaultValue={title}
-            onBlur={(e) => { setEditing(false); commitTitle(e.currentTarget.value); }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); (e.currentTarget as HTMLInputElement).blur(); }
-              if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
-            }}
-          />
-        )}
-        {documentId && (
-          <Badge variant="outline" className="text-xs font-mono">
-            {documentId.slice(0, 8)}
-          </Badge>
-        )}
       </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        <Button variant="outline" size="sm" onClick={onNew} disabled={loading !== null}>
-          <FilePlus className="h-3.5 w-3.5 mr-1" />
+
+      <div className="flex flex-shrink-0 items-center gap-2">
+        <span
+          className={cn('hidden items-center gap-1.5 text-xs sm:flex', status.tone)}
+          aria-live="polite"
+          title={saveError ?? undefined}
+        >
+          <StatusIcon aria-hidden="true" className="h-3.5 w-3.5" />
+          {status.text}
+        </span>
+
+        <Button variant="ghost" size="sm" onClick={onNew} disabled={busy !== null}>
+          <FilePlus className="h-3.5 w-3.5" />
           New
         </Button>
-        <Button size="sm" onClick={onSave} disabled={loading !== null}>
-          <Save className="h-3.5 w-3.5 mr-1" />
-          {loading === 'save' ? 'Saving…' : (documentId ? 'Save' : 'Save (create)')}
+        <Button size="sm" onClick={onSave} disabled={busy !== null}>
+          {busy === 'save' ? <Spinner /> : <Save className="h-3.5 w-3.5" />}
+          Save
         </Button>
-        <Button variant="destructive" size="sm" onClick={onDelete} disabled={!documentId || loading !== null}>
-          <Trash2 className="h-3.5 w-3.5 mr-1" />
-          {loading === 'delete' ? 'Deleting…' : 'Delete'}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          onClick={onDelete}
+          disabled={!documentId || busy !== null}
+          aria-label="Delete document"
+          title="Delete document"
+        >
+          {busy === 'delete' ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" />}
         </Button>
-        <span className="text-muted-foreground text-sm">{statusText}</span>
       </div>
     </div>
   );

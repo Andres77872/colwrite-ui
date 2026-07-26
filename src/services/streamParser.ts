@@ -1,10 +1,13 @@
 // ── Event handler types ──
 
+import type { ToolAction, ToolOperation } from '../editor/types';
+
 export type SSEEventHandlers = {
   onToken?: (content: string) => void;
   onStatus?: (status: string, detail: string) => void;
   onToolCallStart?: (tool: string, toolCallId: string, args: Record<string, unknown>) => void;
   onToolCallEnd?: (tool: string, toolCallId: string, durationMs: number) => void;
+  onToolAction?: (action: ToolAction) => void;
   onError?: (errorCode: string, message: string) => void;
   onDone?: (
     chatId: string | null,
@@ -23,10 +26,35 @@ export type ParseSSEResult = {
 };
 
 /**
+ * Transform a raw SSE `tool_action` payload (snake_case keys from the Python backend)
+ * into the frontend `ToolAction` shape (camelCase keys).
+ *
+ * Uses **whitelist semantics** — only known fields are mapped; unknown extra fields
+ * (e.g. `operationResults`) are silently dropped.  Every field has an explicit type
+ * coercion with a safe default so that consumer code never sees `undefined` for
+ * required fields.
+ */
+function mapSseToolAction(data: Record<string, unknown>): ToolAction {
+  const actions = (data.actions ?? []) as ToolOperation[];
+  return {
+    tool: String(data.tool ?? ''),
+    // Prefer snake_case (backend wire format), fall back to camelCase (for
+    // backward compat if the backend switches format).
+    toolCallId: String(data.tool_call_id ?? data.toolCallId ?? ''),
+    actions,
+    documentId: String(data.document_id ?? data.documentId ?? ''),
+    version: Number(data.version ?? 0),
+    status: (data.status ?? 'applied') as ToolAction['status'],
+    // JSON null survives the `as` cast — coerce to undefined explicitly
+    message: data.message != null ? String(data.message) : undefined,
+  };
+}
+
+/**
  * Parse a `text/event-stream` `Response` body into typed SSE event callbacks.
  *
- * Handles all 6 backend event types (`token`, `status`, `tool_call_start`,
- * `tool_call_end`, `error`, `done`).  Bare `data:` lines without a preceding
+ * Handles all 7 backend event types (`token`, `status`, `tool_call_start`,
+ * `tool_call_end`, `tool_action`, `error`, `done`).  Bare `data:` lines without a preceding
  * `event:` are emitted as `onToken`.  Malformed JSON payloads are silently
  * skipped.  AbortSignal stops reading without throwing.
  *
@@ -148,6 +176,8 @@ export async function parseSSEStream(
       // Capture for return value
       capturedChatId = chatId;
       capturedThreadId = threadId;
+    } else if (effectiveEvent === 'tool_action') {
+      handlers.onToolAction?.(mapSseToolAction(data));
     }
     // Unknown event types are silently skipped
   }

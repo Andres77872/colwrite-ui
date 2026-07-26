@@ -1,191 +1,411 @@
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import type { ParagraphChild } from '../../../../../../editor';
-import { serializeEditableHtml } from '../../../../../../components/common/Editable/Editable';
-import { useEditor } from '../../../../../../editor';
+import { useMemo, useState } from 'react';
+import type { CitationChild, CitationSource } from '@/editor';
+import type { InlineWidgetProps } from '../types';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
+import { useEditor } from '@/editor';
+import { searchArxiv, type ArxivResult } from '@/services/arxiv';
+import {
+  InlinePill,
+  InlinePopover,
+  SettingsFooter,
+  SettingsRow,
+  stopEditorEvents,
+  useInlineChild,
+} from '../shared';
+import { ExternalLink, Plus, Search, X } from 'lucide-react';
 
-export function CitationInline({
-  blockId,
-  child,
-  updateParagraphChild,
-  removeParagraphChild,
-  updateHtml,
-  refs,
-}: {
-  blockId: string;
-  child: ParagraphChild;
-  updateParagraphChild: (blockId: string, childId: string, next: Partial<ParagraphChild>) => void;
-  removeParagraphChild: (blockId: string, childId: string) => void;
-  updateHtml: (id: string, html: string) => void;
-  refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
-}) {
+/**
+ * Type-guard wrapper. It declares no hooks, so returning early here is safe;
+ * the guard used to sit above the content component's hooks, which meant a
+ * child whose type changed in place rendered fewer hooks than the previous
+ * pass and crashed React.
+ */
+export function CitationInline({ child, ...rest }: InlineWidgetProps) {
   if (child.type !== 'citation') return null;
-  const { blocks } = useEditor();
+  return <CitationInlineContent child={child} {...rest} />;
+}
 
-  // Local UI state
-  const [keysStr, setKeysStr] = useState((child.keys || []).join(', '));
-  const [style, setStyle] = useState(child.style || 'numeric');
-  const [prefix, setPrefix] = useState(child.prefix || '');
-  const [suffix, setSuffix] = useState(child.suffix || '');
-  const [locator, setLocator] = useState(child.locator || '');
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLSpanElement | null>(null);
+type Style = NonNullable<CitationChild['style']>;
 
-  // Sync when identity changes
-  useEffect(() => {
-    setKeysStr((child.keys || []).join(', '));
-    setStyle(child.style || 'numeric');
-    setPrefix(child.prefix || '');
-    setSuffix(child.suffix || '');
-    setLocator(child.locator || '');
-  }, [child.id]);
+const STYLES: Array<{ value: Style; label: string; example: string }> = [
+  { value: 'numeric', label: 'Numeric', example: '[1]' },
+  { value: 'author-year', label: 'Author–year', example: '(Smith, 2020)' },
+  { value: 'ieee', label: 'IEEE', example: '[1]' },
+];
 
-  // Debounced persistence to JSON
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      const keys = keysStr
-        .split(/[,;\n]+/)
-        .map(s => s.trim())
-        .filter(Boolean);
-      const next: ParagraphChild = {
-        ...(child as any),
-        keys,
-        style: style as any,
-        prefix,
-        suffix,
-        locator,
-      } as any;
-      // Only write if changed
-      if (JSON.stringify(child) !== JSON.stringify(next)) {
-        updateParagraphChild(blockId, child.id, {
-          keys,
-          style: style as any,
-          prefix,
-          suffix,
-          locator,
-        } as any);
+/** Surname of the first author, which is what a citation actually shows. */
+function firstAuthorSurname(authors?: string): string | undefined {
+  const first = authors?.split(/[,;]|\band\b/)[0]?.trim();
+  if (!first) return undefined;
+  const parts = first.split(/\s+/);
+  return parts[parts.length - 1] || undefined;
+}
+
+function yearOf(date?: string): string | undefined {
+  return date?.match(/\d{4}/)?.[0];
+}
+
+const EMPTY_KEYS: string[] = [];
+const EMPTY_SOURCES: CitationSource[] = [];
+
+function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
+  const { child } = props;
+  const { patch, remove } = useInlineChild(props);
+  const { blocks, updateParagraphChild } = useEditor();
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<ArxivResult[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+
+  // Shared empties rather than fresh `[]` literals: a new array every render
+  // is a new dependency every render, so every memo below would recompute on
+  // any state change at all.
+  const keys = child.keys ?? EMPTY_KEYS;
+  const sources = child.sources ?? EMPTY_SOURCES;
+  const style: Style = child.style ?? 'numeric';
+
+  /**
+   * Citation number, counted across the whole document.
+   *
+   * This used to count citations within the containing paragraph, so a paper
+   * with citations in three paragraphs showed "[1]" three times. Numbering is
+   * a property of the document, and getting it wrong is visible on every page.
+   */
+  const number = useMemo(() => {
+    let count = 0;
+    for (const block of blocks) {
+      if (block.type !== 'paragraph') continue;
+      for (const candidate of block.children ?? []) {
+        if (candidate.type !== 'citation') continue;
+        count += 1;
+        if (candidate.id === child.id) return count;
       }
-    }, 60);
-    return () => window.clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keysStr, style, prefix, suffix, locator]);
+    }
+    return count || 1;
+  }, [blocks, child.id]);
 
-  // Close popover on outside click
-  useEffect(() => {
-    if (!open) return;
-    const onDocMouseDown = (e: MouseEvent) => {
-      const t = e.target as HTMLElement | null;
-      const inside = !!t && !!rootRef.current && rootRef.current.contains(t);
-      if (!inside) setOpen(false);
+  const byKey = useMemo(() => {
+    const map = new Map<string, CitationSource>();
+    for (const source of sources) map.set(source.key, source);
+    return map;
+  }, [sources]);
+
+  const sourceFor = (key: string): CitationSource | undefined => byKey.get(key);
+
+  const label = useMemo(() => {
+    const prefix = child.prefix ? `${child.prefix} ` : '';
+    const trailing = [child.locator, child.suffix].filter(Boolean).join(', ');
+
+    if (style === 'author-year') {
+      const parts = keys.map((key) => {
+        const source = byKey.get(key);
+        const author = firstAuthorSurname(source?.authors);
+        // Falls back to the raw key rather than inventing an author: a
+        // citation showing the wrong name is worse than one showing a key.
+        return author && source?.year ? `${author}, ${source.year}` : key;
+      });
+      const body = parts.length ? parts.join('; ') : 'citation';
+      return `${prefix}(${body}${trailing ? `, ${trailing}` : ''})`;
+    }
+
+    return `${prefix}[${number}]${trailing ? `, ${trailing}` : ''}`;
+  }, [child.prefix, child.locator, child.suffix, keys, number, byKey, style]);
+
+  const attach = (result: ArxivResult) => {
+    const key = result.id || result.doi || result.title.slice(0, 24);
+    if (keys.includes(key)) return;
+    const source: CitationSource = {
+      key,
+      title: result.title,
+      authors: result.authors,
+      year: yearOf(result.date),
+      venue: 'arXiv',
+      url: result.url,
     };
-    document.addEventListener('mousedown', onDocMouseDown, true);
-    return () => document.removeEventListener('mousedown', onDocMouseDown, true);
-  }, [open]);
-
-  const numberLabel = useMemo(() => {
-    try {
-      const blk = blocks.find(b => (b as any).id === blockId && (b as any).type === 'paragraph') as any;
-      const children: ParagraphChild[] = Array.isArray(blk?.children) ? blk.children : [];
-      const citations = children.filter(c => (c as any).type === 'citation');
-      const idx = citations.findIndex(c => c.id === child.id);
-      return (idx >= 0 ? (idx + 1) : 1);
-    } catch {
-      return 1;
-    }
-  }, [blocks, blockId, child.id]);
-
-  const pillText = useMemo(() => {
-    const keys = keysStr
-      .split(/[,;\n]+/)
-      .map(s => s.trim())
-      .filter(Boolean);
-    const locTxt = locator ? (style === 'numeric' ? `, ${locator}` : ` ${locator}`) : '';
-    const sufTxt = suffix ? (style === 'numeric' ? `, ${suffix}` : `, ${suffix}`) : '';
-    const preTxt = prefix ? `${prefix} ` : '';
-    if (style === 'numeric') {
-      return `${preTxt}[${numberLabel}]${locTxt}${sufTxt}`.trim();
-    }
-    // author-year or ieee (simplified placeholder based on keys)
-    const body = keys.length ? keys.join('; ') : 'citation';
-    return `${preTxt}(${body}${locator ? `, ${locator}` : ''}${suffix ? `, ${suffix}` : ''})`;
-  }, [style, keysStr, numberLabel, prefix, suffix, locator]);
-
-  const onRemove = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const host = refs.current[blockId];
-    const el = host?.querySelector(`[data-child-id="${child.id}"]`);
-    el?.parentNode?.removeChild(el as any);
-    removeParagraphChild(blockId, child.id);
-    const editable = refs.current[blockId];
-    if (editable) updateHtml(blockId, serializeEditableHtml(editable));
+    patch({ keys: [...keys, key], sources: [...sources, source] });
   };
 
+  const detach = (key: string) => {
+    patch({
+      keys: keys.filter((k) => k !== key),
+      sources: sources.filter((source) => source.key !== key),
+    });
+  };
+
+  const addManualKey = (raw: string) => {
+    const key = raw.trim();
+    if (!key || keys.includes(key)) return;
+    patch({ keys: [...keys, key] });
+  };
+
+  const runSearch = async () => {
+    const text = query.trim();
+    if (!text || searching) return;
+    setSearching(true);
+    setSearchError('');
+    try {
+      setResults(await searchArxiv({ query: text, limit: 6 }));
+    } catch {
+      setSearchError('Could not reach the source index. Add the key by hand instead.');
+      setResults([]);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  /**
+   * Citation style is a document-wide decision, so changing it here offers to
+   * change it everywhere. Leaving one paragraph in author–year and the rest in
+   * numeric is never what anyone meant.
+   */
+  const applyStyleEverywhere = (next: Style) => {
+    for (const block of blocks) {
+      if (block.type !== 'paragraph') continue;
+      for (const candidate of block.children ?? []) {
+        if (candidate.type === 'citation' && candidate.style !== next) {
+          updateParagraphChild(block.id, candidate.id, { style: next });
+        }
+      }
+    }
+  };
+
+  const otherCitations = useMemo(
+    () =>
+      blocks
+        .filter((block) => block.type === 'paragraph')
+        .flatMap((block) => (block.type === 'paragraph' ? block.children ?? [] : []))
+        .filter((candidate) => candidate.type === 'citation' && candidate.id !== child.id).length,
+    [blocks, child.id],
+  );
+
   return (
-    <span 
-      ref={rootRef} 
-      className="citation-inline inline-block align-baseline relative" 
-      role="group" 
-      aria-label="Citation" 
-      contentEditable={false as any} 
-      onMouseDown={(e) => e.stopPropagation()} 
-      onClick={(e) => e.stopPropagation()}
+    <span
+      className="citation-inline relative inline-block align-baseline"
+      role="group"
+      aria-label="Citation"
+      contentEditable={false}
+      {...stopEditorEvents}
     >
-      <button 
-        type="button" 
-        className={cn(
-          "inline-flex items-center gap-1 px-1.5 py-0.5 text-sm",
-          "bg-emerald-950/40 text-emerald-400 border border-emerald-700/50 rounded",
-          "hover:bg-emerald-900/50 transition-colors cursor-pointer"
-        )}
-        title="Edit citation" 
-        onMouseDown={(e) => { e.preventDefault(); setOpen(v => !v); }} 
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(v => !v); } }}
+      <InlinePopover
+        align="start"
+        contentClassName="w-[24rem] max-w-[85vw] p-3"
+        trigger={
+          <InlinePill
+            tone={keys.length === 0 ? 'error' : 'default'}
+            title={
+              keys.length === 0
+                ? 'This citation has no source yet'
+                : sources.length
+                  ? sources.map((source) => source.title ?? source.key).join('\n')
+                  : keys.join(', ')
+            }
+          >
+            {label}
+          </InlinePill>
+        }
       >
-        <span>{pillText}</span>
-        <span className="text-xs opacity-60" aria-hidden>▾</span>
-      </button>
-      {open && (
-        <div 
-          className="absolute left-0 top-full mt-1 z-50 bg-popover border border-border rounded-lg shadow-lg p-3 min-w-[240px]" 
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center gap-2 mb-2">
-            <label className="text-xs text-muted-foreground w-16 shrink-0">Keys</label>
-            <Input className="h-8 text-sm" type="text" placeholder="smith2020, doe2021" value={keysStr} onChange={(e) => setKeysStr(e.target.value)} />
-          </div>
-          <div className="flex items-center gap-2 mb-2">
-            <label className="text-xs text-muted-foreground w-16 shrink-0">Style</label>
-            <select 
-              className="flex-1 h-8 px-2 text-sm border border-input rounded-md bg-background"
-              value={style} 
-              onChange={(e) => setStyle(e.target.value as any)}
-            >
-              <option value="numeric">Numeric</option>
-              <option value="author-year">Author–year</option>
-              <option value="ieee">IEEE</option>
-            </select>
-          </div>
-          <div className="flex items-center gap-2 mb-2">
-            <label className="text-xs text-muted-foreground w-16 shrink-0">Prefix</label>
-            <Input className="h-8 text-sm" type="text" placeholder="see" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
-          </div>
-          <div className="flex items-center gap-2 mb-2">
-            <label className="text-xs text-muted-foreground w-16 shrink-0">Locator</label>
-            <Input className="h-8 text-sm" type="text" placeholder="p. 12" value={locator} onChange={(e) => setLocator(e.target.value)} />
-          </div>
-          <div className="flex items-center gap-2 mb-3">
-            <label className="text-xs text-muted-foreground w-16 shrink-0">Suffix</label>
-            <Input className="h-8 text-sm" type="text" placeholder="ch. 2" value={suffix} onChange={(e) => setSuffix(e.target.value)} />
-          </div>
-          <div className="flex items-center justify-end gap-2">
-            <Button type="button" variant="destructive" size="sm" onMouseDown={onRemove}>Remove</Button>
-            <Button type="button" variant="outline" size="sm" onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}>Done</Button>
-          </div>
-        </div>
-      )}
+        {(close) => (
+          <>
+            <SettingsRow label="Sources">
+              {keys.length === 0 ? (
+                <p className="rounded-md border border-dashed border-border px-2 py-3 text-center text-xs text-muted-foreground">
+                  No source attached yet — search below or paste a key.
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {keys.map((key) => {
+                    const source = sourceFor(key);
+                    return (
+                      <li
+                        key={key}
+                        className="flex items-start gap-2 rounded-md border border-border px-2 py-1.5"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-xs font-medium">
+                            {source?.title ?? key}
+                          </span>
+                          {source && (
+                            <span className="block truncate text-[11px] text-muted-foreground">
+                              {[source.authors, source.year, source.venue]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </span>
+                          )}
+                        </span>
+                        {source?.url && (
+                          <a
+                            href={source.url}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="shrink-0 text-muted-foreground hover:text-foreground"
+                            aria-label={`Open ${source.title ?? key}`}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => detach(key)}
+                          aria-label={`Remove ${key}`}
+                          className="shrink-0 text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </SettingsRow>
+
+            <SettingsRow label="Find a source">
+              <div className="flex gap-1">
+                <Input
+                  type="text"
+                  value={query}
+                  placeholder="Search arXiv, or paste a key / DOI"
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return;
+                    event.preventDefault();
+                    // A bare identifier is a key, not a search: pasting
+                    // "2103.00020" should attach it, not query for it.
+                    if (/^(10\.\d{4,}\/|arXiv:|\d{4}\.\d{4,})/i.test(query.trim())) {
+                      addManualKey(query.trim());
+                      setQuery('');
+                      return;
+                    }
+                    runSearch();
+                  }}
+                  className="h-8 min-w-0 flex-1 px-2"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  onClick={runSearch}
+                  disabled={searching || !query.trim()}
+                  aria-label="Search"
+                >
+                  {searching ? <Spinner className="h-3.5 w-3.5" /> : <Search className="h-3.5 w-3.5" />}
+                </Button>
+              </div>
+
+              {searchError && (
+                <p role="alert" className="mt-1 text-[11px] text-destructive">
+                  {searchError}
+                </p>
+              )}
+
+              {results && results.length === 0 && !searchError && (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Nothing found. Press Enter to add “{query.trim()}” as a key anyway.
+                </p>
+              )}
+
+              {results && results.length > 0 && (
+                <ul className="mt-1 max-h-44 space-y-1 overflow-y-auto">
+                  {results.map((result) => (
+                    <li key={result.id}>
+                      <button
+                        type="button"
+                        onClick={() => attach(result)}
+                        disabled={keys.includes(result.id)}
+                        className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/50 disabled:opacity-40"
+                      >
+                        <Plus aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0">
+                          <span className="block truncate text-xs">{result.title}</span>
+                          <span className="block truncate text-[11px] text-muted-foreground">
+                            {[result.authors, yearOf(result.date)].filter(Boolean).join(' · ')}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </SettingsRow>
+
+            <SettingsRow label="Style">
+              <div className="flex gap-1">
+                {STYLES.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => patch({ style: option.value })}
+                    aria-pressed={style === option.value}
+                    className={cn(
+                      'flex-1 rounded-md border px-2 py-1 text-xs transition-colors',
+                      style === option.value
+                        ? 'border-primary bg-primary/10 text-foreground'
+                        : 'border-border text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <span className="block">{option.label}</span>
+                    <span className="block text-[11px] opacity-60">{option.example}</span>
+                  </button>
+                ))}
+              </div>
+              {otherCitations > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="mt-1 h-6 px-1.5 text-[11px] text-muted-foreground"
+                  onClick={() => applyStyleEverywhere(style)}
+                >
+                  Apply this style to all {otherCitations + 1} citations
+                </Button>
+              )}
+            </SettingsRow>
+
+            <div className="grid grid-cols-3 gap-2">
+              <SettingsRow label="Prefix" htmlFor={`prefix-${child.id}`}>
+                <Input
+                  id={`prefix-${child.id}`}
+                  type="text"
+                  value={child.prefix ?? ''}
+                  placeholder="see"
+                  onChange={(event) => patch({ prefix: event.target.value })}
+                  className="h-8 px-2"
+                />
+              </SettingsRow>
+              <SettingsRow label="Locator" htmlFor={`locator-${child.id}`}>
+                <Input
+                  id={`locator-${child.id}`}
+                  type="text"
+                  value={child.locator ?? ''}
+                  placeholder="p. 12"
+                  onChange={(event) => patch({ locator: event.target.value })}
+                  className="h-8 px-2"
+                />
+              </SettingsRow>
+              <SettingsRow label="Suffix" htmlFor={`suffix-${child.id}`}>
+                <Input
+                  id={`suffix-${child.id}`}
+                  type="text"
+                  value={child.suffix ?? ''}
+                  placeholder="ch. 2"
+                  onChange={(event) => patch({ suffix: event.target.value })}
+                  className="h-8 px-2"
+                />
+              </SettingsRow>
+            </div>
+
+            <SettingsFooter
+              onRemove={() => {
+                close();
+                remove();
+              }}
+              onDone={close}
+            />
+          </>
+        )}
+      </InlinePopover>
     </span>
   );
 }

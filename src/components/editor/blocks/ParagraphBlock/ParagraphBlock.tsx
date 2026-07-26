@@ -1,10 +1,25 @@
-import type { ParagraphBlock as P } from '../../../../editor';
+import type { ParagraphBlock as P, ParagraphChild } from '../../../../editor';
 import { Editable } from '../../../common/Editable';
-import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { memo, useEffect, useMemo, useState, type ComponentType, type CSSProperties } from 'react';
 import { useEditor } from '../../../../editor';
 import { createPortal } from 'react-dom';
 import { AiBeatInline, TableInline, CitationInline, EquationInline, GraphInline } from './Inlines';
+import type { AiBeatWidgetProps } from './Inlines/types';
 import { cn } from '@/lib/utils';
+
+/**
+ * One registry instead of a per-widget portal branch: the six wiring props are
+ * identical for every widget, and AI Beat's two extras ride along in
+ * AiBeatWidgetProps, which every widget accepts and the others ignore.
+ * A future widget (footnote, xref, var) is one line here, not a new branch.
+ */
+const INLINE_WIDGETS: Record<ParagraphChild['type'], ComponentType<AiBeatWidgetProps>> = {
+  aiBeat: AiBeatInline,
+  table: TableInline,
+  citation: CitationInline,
+  equation: EquationInline,
+  graph: GraphInline,
+};
 
 export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P }) {
   const { refs, updateParagraphChild, removeParagraphChild, updateHtml, documentId, createRemote } = useEditor();
@@ -67,55 +82,18 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
       {mounts.map(({ id, el }: { id: string; el: HTMLElement }) => {
         const child = (block.children || []).find(c => c.id === id);
         if (!child) return null;
+        const Widget = INLINE_WIDGETS[child.type];
         return createPortal(
-          child.type === 'aiBeat' ? (
-            <AiBeatInline
-              blockId={block.id}
-              child={child}
-              updateParagraphChild={updateParagraphChild}
-              removeParagraphChild={removeParagraphChild}
-              updateHtml={updateHtml}
-              refs={refs}
-              documentId={documentId}
-              createRemote={createRemote}
-            />
-          ) : child.type === 'table' ? (
-            <TableInline
-              blockId={block.id}
-              child={child}
-              updateParagraphChild={updateParagraphChild}
-              removeParagraphChild={removeParagraphChild}
-              updateHtml={updateHtml}
-              refs={refs}
-            />
-          ) : child.type === 'citation' ? (
-            <CitationInline
-              blockId={block.id}
-              child={child}
-              updateParagraphChild={updateParagraphChild}
-              removeParagraphChild={removeParagraphChild}
-              updateHtml={updateHtml}
-              refs={refs}
-            />
-          ) : child.type === 'equation' ? (
-            <EquationInline
-              blockId={block.id}
-              child={child}
-              updateParagraphChild={updateParagraphChild}
-              removeParagraphChild={removeParagraphChild}
-              updateHtml={updateHtml}
-              refs={refs}
-            />
-          ) : child.type === 'graph' ? (
-            <GraphInline
-              blockId={block.id}
-              child={child}
-              updateParagraphChild={updateParagraphChild}
-              removeParagraphChild={removeParagraphChild}
-              updateHtml={updateHtml}
-              refs={refs}
-            />
-          ) : null,
+          <Widget
+            blockId={block.id}
+            child={child}
+            updateParagraphChild={updateParagraphChild}
+            removeParagraphChild={removeParagraphChild}
+            updateHtml={updateHtml}
+            refs={refs}
+            documentId={documentId}
+            createRemote={createRemote}
+          />,
           el,
           id,
         );

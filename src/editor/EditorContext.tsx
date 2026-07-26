@@ -1,6 +1,13 @@
 import { createContext, useContext, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
-import type { Block, Doc, ParagraphChild } from './types';
+import type { Block, Doc, ParagraphChild, ToolOperation } from './types';
 import { loadDoc, saveDoc, loadDocumentId, saveDocumentId } from './storage';
+import {
+  applyPatchToBlocks,
+  describeSaveError,
+  reconcileBlocks,
+  withoutOrphanChildren,
+  type ApplyPatchResult,
+} from './docOps';
 import { createDocument as apiCreateDocument, saveDocument as apiSaveDocument, loadDocument as apiLoadDocument, deleteDocument as apiDeleteDocument, listDocuments as apiListDocuments } from '../services';
 import { uid } from '../lib/uid';
 
@@ -47,13 +54,31 @@ export type EditorContextValue = {
   createRemote: (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)) => Promise<string>;
   saveRemote: (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)) => Promise<void>;
   loadRemote: (id: string) => Promise<void>;
+  /** Flush pending edits, then open another document. */
+  switchTo: (id: string) => Promise<void>;
   deleteRemote: (id: string) => Promise<void>;
-  listRemote: (page?: number, limit?: number, query?: string) => Promise<{ documents: any[]; count: number }>; 
+  listRemote: (page?: number, limit?: number, query?: string) => Promise<{ documents: any[]; count: number }>;
   lastSavedAt: number | null;
   isAutoSaving: boolean;
   lastSaveSource: 'auto' | 'manual' | null;
+  /** Why the last save failed, or null. Autosave failures are otherwise invisible. */
+  saveError: string | null;
+  clearSaveError: () => void;
+  /** Record the version the server now holds, without marking the doc dirty. */
+  adoptServerVersion: (version: number | undefined | null) => void;
   // Remote document availability (null while loading)
   hasAnyRemoteDocs: boolean | null;
+  /**
+   * Apply agent operations to the local document.
+   *
+   * `persist` decides whether this counts as an edit the user made. Accepting
+   * a proposed change does — nothing is stored server-side until then, so the
+   * autosave timer has to be armed or the accepted text is lost on reload.
+   */
+  applyPatch: (ops: ToolOperation[], options?: { persist?: boolean }) => ApplyPatchResult;
+  /** Ids of blocks touched by a recently accepted change, for highlighting. */
+  recentlyChanged: ReadonlySet<string>;
+  markRecentlyChanged: (ids: string[]) => void;
 };
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -75,6 +100,35 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const [documentId, setDocumentId] = useState<string | null>(() => loadDocumentId());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Saves are optimistically locked on the version. The authoritative value
+  // lives in a ref rather than in `doc`, because adopting a new version has to
+  // NOT look like a content change — `doc` is an autosave dependency, so
+  // writing the version back into it would re-arm the timer and the editor
+  // would save itself forever.
+  const versionRef = useRef<number>(doc.version ?? 1);
+
+  // Bumped only by real content edits; this is what arms the autosave timer.
+  const [dirtyTick, setDirtyTick] = useState(0);
+
+  // True until the mount-time server fetch settles. Autosave stays disarmed
+  // meanwhile so a cached draft cannot be written back before we know what the
+  // server actually holds.
+  const [isHydrating, setIsHydrating] = useState<boolean>(() => loadDocumentId() !== null);
+
+  // Latest doc/id without waiting for a re-render. Callbacks captured by the
+  // chat stream can outlive several renders, and saving from a stale closure
+  // is how edits get silently reverted.
+  const docRef = useRef(doc);
+  docRef.current = doc;
+  const documentIdRef = useRef(documentId);
+  documentIdRef.current = documentId;
+
+  // Which document the in-state `doc` was actually loaded for. Without this a
+  // PUT can write one document's body over another's — the id and the body are
+  // separate pieces of state that briefly disagree while switching documents.
+  const loadedForIdRef = useRef<string | null>(documentId);
   // Global menu state - only one block menu open at a time
   const [openMenuBlockId, setOpenMenuBlockId] = useState<string | null>(null);
   const [openMenuType, setOpenMenuType] = useState<'add' | 'options' | null>(null);
@@ -87,17 +141,45 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const autoSaveTimerRef = useRef<number | null>(null);
   const [hasAnyRemoteDocs, setHasAnyRemoteDocs] = useState<boolean | null>(null);
 
-  // Auto-save
+  // Local draft cache, keyed by the document it belongs to.
   useEffect(() => {
-    const raf = requestAnimationFrame(() => saveDoc(doc));
+    const raf = requestAnimationFrame(() => saveDoc(doc, documentId));
     return () => cancelAnimationFrame(raf);
-  }, [doc]);
+  }, [doc, documentId]);
 
-  // Debounced remote auto-save (5 seconds after last change)
+  // Hydrate from the server on mount. The cached draft is a fallback for going
+  // offline, not a source of truth: adopting it unconditionally meant a stale
+  // (or another account's) body could be saved over the real document.
+  useEffect(() => {
+    const id = documentIdRef.current;
+    if (!id) {
+      setIsHydrating(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        await loadRemote(id);
+      } catch {
+        // Keep the cached draft — it is at least known to belong to this id.
+        if (!cancelled) setSaveError('Could not reach the server; showing your last local copy.');
+      } finally {
+        if (!cancelled) setIsHydrating(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // Mount only: later document switches go through loadRemote/switchTo.
+  }, []);
+
+  // Debounced remote auto-save (5 seconds after last change).
+  // Keyed on `dirtyTick` rather than `doc` so that adopting a server version
+  // does not count as a change and re-arm the timer.
   useEffect(() => {
     // Wait until we know whether the account has any remote documents
     // to avoid auto-creating the first document without an explicit user action.
     if (hasAnyRemoteDocs === null) return;
+    if (isHydrating) return;
+    if (dirtyTick === 0) return;
 
     if (autoSaveTimerRef.current !== null) {
       clearTimeout(autoSaveTimerRef.current);
@@ -112,8 +194,10 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       setIsAutoSaving(true);
       try {
         await doRemoteSave('auto');
-      } catch {
-        // ignore autosave errors for now; manual save remains available
+      } catch (err) {
+        // Autosave failures used to be swallowed entirely, so a document that
+        // had stopped saving looked identical to one that was saving fine.
+        setSaveError(describeSaveError(err));
       } finally {
         setIsAutoSaving(false);
       }
@@ -124,7 +208,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
         autoSaveTimerRef.current = null;
       }
     };
-  }, [doc, hasAnyRemoteDocs, documentId]);
+  }, [dirtyTick, hasAnyRemoteDocs, documentId, isHydrating]);
 
   // Persist current document id
   useEffect(() => {
@@ -177,10 +261,30 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const setBlocks = (updater: (prev: Block[]) => Block[]) => setDoc(d => ({ ...d, blocks: updater(d.blocks) }));
+  /** Apply a content change and arm the autosave timer. */
+  const mutateDoc = (updater: (prev: Doc) => Doc) => {
+    setDoc(updater);
+    setDirtyTick(tick => tick + 1);
+  };
 
-  const setDocMeta = (meta: Partial<Doc>) => setDoc(prev => ({ ...prev, ...meta }));
+  const setBlocks = (updater: (prev: Block[]) => Block[]) =>
+    mutateDoc(d => ({ ...d, blocks: updater(d.blocks) }));
+
+  const setDocMeta = (meta: Partial<Doc>) => mutateDoc(prev => ({ ...prev, ...meta }));
   const setDocName = (name: string) => setDocMeta({ name });
+
+  /**
+   * Record the version the server now holds, without marking the doc dirty.
+   *
+   * Called after our own saves and after the assistant edits the document
+   * server-side. Skipping this is what made every save after the first fail:
+   * the client kept optimistically locking on the version it first loaded.
+   */
+  const adoptServerVersion = (version: number | undefined | null) => {
+    if (typeof version !== 'number' || Number.isNaN(version)) return;
+    versionRef.current = version;
+    setDoc(prev => (prev.version === version ? prev : { ...prev, version }));
+  };
 
   const addBlockAtStart = (type: Block['type']): string => {
     const newId = uid();
@@ -262,7 +366,10 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const b = prev[idx] as any;
     if (b.html === html) return prev;
     const out = prev.slice();
-    out[idx] = { ...b, html } as Block;
+    // Deleting an inline widget removes its placeholder span from the html but
+    // left the child in `children`. That orphan is invisible in the editor and
+    // used to make every subsequent AI edit of the document fail validation.
+    out[idx] = withoutOrphanChildren({ ...b, html } as Block);
     return out;
   });
 
@@ -329,17 +436,28 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const exec = (cmd: string) => document.execCommand(cmd, false);
 
   const newLocal = () => {
-    setDoc(makeDefaultDoc());
+    const next = makeDefaultDoc();
+    setDoc(next);
+    docRef.current = next;
+    setDirtyTick(0);
     setDocumentId(null);
+    documentIdRef.current = null;
+    loadedForIdRef.current = null;
+    versionRef.current = 1;
     setLastSavedAt(null);
+    setSaveError(null);
   };
 
   // API-backed persistence
   const createRemote = async (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)): Promise<string> => {
-    const payload = docOverride ?? doc;
+    const payload = docOverride ?? docRef.current;
     const res = await apiCreateDocument(payload);
     setDocumentId(res.document_id);
+    documentIdRef.current = res.document_id;
+    loadedForIdRef.current = res.document_id;
+    versionRef.current = res.version ?? 1;
     setHasAnyRemoteDocs(true);
+    setSaveError(null);
     return res.document_id;
   };
 
@@ -350,13 +468,29 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = null;
     }
-    const payload = docOverride ?? doc;
-    if (!documentId) {
-      const id = await createRemote(payload as any);
-      setDocumentId(id);
-    } else {
-      await apiSaveDocument(documentId, payload as any);
+    const targetId = documentIdRef.current;
+    const base = docOverride ?? docRef.current;
+
+    if (!targetId) {
+      await createRemote(base as any);
+      setLastSavedAt(Date.now());
+      setLastSaveSource(source);
+      return;
     }
+
+    // Never write the in-state body to a document it did not come from. The id
+    // and the body are separate state, and they disagree for a moment while
+    // switching documents — long enough for a queued autosave to land.
+    if (!docOverride && loadedForIdRef.current !== targetId) {
+      return;
+    }
+
+    // Always lock on the version the server last confirmed, not the one
+    // embedded in the (possibly much older) doc we are sending.
+    const payload = { ...(base as any), version: versionRef.current };
+    const res = await apiSaveDocument(targetId, payload);
+    adoptServerVersion(res?.version);
+    setSaveError(null);
     setLastSavedAt(Date.now());
     setLastSaveSource(source);
   };
@@ -366,9 +500,33 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   };
 
   const loadRemote = async (id: string): Promise<void> => {
-    const loaded = await apiLoadDocument(id);
+    const fetched = await apiLoadDocument(id);
+    // Self-heal documents saved before html/children were kept in step, so an
+    // old orphan does not keep failing the agent's edits forever.
+    const loaded: Doc = { ...fetched, blocks: reconcileBlocks(fetched.blocks) };
     setDoc(loaded);
+    setDirtyTick(0);
     setDocumentId(id);
+    documentIdRef.current = id;
+    docRef.current = loaded;
+    loadedForIdRef.current = id;
+    versionRef.current = loaded.version ?? 1;
+    setSaveError(null);
+  };
+
+  /** Flush pending local edits, then switch to another document. */
+  const switchTo = async (id: string): Promise<void> => {
+    // Switching used to drop whatever had not hit the 5s autosave yet. The
+    // assistant creating a document made that a routine occurrence.
+    if (documentIdRef.current && loadedForIdRef.current === documentIdRef.current) {
+      try {
+        await doRemoteSave('auto');
+      } catch {
+        // A failed flush must not block the switch — the error is already
+        // surfaced through saveError, and the user asked to move on.
+      }
+    }
+    await loadRemote(id);
   };
 
   const deleteRemote = async (id: string): Promise<void> => {
@@ -391,8 +549,68 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const setFromJSON = (json: string) => {
     const parsed = JSON.parse(json);
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)) throw new Error('Invalid JSON structure');
-    setDoc(parsed as Doc);
+    const next = parsed as Doc;
+    mutateDoc(() => ({ ...next, blocks: reconcileBlocks(next.blocks) }));
   };
+
+  /**
+   * Apply agent tool operations in a single pass.
+   *
+   * `persist: true` is the accept path — the operation exists nowhere but this
+   * browser until autosave runs, so it has to arm the timer like any other
+   * edit. `persist: false` is a replay of something the server already holds
+   * and deliberately leaves the document clean.
+   *
+   * Ops that cannot be applied against the local copy are reported back so the
+   * caller can say the two have diverged, rather than silently putting content
+   * somewhere the agent never asked for.
+   */
+  const applyPatch = (
+    ops: ToolOperation[],
+    options?: { persist?: boolean },
+  ): ApplyPatchResult => {
+    let outcome: ApplyPatchResult = { blocks: [], desynced: [], touched: [] };
+
+    const update = (prev: Doc): Doc => {
+      outcome = applyPatchToBlocks(prev.blocks, ops);
+
+      let nextDoc: Doc = { ...prev, blocks: outcome.blocks };
+      for (const op of ops) {
+        if (op.op === 'update_meta' && op.meta?.name) {
+          nextDoc = { ...nextDoc, name: op.meta.name };
+        }
+      }
+      return nextDoc;
+    };
+
+    if (options?.persist) mutateDoc(update);
+    else setDoc(update);
+
+    return outcome;
+  };
+
+  /**
+   * Blocks an accepted change just landed on.
+   *
+   * Accepting from the review bar can change text far off screen; without a
+   * lingering highlight the author has no way to see what moved.
+   */
+  const [recentlyChanged, setRecentlyChanged] = useState<ReadonlySet<string>>(() => new Set());
+  const recentlyChangedTimer = useRef<number | null>(null);
+
+  const markRecentlyChanged = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setRecentlyChanged(new Set(ids));
+    if (recentlyChangedTimer.current !== null) clearTimeout(recentlyChangedTimer.current);
+    recentlyChangedTimer.current = window.setTimeout(() => {
+      setRecentlyChanged(new Set());
+      recentlyChangedTimer.current = null;
+    }, 4000);
+  };
+
+  useEffect(() => () => {
+    if (recentlyChangedTimer.current !== null) clearTimeout(recentlyChangedTimer.current);
+  }, []);
 
   const save = () => {
     saveDoc(doc);
@@ -438,12 +656,19 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     createRemote,
     saveRemote,
     loadRemote,
+    switchTo,
     deleteRemote,
     listRemote,
     lastSavedAt,
     isAutoSaving,
     lastSaveSource,
+    saveError,
+    clearSaveError: () => setSaveError(null),
+    adoptServerVersion,
     hasAnyRemoteDocs,
+    applyPatch,
+    recentlyChanged,
+    markRecentlyChanged,
   };
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;

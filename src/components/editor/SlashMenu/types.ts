@@ -3,6 +3,12 @@ import type { ParagraphChild } from '../../../editor';
 
 export type SlashContext = {
   blockId: string;
+  /**
+   * The paragraph selection captured before the command search took focus.
+   * Reading document.getSelection() when a command runs would return the
+   * search input (or document body) instead of the insertion point.
+   */
+  insertionRange: Range;
   refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
   updateHtml: (id: string, html: string) => void;
   addParagraphChild: (blockId: string, child: ParagraphChild) => string;
@@ -18,5 +24,4 @@ export type SlashItem = {
   group: 'actions' | 'insert' | string;
   onSelect: (ctx: SlashContext) => Promise<void> | void;
 };
-
 

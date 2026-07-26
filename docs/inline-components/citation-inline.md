@@ -1,85 +1,95 @@
-# CitationInline — Development Plan
+# CitationInline — Reference
 
-This document specifies how to implement the `CitationInline` component for inserting citations into paragraph text.
+How inline citations work in the editor.
 
 References:
-- `src/components/editor/blocks/ParagraphBlock/ParagraphBlock.tsx`
-- `src/components/common/Editable/Editable.tsx`
+- `src/components/editor/blocks/ParagraphBlock/Inlines/CitationInline/CitationInline.tsx`
+- `src/components/editor/blocks/ParagraphBlock/Inlines/shared/*` (shared chrome)
+- `src/components/editor/SlashMenu/items/citation.ts`
 - `src/editor/types.ts`
-- `src/components/editor/SlashMenu/items/*`
 
 ## Status
 
-- Implemented.
-- UI component: `src/components/editor/blocks/ParagraphBlock/Inlines/CitationInline/CitationInline.tsx`
-- Slash menu item: `src/components/editor/SlashMenu/items/citation.ts`
-- Mounted via portals in: `src/components/editor/blocks/ParagraphBlock/ParagraphBlock.tsx`
+- Implemented; UI reworked onto the shared inline chrome (pill + popover).
 
 ## Purpose
-- Enable inline citations in numeric or author–year styles.
-- Support multiple keys, prefixes/suffixes, and locators.
+- Inline citations in numeric, author–year or IEEE style.
+- Multiple keys per citation, plus prefix / locator / suffix.
+- Sources attachable from arXiv search without leaving the document.
 
-## Type additions (src/editor/types.ts)
+## Data contract (src/editor/types.ts)
 ```ts
+export type CitationSource = {
+  key: string;
+  title?: string;
+  authors?: string;
+  year?: string;
+  venue?: string;
+  url?: string;
+};
+
 export type CitationChild = {
   id: string;
   type: 'citation';
-  keys: string[];                    // ['smith2020', '10.1145/...', 'arXiv:2101.12345']
+  keys: string[];                    // citation keys/DOIs/arXiv IDs
   style?: 'numeric' | 'author-year' | 'ieee';
   prefix?: string;                   // e.g., 'see', 'cf.'
   suffix?: string;                   // e.g., 'ch. 2', 'pp. 21–24'
   locator?: string;                  // page/section locator
+  /** Resolved bibliographic detail, keyed by entries in `keys`. */
+  sources?: CitationSource[];
 };
 ```
-Extend `ParagraphChild` union to include `CitationChild`.
 
-## Slash menu item (src/components/editor/SlashMenu/items/citation.ts)
-- Export `citationItem: SlashItem` with `id: 'citation'`, `group: 'insert'`.
-- onSelect steps:
-  1) Resolve `editable = refs.current[blockId]` and `range = document.getSelection().getRangeAt(0)`.
-  2) Create placeholder: `<span data-child-id={id} contenteditable="false"></span>` and insert at caret. Add a trailing space node for caret stability.
-  3) `updateHtml(blockId, serializeEditableHtml(editable))`.
-  4) `addParagraphChild(blockId, { id, type: 'citation', keys: [], style: 'numeric', prefix: '', suffix: '', locator: '' })`.
+## Slash menu item
+- `citationItem` (`group: 'insert'`) inserts via `insertInlineChild`, which writes the
+  placeholder `<span data-child-id="ID" contenteditable="false">` and the child
+  `{ id, type: 'citation', keys: [], style: 'numeric' }` in one pass.
 
-## Inline component (src/components/editor/blocks/ParagraphBlock/Inlines/CitationInline/CitationInline.tsx)
-- Props: `{ blockId, child, updateParagraphChild, removeParagraphChild, updateHtml, refs }`.
-- Root: `<span className="citation-inline" contentEditable={false} onMouseDown={stopPropagation} onClick={stopPropagation}>`.
-- UI:
-  - Render pill: `[1]` (numeric) or `(Smith, 2020)` (author-year). If multiple keys, join with commas.
-  - Click/Enter opens an inline popover with:
-    - Keys list (add/remove input with autocomplete hook for later integration; for now simple text).
-    - Style dropdown: numeric | author-year | ieee.
-    - Optional prefix/suffix/locator inputs.
-  - Provide small “×” button to remove the inline.
+## UI
+- Trigger: shared `InlinePill` (primary tint). Label is `[n]` (numeric/IEEE) or
+  `(Smith, 2020; Doe, 2021)` (author–year), with prefix/locator/suffix applied.
+  A citation with no keys renders in the destructive tone.
+- Popover: shared `InlinePopover` with
+  - Sources list (title · authors · year · venue, external link, detach).
+  - Find a source: arXiv search (`searchArxiv`), attach results; pasting a bare
+    identifier (DOI / `arXiv:` / numeric id) + Enter adds it as a key directly.
+  - Style segmented control; "Apply this style to all N citations" appears when
+    other citations exist (style is a document-wide decision).
+  - Prefix / Locator / Suffix fields.
+  - Shared `SettingsFooter` (Remove / Done).
 - Behavior:
-  - Debounce calls to `updateParagraphChild(blockId, child.id, {...})` when fields change.
-  - Remove: delete placeholder node from the editable DOM, call `removeParagraphChild`, then `updateHtml(blockId, serializeEditableHtml(editable))`.
+  - All edits write straight through `updateParagraphChild` (no debounced shadow
+    state; see `useInlineChild` for why).
+  - Remove deletes the placeholder first, then the child, then re-serializes
+    (that order keeps the paragraph's html/children invariant intact).
 
-## ParagraphBlock integration
-- In `ParagraphBlock.tsx`, extend portal mapping:
-  - `child.type === 'citation'` → `<CitationInline ... />`.
-- Reuse the same props as `AiBeatInline/TableInline`.
+## Rendering rules
+- Numbering counts citation children across the **whole document** in block
+  order — numbering is a document-level property, computed at render time and
+  never stored in JSON.
+- Author–year renders first-author surname + year from `sources`; a key without
+  resolved metadata falls back to the raw key (a wrong author is worse than a
+  visible key).
 
-## Rendering/labeling
-- MVP: numeric labels use order within paragraph context or `keys.length` > 0 shows `[n]` placeholder; exact numbering can be refined later.
-- Author–year: display first author last name + year for first key; if multiple: `(Smith 2020; Doe 2021)` (simplified placeholder rendering until metadata lookup is added).
-
-## Example JSON usage
+## Example JSON
 ```json
 {
   "id": "p1",
   "type": "paragraph",
   "html": "We build on <span data-child-id=\"c1\" contenteditable=\"false\"></span> and extend prior work.",
   "children": [
-    { "id": "c1", "type": "citation", "keys": ["smith2020"], "style": "numeric" }
+    {
+      "id": "c1",
+      "type": "citation",
+      "keys": ["smith2020"],
+      "style": "numeric",
+      "sources": [{ "key": "smith2020", "title": "…", "authors": "J. Smith", "year": "2020", "venue": "arXiv" }]
+    }
   ]
 }
 ```
 
-## Persistence and serialization
-- All UI state (`keys`, `style`, `prefix`, `suffix`, `locator`) lives in `children`.
-- Paragraph `html` must only contain placeholder spans; serialize with `serializeEditableHtml` before persisting.
-
 ## Styling & accessibility
-- Class: `.citation-inline` for wrapper; popover uses `.citation-popover`.
-- `role="group"` and `aria-label="Citation"`; buttons/inputs include `title` attributes.
+- Wrapper class `.citation-inline`; `role="group"`, `aria-label="Citation"`.
+- Sources tooltip on the pill lists attached titles.

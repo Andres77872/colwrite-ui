@@ -77,7 +77,7 @@ describe('dispatchAction', () => {
     expect(message).toContain(selectedText);
   });
 
-  it('2. agent_tool action (add-details) calls with message containing "Apply the tool add_details"', async () => {
+  it('2. agent_tool action (add-details) names the add_details tool', async () => {
     await dispatchAction({
       selectedText,
       action: 'add-details',
@@ -86,7 +86,7 @@ describe('dispatchAction', () => {
 
     expect(mockStreamAgentChat).toHaveBeenCalledTimes(1);
     const { message } = mockStreamAgentChat.mock.calls[0][0];
-    expect(message).toContain('Apply the tool add_details');
+    expect(message).toContain('add_details');
     expect(message).toContain(selectedText);
   });
 
@@ -163,7 +163,7 @@ describe('dispatchAction', () => {
 
     expect(mockStreamAgentChat).toHaveBeenCalledTimes(1);
     const { message } = mockStreamAgentChat.mock.calls[0][0];
-    expect(message).toContain('Apply the tool search_citations');
+    expect(message).toContain('search_citations');
   });
 
   it('agent_tool action (more-concise) uses toolName more_concise', async () => {
@@ -175,6 +175,35 @@ describe('dispatchAction', () => {
 
     expect(mockStreamAgentChat).toHaveBeenCalledTimes(1);
     const { message } = mockStreamAgentChat.mock.calls[0][0];
-    expect(message).toContain('Apply the tool more_concise');
+    expect(message).toContain('more_concise');
+  });
+});
+
+describe('dispatchAction — replacement-text contract', () => {
+  const selectedText = 'The cat sat on the mat.';
+  const docId = 'doc-1';
+
+  beforeEach(() => {
+    mockStreamAgentChat.mockClear();
+    mockStreamAgentChat.mockResolvedValue({ chatId: null, threadId: null, usage: null });
+  });
+
+  it('runs in rewrite mode so the agent cannot edit the document', async () => {
+    // The toolbar shows this behind an accept/reject prompt and applies it
+    // itself; an agent with doc_edit would write the change regardless.
+    await dispatchAction({ selectedText, action: 'improve', documentId: docId });
+    expect(mockStreamAgentChat.mock.calls[0][0].mode).toBe('rewrite');
+  });
+
+  it('asks every action for replacement text only', async () => {
+    // Whatever streams back is spliced into the paragraph verbatim, so a
+    // "Here is the improved version:" preamble would land in the document.
+    for (const action of ['improve', 'translate', 'add-details', 'search-for-references'] as const) {
+      mockStreamAgentChat.mockClear();
+      await dispatchAction({ selectedText, action, documentId: docId });
+      const { message } = mockStreamAgentChat.mock.calls[0][0];
+      expect(message).toContain('replacement text only');
+      expect(message).toContain(selectedText);
+    }
   });
 });

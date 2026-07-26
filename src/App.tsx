@@ -1,4 +1,5 @@
 import { EditorProvider } from './editor'
+import { ProposalsProvider } from './editor/ProposalsContext'
 import { AppShell } from './components/layout/AppShell'
 import { Canvas } from './components/editor/Canvas'
 import { ChatAssistant } from './components/editor/ChatAssistant'
@@ -10,34 +11,49 @@ import { Sidebar } from './components/layout/Sidebar'
 import { Topbar } from './components/layout/Topbar'
 import { ChatSessionsProvider } from './components/chat/ChatSessionsContext'
 import { useAuth } from './components/auth/AuthContext'
-import { LandingPage } from './components/auth/LandingPage'
+import { LandingPage } from './components/landing'
+import { Spinner } from './components/ui/spinner'
 
 function App() {
-  const { user } = useAuth();
-  
+  const { user, status } = useAuth();
+
+  // Confirming a cached session against the server. Showing the landing page
+  // here would flash marketing copy at someone who is already signed in.
+  if (status === 'checking') {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-muted-foreground">
+        <Spinner />
+      </div>
+    )
+  }
+
   if (!user) {
     return <LandingPage />
   }
-  
+
   return (
     <EditorProvider>
-      <ChatSessionsProvider>
-        <PanelsProvider>
-          <AppShell
-            header={<Topbar />}
-            left={<Sidebar />}
-            main={<>
-              <Canvas />
-              <ChatAssistant />
-              <DocumentFooter />
-              <FloatingToolbar />
-              <SlashMenu />
-            </>}
-            right={<ToolsRail />}
-            aside={<ToolsAside />}
-          />
-        </PanelsProvider>
-      </ChatSessionsProvider>
+      {/* Inside EditorProvider: pending agent changes are applied through the
+          editor's own patch path once the author accepts them. */}
+      <ProposalsProvider>
+        <ChatSessionsProvider>
+          <PanelsProvider>
+            <AppShell
+              header={<Topbar />}
+              left={<Sidebar />}
+              main={<>
+                <Canvas />
+                <ChatAssistant />
+                <DocumentFooter />
+                <FloatingToolbar />
+                <SlashMenu />
+              </>}
+              right={<ToolsRail />}
+              aside={<ToolsAside />}
+            />
+          </PanelsProvider>
+        </ChatSessionsProvider>
+      </ProposalsProvider>
     </EditorProvider>
   )
 }

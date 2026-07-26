@@ -2,67 +2,147 @@ import { emitRequireLogin } from './session';
 // Prefer relative base during development to avoid browser CORS via Vite proxy
 export const API_BASE: string = (import.meta as any)?.env?.VITE_API_BASE ?? '/api';
 
-function buildUrl(path: string): string {
+export type ApiRequestInit = RequestInit & {
+  /**
+   * Handle a 401/403 locally instead of letting it sign the user out.
+   * Used by the boot-time session check, which expects failure as a normal
+   * outcome and resolves it itself.
+   */
+  suppressAuthEvent?: boolean;
+};
+
+/**
+ * Endpoints that report their own failures.
+ *
+ * A 401 from `/auth/login` means the password was wrong, not that the current
+ * session died — treating it as the latter used to sign out an already
+ * signed-in user the moment they mistyped. A 401 from `/auth/logout` used to
+ * pop the sign-in dialog straight back open after signing out.
+ */
+const SELF_REPORTING_PATHS = new Set([
+  '/auth/login',
+  '/auth/logout',
+  '/auth/refresh',
+  '/auth/register',
+  '/auth/check-availability',
+]);
+
+function isSelfReporting(path: string): boolean {
+  return SELF_REPORTING_PATHS.has(path.split('?')[0]);
+}
+
+export function buildUrl(path: string): string {
   const base = API_BASE.replace(/\/$/, '');
   const p = path.startsWith('/') ? path : `/${path}`;
   return `${base}${p}`;
 }
 
-async function handleJson<T>(res: Response): Promise<T> {
+export type ApiError = Error & { status: number; data: unknown };
+
+function apiError(res: Response, data: unknown): ApiError {
+  const payload = data as { message?: unknown; detail?: unknown } | null;
+  let msg = res.statusText;
+  if (payload) {
+    if (typeof payload.message === 'string') msg = payload.message;
+    else if (Array.isArray(payload.detail)) {
+      // FastAPI validation errors arrive as a list of per-field objects.
+      msg = payload.detail
+        .map((d: { msg?: string; message?: string }) => d?.msg || d?.message || JSON.stringify(d))
+        .join('; ');
+    } else if (typeof payload.detail === 'string') msg = payload.detail;
+  }
+  const err = new Error(msg) as ApiError;
+  err.status = res.status;
+  err.data = data;
+  return err;
+}
+
+let refreshInFlight: Promise<boolean> | null = null;
+
+/**
+ * Rotate the access cookie, at most one rotation at a time.
+ *
+ * The app fires several requests the moment it mounts, and each rotation
+ * invalidates the previous refresh token — firing them in parallel would look
+ * like token reuse to the auth service and revoke the whole family. Everyone
+ * who asks while a rotation is in flight waits on that same rotation.
+ *
+ * Uses a bare `fetch` rather than going through `request()` so a failing
+ * refresh cannot recurse into another refresh.
+ */
+export function ensureRefreshed(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = fetch(buildUrl('/auth/refresh'), {
+      method: 'POST',
+      credentials: 'include',
+    })
+      .then((res) => res.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  init?: ApiRequestInit,
+): Promise<T> {
+  const { suppressAuthEvent, headers: initHeaders, ...rest } = init ?? {};
+
+  const requestInit: RequestInit = {
+    ...rest,
+    method,
+    // The session lives in an HttpOnly cookie, so every request — including
+    // the auth endpoints, which either set or consume that cookie — needs it.
+    credentials: 'include',
+    headers:
+      body !== undefined
+        ? { 'Content-Type': 'application/json', ...(initHeaders || {}) }
+        : initHeaders,
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  };
+
+  const url = buildUrl(path);
+  let res = await fetch(url, requestInit);
+
+  // The access cookie's lifetime tracks the short access-token TTL, so an
+  // expired session mid-visit is routine. Rotate once and replay before
+  // treating it as a real sign-out.
+  if (res.status === 401 && !isSelfReporting(path) && (await ensureRefreshed())) {
+    res = await fetch(url, requestInit);
+  }
+
   const text = await res.text();
-  let data: any = null;
+  let data: unknown = null;
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
     data = null;
   }
-  if (!res.ok) {
-    let msg = res.statusText;
-    if (data) {
-      if (typeof data.message === 'string') msg = data.message;
-      else if (Array.isArray(data.detail)) {
-        msg = data.detail.map((d: any) => d?.msg || d?.message || JSON.stringify(d)).join('; ');
-      } else if (typeof data.detail === 'string') msg = data.detail;
-    }
-    if (res.status === 401 || res.status === 403) {
-      emitRequireLogin();
-    }
-    const err = new Error(msg);
-    (err as any).status = res.status;
-    (err as any).data = data;
-    throw err;
+  if (res.ok) return data as T;
+
+  if ((res.status === 401 || res.status === 403) && !suppressAuthEvent && !isSelfReporting(path)) {
+    emitRequireLogin(res.status === 403 ? 'forbidden' : 'expired');
   }
-  return data as T;
+  throw apiError(res, data);
 }
 
-export async function get<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(buildUrl(path), { method: 'GET', credentials: 'include', ...init });
-  return handleJson<T>(res);
+export async function get<T>(path: string, init?: ApiRequestInit): Promise<T> {
+  return request<T>('GET', path, undefined, init);
 }
 
-export async function post<T>(path: string, body?: unknown, init?: RequestInit): Promise<T> {
-  const res = await fetch(buildUrl(path), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    credentials: path.startsWith('/auth/') ? 'omit' : 'include',
-    ...init,
-  });
-  return handleJson<T>(res);
+export async function post<T>(path: string, body?: unknown, init?: ApiRequestInit): Promise<T> {
+  return request<T>('POST', path, body, init);
 }
 
-export async function put<T>(path: string, body?: unknown, init?: RequestInit): Promise<T> {
-  const res = await fetch(buildUrl(path), {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    credentials: 'include',
-    ...init,
-  });
-  return handleJson<T>(res);
+export async function put<T>(path: string, body?: unknown, init?: ApiRequestInit): Promise<T> {
+  return request<T>('PUT', path, body, init);
 }
 
-export async function del<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(buildUrl(path), { method: 'DELETE', credentials: 'include', ...init });
-  return handleJson<T>(res);
+export async function del<T>(path: string, init?: ApiRequestInit): Promise<T> {
+  return request<T>('DELETE', path, undefined, init);
 }

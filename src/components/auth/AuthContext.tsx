@@ -1,14 +1,40 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { login, logout as logoutApi, clearSessionTokenCookie, UNAUTHORIZED_EVENT } from '../../services';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  login,
+  logout as logoutApi,
+  getProfile,
+  clearLegacySessionCookie,
+  UNAUTHORIZED_EVENT,
+  type UnauthorizedDetail,
+} from '@/services';
+import { clearCachedDocs } from '@/editor/storage';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { BrandMark, APP_NAME } from '@/components/common/Brand';
+import { AlertCircle, Info } from 'lucide-react';
 
-export type User = { name: string; email: string };
+export type User = { name: string; email: string; userType?: string | null };
+
+/**
+ * `checking` exists because a cached user is only a hint — the session itself
+ * is an HttpOnly cookie this code cannot read. Rendering the editor before the
+ * server confirms it means showing the whole app and then yanking it away on
+ * the first API call.
+ */
+export type AuthStatus = 'checking' | 'authenticated' | 'anonymous';
 
 type AuthContextValue = {
   user: User | null;
+  status: AuthStatus;
   openAuth: () => void;
   closeAuth: () => void;
   logout: () => void;
@@ -16,70 +42,150 @@ type AuthContextValue = {
 };
 
 const STORAGE_KEY = 'cw_user';
+const LEGACY_TOKEN_KEY = 'session_token';
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+function readCachedUser(): User | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as User) : null;
+  } catch {
+    /* corrupt entry — start signed out */
+    return null;
+  }
+}
+
+function persistUser(user: User): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
+  } catch {
+    /* session still works for this tab */
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [authOpen, setAuthOpen] = useState<boolean>(false);
+  const [status, setStatus] = useState<AuthStatus>('checking');
+  const [authOpen, setAuthOpen] = useState(false);
+  // Explains an involuntary sign-out. Without it the user is dropped on the
+  // landing page with no indication of what happened.
+  const [notice, setNotice] = useState<string | null>(null);
 
-  // Hydrate user from localStorage on mount
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setUser(JSON.parse(raw));
-    } catch { /* no-op */ }
-  }, []);
-
-  // Listen for global unauthorized events to force re-authentication
-  useEffect(() => {
-    const onUnauthorized = () => {
-      // Ensure any stored session artifacts are cleared and prompt login
-      try {
-        localStorage.removeItem(STORAGE_KEY);
-        // Remove any stray token entries if they exist
-        localStorage.removeItem('session_token');
-      } catch { /* no-op */ }
-      setUser(null);
-      clearSessionTokenCookie();
-      setAuthOpen(true);
-    };
-    // Casts to satisfy TS for custom event names
-    window.addEventListener(UNAUTHORIZED_EVENT as any, onUnauthorized as EventListener);
-    return () => window.removeEventListener(UNAUTHORIZED_EVENT as any, onUnauthorized as EventListener);
-  }, []);
-
-  const logout = () => {
-    logoutApi().catch(() => { /* backend call best-effort; always clean up local state */ });
+  const clearLocalSession = useCallback(() => {
     try {
       localStorage.removeItem(STORAGE_KEY);
-      localStorage.removeItem('session_token');
-    } catch { /* no-op */ }
+      localStorage.removeItem(LEGACY_TOKEN_KEY);
+    } catch {
+      /* storage blocked — the rest of the teardown still applies */
+    }
     setUser(null);
-    clearSessionTokenCookie();
-  };
+    setStatus('anonymous');
+    clearLegacySessionCookie();
+  }, []);
 
-  const loginWithCredentials = async (usernameOrEmail: string, password: string) => {
-    const resp = await login({ username: usernameOrEmail.trim(), password });
-    if (!resp?.session_token) throw new Error(resp?.message || 'Login failed');
-    const u: User = { name: resp.user?.username || usernameOrEmail || 'User', email: resp.user?.email || '' };
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(u)); } catch { /* no-op */ }
-    setUser(u);
+  // Confirm the cached identity against the server before trusting it.
+  useEffect(() => {
+    const cached = readCachedUser();
+    if (!cached) {
+      // Nobody ever signed in on this browser, so there is no session to
+      // verify — don't make an anonymous visitor wait on a round-trip.
+      setStatus('anonymous');
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const profile = await getProfile();
+        if (cancelled) return;
+        const confirmed: User = {
+          name: profile.username || cached.name,
+          email: profile.email || cached.email || '',
+          userType: profile.user_type ?? cached.userType ?? null,
+        };
+        persistUser(confirmed);
+        setUser(confirmed);
+        setStatus('authenticated');
+      } catch {
+        // Includes the case where the access cookie expired and the refresh
+        // attempt inside the API layer also failed. Nothing to recover.
+        if (!cancelled) clearLocalSession();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clearLocalSession]);
+
+  // A 401/403 that survived a refresh attempt means the session is really gone.
+  useEffect(() => {
+    const onUnauthorized = (event: Event) => {
+      const detail = (event as CustomEvent<UnauthorizedDetail>).detail;
+      clearLocalSession();
+      setNotice(detail?.message ?? 'Your session expired. Please sign in again.');
+      setAuthOpen(true);
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized as EventListener);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized as EventListener);
+  }, [clearLocalSession]);
+
+  const logout = useCallback(() => {
+    // Best-effort server call; local state is cleared either way. Only the
+    // server can clear the HttpOnly cookie, so a failure here leaves the
+    // session alive on the API until it expires.
+    logoutApi().catch(() => {});
+    // Cached drafts are document content, not session data — leaving them
+    // behind meant the next account to sign in on this browser opened the
+    // previous one's document body.
+    clearCachedDocs();
+    clearLocalSession();
+    setNotice(null);
+  }, [clearLocalSession]);
+
+  const loginWithCredentials = useCallback(async (usernameOrEmail: string, password: string) => {
+    const response = await login({ username: usernameOrEmail.trim(), password });
+    // Any non-2xx already threw with the server's message. The body carries no
+    // token — the credentials arrive as HttpOnly cookies — so an explicit
+    // `authenticated: false` is the only failure signal left. Gating on a body
+    // field the API strips is what made a *successful* login surface
+    // "Root user login successful" as a red error.
+    if (response?.authenticated === false) {
+      throw new Error(response?.message || 'Login failed');
+    }
+    const nextUser: User = {
+      name: response?.user?.username || usernameOrEmail.trim() || 'User',
+      email: response?.user?.email || '',
+      userType: response?.user?.user_type ?? null,
+    };
+    persistUser(nextUser);
+    setUser(nextUser);
+    setStatus('authenticated');
+    setNotice(null);
     setAuthOpen(false);
-  };
+  }, []);
 
-  const value = useMemo<AuthContextValue>(() => ({
-    user,
-    openAuth: () => setAuthOpen(true),
-    closeAuth: () => setAuthOpen(false),
-    logout,
-    loginWithCredentials,
-  }), [user]);
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      status,
+      openAuth: () => setAuthOpen(true),
+      closeAuth: () => setAuthOpen(false),
+      logout,
+      loginWithCredentials,
+    }),
+    [user, status, logout, loginWithCredentials],
+  );
 
   return (
     <AuthContext.Provider value={value}>
       {children}
-      {authOpen && <AuthDialog onClose={() => setAuthOpen(false)} onSuccess={() => setAuthOpen(false)} />}
+      <AuthDialog
+        open={authOpen}
+        onOpenChange={setAuthOpen}
+        notice={notice}
+        onNoticeHandled={() => setNotice(null)}
+      />
     </AuthContext.Provider>
   );
 }
@@ -90,124 +196,168 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
-function AuthDialog({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+/* ----------------------------------------
+   Auth dialog
+   ---------------------------------------- */
+
+type Mode = 'signin' | 'register';
+
+/**
+ * Built on the Dialog primitive so it gets a focus trap, focus restoration,
+ * Escape handling and `aria-labelledby` wiring. The hand-rolled portal it
+ * replaces had none of those, and closed on any backdrop click — including a
+ * stray one made while typing a password.
+ */
+function AuthDialog({
+  open,
+  onOpenChange,
+  notice,
+  onNoticeHandled,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Why the dialog opened by itself, if it did. Superseded by a submit error. */
+  notice: string | null;
+  onNoticeHandled: () => void;
+}) {
   const { loginWithCredentials } = useAuth();
-  const [mode, setMode] = useState<'signin' | 'register'>('signin');
-  const [name, setName] = useState<string>('');
-  const [email, setEmail] = useState<string>('');
-  const [username, setUsername] = useState<string>('');
-  const [password, setPassword] = useState<string>('');
-  const [loading, setLoading] = useState<boolean>(false);
+  const [mode, setMode] = useState<Mode>('signin');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+    if (open) return;
     setError(null);
-    if (mode === 'signin') {
-      try {
-        setLoading(true);
-        await loginWithCredentials(username.trim() || email.trim(), password);
-        onSuccess();
-      } catch (err: any) {
-        setError(err?.message || 'Login failed');
-      } finally {
-        setLoading(false);
-      }
-      return;
+    setPassword('');
+  }, [open]);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    onNoticeHandled();
+    if (mode !== 'signin') return;
+
+    setLoading(true);
+    try {
+      await loginWithCredentials(username, password);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Login failed');
+    } finally {
+      setLoading(false);
     }
-    // Register (client-only placeholder)
-    const uEmail = email.trim();
-    if (!uEmail) return;
-    // For now, registration is not implemented server-side; close the modal and ask user to sign in.
-    setMode('signin');
   };
 
-  return createPortal((
-    <div 
-      className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4" 
-      role="dialog" 
-      aria-modal="true" 
-      onClick={onClose}
-    >
-      <div 
-        className="bg-card border border-border rounded-lg shadow-lg max-w-md w-full p-6" 
-        onClick={(e) => e.stopPropagation()}
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="max-w-md"
+        // Losing a half-typed password to a stray backdrop click is worse than
+        // requiring the Escape key or the close button.
+        onPointerDownOutside={(event) => event.preventDefault()}
       >
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 rounded-md grid place-items-center bg-gradient-to-br from-primary to-primary/80 text-white font-bold text-lg">
-            CW
+        <DialogHeader>
+          <div className="mb-1 flex items-center gap-3">
+            <BrandMark size="lg" />
+            <div>
+              <DialogTitle>Welcome to {APP_NAME}</DialogTitle>
+              <DialogDescription>Sign in to open your documents.</DialogDescription>
+            </div>
           </div>
-          <div className="text-xl font-semibold">Welcome to ColWrite</div>
-        </div>
-        <div className="flex border-b border-border mb-4" role="tablist" aria-label="Authentication">
-          <button 
-            role="tab" 
-            aria-selected={mode === 'signin'} 
-            className={cn(
-              "px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
-              mode === 'signin' ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
-            )} 
-            onClick={() => setMode('signin')}
-          >
-            Sign in
-          </button>
-          <button 
-            role="tab" 
-            aria-selected={mode === 'register'} 
-            className={cn(
-              "px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
-              mode === 'register' ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
-            )} 
-            onClick={() => setMode('register')}
-          >
-            Create account
-          </button>
+        </DialogHeader>
+
+        <div className="mt-4 flex border-b border-border" role="tablist" aria-label="Authentication">
+          {(['signin', 'register'] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              role="tab"
+              aria-selected={mode === tab}
+              className={cn(
+                '-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors',
+                mode === tab
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
+              )}
+              onClick={() => {
+                setMode(tab);
+                setError(null);
+              }}
+            >
+              {tab === 'signin' ? 'Sign in' : 'Create account'}
+            </button>
+          ))}
         </div>
 
-        <form className="flex flex-col gap-4" onSubmit={submit}>
-          {mode === 'register' && (
+        {mode === 'signin' ? (
+          <form className="mt-4 flex flex-col gap-4" onSubmit={submit}>
             <label className="flex flex-col gap-1.5">
-              <span className="text-sm text-muted-foreground">Name</span>
-              <Input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ada Lovelace" />
+              <span className="text-sm text-muted-foreground">Username or email</span>
+              <Input
+                required
+                autoFocus
+                type="text"
+                autoComplete="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="you@university.edu"
+              />
             </label>
-          )}
-          {mode === 'signin' ? (
-            <>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-sm text-muted-foreground">Username or email</span>
-                <Input required type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="you@uni.edu or username" />
-              </label>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-sm text-muted-foreground">Password</span>
-                <Input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
-              </label>
-            </>
-          ) : (
             <label className="flex flex-col gap-1.5">
-              <span className="text-sm text-muted-foreground">Email</span>
-              <Input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@uni.edu" />
+              <span className="text-sm text-muted-foreground">Password</span>
+              <Input
+                required
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="••••••••"
+              />
             </label>
-          )}
-          {error && <div className="text-sm text-destructive">{error}</div>}
-          <div className="flex items-center justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
-            <Button type="submit" disabled={loading}>
-              {loading ? 'Please wait…' : (mode === 'signin' ? 'Continue' : 'Create account')}
+
+            {(error || notice) && (
+              <p role="alert" className="flex items-start gap-1.5 text-sm text-destructive">
+                <AlertCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+                <span className="min-w-0 break-words">{error || notice}</span>
+              </p>
+            )}
+
+            <Button type="submit" disabled={loading || !username.trim() || !password}>
+              {loading && <Spinner />}
+              {loading ? 'Signing in…' : 'Continue'}
+            </Button>
+          </form>
+        ) : (
+          // Registration has no server endpoint yet. The previous version
+          // rendered a form that silently flipped back to sign-in on submit,
+          // which read as a broken button.
+          <div className="mt-4 rounded-lg border border-border bg-muted/40 p-4">
+            <p className="text-sm font-medium">Accounts are invite-only during alpha</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Self-service registration is not available yet. Ask for an invite, then sign in with
+              the credentials you were given.
+            </p>
+            <Button variant="outline" size="sm" className="mt-3" onClick={() => setMode('signin')}>
+              Back to sign in
             </Button>
           </div>
-        </form>
-        <div className="text-xs text-muted-foreground mt-3">By continuing you agree to the Terms and Privacy Policy.</div>
-        <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-md">
-          <div className="text-sm font-medium text-amber-800">Alpha Version Notice</div>
-          <div className="text-xs text-amber-700 mt-1">This project is currently in alpha development. Login and registration functionality may change in future updates. User accounts and data may be deleted without prior notification during development phases.</div>
+        )}
+
+        <div className="mt-4 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3">
+          <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+          <div>
+            <p className="text-sm font-medium text-warning">Alpha software</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Accounts and documents may be reset without notice while ColWrite is in development.
+            </p>
+          </div>
         </div>
-      </div>
-    </div>
-  ), document.body);
+
+        <p className="mt-3 text-xs text-muted-foreground">
+          By continuing you agree to the Terms and Privacy Policy.
+        </p>
+      </DialogContent>
+    </Dialog>
+  );
 }

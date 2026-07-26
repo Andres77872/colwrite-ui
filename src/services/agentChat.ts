@@ -1,8 +1,25 @@
-import { API_BASE } from './api';
+import { buildUrl, ensureRefreshed } from './api';
 import { emitRequireLogin } from './session';
 import { parseSSEStream, type SSEEventHandlers } from './streamParser';
 
 // ── Types ──
+
+/**
+ * Which tools the server-side agent gets.
+ *
+ * - `assistant` — the chat panel; the agent may read, edit and create
+ *   documents. Its edits do **not** reach storage: the server stages them and
+ *   sends them down as `tool_action` events with status `proposed`, which the
+ *   editor shows on the affected blocks for the author to accept or reject.
+ * - `rewrite` — the selection toolbar and the inline AI passage; the agent
+ *   returns text only, because the caller applies the result itself behind its
+ *   own accept/reject affordance. Handing that agent the document tools let it
+ *   rewrite the paper while the user was still deciding.
+ *
+ * Both modes therefore end at the same place: the person editing the document
+ * decides what lands in it.
+ */
+export type AgentChatMode = 'assistant' | 'rewrite';
 
 export type AgentChatParams = {
   message: string;
@@ -10,6 +27,7 @@ export type AgentChatParams = {
   chat_id?: string | null;
   thread_id?: number | null;
   model?: string | null;
+  mode?: AgentChatMode;
 };
 
 export type AgentChatResult = {
@@ -22,17 +40,12 @@ export type AgentChatOptions = {
   signal?: AbortSignal;
 };
 
-function buildUrl(path: string): string {
-  const base = API_BASE.replace(/\/$/, '');
-  const p = path.startsWith('/') ? path : `/${path}`;
-  return `${base}${p}`;
-}
-
 /**
  * Send a message to the unified agent chat endpoint (`POST /api/agent/chat`)
  * and stream the typed SSE response via the provided handlers.
  *
  * On HTTP error:
+ *   - 401 rotates the session cookie and replays once, then behaves as below
  *   - 401/403 triggers `emitRequireLogin()` then throws
  *   - Other status codes throw with the response body text
  *
@@ -57,22 +70,33 @@ export async function streamAgentChat(
   if (params.model != null) {
     body.model = params.model;
   }
+  if (params.mode != null) {
+    body.mode = params.mode;
+  }
 
-  const res = await fetch(buildUrl('/agent/chat'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    },
-    body: JSON.stringify(body),
-    signal: opts?.signal,
-    credentials: 'include',
-  });
+  // This endpoint streams, so it cannot go through `request()` in api.ts —
+  // that reads the whole body. It still needs the same session handling.
+  const send = () =>
+    fetch(buildUrl('/agent/chat'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify(body),
+      signal: opts?.signal,
+      credentials: 'include',
+    });
+
+  let res = await send();
+  if (res.status === 401 && (await ensureRefreshed())) {
+    res = await send();
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     if (res.status === 401 || res.status === 403) {
-      emitRequireLogin();
+      emitRequireLogin(res.status === 403 ? 'forbidden' : 'expired');
     }
     throw new Error(text || res.statusText);
   }

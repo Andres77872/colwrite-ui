@@ -4,17 +4,46 @@ import { useEditor } from '../../../editor';
 import { useLayoutEffect, useRef } from 'react';
 import { openSlashMenu, isSlashMenuOpen } from '../../editor/SlashMenu/SlashMenu';
 
-export function serializeEditableHtml(root: HTMLDivElement): string {
-  const clone = root.cloneNode(true) as HTMLDivElement;
-  // Clear rendered contents of child component placeholders
-  const clearNode = (n: Element) => { while (n.firstChild) n.removeChild(n.firstChild); };
+/**
+ * Reduce inline-widget placeholders in *clone* back to empty spans.
+ *
+ * Widgets are React-rendered into their placeholder, so the live DOM holds
+ * their whole UI. Persisting that would store rendered internals as document
+ * content — and on the next render the widget would be portalled in on top of
+ * its own stale markup.
+ */
+export function clearChildPlaceholders(clone: HTMLElement): void {
   clone.querySelectorAll('[data-child-id]').forEach((el) => {
     const elh = el as HTMLElement;
     elh.setAttribute('contenteditable', 'false');
-    clearNode(elh);
+    while (elh.firstChild) elh.removeChild(elh.firstChild);
   });
-  // Do not try to serialize rendered internals for AI; they are represented via placeholders.
+}
+
+export function serializeEditableHtml(root: HTMLDivElement): string {
+  const clone = root.cloneNode(true) as HTMLDivElement;
+  clearChildPlaceholders(clone);
   return clone.innerHTML;
+}
+
+/**
+ * Whether a node sits inside an inline widget rather than in the prose.
+ *
+ * Every widget is rendered into its `data-child-id` placeholder, so that
+ * attribute identifies all of them — present and future. This used to be a
+ * hand-maintained list of five class names (`.table-inline`, `.graph-inline`,
+ * …), which silently stopped matching the moment a widget's markup was
+ * reworked: the paragraph then treated typing inside a table cell as typing in
+ * the document, so "/" opened the command menu and Backspace in an empty cell
+ * deleted the whole block.
+ *
+ * `.ai-suggest` is listed separately because the floating toolbar builds it
+ * with raw DOM inside the paragraph, not as a child widget.
+ */
+function isInsideWidget(node: Node | null | undefined): boolean {
+  if (!node) return false;
+  const element = node.nodeType === 1 ? (node as HTMLElement) : node.parentElement;
+  return !!element?.closest?.('[data-child-id], .ai-suggest');
 }
 
 export function Editable({
@@ -60,9 +89,12 @@ export function Editable({
   return (
     <div
       className={cn(
+        // `editable` is the hook FloatingToolbar walks the DOM for to decide
+        // whether a selection is inside a block. Without it the format and
+        // AI-action toolbar never appears.
+        "editable",
         "min-h-[1.5em] w-full outline-none whitespace-pre-wrap break-words",
         "focus:outline-none focus-visible:outline-none",
-        "selection:bg-primary/20",
         className
       )}
       ref={(el) => { refs.current[id] = el; }}
@@ -71,10 +103,9 @@ export function Editable({
       onMouseDown={() => { pointerDownRef.current = true; }}
       onFocus={(e) => {
         setActive(id);
-        // If focus originated inside an AI widget, do not steal focus or move caret
-        const origin = e.target as HTMLElement;
-        const insideAi = !!origin.closest?.('.ai-suggest, .ai-beat-widget, .table-inline, .citation-inline, .equation-inline, .graph-inline');
-        if (insideAi) return;
+        // Focus that started inside a widget belongs to that widget: moving
+        // the caret here would pull it back out mid-keystroke.
+        if (isInsideWidget(e.target as HTMLElement)) return;
         const el = e.currentTarget as HTMLDivElement;
         if (!el.innerHTML && (html ?? '') !== '') {
           el.innerHTML = html || '';
@@ -122,17 +153,16 @@ export function Editable({
         }
       }}
       onKeyDown={(e) => {
-        // If caret or focus is inside an AI UI wrapper, allow normal editing and do not intercept '/'
-        const sel = window.getSelection();
-        const anchor = sel && sel.anchorNode;
-        const anchorEl = (anchor && (anchor.nodeType === 1 ? (anchor as HTMLElement) : (anchor as Node).parentElement)) as HTMLElement | null;
-        const inAiSuggest = !!anchorEl?.closest('.ai-suggest');
-        const inAiBeat = !!(document.activeElement as HTMLElement | null)?.closest?.('.ai-beat-widget') || !!anchorEl?.closest('[data-child-id] .ai-beat-widget');
-        const inTable = !!(document.activeElement as HTMLElement | null)?.closest?.('.table-inline') || !!anchorEl?.closest('[data-child-id] .table-inline');
-        const inCitation = !!(document.activeElement as HTMLElement | null)?.closest?.('.citation-inline') || !!anchorEl?.closest('[data-child-id] .citation-inline');
-        const inEquation = !!(document.activeElement as HTMLElement | null)?.closest?.('.equation-inline') || !!anchorEl?.closest('[data-child-id] .equation-inline');
-        const inGraph = !!(document.activeElement as HTMLElement | null)?.closest?.('.graph-inline') || !!anchorEl?.closest('[data-child-id] .graph-inline');
-        if (inAiSuggest || inAiBeat || inTable || inCitation || inEquation || inGraph) return;
+        // Typing inside a widget is that widget's business — the paragraph
+        // must not steal '/' for the command menu or Backspace for deletion.
+        const selection = window.getSelection();
+        if (
+          isInsideWidget(selection?.anchorNode) ||
+          isInsideWidget(document.activeElement) ||
+          isInsideWidget(e.target as Node)
+        ) {
+          return;
+        }
         if (slashEnabled && e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
           // Open slash menu and prevent literal '/'
           e.preventDefault();
