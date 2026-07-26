@@ -1,6 +1,6 @@
 import type { ParagraphChild } from '@/editor';
 import { uid } from '@/lib/uid';
-import { serializeEditableHtml } from '@/components/common/Editable/Editable';
+import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import type { SlashContext } from '../types';
 
 /**

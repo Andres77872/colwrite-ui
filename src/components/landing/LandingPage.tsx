@@ -1,4 +1,4 @@
-import { useAuth } from '@/components/auth/AuthContext';
+import { useAuth } from '@/components/auth/authContextState';
 import { Button } from '@/components/ui/button';
 import { BrandLockup } from '@/components/common/Brand';
 import {

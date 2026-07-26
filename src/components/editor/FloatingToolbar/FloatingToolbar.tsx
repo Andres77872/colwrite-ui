@@ -7,7 +7,7 @@ import { AIActionMenu } from './AIActionMenu/AIActionMenu';
 import {
   clearChildPlaceholders,
   serializeEditableHtml,
-} from '@/components/common/Editable/Editable';
+} from '@/components/common/Editable/editableHtml';
 import { Bold, Italic, Strikethrough, Underline } from 'lucide-react';
 
 const TOOLBAR_HEIGHT = 44;
@@ -141,7 +141,7 @@ export function FloatingToolbar() {
     exec(command);
   };
 
-  const findBlockId = (node: Node | null): { el: HTMLDivElement | null; id: string | null } => {
+  const findBlockId = useCallback((node: Node | null): { el: HTMLDivElement | null; id: string | null } => {
     let current: Node | null = node;
     while (current) {
       if (current instanceof HTMLElement && current.classList.contains('editable')) break;
@@ -151,7 +151,7 @@ export function FloatingToolbar() {
     if (!el) return { el: null, id: null };
     const entry = Object.entries(refs.current || {}).find(([, dom]) => dom === el);
     return { el, id: entry?.[0] ?? null };
-  };
+  }, [refs]);
 
   const onAi = useCallback(
     async (action: AiAction, language?: string) => {
@@ -341,7 +341,7 @@ export function FloatingToolbar() {
 
       await runStream();
     },
-    [documentId, refs, updateHtml],
+    [documentId, findBlockId, updateHtml],
   );
 
   if (!visible) return null;

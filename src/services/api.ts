@@ -1,6 +1,8 @@
 import { emitRequireLogin } from './session';
+import { ApiError, isUnknownRecord } from './contracts';
+
 // Prefer relative base during development to avoid browser CORS via Vite proxy
-export const API_BASE: string = (import.meta as any)?.env?.VITE_API_BASE ?? '/api';
+export const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
 
 export type ApiRequestInit = RequestInit & {
   /**
@@ -37,24 +39,24 @@ export function buildUrl(path: string): string {
   return `${base}${p}`;
 }
 
-export type ApiError = Error & { status: number; data: unknown };
-
 function apiError(res: Response, data: unknown): ApiError {
-  const payload = data as { message?: unknown; detail?: unknown } | null;
+  const payload = isUnknownRecord(data) ? data : null;
   let msg = res.statusText;
   if (payload) {
     if (typeof payload.message === 'string') msg = payload.message;
     else if (Array.isArray(payload.detail)) {
       // FastAPI validation errors arrive as a list of per-field objects.
       msg = payload.detail
-        .map((d: { msg?: string; message?: string }) => d?.msg || d?.message || JSON.stringify(d))
+        .map((detail) => {
+          if (!isUnknownRecord(detail)) return JSON.stringify(detail);
+          if (typeof detail.msg === 'string') return detail.msg;
+          if (typeof detail.message === 'string') return detail.message;
+          return JSON.stringify(detail);
+        })
         .join('; ');
     } else if (typeof payload.detail === 'string') msg = payload.detail;
   }
-  const err = new Error(msg) as ApiError;
-  err.status = res.status;
-  err.data = data;
-  return err;
+  return new ApiError(msg, res.status, data);
 }
 
 let refreshInFlight: Promise<boolean> | null = null;
@@ -117,7 +119,7 @@ async function request<T>(
   }
 
   const text = await res.text();
-  let data: unknown = null;
+  let data: unknown;
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
@@ -146,3 +148,5 @@ export async function put<T>(path: string, body?: unknown, init?: ApiRequestInit
 export async function del<T>(path: string, init?: ApiRequestInit): Promise<T> {
   return request<T>('DELETE', path, undefined, init);
 }
+
+export { ApiError } from './contracts';

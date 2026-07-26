@@ -6,21 +6,17 @@ import { tableItem } from './items/table';
 import { citationItem } from './items/citation';
 import { displayEquationItem, equationItem } from './items/equation';
 import { graphItem } from './items/graph';
-import { serializeEditableHtml } from '../../common/Editable/Editable';
+import { serializeEditableHtml } from '../../common/Editable/editableHtml';
 import type { SlashContext, SlashItem } from './types';
 import { Search, SearchX } from 'lucide-react';
-
-export const SLASH_MENU_EVENT = 'colwrite:open-slash-menu';
-export const SLASH_MENU_VISIBILITY_EVENT = 'colwrite:slash-menu-visibility';
+import {
+  SLASH_MENU_EVENT,
+  emitSlashMenuVisibility,
+} from './slashMenuEvents';
 
 const MENU_WIDTH = 288;
 const MENU_MAX_HEIGHT = 320;
 const VIEWPORT_MARGIN = 8;
-
-let slashMenuOpen = false;
-export function isSlashMenuOpen(): boolean {
-  return slashMenuOpen;
-}
 
 type OpenDetail = { blockId: string };
 
@@ -33,15 +29,8 @@ function rangeBelongsTo(range: Range, editable: HTMLDivElement): boolean {
   );
 }
 
-function emitVisibility(visible: boolean) {
-  window.dispatchEvent(
-    new CustomEvent<{ visible: boolean }>(SLASH_MENU_VISIBILITY_EVENT, { detail: { visible } }),
-  );
-}
-
-export function openSlashMenu(blockId: string) {
-  window.dispatchEvent(new CustomEvent<OpenDetail>(SLASH_MENU_EVENT, { detail: { blockId } }));
-  emitVisibility(true);
+function zeroRect(rect: DOMRect | undefined | null): boolean {
+  return !rect || (rect.width === 0 && rect.height === 0);
 }
 
 const GROUPS = [
@@ -84,10 +73,7 @@ export function SlashMenu() {
     );
   }, [query]);
 
-  const zeroRect = (rect: DOMRect | undefined | null) =>
-    !rect || (rect.width === 0 && rect.height === 0);
-
-  const rectFromNode = (node: Node | null): DOMRect | null => {
+  const rectFromNode = useCallback((node: Node | null): DOMRect | null => {
     if (!node) return null;
     try {
       if (node.nodeType === Node.ELEMENT_NODE) {
@@ -109,7 +95,7 @@ export function SlashMenu() {
       /* detached nodes have no geometry */
     }
     return null;
-  };
+  }, []);
 
   const restoreRange = useCallback(
     (id: string, range: Range) => {
@@ -172,7 +158,7 @@ export function SlashMenu() {
       setVisible(true);
       queueMicrotask(() => inputRef.current?.focus());
     },
-    [refs],
+    [rectFromNode, refs],
   );
 
   useEffect(() => {
@@ -188,14 +174,8 @@ export function SlashMenu() {
   }, [blocks, openAtCaret]);
 
   useEffect(() => {
-    slashMenuOpen = visible;
-    emitVisibility(visible);
+    emitSlashMenuVisibility(visible);
   }, [visible]);
-
-  // Clamp the highlight when filtering shrinks the list under it.
-  useEffect(() => {
-    setActiveIndex((index) => Math.min(index, Math.max(0, filteredItems.length - 1)));
-  }, [filteredItems.length]);
 
   const buildContext = useCallback(
     (insertionRange: Range): SlashContext => ({

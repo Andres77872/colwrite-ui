@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   login,
   logout as logoutApi,
@@ -21,30 +21,17 @@ import {
 } from '@/components/ui/dialog';
 import { BrandMark, APP_NAME } from '@/components/common/Brand';
 import { AlertCircle, Info } from 'lucide-react';
-
-export type User = { name: string; email: string; userType?: string | null };
-
-/**
- * `checking` exists because a cached user is only a hint — the session itself
- * is an HttpOnly cookie this code cannot read. Rendering the editor before the
- * server confirms it means showing the whole app and then yanking it away on
- * the first API call.
- */
-export type AuthStatus = 'checking' | 'authenticated' | 'anonymous';
-
-type AuthContextValue = {
-  user: User | null;
-  status: AuthStatus;
-  openAuth: () => void;
-  closeAuth: () => void;
-  logout: () => void;
-  loginWithCredentials: (usernameOrEmail: string, password: string) => Promise<void>;
-};
+import {
+  AuthContext,
+  useAuth,
+  type AuthContextValue,
+  type AuthStatus,
+  type User,
+} from './authContextState';
+export type { AuthStatus, User } from './authContextState';
 
 const STORAGE_KEY = 'cw_user';
 const LEGACY_TOKEN_KEY = 'session_token';
-
-const AuthContext = createContext<AuthContextValue | null>(null);
 
 function readCachedUser(): User | null {
   try {
@@ -65,8 +52,9 @@ function persistUser(user: User): void {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [cachedUser] = useState(readCachedUser);
   const [user, setUser] = useState<User | null>(null);
-  const [status, setStatus] = useState<AuthStatus>('checking');
+  const [status, setStatus] = useState<AuthStatus>(() => cachedUser ? 'checking' : 'anonymous');
   const [authOpen, setAuthOpen] = useState(false);
   // Explains an involuntary sign-out. Without it the user is dropped on the
   // landing page with no indication of what happened.
@@ -86,13 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Confirm the cached identity against the server before trusting it.
   useEffect(() => {
-    const cached = readCachedUser();
-    if (!cached) {
-      // Nobody ever signed in on this browser, so there is no session to
-      // verify — don't make an anonymous visitor wait on a round-trip.
-      setStatus('anonymous');
-      return;
-    }
+    if (!cachedUser) return;
 
     let cancelled = false;
     (async () => {
@@ -100,9 +82,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const profile = await getProfile();
         if (cancelled) return;
         const confirmed: User = {
-          name: profile.username || cached.name,
-          email: profile.email || cached.email || '',
-          userType: profile.user_type ?? cached.userType ?? null,
+          name: profile.username || cachedUser.name,
+          email: profile.email || cachedUser.email || '',
+          userType: profile.user_type ?? cachedUser.userType ?? null,
         };
         persistUser(confirmed);
         setUser(confirmed);
@@ -116,7 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [clearLocalSession]);
+  }, [cachedUser, clearLocalSession]);
 
   // A 401/403 that survived a refresh attempt means the session is really gone.
   useEffect(() => {
@@ -180,20 +162,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={value}>
       {children}
-      <AuthDialog
-        open={authOpen}
-        onOpenChange={setAuthOpen}
-        notice={notice}
-        onNoticeHandled={() => setNotice(null)}
-      />
+      {authOpen && (
+        <AuthDialog
+          open
+          onOpenChange={setAuthOpen}
+          notice={notice}
+          onNoticeHandled={() => setNotice(null)}
+        />
+      )}
     </AuthContext.Provider>
   );
-}
-
-export function useAuth(): AuthContextValue {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
 }
 
 /* ----------------------------------------
@@ -227,12 +205,6 @@ function AuthDialog({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (open) return;
-    setError(null);
-    setPassword('');
-  }, [open]);
-
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
@@ -242,6 +214,7 @@ function AuthDialog({
     setLoading(true);
     try {
       await loginWithCredentials(username, password);
+      setPassword('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {

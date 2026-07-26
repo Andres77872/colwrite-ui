@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useEditor } from '@/editor';
 import { createChat, deleteChat, listChats, updateChatTitle, type ChatItem } from '@/services/chats';
-import { useChatSessions } from '@/components/chat/ChatSessionsContext';
+import { useChatSessions } from '@/components/chat/chatSessionsState';
 import { cn } from '@/lib/utils';
 import { formatDateTime } from '@/lib/text';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton, Spinner } from '@/components/ui/spinner';
-import { useConfirm } from '@/components/ui/confirm-dialog';
-import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirmContext';
+import { useToast } from '@/components/ui/toastContext';
 import {
   AlertCircle,
   ChevronLeft,

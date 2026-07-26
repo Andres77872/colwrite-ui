@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { get, post, put, del } from '../api';
+import { ApiError, get, post, put, del } from '../api';
 import * as session from '../session';
 
 beforeEach(() => {
@@ -150,4 +150,23 @@ describe('401 handling on auth endpoints', () => {
       expect(emitSpy).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('typed API errors', () => {
+  it('retains the HTTP status and parsed response metadata', async () => {
+    const payload = {
+      detail: [{ loc: ['body', 'name'], msg: 'Name is required' }],
+      request_id: 'req-42',
+    };
+    mockRoutes(() => json(payload, 422));
+
+    const error = await post('/document/create', {}).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 422,
+      data: payload,
+      message: 'Name is required',
+    });
+  });
 });

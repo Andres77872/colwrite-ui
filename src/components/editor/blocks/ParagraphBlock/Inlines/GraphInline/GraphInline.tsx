@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import type { GraphChild } from '@/editor';
 import type { InlineWidgetProps } from '../types';
 import { cn } from '@/lib/utils';
@@ -31,14 +30,10 @@ function GraphInlineContent(props: InlineWidgetProps<GraphChild>) {
   const { child } = props;
   const { patch, remove } = useInlineChild(props);
 
-  const values = useMemo(
-    () => (Array.isArray(child.data?.values) ? child.data.values.filter(Number.isFinite) : []),
-    [child.data?.values],
-  );
-  const labels = useMemo(
-    () => (Array.isArray(child.data?.labels) ? child.data.labels : []),
-    [child.data?.labels],
-  );
+  const values = Array.isArray(child.data?.values)
+    ? child.data.values.filter(Number.isFinite)
+    : [];
+  const labels = Array.isArray(child.data?.labels) ? child.data.labels : [];
   const colors = child.data?.colors;
   const kind = child.kind ?? 'bar';
 

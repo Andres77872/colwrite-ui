@@ -1,73 +1,50 @@
-# React + TypeScript + Vite
+# ColWrite UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React 19 editor and research workspace built with Vite 8, Tailwind CSS 4, and TypeScript.
 
-Currently, two official plugins are available:
+## Requirements
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Node.js `^20.19.0 || ^22.13.0 || >=24.0.0`
+- npm `11.13.0`
 
-## Documentation
+Install the committed dependency graph with:
 
-See the Document JSON and Block Structure guide: [docs/document-json.md](./docs/document-json.md)
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm ci
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Scripts
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+- `npm run dev` — start the Vite development server with HMR.
+- `npm run typecheck` — typecheck the application, Vite/Vitest configuration, and test setup.
+- `npm run lint -- --max-warnings=0` — run ESLint 10 with zero warnings allowed.
+- `npm test` — run the Vitest suite once.
+- `npm run build` — typecheck and create the production bundle.
+- `npm run preview` — serve the production bundle locally.
 
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## Vite 8
+
+The project uses Vite 8’s default Rolldown/Oxc toolchain, Lightning CSS processing, and
+`baseline-widely-available` browser target. No Babel, esbuild compatibility layer, React Compiler,
+or legacy browser target is configured.
+
+The development proxy keeps `/api/agent` unchanged and rewrites other `/api` requests by removing
+the `/api` prefix. The following optional Vite environment variables override service bases:
+
+- `VITE_API_BASE`
+- `VITE_ARZ_API`
+- `VITE_COLPALI_BASE`
+
+## TypeScript 7/6 bridge
+
+TypeScript 7’s native compiler no longer provides the JavaScript compiler API that lint tooling
+currently consumes. The project therefore follows the dual-version compatibility approach:
+
+- `@typescript/native` aliases `typescript@^7.0.2` and supplies the `tsc` executable used by
+  `typecheck` and `build`.
+- `typescript` aliases `@typescript/typescript6@^6.0.2` and supplies the JavaScript API used by
+  `typescript-eslint`, plus the `tsc6` compatibility executable.
+
+Do not add npm peer overrides for this bridge.
+
+Document model details are in [docs/document-json.md](./docs/document-json.md).

@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { diffWords } from '@/lib/diff';
 import { useEditor } from '@/editor';
-import { useProposals } from '@/editor/ProposalsContext';
+import { useProposals } from '@/editor/proposalsContextState';
 import {
   blockText,
   describeChange,

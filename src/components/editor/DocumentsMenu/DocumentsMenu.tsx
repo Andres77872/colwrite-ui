@@ -4,8 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton, Spinner } from '@/components/ui/spinner';
-import { useConfirm } from '@/components/ui/confirm-dialog';
-import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirmContext';
+import { useToast } from '@/components/ui/toastContext';
 import { useEditor } from '@/editor';
 import { AlertCircle, ChevronLeft, ChevronRight, FileText, Plus, RefreshCw, Trash2 } from 'lucide-react';
 
@@ -42,6 +42,9 @@ export function DocumentsMenu() {
 
   const fetchList = useCallback(
     async (targetPage: number, search: string) => {
+      // Keep effect-driven fetches on the asynchronous side of the boundary;
+      // event-driven refreshes still begin in the same microtask.
+      await Promise.resolve();
       setLoading(true);
       try {
         const res = await listRemote(targetPage, PAGE_SIZE, search);
@@ -64,18 +67,18 @@ export function DocumentsMenu() {
   );
 
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(query.trim()), SEARCH_DEBOUNCE_MS);
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query.trim());
+      setPage(1);
+    }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [query]);
 
-  // A new search must restart at page 1, or page 3 of the old result set is
-  // requested against a shorter list and comes back empty.
   useEffect(() => {
-    setPage(1);
-  }, [debouncedQuery]);
-
-  useEffect(() => {
-    fetchList(page, debouncedQuery);
+    const timer = window.setTimeout(() => {
+      void fetchList(page, debouncedQuery);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [fetchList, page, debouncedQuery]);
 
   const onCreate = async () => {

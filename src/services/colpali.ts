@@ -1,3 +1,5 @@
+import { ApiError, isUnknownRecord } from './contracts';
+
 export type ColpaliArxivResult = {
   page: number;
   id: string;
@@ -15,7 +17,7 @@ export type ColpaliArxivSearchResponse = {
   data: ColpaliArxivResult[];
 };
 
-const COLPALI_BASE: string = (import.meta as any)?.env?.VITE_COLPALI_BASE ?? 'https://llm.arz.ai';
+const COLPALI_BASE = import.meta.env.VITE_COLPALI_BASE ?? 'https://llm.arz.ai';
 
 export async function searchColpaliArxiv(params: { query: string; limit?: number }): Promise<ColpaliArxivResult[]> {
   const { query, limit = 20 } = params;
@@ -37,17 +39,20 @@ export async function searchColpaliArxiv(params: { query: string; limit?: number
   });
 
   const text = await res.text();
-  const data: ColpaliArxivSearchResponse = text ? JSON.parse(text) : { data: [] };
+  const data: unknown = text ? JSON.parse(text) : { data: [] };
   if (!res.ok) {
-    const message = (data as any)?.message || res.statusText || 'Search failed';
-    const err = new Error(message);
-    (err as any).status = res.status;
-    (err as any).data = data;
-    throw err;
+    const message =
+      (isUnknownRecord(data) && typeof data.message === 'string' && data.message) ||
+      res.statusText ||
+      'Search failed';
+    throw new ApiError(message, res.status, data);
   }
 
   // Normalize page_image from .png to .jpg (optimized variant)
-  const results = (data?.data || []).map((r) => ({
+  const rawResults = isUnknownRecord(data) && Array.isArray(data.data)
+    ? data.data.filter(isColpaliArxivResult)
+    : [];
+  const results = rawResults.map((r) => ({
     ...r,
     page_image: typeof r.page_image === 'string' ? r.page_image.replace(/\.png(\?.*)?$/i, '.jpg$1') : r.page_image,
   }));
@@ -55,4 +60,22 @@ export async function searchColpaliArxiv(params: { query: string; limit?: number
   return results;
 }
 
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
 
+function isColpaliArxivResult(value: unknown): value is ColpaliArxivResult {
+  if (!isUnknownRecord(value)) return false;
+  return (
+    typeof value.page === 'number' &&
+    typeof value.id === 'string' &&
+    isNullableString(value.doi) &&
+    isNullableString(value.date) &&
+    isNullableString(value.title) &&
+    isNullableString(value.authors) &&
+    isNullableString(value.abstract) &&
+    isNullableString(value.url) &&
+    isNullableString(value.version) &&
+    isNullableString(value.page_image)
+  );
+}

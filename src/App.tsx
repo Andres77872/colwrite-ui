@@ -10,7 +10,7 @@ import { PanelsProvider, ToolsRail, ToolsAside } from './components/panels'
 import { Sidebar } from './components/layout/Sidebar'
 import { Topbar } from './components/layout/Topbar'
 import { ChatSessionsProvider } from './components/chat/ChatSessionsContext'
-import { useAuth } from './components/auth/AuthContext'
+import { useAuth } from './components/auth/authContextState'
 import { LandingPage } from './components/landing'
 import { Spinner } from './components/ui/spinner'
 

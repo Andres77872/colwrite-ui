@@ -3,8 +3,7 @@ import { Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
-
-export const RESULT_LIMITS = [10, 20, 30, 40, 50] as const;
+import { RESULT_LIMITS } from './searchFormConstants';
 
 interface SearchFormProps {
   query: string;

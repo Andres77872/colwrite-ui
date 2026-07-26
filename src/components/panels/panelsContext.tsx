@@ -1,8 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isBoolean, isNumber, usePersistentState } from '@/hooks/usePersistentState';
 import { useIsDesktop } from '@/hooks/useMediaQuery';
-
-export type ToolId = 'json' | 'arxiv' | 'colpali' | 'library' | 'chats';
+import { PANEL_CONFIG } from './panelConfig';
+import {
+  PanelsContext,
+  type ToolId,
+} from './panelsContextState';
+export type { ToolId } from './panelsContextState';
 
 const TOOL_IDS: readonly ToolId[] = ['json', 'arxiv', 'colpali', 'library', 'chats'];
 
@@ -13,12 +17,6 @@ const isToolId = (value: unknown): value is ToolId | null =>
    PANEL DIMENSIONS
    ============================================ */
 
-export const PANEL_CONFIG = {
-  left: { default: 260, min: 200, max: 400, collapsed: 56 },
-  right: { default: 380, min: 280, max: 640, collapsed: 0 },
-  rail: { width: 52 },
-} as const;
-
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 /* ----------------------------------------
@@ -26,39 +24,6 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
    ---------------------------------------- */
 
 type SetStateAction<T> = T | ((prev: T) => T);
-
-type PanelsContextValue = {
-  activeTool: ToolId | null;
-  setTool: (tool: ToolId | null) => void;
-
-  /** Whether the right-hand tools panel is showing. */
-  isOpen: boolean;
-  open: () => void;
-  close: () => void;
-  toggle: () => void;
-
-  leftWidth: number;
-  setLeftWidth: (width: SetStateAction<number>) => void;
-  rightWidth: number;
-  setRightWidth: (width: SetStateAction<number>) => void;
-
-  leftCollapsed: boolean;
-  setLeftCollapsed: (collapsed: boolean) => void;
-  toggleLeftCollapsed: () => void;
-
-  /** Below `md`, the sidebar becomes an overlay drawer rather than a column. */
-  isDesktop: boolean;
-  mobileNavOpen: boolean;
-  setMobileNavOpen: (open: boolean) => void;
-};
-
-const PanelsContext = createContext<PanelsContextValue | undefined>(undefined);
-
-export function usePanels() {
-  const ctx = useContext(PanelsContext);
-  if (!ctx) throw new Error('usePanels must be used within PanelsProvider');
-  return ctx;
-}
 
 export function PanelsProvider({ children }: { children: React.ReactNode }) {
   const isDesktop = useIsDesktop();
@@ -104,8 +69,15 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   // over a layout that no longer has anything to dismiss.
   useEffect(() => {
     if (!isDesktop) return;
-    setMobileNavOpen(false);
-    setMobileToolsOpen(false);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setMobileNavOpen(false);
+      setMobileToolsOpen(false);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [isDesktop]);
 
   const setTool = useCallback(

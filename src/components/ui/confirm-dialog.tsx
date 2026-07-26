@@ -1,12 +1,16 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from 'react';
+import {
+  ConfirmContext,
+  type ConfirmFn,
+  type ConfirmOptions,
+} from './confirmContext';
+export type { ConfirmOptions } from './confirmContext';
 import {
   Dialog,
   DialogContent,
@@ -17,19 +21,6 @@ import {
 } from './dialog';
 import { Button } from './button';
 import { Spinner } from './spinner';
-
-export interface ConfirmOptions {
-  title: string;
-  description?: ReactNode;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  /** Styles the confirm button as destructive and focuses cancel by default. */
-  destructive?: boolean;
-}
-
-type ConfirmFn = (options: ConfirmOptions) => Promise<boolean>;
-
-const ConfirmContext = createContext<ConfirmFn | null>(null);
 
 interface PendingConfirm extends ConfirmOptions {
   resolve: (value: boolean) => void;
@@ -101,12 +92,6 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       </Dialog>
     </ConfirmContext.Provider>
   );
-}
-
-export function useConfirm(): ConfirmFn {
-  const ctx = useContext(ConfirmContext);
-  if (!ctx) throw new Error('useConfirm must be used within ConfirmProvider');
-  return ctx;
 }
 
 /** Re-exported so callers can show progress without importing two modules. */

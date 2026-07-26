@@ -3,8 +3,8 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
-import { useConfirm } from '@/components/ui/confirm-dialog';
-import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirmContext';
+import { useToast } from '@/components/ui/toastContext';
 import { useEditor } from '@/editor';
 import { AlertCircle, Check, Cloud, CloudOff, FilePlus, Save, Trash2 } from 'lucide-react';
 

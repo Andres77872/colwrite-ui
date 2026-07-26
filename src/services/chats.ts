@@ -1,4 +1,5 @@
 import { get, post, put, del } from './api';
+import type { JsonValue } from './contracts';
 
 export type ChatItem = {
   chat_id: string;
@@ -16,8 +17,8 @@ export type ThreadItem = {
   role: 'user' | 'assistant';
   parent_thread_id: number | null;
   content: string | null;
-  extras: any | null;
-  metadata: any | null;
+  extras: JsonValue | null;
+  metadata: JsonValue | null;
   created_at: string | null;
 };
 
@@ -57,7 +58,13 @@ export async function listThreads(
 export async function appendThread(
   documentId: string,
   chatId: string,
-  body: { role: 'user' | 'assistant'; parentThreadId?: number | null; content?: string | null; extras?: any | null; metadata?: any | null },
+  body: {
+    role: 'user' | 'assistant';
+    parentThreadId?: number | null;
+    content?: string | null;
+    extras?: JsonValue | null;
+    metadata?: JsonValue | null;
+  },
 ): Promise<{ thread_id: number; message_uuid: string; status: string; message: string }> {
   return post(`/document/${encodeURIComponent(documentId)}/chats/${encodeURIComponent(chatId)}/threads`, body);
 }

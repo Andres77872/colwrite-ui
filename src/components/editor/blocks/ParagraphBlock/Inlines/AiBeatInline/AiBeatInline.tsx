@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Spinner } from '@/components/ui/spinner';
 import { streamAgentChat } from '@/services/agentChat';
-import { serializeEditableHtml } from '@/components/common/Editable/Editable';
+import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import { stopEditorEvents, useInlineChild } from '../shared';
 import { AlertCircle, ChevronDown, ChevronRight, Sparkles, Square, Trash2 } from 'lucide-react';
 

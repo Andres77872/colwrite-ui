@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { createRef, useImperativeHandle } from 'react';
 import type { SSEEventHandlers } from '@/services/streamParser';
 import type { ToolAction } from '@/editor/types';
 
@@ -50,7 +51,8 @@ vi.mock('@/services', async () => ({
 }));
 
 const { EditorProvider, useEditor } = await import('@/editor');
-const { ProposalsProvider, useProposals } = await import('@/editor/ProposalsContext');
+const { ProposalsProvider } = await import('@/editor/ProposalsContext');
+const { useProposals } = await import('@/editor/proposalsContextState');
 const { ChatSessionsProvider } = await import('../../../chat/ChatSessionsContext');
 const { ChatAssistant } = await import('../ChatAssistant');
 
@@ -58,12 +60,27 @@ const { ChatAssistant } = await import('../ChatAssistant');
 
 const DOC_ID = 'doc-1';
 
-let editor: ReturnType<typeof useEditor>;
-let review: ReturnType<typeof useProposals>;
+type HarnessHandle = {
+  editor: ReturnType<typeof useEditor>;
+  review: ReturnType<typeof useProposals>;
+};
+
+const captureRef = createRef<HarnessHandle>();
+const harness = {
+  get editor() {
+    if (!captureRef.current) throw new Error('Editor harness is not mounted');
+    return captureRef.current.editor;
+  },
+  get review() {
+    if (!captureRef.current) throw new Error('Review harness is not mounted');
+    return captureRef.current.review;
+  },
+};
 
 function Capture() {
-  editor = useEditor();
-  review = useProposals();
+  const editor = useEditor();
+  const review = useProposals();
+  useImperativeHandle(captureRef, () => ({ editor, review }), [editor, review]);
   return null;
 }
 
@@ -84,7 +101,7 @@ async function mount() {
 
   // The provider probes for remote documents and hydrates from the server.
   await waitFor(() => expect(listDocuments).toHaveBeenCalled());
-  await waitFor(() => expect(editor.blocks).toHaveLength(2));
+  await waitFor(() => expect(harness.editor.blocks).toHaveLength(2));
 }
 
 /** Drive one send, handing the component the given tool_action events. */
@@ -137,7 +154,7 @@ function committed(overrides: Partial<ToolAction> = {}): ToolAction {
 
 const acceptAll = async () => {
   await act(async () => {
-    review.acceptAll();
+    harness.review.acceptAll();
   });
 };
 
@@ -164,9 +181,9 @@ describe('proposed changes await the author', () => {
       }),
     ]);
 
-    await waitFor(() => expect(review.pendingCount).toBe(1));
+    await waitFor(() => expect(harness.review.pendingCount).toBe(1));
     // The whole point: the block still holds what the author wrote.
-    expect(editor.blocks[0]).toMatchObject({ id: 'a', html: '<p>a</p>' });
+    expect(harness.editor.blocks[0]).toMatchObject({ id: 'a', html: '<p>a</p>' });
   });
 
   it('applies the change once accepted', async () => {
@@ -176,39 +193,39 @@ describe('proposed changes await the author', () => {
         actions: [{ op: 'replace_block', blockId: 'a', block: { html: '<p>edited</p>' } }],
       }),
     ]);
-    await waitFor(() => expect(review.pendingCount).toBe(1));
+    await waitFor(() => expect(harness.review.pendingCount).toBe(1));
 
     await act(async () => {
-      review.accept(review.pending[0].id);
+      harness.review.accept(harness.review.pending[0].id);
     });
 
-    expect(editor.blocks[0]).toMatchObject({ id: 'a', html: '<p>edited</p>' });
-    expect(review.pendingCount).toBe(0);
+    expect(harness.editor.blocks[0]).toMatchObject({ id: 'a', html: '<p>edited</p>' });
+    expect(harness.review.pendingCount).toBe(0);
   });
 
   it('discards the change on reject', async () => {
     await mount();
     await sendWith([proposal({ actions: [{ op: 'delete_block', blockId: 'b' }] })]);
-    await waitFor(() => expect(review.pendingCount).toBe(1));
+    await waitFor(() => expect(harness.review.pendingCount).toBe(1));
 
     await act(async () => {
-      review.reject(review.pending[0].id);
+      harness.review.reject(harness.review.pending[0].id);
     });
 
-    expect(editor.blocks.map((b) => b.id)).toEqual(['a', 'b']);
-    expect(review.pendingCount).toBe(0);
+    expect(harness.editor.blocks.map((b) => b.id)).toEqual(['a', 'b']);
+    expect(harness.review.pendingCount).toBe(0);
   });
 
   it('accepting is a local edit, so it has to be saved', async () => {
     await mount();
     await sendWith([proposal({ actions: [{ op: 'delete_block', blockId: 'b' }] })]);
-    await waitFor(() => expect(review.pendingCount).toBe(1));
+    await waitFor(() => expect(harness.review.pendingCount).toBe(1));
 
     await acceptAll();
 
     // A proposal exists nowhere but this browser; leaving the document clean
     // would lose the accepted text on reload.
-    await waitFor(() => expect(editor.doc.blocks).toHaveLength(1));
+    await waitFor(() => expect(harness.editor.doc.blocks).toHaveLength(1));
     expect(saveDocument).not.toHaveBeenCalled(); // debounced, not immediate
   });
 
@@ -217,8 +234,8 @@ describe('proposed changes await the author', () => {
     await sendWith([proposal({ version: 42, actions: [{ op: 'delete_block', blockId: 'b' }] })]);
 
     // Storage did not move, so neither may the version the next save locks on.
-    await waitFor(() => expect(review.pendingCount).toBe(1));
-    expect(editor.doc.version).toBe(1);
+    await waitFor(() => expect(harness.review.pendingCount).toBe(1));
+    expect(harness.editor.doc.version).toBe(1);
   });
 
   it('queues every batch from one run, in order', async () => {
@@ -228,9 +245,9 @@ describe('proposed changes await the author', () => {
       proposal({ toolCallId: 'call_2', actions: [{ op: 'delete_block', blockId: 'b' }] }),
     ]);
 
-    await waitFor(() => expect(review.pendingCount).toBe(2));
+    await waitFor(() => expect(harness.review.pendingCount).toBe(2));
     await acceptAll();
-    expect(editor.blocks).toHaveLength(0);
+    expect(harness.editor.blocks).toHaveLength(0);
   });
 
   it('ignores a redelivered tool action', async () => {
@@ -240,9 +257,9 @@ describe('proposed changes await the author', () => {
       proposal({ actions: [{ op: 'append_block', block: { id: 'z', type: 'divider' } }] }),
     ]);
 
-    await waitFor(() => expect(review.pendingCount).toBe(1));
+    await waitFor(() => expect(harness.review.pendingCount).toBe(1));
     await acceptAll();
-    expect(editor.blocks).toHaveLength(3);
+    expect(harness.editor.blocks).toHaveLength(3);
   });
 
   it('keeps a reused tool_call_id whose operations differ', async () => {
@@ -254,7 +271,7 @@ describe('proposed changes await the author', () => {
       proposal({ toolCallId: 'call_0', actions: [{ op: 'delete_block', blockId: 'b' }] }),
     ]);
 
-    await waitFor(() => expect(review.pendingCount).toBe(2));
+    await waitFor(() => expect(harness.review.pendingCount).toBe(2));
   });
 
   it('keeps both edits when neither action carries a tool_call_id', async () => {
@@ -266,20 +283,20 @@ describe('proposed changes await the author', () => {
       proposal({ toolCallId: '', version: 5, actions: [{ op: 'delete_block', blockId: 'b' }] }),
     ]);
 
-    await waitFor(() => expect(review.pendingCount).toBe(2));
+    await waitFor(() => expect(harness.review.pendingCount).toBe(2));
     await acceptAll();
-    expect(editor.blocks).toHaveLength(0);
+    expect(harness.editor.blocks).toHaveLength(0);
   });
 
   it('renames the document only on accept', async () => {
     await mount();
     await sendWith([proposal({ actions: [{ op: 'update_meta', meta: { name: 'Renamed' } }] })]);
 
-    await waitFor(() => expect(review.pendingCount).toBe(1));
-    expect(editor.doc.name).toBe('Doc');
+    await waitFor(() => expect(harness.review.pendingCount).toBe(1));
+    expect(harness.editor.doc.name).toBe('Doc');
 
     await acceptAll();
-    expect(editor.doc.name).toBe('Renamed');
+    expect(harness.editor.doc.name).toBe('Renamed');
   });
 
   it('blocks a change until the one it builds on is accepted', async () => {
@@ -293,16 +310,16 @@ describe('proposed changes await the author', () => {
       }),
     ]);
 
-    await waitFor(() => expect(review.pendingCount).toBe(2));
-    const [first, second] = review.pending;
-    expect(review.ready(first)).toBe(true);
+    await waitFor(() => expect(harness.review.pendingCount).toBe(2));
+    const [first, second] = harness.review.pending;
+    expect(harness.review.ready(first)).toBe(true);
     // Accepting the rewrite alone would patch a block that does not exist yet.
-    expect(review.ready(second)).toBe(false);
+    expect(harness.review.ready(second)).toBe(false);
 
     await act(async () => {
-      review.accept(first.id);
+      harness.review.accept(first.id);
     });
-    await waitFor(() => expect(review.ready(review.pending[0])).toBe(true));
+    await waitFor(() => expect(harness.review.ready(harness.review.pending[0])).toBe(true));
   });
 
   it('drops dependents when their prerequisite is rejected', async () => {
@@ -315,14 +332,14 @@ describe('proposed changes await the author', () => {
         ],
       }),
     ]);
-    await waitFor(() => expect(review.pendingCount).toBe(2));
+    await waitFor(() => expect(harness.review.pendingCount).toBe(2));
 
     await act(async () => {
-      review.reject(review.pending[0].id);
+      harness.review.reject(harness.review.pending[0].id);
     });
 
-    expect(review.pendingCount).toBe(0);
-    expect(editor.blocks).toHaveLength(2);
+    expect(harness.review.pendingCount).toBe(0);
+    expect(harness.editor.blocks).toHaveLength(2);
   });
 
   it('reports a change that can no longer be applied', async () => {
@@ -334,13 +351,13 @@ describe('proposed changes await the author', () => {
         ],
       }),
     ]);
-    await waitFor(() => expect(review.pendingCount).toBe(1));
+    await waitFor(() => expect(harness.review.pendingCount).toBe(1));
 
     await acceptAll();
 
-    await waitFor(() => expect(review.error).toMatch(/could not be applied/i));
+    await waitFor(() => expect(harness.review.error).toMatch(/could not be applied/i));
     // The block is not guessed into some other position.
-    expect(editor.blocks.map((b) => b.id)).toEqual(['a', 'b']);
+    expect(harness.editor.blocks.map((b) => b.id)).toEqual(['a', 'b']);
   });
 
   it('surfaces a failed edit in the chat', async () => {
@@ -365,10 +382,10 @@ describe('committed changes from a server in auto mode', () => {
     ]);
 
     await waitFor(() => {
-      expect(editor.blocks[0]).toMatchObject({ id: 'a', html: '<p>edited</p>' });
+      expect(harness.editor.blocks[0]).toMatchObject({ id: 'a', html: '<p>edited</p>' });
     });
     // Nothing to approve — the server already saved it.
-    expect(review.pendingCount).toBe(0);
+    expect(harness.review.pendingCount).toBe(0);
   });
 
   it('adopts the version the server reports', async () => {
@@ -377,7 +394,7 @@ describe('committed changes from a server in auto mode', () => {
 
     // Without this the next save optimistically locks on a stale version and
     // is rejected for the rest of the session.
-    await waitFor(() => expect(editor.doc.version).toBe(42));
+    await waitFor(() => expect(harness.editor.doc.version).toBe(42));
   });
 });
 
@@ -391,9 +408,9 @@ describe('a document the assistant created', () => {
       }),
     ]);
 
-    await waitFor(() => expect(review.invites).toHaveLength(1));
+    await waitFor(() => expect(harness.review.invites).toHaveLength(1));
     // Switching documents throws away whatever the author was in the middle of.
-    expect(editor.documentId).toBe(DOC_ID);
+    expect(harness.editor.documentId).toBe(DOC_ID);
     expect(loadDocument).not.toHaveBeenCalledWith('created-doc');
   });
 });

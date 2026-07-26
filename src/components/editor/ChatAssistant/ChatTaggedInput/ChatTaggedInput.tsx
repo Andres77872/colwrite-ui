@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
+import { parseRefParts } from './refParts';
 
 type SelectionRange = { start: number; end: number };
 
@@ -9,30 +10,6 @@ export type ChatTaggedInputHandle = {
   setSelectionRange: (start: number, end: number) => void;
   getSelectionRange: () => SelectionRange | null;
 };
-
-export function parseRefParts(text: string): Array<string | { kind: 'document' | 'block'; start: number; end: number; refText: string; docId?: string; blockId?: string; source?: 'this' | 'doc' }>{
-  const parts: Array<string | { kind: 'document' | 'block'; start: number; end: number; refText: string; docId?: string; blockId?: string; source?: 'this' | 'doc' }> = [];
-  if (!text) return [''];
-  const pattern = /#doc\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)|#this\/([A-Za-z0-9_-]+)|#doc\/([A-Za-z0-9_-]+)/g;
-  let lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = pattern.exec(text)) !== null) {
-    const matchStart = m.index;
-    const matchStr = m[0];
-    const matchEnd = matchStart + matchStr.length;
-    if (matchStart > lastIndex) parts.push(text.slice(lastIndex, matchStart));
-    if (m[1] && m[2]) {
-      parts.push({ kind: 'block', start: matchStart, end: matchEnd, refText: matchStr, docId: m[1], blockId: m[2], source: 'doc' });
-    } else if (m[3]) {
-      parts.push({ kind: 'block', start: matchStart, end: matchEnd, refText: matchStr, blockId: m[3], source: 'this' });
-    } else if (m[4]) {
-      parts.push({ kind: 'document', start: matchStart, end: matchEnd, refText: matchStr, docId: m[4] });
-    }
-    lastIndex = matchEnd;
-  }
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-  return parts;
-}
 
 function shorten(id: string, max = 10): string {
   if (!id) return '';
@@ -56,14 +33,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
   const pendingCaretRef = useRef<SelectionRange | null>(null);
   const [isFocused, setIsFocused] = useState(false);
 
-  useImperativeHandle(ref, () => ({
-    focus: () => hostRef.current?.focus(),
-    getHost: () => hostRef.current,
-    setSelectionRange: (start: number, end: number) => { pendingCaretRef.current = { start, end }; restoreCaretSoon(); },
-    getSelectionRange: () => getCaretRange(),
-  }), []);
-
-  const getCaretRange = (): SelectionRange | null => {
+  const getCaretRange = useCallback((): SelectionRange | null => {
     const root = hostRef.current;
     if (!root) return null;
     const sel = window.getSelection();
@@ -93,9 +63,9 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
       index += offsetInParent > childIndex ? lenOf(top) : 0;
     }
     return { start: index, end: index };
-  };
+  }, []);
 
-  const setCaretRange = (start: number, _end: number = start) => {
+  const setCaretRange = useCallback((start: number, _end: number = start) => {
     const root = hostRef.current;
     if (!root) return;
     let remaining = start;
@@ -131,9 +101,9 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
       sel.removeAllRanges();
       sel.addRange(range);
     } catch { /* caret restore is best-effort */ }
-  };
+  }, []);
 
-  const rebuildModelFromDOM = (): { text: string; caret: SelectionRange | null } => {
+  const rebuildModelFromDOM = useCallback((): { text: string; caret: SelectionRange | null } => {
     const root = hostRef.current;
     if (!root) return { text: value, caret: null };
     let out = '';
@@ -144,7 +114,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
     }
     const caret = getCaretRange();
     return { text: out, caret };
-  };
+  }, [getCaretRange, value]);
 
   const handleInput = useCallback(() => {
     const { text, caret } = rebuildModelFromDOM();
@@ -158,7 +128,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
     }
     
     onChange(text);
-  }, [onChange, maxLength]);
+  }, [maxLength, onChange, rebuildModelFromDOM]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     // Enhanced keyboard shortcuts
@@ -188,23 +158,33 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
     onKeyDown?.(e);
   }, [onKeyDown]);
 
-  const handleKeyUp = (_e: React.KeyboardEvent<HTMLDivElement>) => {
+  const handleKeyUp = useCallback((_e: React.KeyboardEvent<HTMLDivElement>) => {
     const caret = getCaretRange();
     if (!caret) return;
     const anchor = caret.start;
     if (value[anchor - 1] === '#') {
       onTriggerPicker?.(anchor - 1);
     }
-  };
+  }, [getCaretRange, onTriggerPicker, value]);
 
-  const restoreCaretSoon = () => {
+  const restoreCaretSoon = useCallback(() => {
     requestAnimationFrame(() => {
       const caret = pendingCaretRef.current;
       if (!caret) return;
       setCaretRange(caret.start, caret.end);
       pendingCaretRef.current = null;
     });
-  };
+  }, [setCaretRange]);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => hostRef.current?.focus(),
+    getHost: () => hostRef.current,
+    setSelectionRange: (start: number, end: number) => {
+      pendingCaretRef.current = { start, end };
+      restoreCaretSoon();
+    },
+    getSelectionRange: getCaretRange,
+  }), [getCaretRange, restoreCaretSoon]);
 
   // Sync DOM when value changes externally
   useEffect(() => {
@@ -265,7 +245,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
     if (pendingCaretRef.current) {
       restoreCaretSoon();
     }
-  }, [value]);
+  }, [onChange, onEditRef, onRemoveRef, restoreCaretSoon, setCaretRange, value]);
 
   const charCount = value.length;
   const isOverLimit = maxLength && charCount > maxLength;
@@ -293,7 +273,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
         onBlur={() => setIsFocused(false)}
         onPaste={(e) => {
           e.preventDefault();
-          const text = (e.clipboardData || (window as any).clipboardData).getData('text/plain');
+          const text = e.clipboardData.getData('text/plain');
           
           // Check length before pasting
           const newLength = charCount + text.length;
@@ -329,5 +309,3 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
     </div>
   );
 });
-
-

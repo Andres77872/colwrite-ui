@@ -2,29 +2,8 @@ import type { CSSProperties } from 'react';
 import { cn } from '@/lib/utils';
 import { useEditor } from '../../../editor';
 import { useLayoutEffect, useRef } from 'react';
-import { openSlashMenu, isSlashMenuOpen } from '../../editor/SlashMenu/SlashMenu';
-
-/**
- * Reduce inline-widget placeholders in *clone* back to empty spans.
- *
- * Widgets are React-rendered into their placeholder, so the live DOM holds
- * their whole UI. Persisting that would store rendered internals as document
- * content — and on the next render the widget would be portalled in on top of
- * its own stale markup.
- */
-export function clearChildPlaceholders(clone: HTMLElement): void {
-  clone.querySelectorAll('[data-child-id]').forEach((el) => {
-    const elh = el as HTMLElement;
-    elh.setAttribute('contenteditable', 'false');
-    while (elh.firstChild) elh.removeChild(elh.firstChild);
-  });
-}
-
-export function serializeEditableHtml(root: HTMLDivElement): string {
-  const clone = root.cloneNode(true) as HTMLDivElement;
-  clearChildPlaceholders(clone);
-  return clone.innerHTML;
-}
+import { openSlashMenu, isSlashMenuOpen } from '../../editor/SlashMenu/slashMenuEvents';
+import { serializeEditableHtml } from './editableHtml';
 
 /**
  * Whether a node sits inside an inline widget rather than in the prose.
@@ -61,13 +40,22 @@ export function Editable({
   style?: CSSProperties;
   slashEnabled?: boolean;
 }) {
-  const { addBlockAfter, removeBlock, updateHtml, refs, setActive, activeId } = useEditor();
+  const {
+    addBlockAfter,
+    removeBlock,
+    updateHtml,
+    refs,
+    registerEditable,
+    setActive,
+    activeId,
+  } = useEditor();
   const pointerDownRef = useRef(false);
+  const editableRef = useRef<HTMLDivElement | null>(null);
 
   // Keep DOM content in sync only when NOT actively editing this block.
   // When becoming active (focus), ensure content is restored if a re-render replaced the node.
   useLayoutEffect(() => {
-    const el = refs.current[id];
+    const el = editableRef.current;
     if (!el) return;
     const next = html || '';
     if (activeId !== id) {
@@ -85,7 +73,7 @@ export function Editable({
         if (sel) { sel.removeAllRanges(); sel.addRange(range); }
       }
     }
-  }, [html, activeId, id, refs]);
+  }, [html, activeId, id]);
   return (
     <div
       className={cn(
@@ -97,7 +85,10 @@ export function Editable({
         "focus:outline-none focus-visible:outline-none",
         className
       )}
-      ref={(el) => { refs.current[id] = el; }}
+      ref={(element) => {
+        editableRef.current = element;
+        registerEditable(id, element);
+      }}
       contentEditable
       suppressContentEditableWarning
       onMouseDown={() => { pointerDownRef.current = true; }}

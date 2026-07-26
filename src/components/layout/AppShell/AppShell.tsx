@@ -1,6 +1,7 @@
 import { useCallback, useEffect, type CSSProperties, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
-import { usePanels, PANEL_CONFIG } from '@/components/panels/panelsContext';
+import { usePanels } from '@/components/panels/panelsContextState';
+import { PANEL_CONFIG } from '@/components/panels/panelConfig';
 import { ResizeHandle } from '@/components/ui/resizable-panel';
 
 interface AppShellProps {

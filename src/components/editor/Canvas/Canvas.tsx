@@ -19,7 +19,7 @@ import { ParagraphBlock } from '../blocks/ParagraphBlock';
 import { HeadingBlock } from '../blocks/HeadingBlock';
 import { DividerBlock } from '../blocks/DividerBlock';
 import { ChangeCard, ReviewBar } from '../Review';
-import { useProposals } from '@/editor/ProposalsContext';
+import { useProposals } from '@/editor/proposalsContextState';
 import { changesForBlock, documentChanges, edgeChanges, orphanChanges } from '@/editor/proposals';
 import { ChevronRight, FileText, Plus, Sparkles } from 'lucide-react';
 
@@ -178,7 +178,7 @@ export function Canvas() {
   const isCheckingDocs = hasAnyRemoteDocs === null && !documentId;
   const isEmpty = blocks.length === 0;
 
-  const clearDnd = useCallback(() => setInsertIndex(null), []);
+  const clearDnd = useCallback(() => setInsertIndex(null), [setInsertIndex]);
 
   const isBlockDrag = (event: DragEvent) =>
     Array.from(event.dataTransfer.types || []).includes(BLOCK_DRAG_TYPE);
@@ -201,7 +201,7 @@ export function Canvas() {
       }
     }
     setInsertIndex(rows.length);
-  }, []);
+  }, [setInsertIndex]);
 
   const focusBlock = (id: string) => queueMicrotask(() => refs.current[id]?.focus());
 

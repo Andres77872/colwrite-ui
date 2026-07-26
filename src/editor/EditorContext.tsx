@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react';
 import type { Block, Doc, ParagraphChild, ToolOperation } from './types';
 import { loadDoc, saveDoc, loadDocumentId, saveDocumentId } from './storage';
 import {
@@ -9,93 +9,62 @@ import {
   type ApplyPatchResult,
 } from './docOps';
 import { createDocument as apiCreateDocument, saveDocument as apiSaveDocument, loadDocument as apiLoadDocument, deleteDocument as apiDeleteDocument, listDocuments as apiListDocuments } from '../services';
+import type { DocumentInput, DocumentSummary } from '../services';
 import { uid } from '../lib/uid';
+import { EditorContext, type EditorContextValue } from './editorContextState';
+export type { EditorContextValue } from './editorContextState';
 
-export type EditorContextValue = {
-  doc: Doc;
-  blocks: Block[];
-  refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
-  documentId: string | null;
-  activeId: string | null;
-  setActive: (id: string | null) => void;
-  // Global menu state - ensures only one block menu is open at a time
-  openMenuBlockId: string | null;
-  openMenuType: 'add' | 'options' | null;
-  setBlockMenu: (blockId: string | null, type: 'add' | 'options' | null) => void;
-  setDocMeta: (meta: Partial<Doc>) => void;
-  setDocName: (name: string) => void;
-  addBlockAtStart: (type: Block['type']) => string;
-  addBlockAfter: (afterId: string, type: Block['type']) => string;
-  // Exact placement helpers that preserve provided block IDs (used by AI patches)
-  insertBlockAtStartExact: (block: Block) => void;
-  insertBlockAfterExact: (afterId: string, block: Block) => void;
-  insertBlockBeforeExact: (beforeId: string, block: Block) => void;
-  appendBlockExact: (block: Block) => void;
-  moveBlock: (id: string, dir: -1 | 1) => void;
-  reorderBlock: (id: string, toIndex: number) => void;
-  removeBlock: (id: string) => void;
-  updateHtml: (id: string, html: string) => void;
-  setParagraphColumns: (id: string, columns: number) => void;
-  // Block meta toggles (visual-only; backend enforces behavior)
-  toggleAiHidden: (id: string) => void;
-  toggleLocked: (id: string) => void;
-  toggleCollapsed: (id: string) => void;
-  // Paragraph children helpers
-  addParagraphChild: (blockId: string, child: ParagraphChild) => string;
-  updateParagraphChild: (blockId: string, childId: string, next: Partial<ParagraphChild>) => void;
-  removeParagraphChild: (blockId: string, childId: string) => void;
-  setHeadingLevel: (id: string, level: 1 | 2 | 3) => void;
-  exec: (cmd: string) => void;
-  getJSON: () => string;
-  setFromJSON: (json: string) => void;
-  save: () => void; // local save
-  newLocal: () => void; // create a fresh local document
-  // API methods
-  createRemote: (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)) => Promise<string>;
-  saveRemote: (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)) => Promise<void>;
-  loadRemote: (id: string) => Promise<void>;
-  /** Flush pending edits, then open another document. */
-  switchTo: (id: string) => Promise<void>;
-  deleteRemote: (id: string) => Promise<void>;
-  listRemote: (page?: number, limit?: number, query?: string) => Promise<{ documents: any[]; count: number }>;
-  lastSavedAt: number | null;
-  isAutoSaving: boolean;
-  lastSaveSource: 'auto' | 'manual' | null;
-  /** Why the last save failed, or null. Autosave failures are otherwise invisible. */
-  saveError: string | null;
-  clearSaveError: () => void;
-  /** Record the version the server now holds, without marking the doc dirty. */
-  adoptServerVersion: (version: number | undefined | null) => void;
-  // Remote document availability (null while loading)
-  hasAnyRemoteDocs: boolean | null;
-  /**
-   * Apply agent operations to the local document.
-   *
-   * `persist` decides whether this counts as an edit the user made. Accepting
-   * a proposed change does — nothing is stored server-side until then, so the
-   * autosave timer has to be armed or the accepted text is lost on reload.
-   */
-  applyPatch: (ops: ToolOperation[], options?: { persist?: boolean }) => ApplyPatchResult;
-  /** Ids of blocks touched by a recently accepted change, for highlighting. */
-  recentlyChanged: ReadonlySet<string>;
-  markRecentlyChanged: (ids: string[]) => void;
-};
-
-const EditorContext = createContext<EditorContextValue | null>(null);
-
-export function EditorProvider({ children }: { children: ReactNode }) {
-  const makeDefaultDoc = (): Doc => ({
+function makeDefaultDoc(): Doc {
+  return {
     version: 1,
     name: 'Untitled document',
     blocks: [
       { id: uid(), type: 'heading', level: 2, html: 'Your document' },
       { id: uid(), type: 'paragraph', html: 'Write something here. Select text to format. Use the + to insert blocks.', children: [], columns: 1 },
     ],
-  });
+  };
+}
 
-  const [doc, setDoc] = useState<Doc>(() => loadDoc() ?? makeDefaultDoc());
+function migrateLegacyInlineAiBeats(doc: Doc): Doc {
+  if (typeof document === 'undefined') return doc;
+  try {
+    let changed = false;
+    const blocks = doc.blocks.map((block) => {
+      if (block.type !== 'paragraph') return block;
+      if (block.html.includes('data-child-id') || !/ai-beat-widget/.test(block.html)) return block;
+
+      const container = document.createElement('div');
+      container.innerHTML = block.html;
+      const children: ParagraphChild[] = Array.isArray(block.children) ? [...block.children] : [];
+      const widgets = Array.from(container.querySelectorAll<HTMLElement>('.ai-beat-widget'));
+      for (const element of widgets) {
+        const id = uid();
+        const output = (element.querySelector('.ai-beat-output')?.textContent || '').trim();
+        const collapsed = element.getAttribute('data-collapsed') === '1';
+        const placeholder = document.createElement('span');
+        placeholder.setAttribute('data-child-id', id);
+        placeholder.setAttribute('contenteditable', 'false');
+        element.replaceWith(placeholder);
+        children.push({ id, type: 'aiBeat', message: '', prompt: '', output, collapsed });
+        changed = true;
+      }
+      return { ...block, html: container.innerHTML, children };
+    });
+    return changed ? { ...doc, blocks } : doc;
+  } catch {
+    return doc;
+  }
+}
+
+export function EditorProvider({ children }: { children: ReactNode }) {
+  const [doc, setDoc] = useState<Doc>(
+    () => migrateLegacyInlineAiBeats(loadDoc() ?? makeDefaultDoc()),
+  );
   const blocks = doc.blocks;
   const refs = useRef<Record<string, HTMLDivElement | null>>({});
+  const registerEditable = (id: string, element: HTMLDivElement | null) => {
+    refs.current[id] = element;
+  };
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [documentId, setDocumentId] = useState<string | null>(() => loadDocumentId());
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -121,9 +90,11 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   // chat stream can outlive several renders, and saving from a stale closure
   // is how edits get silently reverted.
   const docRef = useRef(doc);
-  docRef.current = doc;
   const documentIdRef = useRef(documentId);
-  documentIdRef.current = documentId;
+  useEffect(() => {
+    docRef.current = doc;
+    documentIdRef.current = documentId;
+  }, [doc, documentId]);
 
   // Which document the in-state `doc` was actually loaded for. Without this a
   // PUT can write one document's body over another's — the id and the body are
@@ -147,69 +118,6 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     return () => cancelAnimationFrame(raf);
   }, [doc, documentId]);
 
-  // Hydrate from the server on mount. The cached draft is a fallback for going
-  // offline, not a source of truth: adopting it unconditionally meant a stale
-  // (or another account's) body could be saved over the real document.
-  useEffect(() => {
-    const id = documentIdRef.current;
-    if (!id) {
-      setIsHydrating(false);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        await loadRemote(id);
-      } catch {
-        // Keep the cached draft — it is at least known to belong to this id.
-        if (!cancelled) setSaveError('Could not reach the server; showing your last local copy.');
-      } finally {
-        if (!cancelled) setIsHydrating(false);
-      }
-    })();
-    return () => { cancelled = true; };
-    // Mount only: later document switches go through loadRemote/switchTo.
-  }, []);
-
-  // Debounced remote auto-save (5 seconds after last change).
-  // Keyed on `dirtyTick` rather than `doc` so that adopting a server version
-  // does not count as a change and re-arm the timer.
-  useEffect(() => {
-    // Wait until we know whether the account has any remote documents
-    // to avoid auto-creating the first document without an explicit user action.
-    if (hasAnyRemoteDocs === null) return;
-    if (isHydrating) return;
-    if (dirtyTick === 0) return;
-
-    if (autoSaveTimerRef.current !== null) {
-      clearTimeout(autoSaveTimerRef.current);
-      autoSaveTimerRef.current = null;
-    }
-
-    // If there are no remote documents yet and this session has no documentId,
-    // don't schedule an autosave that would auto-create the first document.
-    if (hasAnyRemoteDocs === false && !documentId) return;
-
-    autoSaveTimerRef.current = window.setTimeout(async () => {
-      setIsAutoSaving(true);
-      try {
-        await doRemoteSave('auto');
-      } catch (err) {
-        // Autosave failures used to be swallowed entirely, so a document that
-        // had stopped saving looked identical to one that was saving fine.
-        setSaveError(describeSaveError(err));
-      } finally {
-        setIsAutoSaving(false);
-      }
-    }, 5000);
-    return () => {
-      if (autoSaveTimerRef.current !== null) {
-        clearTimeout(autoSaveTimerRef.current);
-        autoSaveTimerRef.current = null;
-      }
-    };
-  }, [dirtyTick, hasAnyRemoteDocs, documentId, isHydrating]);
-
   // Persist current document id
   useEffect(() => {
     saveDocumentId(documentId);
@@ -229,36 +137,6 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       }
     })();
     return () => { canceled = true; };
-  }, []);
-
-  // One-time migration: convert inline AIBeat markup embedded in paragraph HTML
-  // into paragraph children and placeholder spans.
-  useEffect(() => {
-    setDoc(prev => {
-      try {
-        const migratedBlocks = prev.blocks.map((b) => {
-          if (b.type !== 'paragraph') return b;
-          if ((b.html || '').includes('data-child-id')) return b; // already migrated
-          if (!/(ai-beat-widget)/.test(b.html || '')) return b;
-          const container = document.createElement('div');
-          container.innerHTML = b.html || '';
-          const children: ParagraphChild[] = Array.isArray((b as any).children) ? ([...(b as any).children] as ParagraphChild[]) : [];
-          const widgets = Array.from(container.querySelectorAll('.ai-beat-widget')) as HTMLElement[];
-          for (const el of widgets) {
-            const id = uid();
-            const output = (el.querySelector('.ai-beat-output')?.textContent || '').trim();
-            const collapsed = el.getAttribute('data-collapsed') === '1';
-            const placeholder = document.createElement('span');
-            placeholder.setAttribute('data-child-id', id);
-            placeholder.setAttribute('contenteditable', 'false');
-            el.replaceWith(placeholder);
-            children.push({ id, type: 'aiBeat', message: '', prompt: '', output, collapsed });
-          }
-          return { ...b, html: container.innerHTML, children } as Block;
-        });
-        return { ...prev, blocks: migratedBlocks };
-      } catch { return prev; }
-    });
   }, []);
 
   /** Apply a content change and arm the autosave timer. */
@@ -363,7 +241,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const updateHtml = (id: string, html: string) => setBlocks(prev => {
     const idx = prev.findIndex(b => b.id === id && 'html' in b);
     if (idx === -1) return prev;
-    const b = prev[idx] as any;
+    const b = prev[idx];
+    if (b.type === 'divider') return prev;
     if (b.html === html) return prev;
     const out = prev.slice();
     // Deleting an inline widget removes its placeholder span from the html but
@@ -375,13 +254,13 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
   const setParagraphColumns = (id: string, columns: number) => setBlocks(prev => prev.map(b => (
     b.id === id && b.type === 'paragraph'
-      ? ({ ...(b as any), columns: Math.max(1, Math.min(6, Math.floor(columns || 1))) })
+      ? ({ ...b, columns: Math.max(1, Math.min(6, Math.floor(columns || 1))) })
       : b
   )));
 
   // Generic helper to toggle a boolean meta key on any block
   const toggleMeta = (id: string, key: 'aiHidden' | 'locked' | 'collapsed') => setBlocks(prev => prev.map(b => (
-    b.id === id ? ({ ...(b as any), [key]: !((b as any)[key] ?? false) }) : b
+    b.id === id ? ({ ...b, [key]: !(b[key] ?? false) }) : b
   )));
 
   const toggleAiHidden = (id: string) => toggleMeta(id, 'aiHidden');
@@ -403,7 +282,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     setBlocks(prev => {
       const bIndex = prev.findIndex(b => b.id === blockId && b.type === 'paragraph');
       if (bIndex === -1) return prev;
-      const blk = prev[bIndex] as any;
+      const blk = prev[bIndex];
+      if (blk.type !== 'paragraph') return prev;
       const children: ParagraphChild[] = Array.isArray(blk.children) ? blk.children : [];
       const cIndex = children.findIndex((c: ParagraphChild) => c.id === childId);
       if (cIndex === -1) return prev;
@@ -425,7 +305,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       const existing = b.children || [];
       const filtered = existing.filter(c => c.id !== childId);
       if (filtered.length === existing.length) return b;
-      return { ...(b as any), children: filtered } as Block;
+      return { ...b, children: filtered };
     }));
   };
 
@@ -449,7 +329,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   };
 
   // API-backed persistence
-  const createRemote = async (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)): Promise<string> => {
+  const createRemote = async (docOverride?: DocumentInput): Promise<string> => {
     const payload = docOverride ?? docRef.current;
     const res = await apiCreateDocument(payload);
     setDocumentId(res.document_id);
@@ -462,7 +342,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   };
 
   // Internal helper to centralize remote saves and mark source
-  const doRemoteSave = async (source: 'auto' | 'manual', docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)): Promise<void> => {
+  const doRemoteSave = async (source: 'auto' | 'manual', docOverride?: DocumentInput): Promise<void> => {
     // Cancel any pending autosave timer to avoid duplicate saves
     if (autoSaveTimerRef.current !== null) {
       clearTimeout(autoSaveTimerRef.current);
@@ -472,7 +352,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const base = docOverride ?? docRef.current;
 
     if (!targetId) {
-      await createRemote(base as any);
+      await createRemote(base);
       setLastSavedAt(Date.now());
       setLastSaveSource(source);
       return;
@@ -487,7 +367,9 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
     // Always lock on the version the server last confirmed, not the one
     // embedded in the (possibly much older) doc we are sending.
-    const payload = { ...(base as any), version: versionRef.current };
+    const payload: DocumentInput = Array.isArray(base)
+      ? { blocks: base, version: versionRef.current }
+      : { ...base, version: versionRef.current };
     const res = await apiSaveDocument(targetId, payload);
     adoptServerVersion(res?.version);
     setSaveError(null);
@@ -495,7 +377,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     setLastSaveSource(source);
   };
 
-  const saveRemote = async (docOverride?: Doc | Block[] | (Partial<Doc> & Record<string, any>)): Promise<void> => {
+  const saveRemote = async (docOverride?: DocumentInput): Promise<void> => {
     await doRemoteSave('manual', docOverride);
   };
 
@@ -513,6 +395,64 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     versionRef.current = loaded.version ?? 1;
     setSaveError(null);
   };
+
+  const hydrateRemote = useEffectEvent((id: string) => loadRemote(id));
+  const autoSave = useEffectEvent(() => doRemoteSave('auto'));
+
+  // Hydrate from the server on mount. The cached draft is a fallback for going
+  // offline, not a source of truth: adopting it unconditionally meant a stale
+  // (or another account's) body could be saved over the real document.
+  useEffect(() => {
+    const id = documentIdRef.current;
+    if (!id) return;
+
+    let cancelled = false;
+    void hydrateRemote(id)
+      .catch(() => {
+        // Keep the cached draft — it is at least known to belong to this id.
+        if (!cancelled) {
+          setSaveError('Could not reach the server; showing your last local copy.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsHydrating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Mount only: later document switches go through loadRemote/switchTo.
+  }, []);
+
+  // Debounced remote auto-save (5 seconds after last change).
+  // Keyed on `dirtyTick` rather than `doc` so adopting a server version does
+  // not count as a change and re-arm the timer.
+  useEffect(() => {
+    if (hasAnyRemoteDocs === null || isHydrating || dirtyTick === 0) return;
+
+    if (autoSaveTimerRef.current !== null) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+
+    if (hasAnyRemoteDocs === false && !documentId) return;
+
+    autoSaveTimerRef.current = window.setTimeout(async () => {
+      setIsAutoSaving(true);
+      try {
+        await autoSave();
+      } catch (error) {
+        setSaveError(describeSaveError(error));
+      } finally {
+        setIsAutoSaving(false);
+      }
+    }, 5000);
+    return () => {
+      if (autoSaveTimerRef.current !== null) {
+        clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [dirtyTick, documentId, hasAnyRemoteDocs, isHydrating]);
 
   /** Flush pending local edits, then switch to another document. */
   const switchTo = async (id: string): Promise<void> => {
@@ -540,7 +480,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const listRemote = async (page = 1, limit = 10, query?: string): Promise<{ documents: any[]; count: number }> => {
+  const listRemote = async (page = 1, limit = 10, query?: string): Promise<{ documents: DocumentSummary[]; count: number }> => {
     const res = await apiListDocuments(page, limit, query);
     return { documents: res.documents || [], count: res.count || 0 };
   };
@@ -622,6 +562,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     doc,
     blocks,
     refs,
+    registerEditable,
     documentId,
     activeId,
     setActive: setActiveId,
@@ -672,10 +613,4 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   };
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;
-}
-
-export function useEditor(): EditorContextValue {
-  const ctx = useContext(EditorContext);
-  if (!ctx) throw new Error('useEditor must be used within EditorProvider');
-  return ctx;
 }

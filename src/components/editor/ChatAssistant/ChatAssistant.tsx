@@ -3,10 +3,10 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { usePersistentState, isBoolean } from '@/hooks/usePersistentState';
 import { useEditor } from '@/editor';
-import { useProposals } from '@/editor/ProposalsContext';
+import { useProposals } from '@/editor/proposalsContextState';
 import { streamAgentChat } from '@/services/agentChat';
 import type { ToolAction } from '@/editor/types';
-import { useChatSessions } from '../../chat/ChatSessionsContext';
+import { useChatSessions } from '../../chat/chatSessionsState';
 import { listMessages, listThreads } from '@/services/chats';
 import { uid } from '@/lib/uid';
 import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
@@ -51,6 +51,11 @@ function emptyMessage(role: string, content = ''): ChatMessage {
 }
 
 export function ChatAssistant() {
+  const { documentId } = useEditor();
+  return <DocumentChatAssistant key={documentId ?? 'local'} />;
+}
+
+function DocumentChatAssistant() {
   const editor = useEditor();
   const { documentId } = editor;
   const proposals = useProposals();
@@ -75,9 +80,10 @@ export function ChatAssistant() {
   const processedToolCallIds = useRef<Set<string>>(new Set());
   // The message currently being written into, so stream callbacks can find it
   // without scanning for "the last assistant message" on every token.
-  const activeMessageId = useRef<string | null>(null);
+  const activeMessageIdRef = useRef<string | null>(null);
+  const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
   // What was sent last, so a failed turn can be retried without retyping.
-  const lastSent = useRef<string | null>(null);
+  const [lastSent, setLastSent] = useState<string | null>(null);
 
   const visibleMessages = useMemo(
     () => messages.filter((m) => m.role !== 'system'),
@@ -85,7 +91,7 @@ export function ChatAssistant() {
   );
 
   const patchActive = useCallback((update: (message: ChatMessage) => ChatMessage) => {
-    const id = activeMessageId.current;
+    const id = activeMessageIdRef.current;
     if (!id) return;
     setMessages((prev) => prev.map((m) => (m.id === id ? update(m) : m)));
   }, []);
@@ -97,7 +103,8 @@ export function ChatAssistant() {
     setAgentStatus(null);
     setError('');
     setInput('');
-    activeMessageId.current = null;
+    activeMessageIdRef.current = null;
+    setActiveMessageId(null);
     if (clearMessages) setMessages([]);
   }, []);
 
@@ -144,11 +151,6 @@ export function ChatAssistant() {
   useEffect(() => {
     if (selectedChatId) setExpanded(true);
   }, [selectedChatId, setExpanded]);
-
-  useEffect(() => {
-    resetChatUI(true);
-    processedToolCallIds.current = new Set();
-  }, [documentId, resetChatUI]);
 
   // Load the selected conversation's history.
   useEffect(() => {
@@ -213,12 +215,13 @@ export function ChatAssistant() {
     setInput('');
     setAgentStatus(null);
     pinnedToBottom.current = true;
-    lastSent.current = text;
+    setLastSent(text);
     // Tool-call ids are only unique within a run for some providers.
     processedToolCallIds.current = new Set();
 
     const assistantMessage = emptyMessage('assistant');
-    activeMessageId.current = assistantMessage.id;
+    activeMessageIdRef.current = assistantMessage.id;
+    setActiveMessageId(assistantMessage.id);
     setMessages((prev) => [...prev, emptyMessage('user', text), assistantMessage]);
 
     const controller = new AbortController();
@@ -286,14 +289,15 @@ export function ChatAssistant() {
           run.state === 'running' ? { ...run, state: 'done' as const } : run,
         ),
       }));
-      activeMessageId.current = null;
+      activeMessageIdRef.current = null;
+      setActiveMessageId(null);
     }
   };
 
   const onSend = () => send(input.trim());
 
   const onRetry = () => {
-    const text = lastSent.current;
+    const text = lastSent;
     if (!text) return;
     // Drop the failed exchange so the transcript does not accumulate dead ends.
     setMessages((prev) => prev.slice(0, -2));
@@ -436,7 +440,7 @@ export function ChatAssistant() {
           const isStreamingTail =
             isStreaming &&
             !isUser &&
-            message.id === activeMessageId.current &&
+            message.id === activeMessageId &&
             !message.content &&
             message.runs.length === 0;
 
@@ -457,7 +461,7 @@ export function ChatAssistant() {
                     {message.runs.length > 0 && (
                       <AgentActivity
                         runs={message.runs}
-                        live={isStreaming && message.id === activeMessageId.current}
+                        live={isStreaming && message.id === activeMessageId}
                       />
                     )}
 
@@ -514,7 +518,7 @@ export function ChatAssistant() {
               <AlertCircle aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0" />
               <span className="min-w-0 break-words">{error}</span>
             </p>
-            {lastSent.current && !isStreaming && (
+            {lastSent && !isStreaming && (
               <Button
                 size="sm"
                 variant="ghost"
@@ -568,7 +572,7 @@ export function ChatAssistant() {
             />
             <ChatRefPicker
               ref={refPickerRef}
-              hostRef={{ current: inputHostRef.current?.getHost() as never }}
+              getHost={() => inputHostRef.current?.getHost() ?? null}
               input={input}
               setInput={setInput}
               setCaretIndex={(index) => inputHostRef.current?.setSelectionRange(index, index)}

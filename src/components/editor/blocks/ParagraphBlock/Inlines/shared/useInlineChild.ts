@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import type { ParagraphChild } from '@/editor';
-import { serializeEditableHtml } from '@/components/common/Editable/Editable';
+import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import type { InlineWidgetProps } from '../types';
 
 /**

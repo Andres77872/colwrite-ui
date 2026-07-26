@@ -8,8 +8,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { useAuth } from '@/components/auth/AuthContext';
-import { usePanels } from '@/components/panels/panelsContext';
+import { useAuth } from '@/components/auth/authContextState';
+import { usePanels } from '@/components/panels/panelsContextState';
 import { BrandMark, APP_NAME, APP_TAGLINE } from '@/components/common/Brand';
 import { ChevronDown, LogOut, Menu, User } from 'lucide-react';
 

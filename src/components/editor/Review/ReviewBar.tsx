@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useEditor } from '@/editor';
-import { useProposals } from '@/editor/ProposalsContext';
+import { useProposals } from '@/editor/proposalsContextState';
 import { describeChange } from '@/editor/proposals';
 import { AlertCircle, Check, ChevronDown, ChevronUp, FileText, Sparkles, X } from 'lucide-react';
 import { useState } from 'react';

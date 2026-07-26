@@ -1,14 +1,11 @@
 import {
-  createContext,
   useCallback,
-  useContext,
-  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from 'react';
-import { useEditor } from './EditorContext';
-import type { ToolAction, ToolOperation } from './types';
+import { useEditor } from './editorContextState';
+import type { ToolOperation } from './types';
 import {
   buildChangeSet,
   isReady,
@@ -18,32 +15,8 @@ import {
   type ProposedChange,
 } from './proposals';
 import { uid } from '../lib/uid';
-
-export type ProposalsContextValue = {
-  sets: ChangeSet[];
-  /** Every change still awaiting a decision, in the order they arrived. */
-  pending: ProposedChange[];
-  pendingCount: number;
-  /** Documents the assistant created and is offering to open. */
-  invites: DocumentInvite[];
-  /** Take a streamed `tool_action` into review. Returns what it queued. */
-  receive: (action: ToolAction) => { changes: number; invited: boolean };
-  accept: (changeId: string) => void;
-  reject: (changeId: string) => void;
-  acceptAll: () => void;
-  rejectAll: () => void;
-  /** True when the change's prerequisites in the same batch are all accepted. */
-  ready: (change: ProposedChange) => boolean;
-  /** Scroll the document to a pending change and focus its review card. */
-  focusChange: (changeId: string) => void;
-  focusedChangeId: string | null;
-  dismissInvite: (inviteId: string) => void;
-  /** Set when a change could not be applied to the local copy. */
-  error: string | null;
-  clearError: () => void;
-};
-
-const ProposalsContext = createContext<ProposalsContextValue | null>(null);
+import { ProposalsContext, type ProposalsContextValue } from './proposalsContextState';
+export type { ProposalsContextValue } from './proposalsContextState';
 
 /**
  * Holds the agent's proposed edits until the author decides on them.
@@ -56,20 +29,20 @@ const ProposalsContext = createContext<ProposalsContextValue | null>(null);
  * chat bubble.
  */
 export function ProposalsProvider({ children }: { children: ReactNode }) {
-  const { applyPatch, adoptServerVersion, documentId, markRecentlyChanged } = useEditor();
+  const { documentId } = useEditor();
+  return (
+    <ProposalsState key={documentId ?? 'local'}>
+      {children}
+    </ProposalsState>
+  );
+}
+
+function ProposalsState({ children }: { children: ReactNode }) {
+  const { applyPatch, adoptServerVersion, markRecentlyChanged } = useEditor();
   const [sets, setSets] = useState<ChangeSet[]>([]);
   const [invites, setInvites] = useState<DocumentInvite[]>([]);
   const [focusedChangeId, setFocusedChangeId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  // Proposals are scoped to the document they were staged against. Carrying
-  // them across a switch would offer to patch block ids that belong to a
-  // different document entirely.
-  useEffect(() => {
-    setSets([]);
-    setFocusedChangeId(null);
-    setError(null);
-  }, [documentId]);
 
   const receive = useCallback<ProposalsContextValue['receive']>((action) => {
     const invited = action.actions.some((op) => op.op === 'create_document');
@@ -264,10 +237,4 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
   );
 
   return <ProposalsContext.Provider value={value}>{children}</ProposalsContext.Provider>;
-}
-
-export function useProposals(): ProposalsContextValue {
-  const ctx = useContext(ProposalsContext);
-  if (!ctx) throw new Error('useProposals must be used within ProposalsProvider');
-  return ctx;
 }

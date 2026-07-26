@@ -1,7 +1,5 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -12,29 +10,18 @@ import { createPortal } from 'react-dom';
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { uid } from '@/lib/uid';
-
-export type ToastVariant = 'default' | 'success' | 'error' | 'warning';
-
-export interface ToastOptions {
-  title: string;
-  description?: string;
-  variant?: ToastVariant;
-  /** Milliseconds before auto-dismiss. Errors default to staying longer. */
-  duration?: number;
-}
+import {
+  ToastContext,
+  type ToastOptions,
+  type ToastVariant,
+} from './toastContext';
+export type { ToastOptions, ToastVariant } from './toastContext';
 
 interface ToastRecord extends Required<Pick<ToastOptions, 'title' | 'variant'>> {
   id: string;
   description?: string;
   duration: number;
 }
-
-interface ToastContextValue {
-  toast: (options: ToastOptions) => string;
-  dismiss: (id: string) => void;
-}
-
-const ToastContext = createContext<ToastContextValue | null>(null);
 
 const VARIANT_META: Record<ToastVariant, { icon: typeof Info; accent: string; iconColor: string }> = {
   default: { icon: Info, accent: 'border-border', iconColor: 'text-muted-foreground' },
@@ -149,10 +136,4 @@ function ToastCard({ toast, onDismiss }: { toast: ToastRecord; onDismiss: () => 
       </button>
     </div>
   );
-}
-
-export function useToast(): ToastContextValue {
-  const ctx = useContext(ToastContext);
-  if (!ctx) throw new Error('useToast must be used within ToastProvider');
-  return ctx;
 }

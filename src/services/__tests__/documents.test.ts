@@ -55,14 +55,14 @@ describe('toBackendDocument', () => {
 
   // 6. Primitive fallback (number) → { version: 1, blocks: [] }
   it('6. returns fallback { version:1, blocks:[] } for non-array, non-object input', () => {
-    const result = toBackendDocument(42 as any);
+    const result = toBackendDocument(42);
     expect(result.version).toBe(1);
     expect(result.blocks).toEqual([]);
   });
 
   // 7. null/undefined fallback
   it('7. returns fallback { version:1, blocks:[] } for null', () => {
-    const result = toBackendDocument(null as any);
+    const result = toBackendDocument(null);
     expect(result.version).toBe(1);
     expect(result.blocks).toEqual([]);
   });
@@ -77,7 +77,7 @@ describe('toBackendDocument', () => {
   // 9. Doc with extra metadata fields — preserved via rest spread
   it('9. includes extra metadata fields from input', () => {
     const doc = { version: 3, blocks: sampleBlocks, extraField: 'value', tags: ['a', 'b'] };
-    const result = toBackendDocument(doc as any);
+    const result = toBackendDocument(doc);
     expect(result.version).toBe(3);
     expect(result.extraField).toBe('value');
     expect(result.tags).toEqual(['a', 'b']);
@@ -142,7 +142,7 @@ describe('toEditorDoc', () => {
 
   // 17. Payload with blocks array but version as string → coerces to 1
   it('17. recovers from version-as-string by defaulting to 1', () => {
-    const payload = { blocks: sampleBlocks, version: '3' as any };
+    const payload = { blocks: sampleBlocks, version: '3' };
     const result = toEditorDoc(payload);
     expect(result.version).toBe(1);
   });
@@ -205,5 +205,32 @@ describe('round-trip: toEditorDoc ∘ toBackendDocument', () => {
     const result = toEditorDoc(backend);
     expect(result.version).toBe(1);
     expect(result.blocks).toEqual(sampleBlocks);
+  });
+});
+
+describe('malformed document normalization', () => {
+  it('drops unknown blocks and repairs a recoverable paragraph', () => {
+    const result = toEditorDoc({
+      version: 7,
+      blocks: [
+        { id: 'bad', type: 'video', src: 'unexpected' },
+        { id: 'recovered', type: 'paragraph', html: 42 },
+        null,
+      ],
+    });
+
+    expect(result).toEqual({
+      version: 7,
+      blocks: [
+        {
+          id: 'recovered',
+          type: 'paragraph',
+          html: '',
+          columns: 1,
+          children: [],
+        },
+      ],
+      name: undefined,
+    });
   });
 });

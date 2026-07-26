@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createRef, useImperativeHandle } from 'react';
 import type { Doc, ParagraphBlock as ParagraphBlockType, ParagraphChild } from '@/editor/types';
 import type { SlashContext, SlashItem } from '../types';
 
@@ -66,10 +67,17 @@ afterAll(() => {
   });
 });
 
-let editor: ReturnType<typeof useEditor>;
+const captureRef = createRef<ReturnType<typeof useEditor>>();
+const harness = {
+  get editor() {
+    if (!captureRef.current) throw new Error('Editor harness is not mounted');
+    return captureRef.current;
+  },
+};
 
 function Harness() {
-  editor = useEditor();
+  const editor = useEditor();
+  useImperativeHandle(captureRef, () => editor, [editor]);
   const block = editor.blocks.find((candidate) => candidate.id === 'p1');
   if (!block || block.type !== 'paragraph') return null;
 
@@ -135,7 +143,7 @@ async function openMenuAt(editable: HTMLDivElement, start: number, end: number =
 }
 
 function paragraph(): ParagraphBlockType {
-  const block = editor.blocks.find((candidate) => candidate.id === 'p1');
+  const block = harness.editor.blocks.find((candidate) => candidate.id === 'p1');
   if (!block || block.type !== 'paragraph') throw new Error('Paragraph is missing');
   return block;
 }

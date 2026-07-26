@@ -2,7 +2,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
 import { DocumentsMenu } from '@/components/editor/DocumentsMenu';
-import { usePanels } from '@/components/panels/panelsContext';
+import { usePanels } from '@/components/panels/panelsContextState';
 import { FileText, PanelLeft, PanelLeftClose } from 'lucide-react';
 
 /**

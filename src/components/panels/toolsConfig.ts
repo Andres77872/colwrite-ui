@@ -1,6 +1,6 @@
 import { BookOpen, FileCode, MessageSquare, ScanSearch, Search } from 'lucide-react';
 import type { ElementType } from 'react';
-import type { ToolId } from './panelsContext';
+import type { ToolId } from './panelsContextState';
 
 export interface ToolMeta {
   id: ToolId;

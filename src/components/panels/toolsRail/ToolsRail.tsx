@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
-import { usePanels } from '../panelsContext';
+import { usePanels } from '../panelsContextState';
 import { TOOLS } from '../toolsConfig';
 import { PanelRight } from 'lucide-react';
 

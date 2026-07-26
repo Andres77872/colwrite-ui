@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PanelHeader } from '@/components/ui/resizable-panel';
-import { usePanels } from '../panelsContext';
+import { usePanels } from '../panelsContextState';
 import { toolMeta } from '../toolsConfig';
 import { JsonPanel } from '../JsonPanel';
 import { ArxivPanel } from '../ArxivPanel';

@@ -1,11 +1,24 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
-import type { RefObject, SetStateAction } from 'react';
+import type { SetStateAction } from 'react';
 import { useEditor } from '../../../../editor';
 import type { Block } from '../../../../editor';
 import { loadDocument as apiLoadDocument } from '../../../../services';
+import type { DocumentSummary } from '../../../../services';
+import { errorMessage } from '../../../../services';
 
 type DocSummary = { _id: string; name?: string };
+type NavigationLevel = { type: 'main' | 'documents' | 'doc-blocks' | 'this-blocks' };
+
+function toDocSummary(document: DocumentSummary): DocSummary | null {
+  const id = String(document._id ?? document.id ?? document.document_id ?? '');
+  if (!id) return null;
+  const name =
+    (typeof document.name === 'string' && document.name) ||
+    (typeof document.title === 'string' && document.title) ||
+    undefined;
+  return { _id: id, name };
+}
 
 export type ChatRefPickerHandle = {
   openAt: (anchorIndex: number, opts?: { editing?: boolean }) => void;
@@ -13,14 +26,14 @@ export type ChatRefPickerHandle = {
 };
 
 type ChatRefPickerProps = {
-  hostRef: RefObject<HTMLElement | null>;
+  getHost: () => HTMLElement | null;
   input: string;
   setInput: (value: SetStateAction<string>) => void;
   setCaretIndex?: (idx: number) => void;
 };
 
 export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>(function ChatRefPicker(
-  { hostRef, input, setInput, setCaretIndex },
+  { getHost, input, setInput, setCaretIndex },
   ref
 ) {
   const { blocks, listRemote } = useEditor();
@@ -38,14 +51,14 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   // Separate selection indices to avoid left menu highlighting when navigating results
   const [menuIndex, setMenuIndex] = useState<number>(0);
   const [resultsIndex, setResultsIndex] = useState<number>(0);
-  const [navigationStack, setNavigationStack] = useState<Array<{type: 'main' | 'documents' | 'doc-blocks' | 'this-blocks', data?: any}>>([{type: 'main'}]);
+  const [navigationStack, setNavigationStack] = useState<NavigationLevel[]>([{type: 'main'}]);
   const refMenuRef = useRef<HTMLDivElement | null>(null);
   const refResultsRef = useRef<HTMLDivElement | null>(null);
   const [refResultsLeft, setRefResultsLeft] = useState<number>(268);
 
-  const measureResultsLeft = () => {
+  const measureResultsLeft = useCallback(() => {
     const menu = refMenuRef.current;
-    const wrapper = hostRef.current?.closest('.chat-textarea-wrap') as HTMLElement | null;
+    const wrapper = getHost()?.closest('.chat-textarea-wrap') as HTMLElement | null;
     if (!menu || !wrapper) {
       setRefResultsLeft(268);
       return;
@@ -64,9 +77,9 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       const leftPos = -resultsWidth - gap;
       setRefResultsLeft(Math.max(leftPos, -wrapperWidth + 20));
     }
-  };
+  }, [getHost]);
 
-  const openRefMenu = (anchorIndex: number, opts?: { editing?: boolean }) => {
+  const openRefMenu = useCallback((anchorIndex: number, opts?: { editing?: boolean }) => {
     setRefAnchorIndex(anchorIndex);
     setRefDocs(null);
     setRefBlocks(null);
@@ -79,9 +92,9 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setEditingExisting(!!opts?.editing);
     requestAnimationFrame(measureResultsLeft);
     setRefOpen(true);
-  };
+  }, [measureResultsLeft]);
 
-  const closeRefMenu = () => {
+  const closeRefMenu = useCallback(() => {
     setRefOpen(false);
     setRefResultsOpen(false);
     setRefLoading(false);
@@ -90,9 +103,9 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setResultsIndex(0);
     setNavigationStack([{type: 'main'}]);
     setEditingExisting(false);
-  };
+  }, []);
 
-  const navigateBack = () => {
+  const navigateBack = useCallback(() => {
     if (navigationStack.length > 1) {
       const newStack = navigationStack.slice(0, -1);
       setNavigationStack(newStack);
@@ -106,14 +119,14 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
         setRefResultsOpen(true);
       }
     }
-  };
+  }, [navigationStack]);
 
   useImperativeHandle(ref, () => ({
     openAt: openRefMenu,
     close: closeRefMenu,
-  }), []);
+  }), [closeRefMenu, openRefMenu]);
 
-  const insertAtHash = (textToInsert: string) => {
+  const insertAtHash = useCallback((textToInsert: string) => {
     // hostRef is a contenteditable div; we no longer need DOM selection values here
     const start = Math.max(0, refAnchorIndex);
     let end = Math.min(input.length, start + 1);
@@ -128,51 +141,51 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setInput(next);
     requestAnimationFrame(() => {
       const caretPos = (before + textToInsert + ' ').length;
-      if (typeof (setCaretIndex as any) === 'function') setCaretIndex!(caretPos);
+      setCaretIndex?.(caretPos);
     });
     closeRefMenu();
-  };
+  }, [closeRefMenu, editingExisting, input, refAnchorIndex, setCaretIndex, setInput]);
 
-  const insertDocumentReference = (doc: DocSummary) => {
+  const insertDocumentReference = useCallback((doc: DocSummary) => {
     insertAtHash(`#doc/${doc._id}`);
-  };
+  }, [insertAtHash]);
 
   const labelForBlock = (b: Block, index: number): string => {
     if (b.type === 'heading') return `Heading ${b.level}`;
     if (b.type === 'divider') return `Divider ${index + 1}`;
     const tmp = document.createElement('div');
-    tmp.innerHTML = (b as any).html || '';
+    tmp.innerHTML = b.html || '';
     const txt = (tmp.textContent || '').trim();
     return txt ? (txt.length > 60 ? txt.slice(0, 57) + '…' : txt) : `Paragraph ${index + 1}`;
   };
 
-  const onSelectThis = () => {
+  const onSelectThis = useCallback(() => {
     setRefResultsType('this-blocks');
     setRefBlocks(blocks.slice());
-    setNavigationStack(prev => [...prev, {type: 'this-blocks'}]);
+    setNavigationStack(prev => [...prev, { type: 'this-blocks' }]);
     setResultsIndex(0);
     setRefResultsOpen(true);
-  };
+  }, [blocks]);
 
-  const onSelectDocuments = async () => {
+  const onSelectDocuments = useCallback(async () => {
     setRefResultsType('documents');
     setRefLoading(true);
     setRefError('');
     setResultsIndex(0);
     try {
       const { documents } = await listRemote(1, 10);
-      const docs: DocSummary[] = (documents || []).map((d: any) => ({ _id: d._id, name: d.name }));
+      const docs = documents.map(toDocSummary).filter((doc): doc is DocSummary => doc !== null);
       setRefDocs(docs);
-      setNavigationStack(prev => [...prev, {type: 'documents', data: docs}]);
-    } catch (e: any) {
-      setRefError(e?.message || 'Failed to load documents');
+      setNavigationStack(prev => [...prev, { type: 'documents' }]);
+    } catch (error: unknown) {
+      setRefError(errorMessage(error, 'Failed to load documents'));
     } finally {
       setRefLoading(false);
     }
     setRefResultsOpen(true);
-  };
+  }, [listRemote]);
 
-  const onOpenDocBlocks = async (doc: DocSummary) => {
+  const onOpenDocBlocks = useCallback(async (doc: DocSummary) => {
     setRefDocContext(doc);
     setRefResultsType('doc-blocks');
     setRefLoading(true);
@@ -180,25 +193,57 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setResultsIndex(0);
     try {
       const loaded = await apiLoadDocument(doc._id);
-      const loadedBlocks = (loaded?.blocks as Block[]) || [];
+      const loadedBlocks = loaded.blocks;
       setRefBlocks(loadedBlocks);
-      setNavigationStack(prev => [...prev, {type: 'doc-blocks', data: {doc, blocks: loadedBlocks}}]);
-    } catch (e: any) {
-      setRefError(e?.message || 'Failed to load document');
+      setNavigationStack(prev => [...prev, { type: 'doc-blocks' }]);
+    } catch (error: unknown) {
+      setRefError(errorMessage(error, 'Failed to load document'));
     } finally {
       setRefLoading(false);
     }
     setRefResultsOpen(true);
-  };
+  }, []);
 
-  const onPickBlock = (source: 'this' | 'doc', block: Block) => {
+  const onPickBlock = useCallback((source: 'this' | 'doc', block: Block) => {
     if (source === 'this') {
       insertAtHash(`#this/${block.id}`);
     } else {
       const docId = refDocContext?._id || 'unknown';
       insertAtHash(`#doc/${docId}/${block.id}`);
     }
-  };
+  }, [insertAtHash, refDocContext]);
+
+  const handleEnterKey = useCallback(() => {
+    if (refOpen && !refResultsOpen) {
+      if (menuIndex === 0) {
+        onSelectThis();
+      } else if (menuIndex === 1) {
+        void onSelectDocuments();
+      }
+    } else if (refResultsOpen) {
+      if (refResultsType === 'documents' && refDocs) {
+        const doc = refDocs[resultsIndex];
+        if (doc) void onOpenDocBlocks(doc);
+      } else if ((refResultsType === 'this-blocks' || refResultsType === 'doc-blocks') && refBlocks) {
+        const block = refBlocks[resultsIndex];
+        if (block) {
+          onPickBlock(refResultsType === 'this-blocks' ? 'this' : 'doc', block);
+        }
+      }
+    }
+  }, [
+    menuIndex,
+    onOpenDocBlocks,
+    onPickBlock,
+    onSelectDocuments,
+    onSelectThis,
+    refBlocks,
+    refDocs,
+    refOpen,
+    refResultsOpen,
+    refResultsType,
+    resultsIndex,
+  ]);
 
   useEffect(() => {
     if (!refOpen && !refResultsOpen) return;
@@ -206,7 +251,8 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       const target = e.target as HTMLElement | null;
       const insideMenu = !!refMenuRef.current && !!target && refMenuRef.current.contains(target);
       const insideResults = !!refResultsRef.current && !!target && refResultsRef.current.contains(target);
-      const isHost = !!hostRef.current && !!target && hostRef.current.contains(target as any);
+      const host = getHost();
+      const isHost = !!host && !!target && host.contains(target);
       if (!insideMenu && !insideResults && !isHost) closeRefMenu();
     };
     
@@ -260,42 +306,32 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       document.removeEventListener('mousedown', onClick);
       document.removeEventListener('keydown', onKey, true);
     };
-  }, [refOpen, refResultsOpen, hostRef, menuIndex, resultsIndex, navigationStack, refResultsType, refDocs, refBlocks]);
+  }, [
+    closeRefMenu,
+    handleEnterKey,
+    getHost,
+    navigateBack,
+    navigationStack.length,
+    refBlocks,
+    refDocs,
+    refOpen,
+    refResultsOpen,
+    refResultsType,
+  ]);
 
   // Close the picker unless the caret is immediately after a trailing '#'
   useEffect(() => {
     if (!refOpen && !refResultsOpen) return;
     const shouldStayOpen = input.endsWith('#');
     if (!shouldStayOpen) closeRefMenu();
-  }, [refOpen, refResultsOpen, input]);
-
-  const handleEnterKey = () => {
-    if (refOpen && !refResultsOpen) {
-      // Main menu
-      if (menuIndex === 0) {
-        onSelectThis();
-      } else if (menuIndex === 1) {
-        onSelectDocuments();
-      }
-    } else if (refResultsOpen) {
-      if (refResultsType === 'documents' && refDocs) {
-        const doc = refDocs[resultsIndex];
-        if (doc) onOpenDocBlocks(doc);
-      } else if ((refResultsType === 'this-blocks' || refResultsType === 'doc-blocks') && refBlocks) {
-        const block = refBlocks[resultsIndex];
-        if (block) {
-          onPickBlock(refResultsType === 'this-blocks' ? 'this' : 'doc', block);
-        }
-      }
-    }
-  };
+  }, [closeRefMenu, refOpen, refResultsOpen, input]);
 
   useEffect(() => {
     const on = () => requestAnimationFrame(measureResultsLeft);
     on();
     window.addEventListener('resize', on);
     return () => window.removeEventListener('resize', on);
-  }, [refOpen, refResultsOpen]);
+  }, [measureResultsLeft, refOpen, refResultsOpen]);
 
   return (
     <>
@@ -442,5 +478,3 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     </>
   );
 });
-
-

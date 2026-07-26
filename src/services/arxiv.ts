@@ -1,6 +1,8 @@
+import { ApiError, isUnknownRecord } from './contracts';
+
 // Standalone client for the external arXiv search API (separate from our app API)
 // Base can be overridden via Vite env var VITE_ARZ_API
-export const ARZ_API_BASE: string = (import.meta as any)?.env?.VITE_ARZ_API ?? 'https://llm.arz.ai';
+export const ARZ_API_BASE = import.meta.env.VITE_ARZ_API ?? 'https://llm.arz.ai';
 
 export type ArxivSearchParams = {
   query: string;
@@ -23,14 +25,11 @@ export type ArxivResult = {
 
 async function handleJson<T>(res: Response): Promise<T> {
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  const data: unknown = text ? JSON.parse(text) : null;
   if (!res.ok) {
     let msg = res.statusText || 'Request failed';
-    if (data && typeof data.message === 'string') msg = data.message;
-    const err = new Error(msg);
-    (err as any).status = res.status;
-    (err as any).data = data;
-    throw err;
+    if (isUnknownRecord(data) && typeof data.message === 'string') msg = data.message;
+    throw new ApiError(msg, res.status, data);
   }
   return data as T;
 }
@@ -47,23 +46,23 @@ export async function searchArxiv(params: ArxivSearchParams): Promise<ArxivResul
     method: 'POST',
     body: form,
   });
-  const results = await handleJson<any[]>(res);
+  const results = await handleJson<unknown>(res);
 
   // Normalize and enrich results with commonly used fields
-  return (Array.isArray(results) ? results : []).map((r: any) => {
-    const id = String(r?.id ?? '');
+  return (Array.isArray(results) ? results : []).filter(isUnknownRecord).map((result) => {
+    const id = String(result.id ?? '');
     const url = id ? `https://arxiv.org/abs/${id}` : undefined;
     const pdfUrl = id ? `https://arxiv.org/pdf/${id}.pdf` : undefined;
     return {
       id,
-      title: String(r?.title ?? ''),
-      authors: r?.authors ? String(r.authors) : undefined,
-      date: r?.date ? String(r.date) : undefined,
-      abstract: r?.abstract ? String(r.abstract) : undefined,
-      doi: r?.doi ?? null,
-      score: typeof r?.score === 'number' ? r.score : undefined,
+      title: String(result.title ?? ''),
+      authors: result.authors ? String(result.authors) : undefined,
+      date: result.date ? String(result.date) : undefined,
+      abstract: result.abstract ? String(result.abstract) : undefined,
+      doi: typeof result.doi === 'string' ? result.doi : null,
+      score: typeof result.score === 'number' ? result.score : undefined,
       url,
       pdfUrl,
-    } as ArxivResult;
+    };
   });
 }

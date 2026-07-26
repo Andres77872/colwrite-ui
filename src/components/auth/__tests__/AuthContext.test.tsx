@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { AuthProvider, useAuth } from '../AuthContext';
+import { AuthProvider } from '../AuthContext';
+import { useAuth } from '../authContextState';
 import { UNAUTHORIZED_EVENT, type UnauthorizedDetail } from '@/services';
 
 /**

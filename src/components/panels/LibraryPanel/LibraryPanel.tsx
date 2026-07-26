@@ -6,7 +6,7 @@ import { formatBytes, formatDate } from '@/lib/text';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { EmptyState } from '@/components/ui/empty-state';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/components/ui/toastContext';
 import { BookOpen, FileText, SearchX, Upload, X } from 'lucide-react';
 
 export type LocalDoc = {
@@ -30,7 +30,9 @@ export function LibraryPanel() {
   // cleanup on `docs` used to revoke every still-listed document's URL on each
   // add or remove, so previews went blank as soon as a second file arrived.
   const docsRef = useRef<LocalDoc[]>([]);
-  docsRef.current = docs;
+  useEffect(() => {
+    docsRef.current = docs;
+  }, [docs]);
   useEffect(
     () => () => {
       for (const doc of docsRef.current) URL.revokeObjectURL(doc.url);

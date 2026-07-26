@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useEditor } from '@/editor';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Spinner } from '@/components/ui/spinner';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/components/ui/toastContext';
 import { AlertCircle, Check, Copy, RotateCcw, Save, Wand2 } from 'lucide-react';
 
 /**
@@ -18,24 +18,17 @@ import { AlertCircle, Check, Copy, RotateCcw, Save, Wand2 } from 'lucide-react';
  * document only, and persistence goes through the editor's normal save path.
  */
 export function JsonPanel() {
-  const { getJSON, setFromJSON, doc, documentId, saveRemote } = useEditor();
+  const { setFromJSON, doc, documentId, saveRemote } = useEditor();
   const { toast } = useToast();
 
-  const currentJson = useMemo(() => getJSON(), [getJSON]);
-  const [text, setText] = useState(currentJson);
-  const [dirty, setDirty] = useState(false);
+  const currentJson = JSON.stringify(doc, null, 2);
+  const [draft, setDraft] = useState(() => ({ base: currentJson, text: currentJson }));
+  const dirty = draft.text !== draft.base;
+  const text = dirty ? draft.text : currentJson;
   const [parseError, setParseError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<number | null>(null);
-
-  // Follow the document while the textarea is untouched. The previous version
-  // keyed this effect on the (unmemoised) `getJSON` identity, so it re-ran on
-  // every editor render and overwrote whatever was being typed here.
-  useEffect(() => {
-    if (dirty) return;
-    setText(currentJson);
-  }, [currentJson, dirty]);
 
   useEffect(
     () => () => {
@@ -45,14 +38,16 @@ export function JsonPanel() {
   );
 
   const revert = () => {
-    setText(getJSON());
-    setDirty(false);
+    setDraft({ base: currentJson, text: currentJson });
     setParseError(null);
   };
 
   const format = () => {
     try {
-      setText(JSON.stringify(JSON.parse(text), null, 2));
+      setDraft((current) => ({
+        ...current,
+        text: JSON.stringify(JSON.parse(text), null, 2),
+      }));
       setParseError(null);
     } catch (error) {
       setParseError(error instanceof Error ? error.message : 'Invalid JSON');
@@ -62,7 +57,7 @@ export function JsonPanel() {
   const apply = () => {
     try {
       setFromJSON(text);
-      setDirty(false);
+      setDraft({ base: text, text });
       setParseError(null);
       toast({ title: 'Document structure replaced', variant: 'success' });
     } catch (error) {
@@ -137,8 +132,10 @@ export function JsonPanel() {
         aria-label="Document JSON"
         aria-invalid={parseError !== null}
         onChange={(event) => {
-          setText(event.target.value);
-          setDirty(true);
+          setDraft((current) => ({
+            base: current.text === current.base ? currentJson : current.base,
+            text: event.target.value,
+          }));
           if (parseError) setParseError(null);
         }}
         placeholder="Document JSON…"

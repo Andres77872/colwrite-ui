@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { createRef, useImperativeHandle } from 'react';
 import type { Block, Doc, ParagraphChild } from '@/editor/types';
 
 /**
@@ -20,10 +21,17 @@ const { EditorProvider, useEditor } = await import('@/editor');
 const { CitationInline } = await import('../CitationInline/CitationInline');
 const { EquationInline } = await import('../EquationInline/EquationInline');
 
-let editor: ReturnType<typeof useEditor>;
+const captureRef = createRef<ReturnType<typeof useEditor>>();
+const harness = {
+  get editor() {
+    if (!captureRef.current) throw new Error('Editor harness is not mounted');
+    return captureRef.current;
+  },
+};
 
 function Capture() {
-  editor = useEditor();
+  const editor = useEditor();
+  useImperativeHandle(captureRef, () => editor, [editor]);
   return null;
 }
 
@@ -83,7 +91,7 @@ describe('CitationInline', () => {
 
     // c1 is first in document order; the two in p2 follow it.
     expect(screen.getByRole('button', { name: '[1]' })).toBeTruthy();
-    expect(editor.blocks.find((b) => b.id === 'p2')).toBeTruthy();
+    expect(harness.editor.blocks.find((b) => b.id === 'p2')).toBeTruthy();
   });
 
   it('renders author–year from the attached source, key as fallback', async () => {
@@ -112,7 +120,7 @@ describe('CitationInline', () => {
     fireEvent.change(field, { target: { value: '2103.00020' } });
     fireEvent.keyDown(field, { key: 'Enter' });
 
-    const block = editor.blocks.find((b) => b.id === 'p1');
+    const block = harness.editor.blocks.find((b) => b.id === 'p1');
     expect(block?.type === 'paragraph' && block.children?.[0]).toMatchObject({
       keys: ['2103.00020'],
     });
@@ -169,13 +177,13 @@ describe('EquationInline', () => {
     await mount(equation('e1'));
     const host = document.createElement('div');
     host.innerHTML = 'before <span data-child-id="e1" contenteditable="false"></span> after';
-    editor.refs.current['p1'] = host;
+    harness.editor.refs.current['p1'] = host;
 
     fireEvent.click(screen.getByRole('button', { name: 'E = mc^2' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
 
     expect(host.querySelector('[data-child-id="e1"]')).toBeNull();
-    const block = editor.blocks.find((b) => b.id === 'p1');
+    const block = harness.editor.blocks.find((b) => b.id === 'p1');
     expect(block?.type === 'paragraph' ? block.children : []).toEqual([]);
   });
 });

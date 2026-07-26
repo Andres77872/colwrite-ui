@@ -39,6 +39,17 @@ export type ChartFigureProps = {
 };
 
 type Hover = { index: number; x: number; y: number } | null;
+type PieSlice = ReturnType<typeof pieSlices>[number];
+
+function positionPieSlices(slices: PieSlice[]) {
+  let angle = -Math.PI / 2;
+  return slices.map((slice) => {
+    const start = angle;
+    const end = angle + slice.fraction * Math.PI * 2;
+    angle = end;
+    return { ...slice, start, end };
+  });
+}
 
 export function ChartFigure(props: ChartFigureProps) {
   const { kind, values, labels, className } = props;
@@ -308,13 +319,7 @@ function PieChart({ values, colors, labels, hover, setHover, labelFor }: InnerPr
     );
   }
 
-  let angle = -Math.PI / 2;
-  const drawn = slices.map((slice) => {
-    const start = angle;
-    const end = angle + slice.fraction * Math.PI * 2;
-    angle = end;
-    return { ...slice, start, end };
-  });
+  const drawn = positionPieSlices(slices);
 
   return (
     <div className="flex flex-wrap items-center gap-4 px-3 py-2">

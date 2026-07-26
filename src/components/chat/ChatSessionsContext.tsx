@@ -1,14 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useEditor } from '../../editor';
-
-export type ChatSessionsValue = {
-  selectedChatId: string | null;
-  selectedThreadId: number | null;
-  setSelectedChatId: (id: string | null) => void;
-  setSelectedThreadId: (id: number | null) => void;
-};
-
-const ChatSessionsContext = createContext<ChatSessionsValue | null>(null);
+import { ChatSessionsContext, type ChatSessionsValue } from './chatSessionsState';
+export type { ChatSessionsValue } from './chatSessionsState';
 
 function keyForDoc(docId: string | null): string | null {
   if (!docId) return null;
@@ -17,22 +10,33 @@ function keyForDoc(docId: string | null): string | null {
 
 export function ChatSessionsProvider({ children }: { children: React.ReactNode }) {
   const { documentId } = useEditor();
-  const [selectedChatId, _setSelectedChatId] = useState<string | null>(null);
-  const [selectedThreadId, _setSelectedThreadId] = useState<number | null>(null);
+  return (
+    <ChatSessionsState key={documentId ?? 'local'} documentId={documentId}>
+      {children}
+    </ChatSessionsState>
+  );
+}
 
-  // Load persisted selection for current document
-  useEffect(() => {
-    try {
-      const key = keyForDoc(documentId);
-      if (!key) { _setSelectedChatId(null); _setSelectedThreadId(null); return; }
-      const raw = localStorage.getItem(key);
-      _setSelectedChatId(raw || null);
-      _setSelectedThreadId(null);
-    } catch {
-      _setSelectedChatId(null);
-      _setSelectedThreadId(null);
-    }
-  }, [documentId]);
+function readSelectedChat(documentId: string | null): string | null {
+  try {
+    const key = keyForDoc(documentId);
+    return key ? localStorage.getItem(key) || null : null;
+  } catch {
+    return null;
+  }
+}
+
+function ChatSessionsState({
+  children,
+  documentId,
+}: {
+  children: React.ReactNode;
+  documentId: string | null;
+}) {
+  const [selectedChatId, _setSelectedChatId] = useState<string | null>(
+    () => readSelectedChat(documentId),
+  );
+  const [selectedThreadId, _setSelectedThreadId] = useState<number | null>(null);
 
   const setSelectedChatId = useCallback((id: string | null) => {
     _setSelectedChatId(id);
@@ -55,10 +59,4 @@ export function ChatSessionsProvider({ children }: { children: React.ReactNode }
   }), [selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId]);
 
   return <ChatSessionsContext.Provider value={value}>{children}</ChatSessionsContext.Provider>;
-}
-
-export function useChatSessions(): ChatSessionsValue {
-  const ctx = useContext(ChatSessionsContext);
-  if (!ctx) throw new Error('useChatSessions must be used within ChatSessionsProvider');
-  return ctx;
 }
