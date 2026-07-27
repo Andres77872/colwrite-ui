@@ -44,6 +44,12 @@ function toDocSummary(document: DocumentSummary): DocSummary | null {
 export type ChatRefPickerHandle = {
   openAt: (anchorIndex: number, opts?: { editing?: boolean }) => void;
   close: () => void;
+  /**
+   * Whether the picker currently owns the keyboard. The composer asks before
+   * treating Enter as "send": with a list of documents on screen, Enter picks
+   * the highlighted one.
+   */
+  isOpen: () => boolean;
 };
 
 type ChatRefPickerProps = {
@@ -75,30 +81,6 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   const [navigationStack, setNavigationStack] = useState<NavigationLevel[]>([{type: 'main'}]);
   const refMenuRef = useRef<HTMLDivElement | null>(null);
   const refResultsRef = useRef<HTMLDivElement | null>(null);
-  const [refResultsLeft, setRefResultsLeft] = useState<number>(268);
-
-  const measureResultsLeft = useCallback(() => {
-    const menu = refMenuRef.current;
-    const wrapper = getHost()?.closest('.chat-textarea-wrap') as HTMLElement | null;
-    if (!menu || !wrapper) {
-      setRefResultsLeft(268);
-      return;
-    }
-
-    const menuWidth = menu.offsetWidth;
-    const wrapperWidth = wrapper.offsetWidth;
-    const isSmallScreen = window.innerWidth <= 980;
-    const resultsWidth = isSmallScreen ? 280 : 340;
-    const gap = 8;
-
-    const rightPos = menuWidth + gap;
-    if (rightPos + resultsWidth <= wrapperWidth) {
-      setRefResultsLeft(rightPos);
-    } else {
-      const leftPos = -resultsWidth - gap;
-      setRefResultsLeft(Math.max(leftPos, -wrapperWidth + 20));
-    }
-  }, [getHost]);
 
   const openRefMenu = useCallback((anchorIndex: number, opts?: { editing?: boolean }) => {
     setRefAnchorIndex(anchorIndex);
@@ -111,9 +93,8 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setResultsIndex(0);
     setNavigationStack([{type: 'main'}]);
     setEditingExisting(!!opts?.editing);
-    requestAnimationFrame(measureResultsLeft);
     setRefOpen(true);
-  }, [measureResultsLeft]);
+  }, []);
 
   const closeRefMenu = useCallback(() => {
     setRefOpen(false);
@@ -142,9 +123,17 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     }
   }, [navigationStack]);
 
+  // Read through a ref so the handle stays stable while the picker opens and
+  // closes — the composer holds it for the lifetime of a conversation.
+  const openRef = useRef(false);
+  useEffect(() => {
+    openRef.current = refOpen || refResultsOpen;
+  }, [refOpen, refResultsOpen]);
+
   useImperativeHandle(ref, () => ({
     openAt: openRefMenu,
     close: closeRefMenu,
+    isOpen: () => openRef.current,
   }), [closeRefMenu, openRefMenu]);
 
   const insertAtHash = useCallback((textToInsert: string) => {
@@ -350,13 +339,6 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     closeRefMenu();
   }
 
-  useEffect(() => {
-    const on = () => requestAnimationFrame(measureResultsLeft);
-    on();
-    window.addEventListener('resize', on);
-    return () => window.removeEventListener('resize', on);
-  }, [measureResultsLeft, refOpen, refResultsOpen]);
-
   /**
    * Announce the highlighted option through the composer.
    *
@@ -393,10 +375,13 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
 
   return (
     <>
-      {refOpen && (
+      {/* One list at a time, filling the composer's width. The two used to sit
+          side by side at a measured offset, which in a 380px window put the
+          results panel outside the assistant entirely, where it was clipped. */}
+      {refOpen && !refResultsOpen && (
         <div
           ref={refMenuRef}
-          className="chat-ref-menu absolute bottom-full mb-1 left-0 z-[var(--z-dropdown)] bg-popover border border-border rounded-lg shadow-lg min-w-[220px]"
+          className="chat-ref-menu absolute bottom-full left-0 right-0 mb-1 z-[var(--z-dropdown)] bg-popover border border-border rounded-lg shadow-lg"
         >
           <div className="p-2">
             <div id={`${MENU_LIST_ID}-label`} className="text-xs font-semibold text-muted-foreground mb-2 px-2">
@@ -451,8 +436,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       {refResultsOpen && (
         <div
           ref={refResultsRef}
-          className="chat-ref-results absolute bottom-full mb-1 z-[var(--z-dropdown)] bg-popover border border-border rounded-lg shadow-lg min-w-[280px] max-w-[340px]"
-          style={{ left: refResultsLeft }}
+          className="chat-ref-results absolute bottom-full left-0 right-0 mb-1 z-[var(--z-dropdown)] bg-popover border border-border rounded-lg shadow-lg"
         >
           <div className="p-2">
             {navigationStack.length > 1 && (
@@ -480,7 +464,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                     id={RESULTS_LIST_ID}
                     role="listbox"
                     aria-labelledby={`${RESULTS_LIST_ID}-label`}
-                    className="space-y-0.5"
+                    className="max-h-[13rem] space-y-0.5 overflow-y-auto"
                   >
                     {(refDocs || []).map((d, idx) => (
                       <div key={d._id} className="flex items-center gap-1">
@@ -498,8 +482,8 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                           onMouseEnter={() => setResultsIndex(idx)}
                           title="Select this document"
                         >
-                          <span className="text-sm font-medium truncate max-w-[200px]">{d.name || d._id}</span>
-                          <span className="text-xs text-muted-foreground truncate max-w-[200px]">{d._id}</span>
+                          <span className="w-full truncate text-sm font-medium">{d.name || d._id}</span>
+                          <span className="w-full truncate text-xs text-muted-foreground">{d._id}</span>
                         </button>
                         <button
                           className="px-2 py-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded-sm transition-colors"
@@ -530,7 +514,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                     id={RESULTS_LIST_ID}
                     role="listbox"
                     aria-labelledby={`${RESULTS_LIST_ID}-label`}
-                    className="space-y-0.5 max-h-[200px] overflow-auto"
+                    className="max-h-[13rem] space-y-0.5 overflow-y-auto"
                   >
                     {(refBlocks || []).map((b, idx) => (
                       <button
@@ -547,7 +531,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                         onClick={() => onPickBlock(refResultsType === 'this-blocks' ? 'this' : 'doc', b)}
                         onMouseEnter={() => setResultsIndex(idx)}
                       >
-                        <span className="text-sm truncate max-w-full">{labelForBlock(b, idx)}</span>
+                        <span className="w-full truncate text-sm">{labelForBlock(b, idx)}</span>
                         <span className="text-xs text-muted-foreground">{b.type}</span>
                       </button>
                     ))}

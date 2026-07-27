@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createRef, useImperativeHandle } from 'react';
 import type { SSEEventHandlers } from '@/services/streamParser';
 import type { ToolAction } from '@/editor/types';
@@ -38,9 +38,11 @@ const createDocument = vi.fn(async () => ({ document_id: 'created-doc', version:
 vi.mock('@/services/agentChat', () => ({
   streamAgentChat: (...args: unknown[]) => streamAgentChat(...args),
 }));
+const listMessages = vi.fn(async () => ({ messages: [], pivotThreadId: null }));
+const listThreads = vi.fn(async () => ({ threads: [] }));
 vi.mock('@/services/chats', () => ({
-  listMessages: vi.fn(async () => ({ messages: [], pivotThreadId: null })),
-  listThreads: vi.fn(async () => ({ threads: [] })),
+  listMessages: (...args: unknown[]) => listMessages(...(args as [])),
+  listThreads: (...args: unknown[]) => listThreads(...(args as [])),
 }));
 vi.mock('@/services', async () => ({
   createDocument: () => createDocument(),
@@ -54,6 +56,7 @@ const { EditorProvider, useEditor } = await import('@/editor');
 const { ProposalsProvider } = await import('@/editor/ProposalsContext');
 const { useProposals } = await import('@/editor/proposalsContextState');
 const { ChatSessionsProvider } = await import('../../../chat/ChatSessionsContext');
+const { useChatSessions } = await import('../../../chat/chatSessionsState');
 const { ChatAssistant } = await import('../ChatAssistant');
 
 // ── Harness ──
@@ -66,6 +69,7 @@ type HarnessHandle = {
 };
 
 const captureRef = createRef<HarnessHandle>();
+const chatsRef = createRef<ReturnType<typeof useChatSessions>>();
 const harness = {
   get editor() {
     if (!captureRef.current) throw new Error('Editor harness is not mounted');
@@ -75,12 +79,23 @@ const harness = {
     if (!captureRef.current) throw new Error('Review harness is not mounted');
     return captureRef.current.review;
   },
+  get chats() {
+    if (!chatsRef.current) throw new Error('Chat sessions harness is not mounted');
+    return chatsRef.current;
+  },
 };
 
 function Capture() {
   const editor = useEditor();
   const review = useProposals();
   useImperativeHandle(captureRef, () => ({ editor, review }), [editor, review]);
+  return null;
+}
+
+/** Inside the sessions provider: the panel is told which chat to show. */
+function CaptureChats() {
+  const chats = useChatSessions();
+  useImperativeHandle(chatsRef, () => chats, [chats]);
   return null;
 }
 
@@ -93,6 +108,7 @@ async function mount() {
       <ProposalsProvider>
         <Capture />
         <ChatSessionsProvider>
+          <CaptureChats />
           <ChatAssistant />
         </ChatSessionsProvider>
       </ProposalsProvider>
@@ -104,17 +120,8 @@ async function mount() {
   await waitFor(() => expect(harness.editor.blocks).toHaveLength(2));
 }
 
-/** Drive one send, handing the component the given tool_action events. */
-async function sendWith(actions: ToolAction[]) {
-  streamAgentChat.mockImplementation(
-    async (_params: unknown, handlers: SSEEventHandlers) => {
-      for (const action of actions) handlers.onToolAction?.(action);
-      handlers.onDone?.('chat-1', 1, { promptTokens: 0, completionTokens: 0 });
-      return { chatId: 'chat-1', threadId: 1, usage: null };
-    },
-  );
-
-  // Expand the panel if it is collapsed.
+/** Expand the panel if it is collapsed, and put text in the composer. */
+async function compose(text: string) {
   const trigger = screen.queryByRole('button', { name: /^assistant$/i });
   if (trigger) {
     await act(async () => {
@@ -126,9 +133,27 @@ async function sendWith(actions: ToolAction[]) {
   // `input`, so set the text and fire the event the component listens for.
   const host = screen.getByRole('textbox');
   await act(async () => {
-    host.textContent = 'do the thing';
+    host.textContent = text;
     host.dispatchEvent(new Event('input', { bubbles: true }));
   });
+  return host;
+}
+
+/** Answer the next send with the given tool_action events. */
+function answerWith(actions: ToolAction[]) {
+  streamAgentChat.mockImplementation(
+    async (_params: unknown, handlers: SSEEventHandlers) => {
+      for (const action of actions) handlers.onToolAction?.(action);
+      handlers.onDone?.('chat-1', 1, { promptTokens: 0, completionTokens: 0 });
+      return { chatId: 'chat-1', threadId: 1, usage: null };
+    },
+  );
+}
+
+/** Drive one send, handing the component the given tool_action events. */
+async function sendWith(actions: ToolAction[]) {
+  answerWith(actions);
+  await compose('do the thing');
 
   await act(async () => {
     screen.getByRole('button', { name: /send message/i }).click();
@@ -162,6 +187,20 @@ beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
   listDocuments.mockResolvedValue({ documents: [{}], count: 1, status: 'ok', message: '' });
+
+  // jsdom ships no `matchMedia`, so every media query reads as false and the
+  // assistant renders its small-screen layout — the one without a window to
+  // move. Answer width queries the way a desktop would.
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: /min-width/.test(query),
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
 });
 
 afterEach(() => {
@@ -395,6 +434,103 @@ describe('committed changes from a server in auto mode', () => {
     // Without this the next save optimistically locks on a stale version and
     // is rejected for the rest of the session.
     await waitFor(() => expect(harness.editor.doc.version).toBe(42));
+  });
+});
+
+describe('the composer', () => {
+  it('sends on Enter', async () => {
+    await mount();
+    answerWith([]);
+    const host = await compose('ship it');
+
+    await act(async () => {
+      fireEvent.keyDown(host, { key: 'Enter' });
+    });
+
+    expect(streamAgentChat).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'ship it', document_id: DOC_ID }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('opens a line on Shift+Enter, and keeps the message unsent', async () => {
+    await mount();
+    answerWith([]);
+    const host = await compose('first line');
+
+    await act(async () => {
+      fireEvent.keyDown(host, { key: 'Enter', shiftKey: true });
+    });
+
+    expect(streamAgentChat).not.toHaveBeenCalled();
+    // Still there to be added to, rather than gone into an empty transcript.
+    await waitFor(() => expect(host.textContent).toContain('first line'));
+  });
+
+  it('clears the composer once the message is on its way', async () => {
+    await mount();
+    answerWith([]);
+    const host = await compose('ship it');
+
+    await act(async () => {
+      fireEvent.keyDown(host, { key: 'Enter' });
+    });
+
+    await waitFor(() => expect(host.textContent).toBe(''));
+  });
+});
+
+describe('the transcript after a turn', () => {
+  it('keeps the reply it just streamed instead of refetching it', async () => {
+    await mount();
+    await sendWith([proposal({ actions: [{ op: 'delete_block', blockId: 'b' }] })]);
+    await waitFor(() => expect(harness.review.pendingCount).toBe(1));
+
+    // `done` hands back the chat and thread ids this transcript already is.
+    // Fetching them replaced the live reply — tool activity, proposal chip and
+    // all — with the server's plain text a second after it arrived.
+    expect(listMessages).not.toHaveBeenCalled();
+    expect(screen.getByText(/review in the document/i)).toBeTruthy();
+  });
+
+  it('still loads a conversation the author switches to', async () => {
+    await mount();
+    await sendWith([]);
+    await waitFor(() => expect(streamAgentChat).toHaveBeenCalled());
+
+    // What the Chats panel does when a conversation is picked from the list.
+    await act(async () => {
+      harness.chats.setSelectedChatId('another-chat');
+      harness.chats.setSelectedThreadId(7);
+    });
+
+    await waitFor(() =>
+      expect(listMessages).toHaveBeenCalledWith(DOC_ID, 'another-chat', 7),
+    );
+  });
+});
+
+describe('the assistant window', () => {
+  it('can be moved and resized from the keyboard', async () => {
+    await mount();
+    await compose('');
+
+    expect(screen.getByRole('button', { name: /move assistant/i })).toBeTruthy();
+    expect(screen.getByRole('separator', { name: /resize assistant/i })).toBeTruthy();
+  });
+
+  it('remembers where it was put', async () => {
+    await mount();
+    await compose('');
+
+    // Persisted geometry is what makes the window worth moving at all: a
+    // window that snaps back to the corner on every reload is not one.
+    await waitFor(() => expect(localStorage.getItem('chat.rect')).toBeTruthy());
+    expect(JSON.parse(localStorage.getItem('chat.rect') ?? '{}')).toMatchObject({
+      width: expect.any(Number),
+      height: expect.any(Number),
+    });
   });
 });
 

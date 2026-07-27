@@ -1,5 +1,6 @@
 export * from './documents';
 export * from './auth';
+export * from './userProfile';
 export * from './arxiv';
 export * from './colpali';
 export * from './semanticScholar';

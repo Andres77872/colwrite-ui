@@ -457,6 +457,61 @@
   .ai-regenerate { @apply bg-primary/15 text-primary hover:bg-primary/25; }
 
   /* ----------------------------------------
+     Assistant composer
+
+     The composer is a contenteditable whose reference chips are built with
+     raw DOM (they have to be `contenteditable=false` islands), so they are
+     styled here. They previously carried `.ref-tag` classes that existed
+     nowhere in the stylesheet, which is why a reference rendered as bare
+     text with a stray `×` after it.
+     ---------------------------------------- */
+
+  .ref-chip {
+    @apply inline-flex max-w-[14rem] select-none items-center gap-1 rounded-sm border
+           px-1 py-px align-baseline text-2xs font-medium whitespace-nowrap;
+    /* The chip is one character to the caret; nothing inside it is a target. */
+    cursor: pointer;
+  }
+
+  .ref-chip-label {
+    @apply overflow-hidden text-ellipsis;
+  }
+
+  .ref-chip-remove {
+    @apply -mr-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-xs
+           leading-none opacity-60 transition-opacity;
+  }
+
+  .ref-chip-remove:hover {
+    @apply bg-black/20 opacity-100;
+  }
+
+  .ref-chip--doc {
+    @apply border-primary/40 bg-primary/15 text-foreground;
+  }
+
+  .ref-chip--block {
+    @apply border-info/40 bg-info/15 text-foreground;
+  }
+
+  /* Chips inside a sent message sit on the filled user bubble, where a
+     translucent wash of the same hue is the only thing that stays legible. */
+  .ref-chip--onfill {
+    @apply border-white/25 bg-white/15 text-primary-foreground;
+  }
+
+  .chat-composer-input {
+    @apply relative;
+  }
+
+  /* Absolute, so the caret sits at the start of the empty field rather than
+     after the placeholder — it read as text already typed and not deletable. */
+  .chat-composer-input[data-empty]::before {
+    content: attr(data-placeholder);
+    @apply pointer-events-none absolute inset-x-3 top-2 text-muted-foreground;
+  }
+
+  /* ----------------------------------------
      Resizing
      ---------------------------------------- */
 

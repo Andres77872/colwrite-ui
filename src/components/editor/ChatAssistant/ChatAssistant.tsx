@@ -1,7 +1,17 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { Kbd } from '@/components/ui/kbd';
 import { usePersistentState, isBoolean } from '@/hooks/usePersistentState';
+import { useIsDesktop } from '@/hooks/useMediaQuery';
 import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
 import { streamAgentChat } from '@/services/agentChat';
@@ -13,10 +23,15 @@ import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
 import { ChatRefTags } from './ChatRefTags';
 import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
 import { ChatMarkdown } from './ChatMarkdown';
-import { AgentActivity, type ToolRun } from './AgentActivity';
+import { AgentActivity, toolRunningLabel, type ToolRun } from './AgentActivity';
+import { CHAT_MARGIN, useChatWindow, type DragMode } from './useChatWindow';
 import {
   AlertCircle,
   ArrowDown,
+  Check,
+  Copy,
+  CornerDownLeft,
+  GripVertical,
   Maximize2,
   MessageSquarePlus,
   Minimize2,
@@ -39,6 +54,9 @@ type ChatMessage = {
 
 /** How close to the bottom counts as "following along" for auto-scroll. */
 const AUTOSCROLL_THRESHOLD_PX = 64;
+
+/** The composer refuses more than this, and warns as it approaches. */
+const MAX_MESSAGE_LENGTH = 2000;
 
 const SUGGESTIONS = [
   'Summarise this document in three sentences',
@@ -105,7 +123,7 @@ function DocumentChatAssistant() {
     useChatSessions();
 
   const [expanded, setExpanded] = usePersistentState<boolean>('chat.expanded', false, isBoolean);
-  const [enlarged, setEnlarged] = usePersistentState<boolean>('chat.enlarged', false, isBoolean);
+  const [maximized, setMaximized] = usePersistentState<boolean>('chat.maximized', false, isBoolean);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -114,6 +132,7 @@ function DocumentChatAssistant() {
   const [atBottom, setAtBottom] = useState(true);
 
   const abortRef = useRef<AbortController | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const inputHostRef = useRef<ChatTaggedInputHandle | null>(null);
   const refPickerRef = useRef<ChatRefPickerHandle | null>(null);
@@ -127,6 +146,15 @@ function DocumentChatAssistant() {
   // What was sent last, so a failed turn can be retried without retyping.
   const [lastSent, setLastSent] = useState<string | null>(null);
   const unsavedNoticeId = useId();
+  const composerHintId = useId();
+
+  // Below `md` there is no room to place a window: it fills the canvas, and
+  // dragging it anywhere would only push it off screen.
+  const isDesktop = useIsDesktop();
+  const floating = isDesktop && !maximized;
+  const { rect, dragging, beginDrag, nudge, reset } = useChatWindow(panelRef, {
+    enabled: floating,
+  });
 
   const visibleMessages = useMemo(
     () => messages.filter((m) => m.role !== 'system'),
@@ -205,9 +233,32 @@ function DocumentChatAssistant() {
     if (selectedChatId) setExpanded(true);
   }, [selectedChatId, setExpanded]);
 
-  // Load the selected conversation's history.
+  // Opening the assistant puts the caret where the author is about to type.
+  // Skipped on mount: a panel that was already open when the page loaded has
+  // no claim on focus, and taking it would drag the view off the document.
+  const wasExpanded = useRef(expanded);
+  useEffect(() => {
+    if (expanded && !wasExpanded.current) inputHostRef.current?.focus();
+    wasExpanded.current = expanded;
+  }, [expanded]);
+
+  /**
+   * Load a conversation the author switched to.
+   *
+   * Keyed, because the ids this effect watches are also the ids the panel sets
+   * itself at the end of every turn. Without the key it refetched the
+   * conversation it had just streamed and replaced it with the server's plain
+   * transcript — which carries no tool activity and no record of what was
+   * proposed, so both vanished from the reply a second after arriving.
+   */
+  const loadedConversation = useRef<string | null>(null);
   useEffect(() => {
     if (!documentId || !selectedChatId) return;
+
+    const key = `${documentId}:${selectedChatId}:${selectedThreadId ?? 'latest'}`;
+    if (loadedConversation.current === key) return;
+    loadedConversation.current = key;
+
     let cancelled = false;
 
     (async () => {
@@ -230,15 +281,18 @@ function DocumentChatAssistant() {
         const res = await listMessages(documentId, selectedChatId, pivot);
         if (cancelled) return;
 
-        setMessages(
-          res.messages.map((m) =>
-            emptyMessage(
-              m.role,
-              // Legacy rows can still carry EXTRAS_JSON envelopes.
-              m.content?.replace(/<EXTRAS_JSON>[\s\S]*?<\/EXTRAS_JSON>/g, '') ?? '',
-            ),
+        loadedConversation.current = `${documentId}:${selectedChatId}:${pivot}`;
+
+        const history = (res.messages ?? []).map((m) =>
+          emptyMessage(
+            m.role,
+            // Legacy rows can still carry EXTRAS_JSON envelopes.
+            m.content?.replace(/<EXTRAS_JSON>[\s\S]*?<\/EXTRAS_JSON>/g, '') ?? '',
           ),
         );
+        // A conversation the server has nothing for does not overwrite one the
+        // author can see: that reads as the transcript being thrown away.
+        setMessages((prev) => (history.length === 0 && prev.length > 0 ? prev : history));
         if (typeof res.pivotThreadId === 'number') setSelectedThreadId(res.pivotThreadId);
       } catch {
         if (!cancelled) setError('Could not load this conversation.');
@@ -252,9 +306,11 @@ function DocumentChatAssistant() {
 
   const onNewChat = () => {
     resetChatUI(true);
+    // Reopening the same conversation later has to fetch it again.
+    loadedConversation.current = null;
     setSelectedChatId(null);
     setSelectedThreadId(null);
-    requestAnimationFrame(() => inputHostRef.current?.setSelectionRange(0, 0));
+    requestAnimationFrame(() => inputHostRef.current?.focus());
   };
 
   const send = async (text: string) => {
@@ -268,6 +324,7 @@ function DocumentChatAssistant() {
     setInput('');
     setAgentStatus(null);
     pinnedToBottom.current = true;
+    setAtBottom(true);
     setLastSent(text);
     // Tool-call ids are only unique within a run for some providers.
     processedToolCallIds.current = new Set();
@@ -296,7 +353,9 @@ function DocumentChatAssistant() {
           },
           onStatus: (status, detail) => setAgentStatus({ status, detail }),
           onToolCallStart: (tool, toolCallId, args) => {
-            setAgentStatus({ status: 'executing_tool', detail: `Running ${tool}…` });
+            // The activity list below spells this out step by step; the status
+            // line is only there so something moves before the first token.
+            setAgentStatus({ status: 'executing_tool', detail: `${toolRunningLabel(tool)}…` });
             patchActive((message) => ({
               ...message,
               runs: [
@@ -337,6 +396,14 @@ function DocumentChatAssistant() {
             setError(message);
           },
           onDone: (chatId, threadId) => {
+            const id = chatId || selectedChatId;
+            // This transcript *is* the conversation these ids name, so mark it
+            // loaded before the ids land and the loader chases them.
+            if (id) {
+              loadedConversation.current = `${documentId}:${id}:${
+                typeof threadId === 'number' ? threadId : selectedThreadId ?? 'latest'
+              }`;
+            }
             if (chatId && !selectedChatId) setSelectedChatId(chatId);
             if (typeof threadId === 'number') setSelectedThreadId(threadId);
           },
@@ -366,6 +433,11 @@ function DocumentChatAssistant() {
 
   const onSend = () => send(input.trim());
 
+  const onSuggestion = (suggestion: string) => {
+    inputHostRef.current?.focus();
+    send(suggestion);
+  };
+
   const onRetry = () => {
     const text = lastSent;
     if (!text) return;
@@ -380,6 +452,32 @@ function DocumentChatAssistant() {
     abortRef.current = null;
     setIsStreaming(false);
     setAgentStatus(null);
+  };
+
+  const scrollToLatest = () => {
+    const list = listRef.current;
+    if (!list) return;
+    list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' });
+    pinnedToBottom.current = true;
+    setAtBottom(true);
+  };
+
+  /**
+   * Escape, in the order the author means it: dismiss the reference picker,
+   * then stop a run in progress, then put the assistant away. Never while
+   * there is unsent text — that would throw the message away.
+   */
+  const onPanelKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    if (refPickerRef.current?.isOpen()) return;
+    if (isStreaming) {
+      event.preventDefault();
+      onStop();
+      return;
+    }
+    if (input.trim()) return;
+    event.preventDefault();
+    setExpanded(false);
   };
 
   // Anchored inside the canvas (`main` is the positioned ancestor) rather than
@@ -403,26 +501,75 @@ function DocumentChatAssistant() {
     );
   }
 
+  const geometry: CSSProperties = floating
+    ? { right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height }
+    : { inset: CHAT_MARGIN };
+
+  const overLimit = input.length > MAX_MESSAGE_LENGTH;
+  const nearLimit = input.length > MAX_MESSAGE_LENGTH * 0.8;
+
   return (
     <div
+      ref={panelRef}
       role="complementary"
       aria-label="Writing assistant"
+      onKeyDown={onPanelKeyDown}
+      style={geometry}
       className={cn(
-        'absolute bottom-4 right-4 flex flex-col rounded-xl border border-border bg-card shadow-xl z-[var(--z-floating)]',
-        'animate-in fade-in-0 slide-in-from-bottom-2',
-        enlarged
-          ? 'max-h-[calc(100%-2rem)] w-[min(34rem,calc(100%-2rem))]'
-          : 'max-h-[min(32rem,calc(100%-2rem))] w-[min(24rem,calc(100%-2rem))]',
+        'absolute z-[var(--z-floating)] flex flex-col overflow-hidden rounded-xl',
+        'border border-border bg-card shadow-xl',
+        'animate-in fade-in-0 zoom-in-95',
+        // A drag that selects the header text as it goes looks broken.
+        dragging && 'select-none',
       )}
     >
-      <div className="flex flex-shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold">Assistant</p>
-          <p className="truncate text-xs text-muted-foreground">
-            Suggests edits — you approve them in the document
-          </p>
-        </div>
-        <div className="flex flex-shrink-0 items-center gap-0.5">
+      {floating && <ResizeHandles onBegin={beginDrag} onNudge={nudge} rect={rect} />}
+
+      {/* ---- Title bar: the drag surface ---- */}
+      <header
+        onPointerDown={(event) => beginDrag(event, 'move')}
+        onDoubleClick={() => setMaximized((value) => !value)}
+        className={cn(
+          'flex h-11 flex-shrink-0 items-center gap-1.5 border-b border-border/70 px-1.5',
+          'bg-gradient-to-b from-card to-card/60',
+          floating && (dragging ? 'cursor-grabbing' : 'cursor-grab'),
+        )}
+      >
+        {floating && (
+          <button
+            type="button"
+            aria-label="Move assistant. Arrow keys move it; hold Shift for larger steps."
+            title="Drag to move · double-click to reset position"
+            onPointerDown={(event) => beginDrag(event, 'move')}
+            onDoubleClick={(event) => {
+              // The escape hatch for a window dragged somewhere unhelpful,
+              // without spending header space on a button for it.
+              event.stopPropagation();
+              reset();
+            }}
+            onKeyDown={(event) => {
+              if (nudge('move', event)) event.preventDefault();
+            }}
+            className="flex h-7 w-4 items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <GripVertical aria-hidden="true" className="h-4 w-4" />
+          </button>
+        )}
+
+        <Sparkles aria-hidden="true" className="h-4 w-4 shrink-0 text-primary" />
+        <h2 className="truncate text-sm font-semibold">Assistant</h2>
+
+        {/* Only the run state. The pending count has its own row below, which
+            says the same thing and can be acted on — three copies of one fact
+            is what made the old header feel busy. */}
+        {isStreaming && (
+          <span className="flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-2xs text-primary">
+            <span aria-hidden="true" className="h-1.5 w-1.5 animate-shimmer rounded-full bg-primary" />
+            Working
+          </span>
+        )}
+
+        <div className="ml-auto flex flex-shrink-0 items-center gap-0.5">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -435,23 +582,25 @@ function DocumentChatAssistant() {
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setEnlarged((value) => !value)}
-            aria-label={enlarged ? 'Shrink assistant' : 'Enlarge assistant'}
-            title={enlarged ? 'Shrink' : 'Enlarge'}
+            onClick={() => setMaximized((value) => !value)}
+            onDoubleClick={(event) => event.stopPropagation()}
+            aria-label={maximized ? 'Restore assistant size' : 'Maximise assistant'}
+            aria-pressed={maximized}
+            title={maximized ? 'Restore' : 'Maximise'}
           >
-            {enlarged ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </Button>
           <Button
             variant="ghost"
             size="icon-sm"
             onClick={() => setExpanded(false)}
             aria-label="Hide assistant"
-            title="Hide assistant"
+            title="Hide assistant · Esc"
           >
             <X className="h-4 w-4" />
           </Button>
         </div>
-      </div>
+      </header>
 
       {proposals.pendingCount > 0 && (
         <button
@@ -460,7 +609,7 @@ function DocumentChatAssistant() {
             const first = proposals.pending[0];
             if (first) proposals.focusChange(first.id);
           }}
-          className="flex flex-shrink-0 items-center gap-2 border-b border-border bg-primary/10 px-3 py-2 text-left text-xs transition-colors hover:bg-primary/15"
+          className="flex flex-shrink-0 items-center gap-2 border-b border-border/70 bg-primary/10 px-3 py-2 text-left text-xs transition-colors hover:bg-primary/15"
         >
           <Sparkles aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-primary" />
           <span className="min-w-0 flex-1">
@@ -471,220 +620,381 @@ function DocumentChatAssistant() {
         </button>
       )}
 
-      <div
-        ref={listRef}
-        className="min-h-[12rem] flex-1 space-y-3 overflow-y-auto p-3"
-        onScroll={(event) => {
-          const el = event.currentTarget;
-          const bottom = el.scrollHeight - el.scrollTop - el.clientHeight <= AUTOSCROLL_THRESHOLD_PX;
-          pinnedToBottom.current = bottom;
-          setAtBottom(bottom);
-        }}
-        // Deliberately not a live region. Markdown arrives token by token, so
-        // `aria-live` here made a screen reader restart the whole growing reply
-        // on every chunk. The typing indicator and `agentStatus` below already
-        // announce progress, and `role="status"` announces the finished reply.
-        aria-busy={isStreaming}
-      >
-        {visibleMessages.length === 0 && (
-          <div className="space-y-3 py-6">
-            <p className="text-center text-sm text-muted-foreground text-balance">
-              Ask for suggestions, rewrites, structure, summaries or references. Edits arrive as
-              changes you accept in the document.
-            </p>
-            <div className="flex flex-col gap-1.5">
-              {SUGGESTIONS.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  onClick={() => send(suggestion)}
-                  disabled={!documentId}
-                  // `aria-disabled` alongside `disabled` so the reason below is
-                  // reachable: these are the only three affordances in the
-                  // empty state, and on an unsaved document all three used to
-                  // sit greyed out with nothing saying why.
-                  aria-disabled={!documentId}
-                  aria-describedby={documentId ? undefined : unsavedNoticeId}
-                  className="rounded-md border border-border px-2.5 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground disabled:opacity-50"
-                >
-                  {suggestion}
-                </button>
-              ))}
-            </div>
-
-            {!documentId && (
-              <p id={unsavedNoticeId} className="text-center text-xs text-muted-foreground">
-                Save the document to use these.
-              </p>
-            )}
-          </div>
-        )}
-
-        {visibleMessages.map((message) => {
-          const isUser = message.role === 'user';
-          const isStreamingTail =
-            isStreaming &&
-            !isUser &&
-            message.id === activeMessageId &&
-            !message.content &&
-            message.runs.length === 0;
-
-          return (
-            <div key={message.id} className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
-              <div
-                className={cn(
-                  'min-w-0 max-w-[85%] rounded-lg px-3 py-2 text-sm',
-                  isUser
-                    ? 'whitespace-pre-wrap bg-primary text-primary-foreground'
-                    : 'w-full bg-muted text-foreground',
-                )}
-              >
-                {isUser ? (
-                  <ChatRefTags text={message.content} />
-                ) : (
-                  <div className="space-y-2">
-                    {message.runs.length > 0 && (
-                      <AgentActivity
-                        runs={message.runs}
-                        live={isStreaming && message.id === activeMessageId}
-                      />
-                    )}
-
-                    {isStreamingTail ? (
-                      <span className="inline-flex gap-1" aria-label="Assistant is typing">
-                        {[0, 1, 2].map((dot) => (
-                          <span
-                            key={dot}
-                            className="h-1.5 w-1.5 animate-shimmer rounded-full bg-muted-foreground"
-                            style={{ animationDelay: `${dot * 160}ms` }}
-                          />
-                        ))}
-                      </span>
-                    ) : (
-                      message.content && <ChatMarkdown text={message.content} />
-                    )}
-
-                    {message.proposed > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const first = proposals.pending[0];
-                          if (first) proposals.focusChange(first.id);
-                        }}
-                        className="flex w-full items-center gap-1.5 rounded-md border border-primary/40 bg-primary/10 px-2 py-1.5 text-left text-xs transition-colors hover:bg-primary/15"
-                      >
-                        <Sparkles aria-hidden="true" className="h-3 w-3 shrink-0 text-primary" />
-                        <span className="min-w-0 flex-1">
-                          Suggested {message.proposed}{' '}
-                          {message.proposed === 1 ? 'change' : 'changes'} — review in the document
-                        </span>
-                      </button>
-                    )}
-                  </div>
-                )}
+      {/* ---- Transcript ---- */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div
+          ref={listRef}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3"
+          onScroll={(event) => {
+            const el = event.currentTarget;
+            const bottom =
+              el.scrollHeight - el.scrollTop - el.clientHeight <= AUTOSCROLL_THRESHOLD_PX;
+            pinnedToBottom.current = bottom;
+            setAtBottom(bottom);
+          }}
+          // Deliberately not a live region. Markdown arrives token by token, so
+          // `aria-live` here made a screen reader restart the whole growing reply
+          // on every chunk. The typing indicator and `agentStatus` below already
+          // announce progress, and `role="status"` announces the finished reply.
+          aria-busy={isStreaming}
+        >
+          {/* Capped and centred: maximised, the window is as wide as the
+              canvas, and a line of prose that long is unreadable. */}
+          <div className="mx-auto w-full max-w-[44rem] space-y-3">
+          {visibleMessages.length === 0 && (
+            <div className="space-y-4 py-4">
+              <div className="space-y-1.5 text-center">
+                <p className="text-sm font-medium">Ask about this document</p>
+                <p className="text-xs text-muted-foreground text-balance">
+                  Suggestions, rewrites, structure, summaries or references. Edits arrive as
+                  changes you accept in the document — nothing is written behind your back.
+                </p>
               </div>
+              <div className="flex flex-wrap justify-center gap-1.5">
+                {SUGGESTIONS.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => onSuggestion(suggestion)}
+                    disabled={!documentId}
+                    // `aria-disabled` alongside `disabled` so the reason below is
+                    // reachable: these are the only three affordances in the
+                    // empty state, and on an unsaved document all three used to
+                    // sit greyed out with nothing saying why.
+                    aria-disabled={!documentId}
+                    aria-describedby={documentId ? undefined : unsavedNoticeId}
+                    className="rounded-full border border-border bg-secondary/40 px-2.5 py-1 text-left text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-secondary hover:text-foreground disabled:opacity-50"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+
+              {!documentId && (
+                <p id={unsavedNoticeId} className="text-center text-xs text-muted-foreground">
+                  Save the document to use these.
+                </p>
+              )}
             </div>
-          );
-        })}
+          )}
 
-        <p role="status" aria-live="polite" className="sr-only">
-          {completedReply}
-        </p>
-
-        {isStreaming && agentStatus && (
-          <p className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span
-              className="h-1.5 w-1.5 animate-shimmer rounded-full bg-primary"
-              aria-hidden="true"
+          {visibleMessages.map((message) => (
+            <MessageRow
+              key={message.id}
+              message={message}
+              live={isStreaming && message.id === activeMessageId}
+              onFocusChange={() => {
+                const first = proposals.pending[0];
+                if (first) proposals.focusChange(first.id);
+              }}
             />
-            {agentStatus.detail}
-          </p>
-        )}
+          ))}
 
-        {error && (
-          <div role="alert" className="space-y-1.5 rounded-md bg-destructive/10 px-2 py-1.5">
-            <p className="flex items-start gap-1.5 text-xs text-destructive">
-              <AlertCircle aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0" />
-              <span className="min-w-0 break-words">{error}</span>
+          <p role="status" aria-live="polite" className="sr-only">
+            {completedReply}
+          </p>
+
+          {/* Not while a tool is running: the activity list is already saying
+              the same thing one line above, in the same words. */}
+          {isStreaming && agentStatus && agentStatus.status !== 'executing_tool' && (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span
+                className="h-1.5 w-1.5 animate-shimmer rounded-full bg-primary"
+                aria-hidden="true"
+              />
+              {agentStatus.detail}
             </p>
-            {lastSent && !isStreaming && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-6 gap-1 px-1.5 text-xs"
-                onClick={onRetry}
+          )}
+
+          {error && (
+            <div
+              role="alert"
+              className="space-y-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5"
+            >
+              <p className="flex items-start gap-1.5 text-xs text-destructive">
+                <AlertCircle aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 break-words">{error}</span>
+              </p>
+              {lastSent && !isStreaming && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 gap-1 px-1.5 text-xs"
+                  onClick={onRetry}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Try again
+                </Button>
+              )}
+            </div>
+          )}
+          </div>
+        </div>
+
+        {!atBottom && visibleMessages.length > 0 && (
+          <button
+            type="button"
+            className="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-popover px-2.5 py-1 text-2xs text-muted-foreground shadow-md transition-colors hover:text-foreground"
+            onClick={scrollToLatest}
+          >
+            <ArrowDown aria-hidden="true" className="h-3 w-3" />
+            Latest
+          </button>
+        )}
+      </div>
+
+      {/* ---- Composer ---- */}
+      <div className="flex-shrink-0 border-t border-border/70 p-2">
+        <div
+          className={cn(
+            'chat-textarea-wrap relative mx-auto w-full max-w-[44rem] rounded-lg border border-input bg-background/60 transition-colors',
+            'focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-ring/30',
+            overLimit && 'border-destructive focus-within:border-destructive focus-within:ring-destructive/30',
+          )}
+        >
+          <ChatTaggedInput
+            ref={inputHostRef}
+            value={input}
+            onChange={setInput}
+            onSubmit={onSend}
+            placeholder="Ask about this document…"
+            aria-describedby={composerHintId}
+            onTriggerPicker={(anchor) => refPickerRef.current?.openAt(anchor)}
+            onEditRef={(start) => refPickerRef.current?.openAt(start, { editing: true })}
+            onRemoveRef={() => refPickerRef.current?.close()}
+            isPickerOpen={() => refPickerRef.current?.isOpen() ?? false}
+            maxLength={MAX_MESSAGE_LENGTH}
+          />
+
+          <div className="flex items-center gap-2 px-2 pb-1.5 pt-0.5">
+            <p id={composerHintId} className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">
+              <Kbd>Enter</Kbd> to send · <Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> for a new line ·{' '}
+              <Kbd>#</Kbd> to reference
+            </p>
+
+            {nearLimit && (
+              <span
+                className={cn('shrink-0 text-2xs tabular-nums', overLimit ? 'text-destructive' : 'text-muted-foreground')}
               >
-                <RotateCcw className="h-3 w-3" />
-                Try again
+                {input.length}/{MAX_MESSAGE_LENGTH}
+              </span>
+            )}
+
+            {isStreaming ? (
+              <Button
+                variant="destructive"
+                size="icon-sm"
+                onClick={onStop}
+                aria-label="Stop generating"
+                title="Stop · Esc"
+              >
+                <Square className="h-3.5 w-3.5" />
+              </Button>
+            ) : (
+              <Button
+                size="icon-sm"
+                onClick={onSend}
+                disabled={!input.trim() || overLimit}
+                aria-label="Send message"
+                title="Send · Enter"
+              >
+                <Send className="h-3.5 w-3.5" />
               </Button>
             )}
           </div>
-        )}
-      </div>
 
-      {!atBottom && (
-        <button
-          type="button"
-          className="absolute bottom-20 left-1/2 -translate-x-1/2 rounded-full border border-border bg-card p-1.5 shadow-md"
-          onClick={() => {
-            const list = listRef.current;
-            if (!list) return;
-            list.scrollTop = list.scrollHeight;
-            pinnedToBottom.current = true;
-            setAtBottom(true);
-          }}
-          aria-label="Scroll to latest"
-        >
-          <ArrowDown className="h-3.5 w-3.5" />
-        </button>
-      )}
-
-      <div className="flex-shrink-0 border-t border-border p-3">
-        <div className="flex items-end gap-2">
-          <div className="relative flex-1">
-            <ChatTaggedInput
-              ref={inputHostRef}
-              value={input}
-              onChange={setInput}
-              placeholder="Ask the assistant…"
-              onTriggerPicker={(anchor) => refPickerRef.current?.openAt(anchor)}
-              onEditRef={(start) => refPickerRef.current?.openAt(start, { editing: true })}
-              onRemoveRef={(start, refText) => {
-                setInput(input.slice(0, start) + input.slice(start + refText.length));
-                requestAnimationFrame(() => inputHostRef.current?.setSelectionRange(start, start));
-              }}
-              onKeyDown={(event) => {
-                if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') onSend();
-              }}
-              maxLength={2000}
-              showStatus
-            />
-            <ChatRefPicker
-              ref={refPickerRef}
-              getHost={() => inputHostRef.current?.getHost() ?? null}
-              input={input}
-              setInput={setInput}
-              setCaretIndex={(index) => inputHostRef.current?.setSelectionRange(index, index)}
-            />
-          </div>
-
-          {isStreaming ? (
-            <Button variant="destructive" size="icon" onClick={onStop} aria-label="Stop generating">
-              <Square className="h-4 w-4" />
-            </Button>
-          ) : (
-            <Button
-              size="icon"
-              onClick={onSend}
-              disabled={!input.trim()}
-              aria-label="Send message"
-              title="Send · Ctrl+Enter"
-            >
-              <Send className="h-4 w-4" />
-            </Button>
-          )}
+          <ChatRefPicker
+            ref={refPickerRef}
+            getHost={() => inputHostRef.current?.getHost() ?? null}
+            input={input}
+            setInput={setInput}
+            setCaretIndex={(index) => inputHostRef.current?.setSelectionRange(index, index)}
+          />
         </div>
       </div>
     </div>
+  );
+}
+
+/* ----------------------------------------
+   Window edges
+   ---------------------------------------- */
+
+const EDGE_CLASS: Record<Exclude<DragMode, 'move'>, string> = {
+  n: 'inset-x-3 top-0 h-1.5 cursor-ns-resize',
+  s: 'inset-x-3 bottom-0 h-1.5 cursor-ns-resize',
+  w: 'inset-y-3 left-0 w-1.5 cursor-ew-resize',
+  e: 'inset-y-3 right-0 w-1.5 cursor-ew-resize',
+  nw: 'left-0 top-0 h-3 w-3 cursor-nwse-resize',
+  ne: 'right-0 top-0 h-3 w-3 cursor-nesw-resize',
+  sw: 'bottom-0 left-0 h-3 w-3 cursor-nesw-resize',
+  se: 'bottom-0 right-0 h-3 w-3 cursor-nwse-resize',
+};
+
+/**
+ * The eight grab zones around the window.
+ *
+ * Only the top-left corner takes focus. Eight tab stops for one operation
+ * would bury the composer at the bottom of the panel's tab order, and one
+ * handle that resizes in both axes covers everything the other seven do.
+ */
+function ResizeHandles({
+  onBegin,
+  onNudge,
+  rect,
+}: {
+  onBegin: (event: React.PointerEvent, mode: DragMode) => void;
+  onNudge: (mode: DragMode, event: React.KeyboardEvent) => boolean;
+  rect: { width: number; height: number };
+}) {
+  return (
+    <>
+      {(Object.keys(EDGE_CLASS) as Array<Exclude<DragMode, 'move'>>).map((edge) => {
+        const keyboard = edge === 'nw';
+        return (
+          <div
+            key={edge}
+            data-resize={edge}
+            onPointerDown={(event) => onBegin(event, edge)}
+            onKeyDown={
+              keyboard
+                ? (event) => {
+                    if (onNudge(edge, event)) event.preventDefault();
+                  }
+                : undefined
+            }
+            {...(keyboard
+              ? {
+                  role: 'separator' as const,
+                  tabIndex: 0,
+                  'aria-label':
+                    'Resize assistant. Left and up arrows enlarge it; right and down arrows shrink it.',
+                  'aria-valuetext': `${Math.round(rect.width)} by ${Math.round(rect.height)} pixels`,
+                }
+              : { 'aria-hidden': true })}
+            style={{ touchAction: 'none' }}
+            className={cn(
+              // Invisible until the pointer is on it, then a hairline in the
+              // accent colour — the same reveal the shell's panel dividers
+              // use. A permanently drawn frame around a floating window is
+              // noise; the resize cursor is what actually announces it.
+              'absolute z-10 rounded-full transition-colors hover:bg-primary/60',
+              EDGE_CLASS[edge],
+              keyboard && 'focus-visible:bg-primary focus-visible:ring-2 focus-visible:ring-ring',
+            )}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+/* ----------------------------------------
+   One turn of the conversation
+   ---------------------------------------- */
+
+function MessageRow({
+  message,
+  live,
+  onFocusChange,
+}: {
+  message: ChatMessage;
+  live: boolean;
+  onFocusChange: () => void;
+}) {
+  const isUser = message.role === 'user';
+  const isStreamingTail = live && !isUser && !message.content && message.runs.length === 0;
+
+  if (isUser) {
+    return (
+      <div className="flex justify-end">
+        <div className="min-w-0 max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-primary-strong px-3 py-2 text-sm text-primary-foreground">
+          <ChatRefTags text={message.content} surface="onfill" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="group/message space-y-2">
+      {message.runs.length > 0 && <AgentActivity runs={message.runs} live={live} />}
+
+      {isStreamingTail ? (
+        <span className="inline-flex gap-1 px-1 py-2" aria-label="Assistant is typing">
+          {[0, 1, 2].map((dot) => (
+            <span
+              key={dot}
+              className="h-1.5 w-1.5 animate-shimmer rounded-full bg-muted-foreground"
+              style={{ animationDelay: `${dot * 160}ms` }}
+            />
+          ))}
+        </span>
+      ) : (
+        message.content && (
+          <div className="rounded-2xl rounded-bl-sm bg-muted/60 px-3 py-2 text-sm text-foreground">
+            <ChatMarkdown text={message.content} />
+          </div>
+        )
+      )}
+
+      {message.proposed > 0 && (
+        <button
+          type="button"
+          onClick={onFocusChange}
+          className="flex w-full items-center gap-1.5 rounded-md border border-primary/40 bg-primary/10 px-2 py-1.5 text-left text-xs transition-colors hover:bg-primary/15"
+        >
+          <Sparkles aria-hidden="true" className="h-3 w-3 shrink-0 text-primary" />
+          <span className="min-w-0 flex-1">
+            Suggested {message.proposed} {message.proposed === 1 ? 'change' : 'changes'} — review in
+            the document
+          </span>
+          <CornerDownLeft aria-hidden="true" className="h-3 w-3 shrink-0 text-primary" />
+        </button>
+      )}
+
+      {message.content && !live && <CopyReply text={message.content} />}
+    </div>
+  );
+}
+
+/** Copy a reply out of the panel — the transcript is not selectable mid-stream. */
+function CopyReply({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1600);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+        } catch {
+          /* a clipboard the browser refuses is not worth an error banner */
+        }
+      }}
+      className={cn(
+        'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs text-muted-foreground transition-opacity',
+        'opacity-0 hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/message:opacity-100',
+        copied && 'opacity-100',
+      )}
+    >
+      {copied ? (
+        <>
+          <Check aria-hidden="true" className="h-3 w-3 text-diff-add-fg" />
+          Copied
+        </>
+      ) : (
+        <>
+          <Copy aria-hidden="true" className="h-3 w-3" />
+          Copy
+        </>
+      )}
+    </button>
   );
 }

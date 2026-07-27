@@ -22,6 +22,32 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
 }
 
+/**
+ * Stat-tile figure: exact below 10,000, compacted above (12.9K, 4.2M).
+ *
+ * The cutoff is where a thousands-separated number stops being read as a
+ * quantity and starts being counted digit by digit.
+ */
+export function formatCompact(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  const magnitude = Math.abs(value);
+  if (magnitude < 10_000) return value.toLocaleString();
+  for (const [threshold, suffix] of [
+    [1e9, 'B'],
+    [1e6, 'M'],
+    [1e3, 'K'],
+  ] as const) {
+    if (magnitude >= threshold) {
+      const scaled = value / threshold;
+      // 12.9K but 129K — a decimal on a three-digit mantissa is noise — and
+      // 34K rather than 34.0K, matching the chart axis formatter.
+      const rounded = Number(scaled.toFixed(Math.abs(scaled) >= 100 ? 0 : 1));
+      return `${rounded}${suffix}`;
+    }
+  }
+  return value.toLocaleString();
+}
+
 /** Locale date for a possibly-missing/invalid timestamp; empty string if unusable. */
 export function formatDate(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === '') return '';

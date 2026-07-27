@@ -10,8 +10,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/components/auth/authContextState';
 import { usePanels } from '@/components/panels/panelsContextState';
+import { useView } from '@/components/layout/viewContextState';
 import { BrandMark, APP_NAME, APP_TAGLINE } from '@/components/common/Brand';
-import { ChevronDown, LogOut, Menu, User } from 'lucide-react';
+import { ChevronDown, LogOut, Menu, PenLine, User } from 'lucide-react';
 
 /** Two-letter monogram from a display name or email local-part. */
 function initialsFor(nameOrEmail: string): string {
@@ -27,6 +28,7 @@ function initialsFor(nameOrEmail: string): string {
 export function Topbar() {
   const { user, logout } = useAuth();
   const { isDesktop, setMobileNavOpen } = usePanels();
+  const { view, setView } = useView();
 
   const initials = useMemo(
     () => (user ? initialsFor(user.name || user.email || '?') : ''),
@@ -42,7 +44,9 @@ export function Topbar() {
   return (
     <div className="relative flex w-full items-center justify-between gap-3 rounded-xl border border-border/60 bg-card px-3 py-2 z-[var(--z-sticky)]">
       <div className="flex min-w-0 items-center gap-2">
-        {!isDesktop && (
+        {/* The profile view has no sidebar, so the drawer trigger would open
+            an empty one. */}
+        {!isDesktop && view === 'workspace' && (
           <Button
             variant="ghost"
             size="icon-sm"
@@ -93,11 +97,17 @@ export function Topbar() {
             <span className="block truncate text-sm font-medium">{user.email || displayName}</span>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem disabled>
-            <User aria-hidden="true" className="mr-2 h-4 w-4" />
-            Profile
-            <span className="ml-auto text-2xs text-muted-foreground">Soon</span>
-          </DropdownMenuItem>
+          {view === 'profile' ? (
+            <DropdownMenuItem onClick={() => setView('workspace')}>
+              <PenLine aria-hidden="true" className="mr-2 h-4 w-4" />
+              Back to editor
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onClick={() => setView('profile')}>
+              <User aria-hidden="true" className="mr-2 h-4 w-4" />
+              Profile and usage
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={logout} className="text-destructive focus:text-destructive">
             <LogOut aria-hidden="true" className="mr-2 h-4 w-4" />

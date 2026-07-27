@@ -101,6 +101,13 @@ async function request<T>(
 ): Promise<T> {
   const { suppressAuthEvent, headers: initHeaders, ...rest } = init ?? {};
 
+  // A multipart body carries its own generated boundary in the Content-Type
+  // header, so it has to go through untouched — JSON-encoding it would send
+  // `{}`, and setting the header by hand would omit the boundary. Note the
+  // 401 replay below re-sends this same object; that is safe for FormData
+  // (fetch builds a fresh stream per call) but would not be for a stream.
+  const isMultipart = typeof FormData !== 'undefined' && body instanceof FormData;
+
   const requestInit: RequestInit = {
     ...rest,
     method,
@@ -108,10 +115,12 @@ async function request<T>(
     // the auth endpoints, which either set or consume that cookie — needs it.
     credentials: 'include',
     headers:
-      body !== undefined
+      body !== undefined && !isMultipart
         ? { 'Content-Type': 'application/json', ...(initHeaders || {}) }
         : initHeaders,
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    ...(body !== undefined
+      ? { body: isMultipart ? (body as FormData) : JSON.stringify(body) }
+      : {}),
   };
 
   const url = buildUrl(path);

@@ -48,6 +48,25 @@ Do not add npm peer overrides for this bridge.
 
 Document model details are in [docs/document-json.md](./docs/document-json.md).
 
+## Profile and usage dashboard
+
+The account menu in the topbar opens a second full-page surface: the profile
+and usage dashboard. It renders the profile record, lifetime usage counters, a
+30-day activity chart with a table twin, every document with its chat and
+assistant-run counts, the tools the assistant runs, and the server-side PDF
+library (upload, download, delete).
+
+All of it comes from the ColWrite API's own `/users/me` routes rather than the
+auth service, which owns only credentials and the canonical identity — so
+username, email, and password are deliberately not editable there. One
+`/users/me/overview` request backs the page, because every endpoint
+revalidates the session and a per-widget fetch would pay that cost repeatedly
+to render a single view.
+
+The app has no router; the two surfaces are switched through
+`components/layout/viewContextState.ts`, which sits inside the editor
+providers so the workspace survives a round trip to the dashboard and back.
+
 ## Research providers
 
 The tools rail includes arXiv, ColPali, and Semantic Scholar. Semantic Scholar
