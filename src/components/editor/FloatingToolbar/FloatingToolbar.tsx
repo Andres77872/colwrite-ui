@@ -41,18 +41,20 @@ type FormatState = Record<FormatStateKey, boolean>;
 const EMPTY_STATE: FormatState = { bold: false, italic: false, underline: false, strike: false };
 
 /**
- * FloatingToolbar — appears over a text selection with formatting and AI actions.
+ * The toolbar's selection tracking, formatting and AI-suggestion machinery.
  *
  * It locates the active field by walking up to an element with the `editable`
  * class. That class was never rendered, so until it was added to `Editable`
  * this toolbar could not appear at all and the AI action menu was unreachable.
  */
-export function FloatingToolbar() {
+function useFloatingToolbar() {
   const { exec, refs, updateHtml, addParagraphChild, documentId } = useEditor();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const [states, setStates] = useState<FormatState>(EMPTY_STATE);
+  const [activeIndex, setActiveIndex] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
   const slashOpenRef = useRef(false);
   // The last non-collapsed range inside an editable. Keeping it lets menu
   // items run from the keyboard, where opening the menu moves DOM focus away
@@ -72,6 +74,11 @@ export function FloatingToolbar() {
 
   useEffect(() => {
     const onSelectionChange = () => {
+      // Moving focus onto a toolbar button greys the selection out, which used
+      // to dismiss the toolbar the moment a keyboard user reached it. While
+      // focus is inside the toolbar the selection it acts on is `savedRangeRef`.
+      if (toolbarRef.current?.contains(document.activeElement)) return;
+
       const selection = document.getSelection();
       if (!selection || selection.rangeCount === 0 || selection.isCollapsed || slashOpenRef.current) {
         setVisible(false);
@@ -139,12 +146,6 @@ export function FloatingToolbar() {
   // Abort any in-flight generation if the toolbar unmounts.
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  const onFormat = (command: string) => (event: React.MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    exec(command);
-  };
-
   const findBlockId = useCallback((node: Node | null): { el: HTMLDivElement | null; id: string | null } => {
     let current: Node | null = node;
     while (current) {
@@ -156,6 +157,31 @@ export function FloatingToolbar() {
     const entry = Object.entries(refs.current || {}).find(([, dom]) => dom === el);
     return { el, id: entry?.[0] ?? null };
   }, [refs]);
+
+  /**
+   * Put the caret back where the user left it before reaching the toolbar.
+   *
+   * `document.execCommand` acts on whatever the document has selected, so once
+   * focus sits on a toolbar button it would apply to nothing. The pointer path
+   * never hit this because `mousedown` is prevented; the keyboard path does.
+   */
+  const focusSavedRange = useCallback(() => {
+    const range = savedRangeRef.current;
+    if (!range) return;
+    const { el } = findBlockId(range.commonAncestorContainer);
+    if (el && document.activeElement !== el) el.focus({ preventScroll: true });
+    const selection = document.getSelection();
+    if (!selection) return;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, [findBlockId]);
+
+  const onFormat = (command: string) => (event: React.MouseEvent | React.KeyboardEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    focusSavedRange();
+    exec(command);
+  };
 
   const onAi = useCallback(
     async (action: AiAction, language?: string) => {
@@ -197,6 +223,26 @@ export function FloatingToolbar() {
         button.setAttribute('aria-label', title);
         button.textContent = glyph;
         return button;
+      };
+
+      /**
+       * Wire a suggestion control for pointer *and* keyboard.
+       *
+       * `mousedown` is only here to stop the caret jumping into the control;
+       * the action runs on `click`, which is what Enter and Space produce.
+       * These used to carry the action on `mousedown` alone, which meant a
+       * suggestion could not be accepted, rejected or stopped without a mouse.
+       */
+      const bindControl = (button: HTMLButtonElement, run: () => void) => {
+        button.onmousedown = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        };
+        button.onclick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          run();
+        };
       };
 
       const acceptBtn = makeControl('ai-accept', 'Accept suggestion', '✓');
@@ -256,12 +302,10 @@ export function FloatingToolbar() {
         stopBtn.title = 'Stop generating';
         stopBtn.setAttribute('aria-label', 'Stop generating');
         stopBtn.textContent = '■';
-        stopBtn.onmousedown = (event) => {
-          event.preventDefault();
-          event.stopPropagation();
+        bindControl(stopBtn, () => {
           stopped = true;
           abortRef.current?.abort();
-        };
+        });
       };
 
       const setRegenerateMode = () => {
@@ -269,11 +313,9 @@ export function FloatingToolbar() {
         stopBtn.title = 'Regenerate';
         stopBtn.setAttribute('aria-label', 'Regenerate suggestion');
         stopBtn.textContent = '↻';
-        stopBtn.onmousedown = (event) => {
-          event.preventDefault();
-          event.stopPropagation();
+        bindControl(stopBtn, () => {
           void runStream();
-        };
+        });
       };
 
       const runStream = async () => {
@@ -320,9 +362,7 @@ export function FloatingToolbar() {
         updateHtml(blockId, serializeEditableHtml(editable));
       };
 
-      acceptBtn.onmousedown = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
+      bindControl(acceptBtn, () => {
         stopped = true;
         abortRef.current?.abort();
 
@@ -346,29 +386,74 @@ export function FloatingToolbar() {
         // silently deleting the selected text.
         if (!frag.firstChild) frag.append(...Array.from(original.childNodes));
         replaceWith(frag);
-      };
+      });
 
-      rejectBtn.onmousedown = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
+      bindControl(rejectBtn, () => {
         stopped = true;
         abortRef.current?.abort();
         const frag = document.createDocumentFragment();
         frag.append(...Array.from(original.childNodes));
         replaceWith(frag);
-      };
+      });
 
       await runStream();
     },
     [addParagraphChild, documentId, findBlockId, updateHtml],
   );
 
+  return { visible, pos, states, activeIndex, setActiveIndex, toolbarRef, onFormat, onAi };
+}
+
+/**
+ * `role="toolbar"` promises one tab stop plus arrow-key navigation. Keeping the
+ * roving `tabindex` in the DOM rather than in JSX lets the AI menu's trigger —
+ * which this component does not render — join the same rotation.
+ */
+function useRovingTabIndex(
+  toolbarRef: React.RefObject<HTMLDivElement | null>,
+  visible: boolean,
+  activeIndex: number,
+) {
+  useEffect(() => {
+    if (!visible) return;
+    const items = toolbarRef.current?.querySelectorAll<HTMLButtonElement>('button');
+    items?.forEach((item, index) => {
+      item.tabIndex = index === activeIndex ? 0 : -1;
+    });
+  }, [toolbarRef, visible, activeIndex]);
+}
+
+export function FloatingToolbar() {
+  const { visible, pos, states, activeIndex, setActiveIndex, toolbarRef, onFormat, onAi } =
+    useFloatingToolbar();
+
+  useRovingTabIndex(toolbarRef, visible, activeIndex);
+
+  const onToolbarKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(toolbarRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? []);
+    if (items.length === 0) return;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+
+    let next: number | null = null;
+    if (event.key === 'ArrowRight') next = current < 0 ? 0 : (current + 1) % items.length;
+    else if (event.key === 'ArrowLeft') next = current <= 0 ? items.length - 1 : current - 1;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = items.length - 1;
+    if (next === null) return;
+
+    event.preventDefault();
+    setActiveIndex(next);
+    items[next].focus();
+  };
+
   if (!visible) return null;
 
   return (
     <div
+      ref={toolbarRef}
       role="toolbar"
       aria-label="Text formatting"
+      onKeyDown={onToolbarKeyDown}
       className={cn(
         'floating-toolbar fixed inline-flex -translate-x-1/2 -translate-y-2 items-center gap-1 p-1',
         'rounded-lg border border-border bg-popover shadow-lg z-[var(--z-floating)]',
@@ -386,7 +471,7 @@ export function FloatingToolbar() {
             'grid h-7 w-7 place-items-center rounded-sm transition-colors hover:bg-accent',
             states[stateKey] && 'bg-primary/15 text-primary',
           )}
-          onMouseDown={onFormat(command)}
+          onClick={onFormat(command)}
           aria-label={shortcut ? `${label} (${shortcut})` : label}
           aria-pressed={states[stateKey]}
           title={shortcut ? `${label} · ${shortcut}` : label}

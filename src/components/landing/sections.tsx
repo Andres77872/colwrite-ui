@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { APP_TAGLINE } from '@/components/common/Brand';
 import { toolMeta } from '@/components/panels/toolsConfig';
 import {
@@ -102,7 +103,7 @@ function FeatureCard({
   children?: ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
+    <Card className="p-4">
       <div className="flex items-center gap-3">
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
           <Icon aria-hidden="true" className="h-4 w-4" />
@@ -111,7 +112,7 @@ function FeatureCard({
       </div>
       <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{description}</p>
       {children}
-    </div>
+    </Card>
   );
 }
 
@@ -124,15 +125,15 @@ export function HeroSection({ onSignIn }: { onSignIn: () => void }) {
     <section className="relative overflow-hidden">
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-[520px] bg-[radial-gradient(55%_60%_at_50%_0%,rgb(99_102_241/0.14),transparent_75%)]"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[520px] bg-[radial-gradient(55%_60%_at_50%_0%,var(--color-primary)_0%,transparent_75%)] opacity-[0.14]"
       />
       <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-6 pb-16 pt-14 sm:pt-20 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:pb-24">
-        <div style={{ animation: 'slide-in-up 0.4s ease-out both' }}>
+        <div className="animate-slide-in-up">
           <p className="inline-flex items-center gap-1.5 rounded-full border border-warning/40 bg-warning/10 px-2.5 py-1 text-xs font-medium text-warning">
             <FlaskConical aria-hidden="true" className="h-3.5 w-3.5" />
             In alpha · invite-only
           </p>
-          <h1 className="mt-4 text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
+          <h1 className="mt-4 text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
             The writing environment where AI edits wait for your approval
           </h1>
           <p className="mt-4 max-w-xl text-md leading-relaxed text-muted-foreground">
@@ -153,7 +154,7 @@ export function HeroSection({ onSignIn }: { onSignIn: () => void }) {
           </p>
         </div>
 
-        <div style={{ animation: 'slide-in-up 0.4s ease-out 0.12s both' }}>
+        <div className="animate-slide-in-up [animation-delay:120ms] [animation-fill-mode:both]">
           <EditorMock />
         </div>
       </div>
@@ -266,14 +267,14 @@ export function InlineWidgetsSection() {
         >
           <div aria-hidden="true" className="mt-3 grid grid-cols-2 gap-2">
             <div className="space-y-1 rounded-md border border-border/40 bg-background/40 p-2">
-              <div className="h-1 w-full rounded bg-border/70" />
-              <div className="h-1 w-5/6 rounded bg-border/70" />
-              <div className="h-1 w-full rounded bg-border/70" />
+              <div className="h-1 w-full rounded-sm bg-border/70" />
+              <div className="h-1 w-5/6 rounded-sm bg-border/70" />
+              <div className="h-1 w-full rounded-sm bg-border/70" />
             </div>
             <div className="space-y-1 rounded-md border border-border/40 bg-background/40 p-2">
-              <div className="h-1 w-full rounded bg-border/70" />
-              <div className="h-1 w-4/6 rounded bg-border/70" />
-              <div className="h-1 w-5/6 rounded bg-border/70" />
+              <div className="h-1 w-full rounded-sm bg-border/70" />
+              <div className="h-1 w-4/6 rounded-sm bg-border/70" />
+              <div className="h-1 w-5/6 rounded-sm bg-border/70" />
             </div>
           </div>
         </FeatureCard>
@@ -337,7 +338,7 @@ export function ReviewSection() {
               description="Insert paragraph after “Introduction”"
               locked
             >
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-[var(--color-diff-add-fg)]">
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-diff-add-fg">
                 We release code and routing traces to support reproduction of every result.
               </p>
             </ChangeCardMock>
@@ -449,7 +450,7 @@ export function AlphaCtaSection({ onSignIn }: { onSignIn: () => void }) {
       <div className="relative overflow-hidden rounded-xl border border-border bg-card px-6 py-12 text-center sm:py-16">
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 h-full bg-[radial-gradient(50%_60%_at_50%_0%,rgb(99_102_241/0.12),transparent_75%)]"
+          className="pointer-events-none absolute inset-x-0 top-0 h-full bg-[radial-gradient(50%_60%_at_50%_0%,var(--color-primary)_0%,transparent_75%)] opacity-[0.12]"
         />
         <div className="relative">
           <p className="inline-flex items-center gap-1.5 rounded-full border border-warning/40 bg-warning/10 px-2.5 py-1 text-xs font-medium text-warning">

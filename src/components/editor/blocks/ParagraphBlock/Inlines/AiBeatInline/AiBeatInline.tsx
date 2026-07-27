@@ -171,7 +171,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
             <span className="mb-1 flex items-baseline justify-between gap-2">
               <label
                 htmlFor={`aibeat-message-${child.id}`}
-                className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+                className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
               >
                 Message
               </label>
@@ -199,7 +199,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
             <span className="mb-1 flex items-baseline justify-between gap-2">
               <label
                 htmlFor={`aibeat-prompt-${child.id}`}
-                className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+                className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
               >
                 Style prompt
               </label>
@@ -280,7 +280,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
                 Thinking…
               </span>
             ) : (
-              <span className="ml-auto text-[11px] text-muted-foreground">
+              <span className="ml-auto text-xs text-muted-foreground">
                 Ctrl+Enter to generate · Esc to collapse
               </span>
             )}
@@ -294,7 +294,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
 function CharacterCount({ value, label }: { value: string; label: string }) {
   const over = value.length > MAX_PROMPT_LENGTH;
   return (
-    <span className={cn('text-[11px] tabular-nums', over ? 'text-destructive' : 'text-muted-foreground/70')}>
+    <span className={cn('text-xs tabular-nums', over ? 'text-destructive' : 'text-muted-foreground/70')}>
       {value.length}/{MAX_PROMPT_LENGTH}
       {over && <span className="ml-2">{label} must be ≤{MAX_PROMPT_LENGTH} characters</span>}
     </span>

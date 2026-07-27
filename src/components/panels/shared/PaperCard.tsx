@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { ExternalLink, FileDown, Link2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
 import { truncateAtSentence } from '@/lib/text';
 import { safeExternalHttpUrl } from '@/lib/url';
 
@@ -88,76 +89,78 @@ export function PaperCard({
   const previewUrl = safeExternalHttpUrl(thumbnailUrl);
 
   return (
-    <article className="rounded-lg border border-border bg-card p-3 transition-colors hover:border-border/80">
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <span className="text-xs tabular-nums text-muted-foreground">#{index}</span>
-        {badge}
-      </div>
+    <Card asChild className="p-3 transition-colors hover:border-border/80">
+      <article>
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <span className="text-xs tabular-nums text-muted-foreground">#{index}</span>
+          {badge}
+        </div>
 
-      <h3 className="text-sm font-medium leading-snug">
-        {sourceUrl ? (
-          <a
-            className="rounded-sm text-primary hover:underline"
-            href={sourceUrl}
-            target="_blank"
-            rel="noreferrer noopener"
-          >
-            {displayTitle}
-          </a>
-        ) : (
-          displayTitle
+        <h3 className="text-sm font-medium leading-snug">
+          {sourceUrl ? (
+            <a
+              className="rounded-sm text-primary hover:underline"
+              href={sourceUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              {displayTitle}
+            </a>
+          ) : (
+            displayTitle
+          )}
+        </h3>
+
+        {(authors || metaParts.length > 0) && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {[authors?.trim(), ...metaParts].filter(Boolean).join(' · ')}
+          </p>
         )}
-      </h3>
 
-      {(authors || metaParts.length > 0) && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          {[authors?.trim(), ...metaParts].filter(Boolean).join(' · ')}
-        </p>
-      )}
+        {(fullAbstract || previewUrl) && (
+          <div className="mt-2 flex gap-3">
+            {previewUrl && (
+              <img
+                src={previewUrl}
+                alt={`First matching page of “${displayTitle}”`}
+                loading="lazy"
+                className="h-28 w-20 shrink-0 rounded-sm bg-muted object-cover"
+              />
+            )}
+            {fullAbstract && (
+              <div className="min-w-0 flex-1">
+                <p className="text-xs leading-relaxed text-foreground/80">{shownAbstract}</p>
+                {needsTruncation && (
+                  <button
+                    type="button"
+                    className="mt-1 rounded-sm text-xs text-primary hover:underline"
+                    onClick={onToggleExpanded}
+                    aria-expanded={expanded}
+                  >
+                    {expanded ? 'Show less' : 'Read more'}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
-      {(fullAbstract || previewUrl) && (
-        <div className="mt-2 flex gap-3">
-          {previewUrl && (
-            <img
-              src={previewUrl}
-              alt={`First matching page of “${displayTitle}”`}
-              loading="lazy"
-              className="h-28 w-20 shrink-0 rounded-sm bg-muted object-cover"
-            />
-          )}
-          {fullAbstract && (
-            <div className="min-w-0 flex-1">
-              <p className="text-xs leading-relaxed text-foreground/80">{shownAbstract}</p>
-              {needsTruncation && (
-                <button
-                  type="button"
-                  className="mt-1 rounded-sm text-xs text-primary hover:underline"
-                  onClick={onToggleExpanded}
-                  aria-expanded={expanded}
-                >
-                  {expanded ? 'Show less' : 'Read more'}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+        {(sourceUrl || downloadUrl || doi || actions) && (
+          <div className="mt-2.5 flex flex-wrap items-center gap-3 text-xs">
+            {sourceUrl && <ResourceLink href={sourceUrl} icon={ExternalLink}>{primaryLinkLabel}</ResourceLink>}
+            {downloadUrl && <ResourceLink href={downloadUrl} icon={FileDown}>PDF</ResourceLink>}
+            {doi && <ResourceLink href={`https://doi.org/${doi}`} icon={Link2}>DOI</ResourceLink>}
+            {actions}
+          </div>
+        )}
 
-      {(sourceUrl || downloadUrl || doi || actions) && (
-        <div className="mt-2.5 flex flex-wrap items-center gap-3 text-xs">
-          {sourceUrl && <ResourceLink href={sourceUrl} icon={ExternalLink}>{primaryLinkLabel}</ResourceLink>}
-          {downloadUrl && <ResourceLink href={downloadUrl} icon={FileDown}>PDF</ResourceLink>}
-          {doi && <ResourceLink href={`https://doi.org/${doi}`} icon={Link2}>DOI</ResourceLink>}
-          {actions}
-        </div>
-      )}
-
-      {notice && (
-        <div className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
-          {notice}
-        </div>
-      )}
-    </article>
+        {notice && (
+          <div className="mt-2 text-2xs leading-relaxed text-muted-foreground">
+            {notice}
+          </div>
+        )}
+      </article>
+    </Card>
   );
 }
 

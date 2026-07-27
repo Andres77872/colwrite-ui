@@ -19,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BrandMark, APP_NAME } from '@/components/common/Brand';
 import { AlertCircle, Info } from 'lucide-react';
 import {
@@ -240,30 +241,38 @@ function AuthDialog({
           </div>
         </DialogHeader>
 
-        <div className="mt-4 flex border-b border-border" role="tablist" aria-label="Authentication">
-          {(['signin', 'register'] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={mode === tab}
-              className={cn(
-                '-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors',
-                mode === tab
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
-              )}
-              onClick={() => {
-                setMode(tab);
-                setError(null);
-              }}
-            >
-              {tab === 'signin' ? 'Sign in' : 'Create account'}
-            </button>
-          ))}
-        </div>
+        {/* Radix tabs rather than hand-rolled `role="tab"` buttons, which had
+            `aria-selected` but no `aria-controls`, no `tabpanel`, no roving
+            tabindex and no arrow-key movement — half of the pattern. */}
+        <Tabs
+          value={mode}
+          onValueChange={(next) => {
+            setMode(next as Mode);
+            setError(null);
+          }}
+          className="mt-4"
+        >
+          <TabsList
+            aria-label="Authentication"
+            className="flex h-auto w-full justify-start rounded-none border-b border-border bg-transparent p-0"
+          >
+            {(['signin', 'register'] as const).map((tab) => (
+              <TabsTrigger
+                key={tab}
+                value={tab}
+                className={cn(
+                  '-mb-px rounded-none border-b-2 border-transparent px-4 py-2 text-sm font-medium shadow-none',
+                  'text-muted-foreground hover:text-foreground',
+                  'data-[state=active]:border-primary data-[state=active]:bg-transparent',
+                  'data-[state=active]:text-primary data-[state=active]:shadow-none',
+                )}
+              >
+                {tab === 'signin' ? 'Sign in' : 'Create account'}
+              </TabsTrigger>
+            ))}
+          </TabsList>
 
-        {mode === 'signin' ? (
+          <TabsContent value="signin">
           <form className="mt-4 flex flex-col gap-4" onSubmit={submit}>
             <label className="flex flex-col gap-1.5">
               <span className="text-sm text-muted-foreground">Username or email</span>
@@ -301,21 +310,24 @@ function AuthDialog({
               {loading ? 'Signing in…' : 'Continue'}
             </Button>
           </form>
-        ) : (
-          // Registration has no server endpoint yet. The previous version
-          // rendered a form that silently flipped back to sign-in on submit,
-          // which read as a broken button.
-          <div className="mt-4 rounded-lg border border-border bg-muted/40 p-4">
-            <p className="text-sm font-medium">Accounts are invite-only during alpha</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Self-service registration is not available yet. Ask for an invite, then sign in with
-              the credentials you were given.
-            </p>
-            <Button variant="outline" size="sm" className="mt-3" onClick={() => setMode('signin')}>
-              Back to sign in
-            </Button>
-          </div>
-        )}
+          </TabsContent>
+
+          {/* Registration has no server endpoint yet. An earlier version
+              rendered a form that silently flipped back to sign-in on submit,
+              which read as a broken button. */}
+          <TabsContent value="register">
+            <div className="mt-4 rounded-lg border border-border bg-muted/40 p-4">
+              <p className="text-sm font-medium">Accounts are invite-only during alpha</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Self-service registration is not available yet. Ask for an invite, then sign in with
+                the credentials you were given.
+              </p>
+              <Button variant="outline" size="sm" className="mt-3" onClick={() => setMode('signin')}>
+                Back to sign in
+              </Button>
+            </div>
+          </TabsContent>
+        </Tabs>
 
         <div className="mt-4 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3">
           <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-warning" />

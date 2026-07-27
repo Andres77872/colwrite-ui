@@ -81,8 +81,10 @@ export function Editable({
         // whether a selection is inside a block. Without it the format and
         // AI-action toolbar never appears.
         "editable",
+        // No focus outline: a box drawn around body text reads as an error
+        // state while writing. The affordance is the row tint in `Canvas`,
+        // which keys off `.editable:focus-visible`.
         "min-h-[1.5em] w-full outline-none whitespace-pre-wrap break-words",
-        "focus:outline-none focus-visible:outline-none",
         className
       )}
       ref={(element) => {

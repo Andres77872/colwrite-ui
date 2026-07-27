@@ -200,7 +200,7 @@ function GraphInlineContent(props: InlineWidgetProps<GraphChild>) {
             </SettingsRow>
 
             {tooManySlices && (
-              <p className="mt-2 rounded-md bg-warning/10 px-2 py-1 text-[11px] text-warning">
+              <p className="mt-2 rounded-md bg-warning/10 px-2 py-1 text-xs text-warning">
                 {values.length} slices is more than a pie can show at a glance. A bar chart
                 compares these better.
               </p>

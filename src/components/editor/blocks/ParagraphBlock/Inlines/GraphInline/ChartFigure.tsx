@@ -167,7 +167,7 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
           dy="0.32em"
           textAnchor="end"
           className="fill-muted-foreground"
-          style={{ fontSize: 10, fontVariantNumeric: 'tabular-nums' }}
+          style={{ fontSize: 'var(--text-2xs)', fontVariantNumeric: 'tabular-nums' }}
         >
           {tick.label}
         </text>
@@ -235,7 +235,7 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
           y={Math.max(9, y(values[peakIndex]) - (kind === 'bar' ? 6 : 10))}
           textAnchor="middle"
           className="fill-foreground"
-          style={{ fontSize: 10, fontWeight: 600 }}
+          style={{ fontSize: 'var(--text-2xs)', fontWeight: 600 }}
         >
           {formatNumber(values[peakIndex])}
         </text>
@@ -249,7 +249,7 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
             y={PLOT.height - PLOT.bottom + 14}
             textAnchor="middle"
             className="fill-muted-foreground"
-            style={{ fontSize: 10 }}
+            style={{ fontSize: 'var(--text-2xs)' }}
           >
             {truncate(labelFor(index), 10)}
           </text>
@@ -262,7 +262,7 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
           y={PLOT.height - 2}
           textAnchor="middle"
           className="fill-muted-foreground"
-          style={{ fontSize: 10 }}
+          style={{ fontSize: 'var(--text-2xs)' }}
         >
           {xLabel}
         </text>
@@ -272,7 +272,7 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
           transform={`translate(10 ${PLOT.top + plotHeight / 2}) rotate(-90)`}
           textAnchor="middle"
           className="fill-muted-foreground"
-          style={{ fontSize: 10 }}
+          style={{ fontSize: 'var(--text-2xs)' }}
         >
           {yLabel}
         </text>
@@ -362,7 +362,7 @@ function PieChart({ values, colors, labels, hover, setHover, labelFor }: InnerPr
           </li>
         ))}
         {labels.length > MAX_PIE_SLICES && (
-          <li className="text-[11px] text-muted-foreground">
+          <li className="text-xs text-muted-foreground">
             Part-to-whole stops reading past {MAX_PIE_SLICES} slices — a bar chart compares these
             better.
           </li>
@@ -377,7 +377,7 @@ function truncate(text: string, max: number): string {
 }
 
 /**
- * A bar rounded at the data end and square where it meets the baseline.
+ * A bar rounded-sm at the data end and square where it meets the baseline.
  *
  * A plain `<rect rx>` rounds all four corners, which lifts the bar off its own
  * baseline and makes short bars read as floating pills. The rounding belongs

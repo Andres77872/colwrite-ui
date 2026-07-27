@@ -4,7 +4,7 @@ export const APP_NAME = 'ColWrite';
 export const APP_TAGLINE = 'Assistant writer for arXiv papers';
 
 const MARK_SIZES = {
-  sm: 'h-6 w-6 rounded-md text-[10px]',
+  sm: 'h-6 w-6 rounded-md text-2xs',
   md: 'h-7 w-7 rounded-md text-xs',
   lg: 'h-10 w-10 rounded-lg text-base',
   xl: 'h-12 w-12 rounded-lg text-xl',

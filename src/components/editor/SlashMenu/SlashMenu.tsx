@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { Kbd } from '@/components/ui/kbd';
 import { useEditor } from '@/editor';
 import { aiBeatItem } from './items/aiBeat';
 import { tableItem } from './items/table';
@@ -383,13 +384,13 @@ export function SlashMenu() {
 
       <div className="flex items-center gap-3 border-t border-border bg-card/30 px-3 py-2 text-2xs text-muted-foreground">
         <span>
-          <kbd className="rounded-sm bg-secondary px-1 py-0.5">↑↓</kbd> Navigate
+          <Kbd>↑↓</Kbd> Navigate
         </span>
         <span>
-          <kbd className="rounded-sm bg-secondary px-1 py-0.5">↵</kbd> Select
+          <Kbd>↵</Kbd> Select
         </span>
         <span>
-          <kbd className="rounded-sm bg-secondary px-1 py-0.5">Esc</kbd> Close
+          <Kbd>Esc</Kbd> Close
         </span>
       </div>
     </div>

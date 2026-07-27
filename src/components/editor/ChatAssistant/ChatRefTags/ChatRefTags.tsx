@@ -63,7 +63,7 @@ export function ChatRefTags({
             className={cn(
               "inline-flex items-center gap-0.5 mx-0.5",
               isDoc ? "bg-blue-100 text-blue-800" : "bg-violet-100 text-violet-800",
-              "px-1.5 py-0.5 rounded text-xs",
+              "px-1.5 py-0.5 rounded-sm text-xs",
               interactive && "cursor-pointer hover:opacity-80"
             )}
             title={title}

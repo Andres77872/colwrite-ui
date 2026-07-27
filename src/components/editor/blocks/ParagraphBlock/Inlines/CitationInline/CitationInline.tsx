@@ -386,7 +386,7 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                             {source?.title ?? key}
                           </span>
                           {source && (
-                            <span className="block truncate text-[11px] text-muted-foreground">
+                            <span className="block truncate text-xs text-muted-foreground">
                               {[source.authors, source.year, source.venue]
                                 .filter(Boolean)
                                 .join(' · ')}
@@ -419,9 +419,10 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
               )}
             </SettingsRow>
 
-            <SettingsRow label="Find a source">
+            <SettingsRow label="Find a source" htmlFor={`citation-search-${child.id}`}>
               <div className="flex gap-1">
                 <Input
+                  id={`citation-search-${child.id}`}
                   type="text"
                   value={query}
                   placeholder="Search arXiv and Semantic Scholar, or paste a key / DOI"
@@ -453,19 +454,19 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
               </div>
 
               {searchError && (
-                <p role="alert" className="mt-1 text-[11px] text-destructive">
+                <p role="alert" className="mt-1 text-xs text-destructive">
                   {searchError}
                 </p>
               )}
 
               {searchWarning && (
-                <p role="status" className="mt-1 text-[11px] text-muted-foreground">
+                <p role="status" className="mt-1 text-xs text-muted-foreground">
                   {searchWarning}
                 </p>
               )}
 
               {results && results.length === 0 && !searchError && (
-                <p className="mt-1 text-[11px] text-muted-foreground">
+                <p className="mt-1 text-xs text-muted-foreground">
                   Nothing found. Press Enter to add “{query.trim()}” as a key anyway.
                 </p>
               )}
@@ -484,11 +485,11 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-1">
                             <span className="min-w-0 flex-1 truncate text-xs">{result.title}</span>
-                            <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[9px]">
+                            <Badge variant="secondary" className="h-4 shrink-0 px-1 text-2xs">
                               {result.providerLabel}
                             </Badge>
                           </span>
-                          <span className="block truncate text-[11px] text-muted-foreground">
+                          <span className="block truncate text-xs text-muted-foreground">
                             {[result.authors, result.year].filter(Boolean).join(' · ')}
                           </span>
                         </span>
@@ -515,7 +516,7 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                     )}
                   >
                     <span className="block">{option.label}</span>
-                    <span className="block text-[11px] opacity-60">{option.example}</span>
+                    <span className="block text-xs opacity-60">{option.example}</span>
                   </button>
                 ))}
               </div>
@@ -524,7 +525,7 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="mt-1 h-6 px-1.5 text-[11px] text-muted-foreground"
+                  className="mt-1 h-6 px-1.5 text-xs text-muted-foreground"
                   onClick={() => applyStyleEverywhere(style)}
                 >
                   Apply this style to all {otherCitations + 1} citations

@@ -141,7 +141,7 @@ export function AgentActivity({ runs, live }: { runs: ToolRun[]; live: boolean }
                   ) : run.state === 'error' ? (
                     <TriangleAlert aria-hidden="true" className="h-3 w-3 text-destructive" />
                   ) : (
-                    <Check aria-hidden="true" className="h-3 w-3 text-[var(--color-diff-add-fg)]" />
+                    <Check aria-hidden="true" className="h-3 w-3 text-diff-add-fg" />
                   )}
                 </span>
                 <Icon aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />

@@ -143,44 +143,48 @@ export function LibraryPanel() {
         />
       )}
 
-      <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
-        {filtered.map((doc) => {
-          const isSelected = selectedId === doc.id;
-          return (
-            <li key={doc.id}>
-              <div
-                className={cn(
-                  'group flex items-center gap-2 rounded-lg border transition-colors',
-                  isSelected ? 'border-primary bg-primary/10' : 'border-border bg-card hover:bg-accent',
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => setSelectedId(isSelected ? null : doc.id)}
-                  aria-pressed={isSelected}
-                  className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-2.5 text-left"
+      {/* Scroll on the wrapper so the empty states below stay outside the list
+          — they are not list items, and `<ul>` may only contain `<li>`. */}
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
+        <ul className="space-y-1.5">
+          {filtered.map((doc) => {
+            const isSelected = selectedId === doc.id;
+            return (
+              <li key={doc.id}>
+                <div
+                  className={cn(
+                    'group flex items-center gap-2 rounded-lg border transition-colors',
+                    isSelected ? 'border-primary bg-primary/10' : 'border-border bg-card hover:bg-accent',
+                  )}
                 >
-                  <FileText aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">{doc.name}</span>
-                    <span className="block text-xs text-muted-foreground">
-                      {formatBytes(doc.size)} · {formatDate(doc.lastModified)}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(isSelected ? null : doc.id)}
+                    aria-pressed={isSelected}
+                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-2.5 text-left"
+                  >
+                    <FileText aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{doc.name}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {formatBytes(doc.size)} · {formatDate(doc.lastModified)}
+                      </span>
                     </span>
-                  </span>
-                </button>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  className="mr-2 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
-                  onClick={() => onRemove(doc.id)}
-                  aria-label={`Remove ${doc.name}`}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            </li>
-          );
-        })}
+                  </button>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="mr-2 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+                    onClick={() => onRemove(doc.id)}
+                    aria-label={`Remove ${doc.name}`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
 
         {docs.length === 0 && (
           <EmptyState
@@ -197,7 +201,7 @@ export function LibraryPanel() {
             description={`No file name contains “${query.trim()}”.`}
           />
         )}
-      </ul>
+      </div>
 
       {selected && (
         <div className="flex-shrink-0 overflow-hidden rounded-lg border border-border">

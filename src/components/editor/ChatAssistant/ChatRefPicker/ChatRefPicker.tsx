@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { Spinner } from '@/components/ui/spinner';
 import type { SetStateAction } from 'react';
 import { useEditor } from '../../../../editor';
 import type { Block } from '../../../../editor';
@@ -9,6 +10,26 @@ import { errorMessage } from '../../../../services';
 
 type DocSummary = { _id: string; name?: string };
 type NavigationLevel = { type: 'main' | 'documents' | 'doc-blocks' | 'this-blocks' };
+
+/* Only one picker is ever mounted (it belongs to the single composer), so
+   fixed ids are safe and keep the activedescendant wiring readable. */
+const MENU_LIST_ID = 'chat-ref-menu';
+const RESULTS_LIST_ID = 'chat-ref-results';
+
+const optionId = (listId: string, index: number) => `${listId}-option-${index}`;
+
+/** Loading states here were bare text while every other panel used `Spinner`. */
+function LoadingRow({ label }: { label: string }) {
+  return (
+    <div
+      role="status"
+      className="flex items-center justify-center gap-2 px-2 py-4 text-sm text-muted-foreground"
+    >
+      <Spinner />
+      {label}
+    </div>
+  );
+}
 
 function toDocSummary(document: DocumentSummary): DocSummary | null {
   const id = String(document._id ?? document.id ?? document.document_id ?? '');
@@ -319,12 +340,15 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     refResultsType,
   ]);
 
-  // Close the picker unless the caret is immediately after a trailing '#'
-  useEffect(() => {
-    if (!refOpen && !refResultsOpen) return;
-    const shouldStayOpen = input.endsWith('#');
-    if (!shouldStayOpen) closeRefMenu();
-  }, [closeRefMenu, refOpen, refResultsOpen, input]);
+  // Close the picker unless the caret is immediately after a trailing '#'.
+  // Adjusted during render rather than in an effect: this reacts to the
+  // composer's text, not to an external system, and `closeRefMenu` only resets
+  // state — so React re-renders before committing instead of painting the
+  // stale-open picker for a frame and then cascading a second render.
+  // The guard converges: `closeRefMenu` clears both open flags.
+  if ((refOpen || refResultsOpen) && !input.endsWith('#')) {
+    closeRefMenu();
+  }
 
   useEffect(() => {
     const on = () => requestAnimationFrame(measureResultsLeft);
@@ -333,37 +357,86 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     return () => window.removeEventListener('resize', on);
   }, [measureResultsLeft, refOpen, refResultsOpen]);
 
+  /**
+   * Announce the highlighted option through the composer.
+   *
+   * Arrow keys move a purely visual highlight while DOM focus stays in the
+   * text field, so without `aria-activedescendant` none of this navigation
+   * existed for a screen reader. The attributes are set imperatively because
+   * the composer element belongs to `ChatTaggedInput`, not to this component.
+   */
+  useEffect(() => {
+    const host = getHost();
+    if (!host) return;
+
+    const open = refOpen || refResultsOpen;
+    if (!open) {
+      host.removeAttribute('aria-expanded');
+      host.removeAttribute('aria-controls');
+      host.removeAttribute('aria-activedescendant');
+      return;
+    }
+
+    host.setAttribute('aria-expanded', 'true');
+    host.setAttribute('aria-controls', refResultsOpen ? RESULTS_LIST_ID : MENU_LIST_ID);
+    host.setAttribute(
+      'aria-activedescendant',
+      refResultsOpen ? optionId(RESULTS_LIST_ID, resultsIndex) : optionId(MENU_LIST_ID, menuIndex),
+    );
+
+    return () => {
+      host.removeAttribute('aria-expanded');
+      host.removeAttribute('aria-controls');
+      host.removeAttribute('aria-activedescendant');
+    };
+  }, [getHost, menuIndex, refOpen, refResultsOpen, resultsIndex]);
+
   return (
     <>
       {refOpen && (
-        <div 
-          ref={refMenuRef} 
-          className="chat-ref-menu absolute bottom-full mb-1 left-0 z-50 bg-popover border border-border rounded-lg shadow-lg min-w-[220px]" 
-          role="menu"
+        <div
+          ref={refMenuRef}
+          className="chat-ref-menu absolute bottom-full mb-1 left-0 z-[var(--z-dropdown)] bg-popover border border-border rounded-lg shadow-lg min-w-[220px]"
         >
           <div className="p-2">
-            <div className="text-xs font-semibold text-muted-foreground mb-2 px-2">References</div>
-            <div className="space-y-0.5">
-              <button 
+            <div id={`${MENU_LIST_ID}-label`} className="text-xs font-semibold text-muted-foreground mb-2 px-2">
+              References
+            </div>
+            {/* `listbox`, not `menu`: the highlight is virtual and focus stays
+                in the composer, which is the listbox pattern. `role="menu"`
+                also requires `menuitem` children, which these never were. */}
+            <div
+              id={MENU_LIST_ID}
+              role="listbox"
+              aria-labelledby={`${MENU_LIST_ID}-label`}
+              className="space-y-0.5"
+            >
+              <button
+                id={optionId(MENU_LIST_ID, 0)}
+                role="option"
+                aria-selected={menuIndex === 0}
                 className={cn(
-                  "w-full flex flex-col items-start px-2 py-1.5 rounded text-left",
+                  "w-full flex flex-col items-start px-2 py-1.5 rounded-sm text-left",
                   "hover:bg-accent transition-colors",
                   menuIndex === 0 && "bg-accent"
                 )}
-                onMouseDown={(e) => e.preventDefault()} 
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={onSelectThis}
                 onMouseEnter={() => setMenuIndex(0)}
               >
                 <span className="text-sm font-medium">this</span>
                 <span className="text-xs text-muted-foreground">Reference current document</span>
               </button>
-              <button 
+              <button
+                id={optionId(MENU_LIST_ID, 1)}
+                role="option"
+                aria-selected={menuIndex === 1}
                 className={cn(
-                  "w-full flex flex-col items-start px-2 py-1.5 rounded text-left",
+                  "w-full flex flex-col items-start px-2 py-1.5 rounded-sm text-left",
                   "hover:bg-accent transition-colors",
                   menuIndex === 1 && "bg-accent"
                 )}
-                onMouseDown={(e) => e.preventDefault()} 
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={onSelectDocuments}
                 onMouseEnter={() => setMenuIndex(1)}
               >
@@ -376,19 +449,19 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       )}
 
       {refResultsOpen && (
-        <div 
-          ref={refResultsRef} 
-          className="chat-ref-results absolute bottom-full mb-1 z-50 bg-popover border border-border rounded-lg shadow-lg min-w-[280px] max-w-[340px]" 
-          style={{ left: refResultsLeft }} 
-          role="menu"
+        <div
+          ref={refResultsRef}
+          className="chat-ref-results absolute bottom-full mb-1 z-[var(--z-dropdown)] bg-popover border border-border rounded-lg shadow-lg min-w-[280px] max-w-[340px]"
+          style={{ left: refResultsLeft }}
         >
           <div className="p-2">
             {navigationStack.length > 1 && (
               <div className="mb-2">
-                <button 
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors" 
+                <button
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
                   onClick={navigateBack}
                   onMouseDown={(e) => e.preventDefault()}
+                  aria-label="Back to the previous list"
                   title="Go back"
                 >
                   ← Back
@@ -397,20 +470,30 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
             )}
             {refResultsType === 'documents' && (
               <>
-                <div className="text-xs font-semibold text-muted-foreground mb-2 px-2">Documents</div>
-                {refLoading && <div className="text-sm text-muted-foreground px-2 py-4 text-center">Loading documents…</div>}
-                {refError && <div className="text-sm text-destructive px-2">{refError}</div>}
+                <div id={`${RESULTS_LIST_ID}-label`} className="text-xs font-semibold text-muted-foreground mb-2 px-2">
+                  Documents
+                </div>
+                {refLoading && <LoadingRow label="Loading documents…" />}
+                {refError && <div role="alert" className="text-sm text-destructive px-2">{refError}</div>}
                 {!refLoading && !refError && (
-                  <div className="space-y-0.5">
+                  <div
+                    id={RESULTS_LIST_ID}
+                    role="listbox"
+                    aria-labelledby={`${RESULTS_LIST_ID}-label`}
+                    className="space-y-0.5"
+                  >
                     {(refDocs || []).map((d, idx) => (
                       <div key={d._id} className="flex items-center gap-1">
-                        <button 
+                        <button
+                          id={optionId(RESULTS_LIST_ID, idx)}
+                          role="option"
+                          aria-selected={resultsIndex === idx}
                           className={cn(
-                            "flex-1 flex flex-col items-start px-2 py-1.5 rounded text-left",
+                            "flex-1 flex flex-col items-start px-2 py-1.5 rounded-sm text-left",
                             "hover:bg-accent transition-colors",
                             resultsIndex === idx && "bg-accent"
                           )}
-                          onMouseDown={(e) => e.preventDefault()} 
+                          onMouseDown={(e) => e.preventDefault()}
                           onClick={() => insertDocumentReference(d)}
                           onMouseEnter={() => setResultsIndex(idx)}
                           title="Select this document"
@@ -418,10 +501,11 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                           <span className="text-sm font-medium truncate max-w-[200px]">{d.name || d._id}</span>
                           <span className="text-xs text-muted-foreground truncate max-w-[200px]">{d._id}</span>
                         </button>
-                        <button 
-                          className="px-2 py-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors" 
-                          onMouseDown={(e) => e.preventDefault()} 
+                        <button
+                          className="px-2 py-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded-sm transition-colors"
+                          onMouseDown={(e) => e.preventDefault()}
                           onClick={() => onOpenDocBlocks(d)}
+                          aria-label={`Explore blocks in ${d.name || d._id}`}
                           title="Explore document blocks"
                         >
                           →
@@ -436,18 +520,26 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
 
             {(refResultsType === 'this-blocks' || refResultsType === 'doc-blocks') && (
               <>
-                <div className="text-xs font-semibold text-muted-foreground mb-2 px-2">
+                <div id={`${RESULTS_LIST_ID}-label`} className="text-xs font-semibold text-muted-foreground mb-2 px-2">
                   {refResultsType === 'this-blocks' ? 'This document blocks' : `Blocks: ${refDocContext?.name || refDocContext?._id || ''}`}
                 </div>
-                {refLoading && <div className="text-sm text-muted-foreground px-2 py-4 text-center">Loading blocks…</div>}
-                {refError && <div className="text-sm text-destructive px-2">{refError}</div>}
+                {refLoading && <LoadingRow label="Loading blocks…" />}
+                {refError && <div role="alert" className="text-sm text-destructive px-2">{refError}</div>}
                 {!refLoading && !refError && (
-                  <div className="space-y-0.5 max-h-[200px] overflow-auto">
+                  <div
+                    id={RESULTS_LIST_ID}
+                    role="listbox"
+                    aria-labelledby={`${RESULTS_LIST_ID}-label`}
+                    className="space-y-0.5 max-h-[200px] overflow-auto"
+                  >
                     {(refBlocks || []).map((b, idx) => (
                       <button
                         key={b.id}
+                        id={optionId(RESULTS_LIST_ID, idx)}
+                        role="option"
+                        aria-selected={resultsIndex === idx}
                         className={cn(
-                          "w-full flex flex-col items-start px-2 py-1.5 rounded text-left",
+                          "w-full flex flex-col items-start px-2 py-1.5 rounded-sm text-left",
                           "hover:bg-accent transition-colors",
                           resultsIndex === idx && "bg-accent"
                         )}
@@ -466,7 +558,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
             )}
           </div>
           <div className="border-t border-border px-2 py-1.5">
-            <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-3 text-2xs text-muted-foreground">
               <span>↑↓ Navigate</span>
               <span>← Back</span>
               <span>Enter Select</span>

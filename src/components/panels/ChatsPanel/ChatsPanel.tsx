@@ -226,119 +226,125 @@ export function ChatsPanel() {
         New chat
       </Button>
 
-      <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
-        {showSkeleton &&
-          Array.from({ length: 3 }).map((_, index) => (
-            <li key={index} className="rounded-lg border border-border p-3">
-              <Skeleton className="mb-2 h-3.5 w-2/3" />
-              <Skeleton className="h-3 w-1/3" />
-            </li>
-          ))}
+      {/* The scroll region is the wrapper, not the list: the error and empty
+          states are not list items, and hanging them off `<ul>` put non-`<li>`
+          children in a list — invalid, and it makes the list announce a phantom
+          entry. `DocumentsMenu` already keeps them outside. */}
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
+        <ul className="space-y-1.5">
+          {showSkeleton &&
+            Array.from({ length: 3 }).map((_, index) => (
+              <li key={index} className="rounded-lg border border-border p-3">
+                <Skeleton className="mb-2 h-3.5 w-2/3" />
+                <Skeleton className="h-3 w-1/3" />
+              </li>
+            ))}
 
-        {!showSkeleton &&
-          filtered.map((chat) => {
-            const isSelected = chat.chat_id === selectedChatId;
-            const isRenaming = renamingId === chat.chat_id;
+          {!showSkeleton &&
+            filtered.map((chat) => {
+              const isSelected = chat.chat_id === selectedChatId;
+              const isRenaming = renamingId === chat.chat_id;
 
-            return (
-              <li key={chat.chat_id}>
-                <div
-                  className={cn(
-                    'group flex items-center gap-1 rounded-lg border transition-colors',
-                    isSelected ? 'border-primary bg-primary/10' : 'border-border bg-card hover:bg-accent',
-                  )}
-                >
-                  {isRenaming ? (
-                    <div className="flex flex-1 items-center gap-1 p-2">
-                      <Input
-                        autoFocus
-                        className="h-7 flex-1"
-                        aria-label="Chat title"
-                        value={renameValue}
-                        onChange={(event) => setRenameValue(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            commitRename(chat.chat_id);
-                          }
-                          if (event.key === 'Escape') {
-                            event.preventDefault();
-                            cancelRename();
-                          }
-                        }}
-                        onBlur={() => commitRename(chat.chat_id)}
-                      />
-                      <Button
-                        size="icon-sm"
-                        // Without this, blur fires first and commits the rename
-                        // before the click ever reaches the button.
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => commitRename(chat.chat_id)}
-                        aria-label="Save chat title"
-                      >
-                        <Save className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => selectChat(chat)}
-                        aria-current={isSelected ? 'true' : undefined}
-                        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-2.5 text-left"
-                      >
-                        <MessageSquare
-                          aria-hidden="true"
-                          className={cn(
-                            'h-4 w-4 shrink-0',
-                            isSelected ? 'text-primary' : 'text-muted-foreground',
-                          )}
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span
-                            className={cn(
-                              'block truncate text-sm font-medium',
-                              !chat.title?.trim() && 'text-muted-foreground',
-                            )}
-                          >
-                            {chatLabel(chat)}
-                          </span>
-                          <span className="block truncate text-xs text-muted-foreground">
-                            {formatDateTime(chat.updated_at) || 'No activity yet'}
-                          </span>
-                        </span>
-                      </button>
-                      <div className="mr-1.5 flex flex-shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          onClick={() => {
-                            setRenamingId(chat.chat_id);
-                            setRenameValue(chat.title ?? '');
+              return (
+                <li key={chat.chat_id}>
+                  <div
+                    className={cn(
+                      'group flex items-center gap-1 rounded-lg border transition-colors',
+                      isSelected ? 'border-primary bg-primary/10' : 'border-border bg-card hover:bg-accent',
+                    )}
+                  >
+                    {isRenaming ? (
+                      <div className="flex flex-1 items-center gap-1 p-2">
+                        <Input
+                          autoFocus
+                          className="h-7 flex-1"
+                          aria-label="Chat title"
+                          value={renameValue}
+                          onChange={(event) => setRenameValue(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              commitRename(chat.chat_id);
+                            }
+                            if (event.key === 'Escape') {
+                              event.preventDefault();
+                              cancelRename();
+                            }
                           }}
-                          aria-label={`Rename ${chatLabel(chat)}`}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
+                          onBlur={() => commitRename(chat.chat_id)}
+                        />
                         <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                          onClick={() => onDelete(chat)}
-                          aria-label={`Delete ${chatLabel(chat)}`}
+                          size="icon-sm"
+                          // Without this, blur fires first and commits the rename
+                          // before the click ever reaches the button.
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => commitRename(chat.chat_id)}
+                          aria-label="Save chat title"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <Save className="h-3.5 w-3.5" />
                         </Button>
                       </div>
-                    </>
-                  )}
-                </div>
-              </li>
-            );
-          })}
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => selectChat(chat)}
+                          aria-current={isSelected ? 'true' : undefined}
+                          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-2.5 text-left"
+                        >
+                          <MessageSquare
+                            aria-hidden="true"
+                            className={cn(
+                              'h-4 w-4 shrink-0',
+                              isSelected ? 'text-primary' : 'text-muted-foreground',
+                            )}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span
+                              className={cn(
+                                'block truncate text-sm font-medium',
+                                !chat.title?.trim() && 'text-muted-foreground',
+                              )}
+                            >
+                              {chatLabel(chat)}
+                            </span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {formatDateTime(chat.updated_at) || 'No activity yet'}
+                            </span>
+                          </span>
+                        </button>
+                        <div className="mr-1.5 flex flex-shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={() => {
+                              setRenamingId(chat.chat_id);
+                              setRenameValue(chat.title ?? '');
+                            }}
+                            aria-label={`Rename ${chatLabel(chat)}`}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => onDelete(chat)}
+                            aria-label={`Delete ${chatLabel(chat)}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+        </ul>
 
         {!loading && listError && (
-          <li
+          <div
             role="alert"
             className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-center"
           >
@@ -350,7 +356,7 @@ export function ChatsPanel() {
             <Button variant="outline" size="sm" className="mt-2" onClick={() => refresh(page)}>
               Retry
             </Button>
-          </li>
+          </div>
         )}
 
         {!loading && !listError && items.length === 0 && (
@@ -364,7 +370,7 @@ export function ChatsPanel() {
         {!loading && items.length > 0 && filtered.length === 0 && (
           <EmptyState icon={MessageSquare} title="No matches" description="Try a different filter." />
         )}
-      </ul>
+      </div>
 
       {totalPages > 1 && (
         <div className="flex flex-shrink-0 items-center justify-between border-t border-border pt-2">

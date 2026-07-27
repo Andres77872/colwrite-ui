@@ -255,7 +255,7 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
               className="h-8 px-2"
             />
           </SettingsRow>
-          <p className="mt-2 text-[11px] text-muted-foreground">
+          <p className="mt-2 text-xs text-muted-foreground">
             Tab moves between cells and adds a row at the end. Shift+Enter starts a new line inside
             a cell. Paste spreadsheet or CSV data to fill the table.
           </p>
@@ -351,7 +351,7 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
           type="button"
           variant="ghost"
           size="sm"
-          className="h-6 gap-1 px-1.5 text-[11px] text-muted-foreground"
+          className="h-6 gap-1 px-1.5 text-xs text-muted-foreground"
           onClick={() => addRowAt(rows)}
         >
           <ArrowDownToLine className="h-3 w-3" />
@@ -361,13 +361,13 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
           type="button"
           variant="ghost"
           size="sm"
-          className="h-6 gap-1 px-1.5 text-[11px] text-muted-foreground"
+          className="h-6 gap-1 px-1.5 text-xs text-muted-foreground"
           onClick={() => addColumnAt(cols)}
         >
           <ArrowRightToLine className="h-3 w-3" />
           Column
         </Button>
-        <span className="ml-auto text-[11px] text-muted-foreground">
+        <span className="ml-auto text-xs text-muted-foreground">
           {rows} × {cols}
         </span>
       </span>

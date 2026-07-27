@@ -1,5 +1,10 @@
 <!doctype html>
-<html lang="en" class="dark">
+<!-- No `class="dark"`: Tailwind v4 only enables the `dark:` variant when the
+     stylesheet declares `@custom-variant dark`, which this project deliberately
+     does not — the theme is single-mode. The class was inert, and left in place
+     it would make any future `dark:` utility fail silently. The dark palette
+     comes from `color-scheme` plus the tokens in src/styles/globals.css. -->
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

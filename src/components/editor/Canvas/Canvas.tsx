@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Spinner } from '@/components/ui/spinner';
+import { useToast } from '@/components/ui/toastContext';
 import { BrandMark, APP_NAME, APP_TAGLINE } from '@/components/common/Brand';
 import { BLOCK_TYPES, blockTypeLabel, useEditor, type Block, type Doc } from '@/editor';
 import { uid } from '@/lib/uid';
@@ -158,6 +159,7 @@ export function Canvas() {
     recentlyChanged,
   } = useEditor();
   const { sets } = useProposals();
+  const { toast } = useToast();
 
   // Changes render where they would land, so the author judges a rewrite
   // against the paragraph it replaces rather than against a chat summary.
@@ -229,11 +231,24 @@ export function Canvas() {
     ],
   });
 
+  /**
+   * The welcome screen is the first thing a new account sees, and this used to
+   * be the one mutation path in the app with no `catch`: a failed
+   * `createRemote` rejected into nothing, so both buttons spun briefly and then
+   * did nothing at all. The document still exists locally, so say so rather
+   * than implying the work was lost.
+   */
   const createDocument = async (next: Doc) => {
     setCreating(true);
     try {
       setFromJSON(JSON.stringify(next));
       await createRemote(next);
+    } catch (error) {
+      toast({
+        title: 'Created locally, but the server did not accept it',
+        description: error instanceof Error ? error.message : undefined,
+        variant: 'error',
+      });
     } finally {
       setCreating(false);
     }
@@ -255,9 +270,9 @@ export function Canvas() {
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <WelcomeScreen
           creating={creating}
-          onCreateIntro={() => createDocument(buildIntroDoc())}
+          onCreateIntro={() => void createDocument(buildIntroDoc())}
           onCreateBlank={() =>
-            createDocument({ version: 1, name: 'Untitled document', blocks: [] })
+            void createDocument({ version: 1, name: 'Untitled document', blocks: [] })
           }
         />
       </div>
@@ -335,9 +350,17 @@ export function Canvas() {
       }}
     >
       {/* Full-bleed chrome, matching the status footer, with the writing
-          surface below it held to a comfortable measure. */}
-      <DocumentHeader />
-      <ReviewBar />
+          surface below it held to a comfortable measure.
+
+          One sticky wrapper, not two sticky siblings: both pinned to `top: 0`
+          independently, so the review bar landed on top of the title, save
+          status and Delete whenever there were changes to review. Stacking them
+          in a single stop also survives the header wrapping onto two lines,
+          which a hardcoded `top` offset would not. */}
+      <div className="sticky top-0 z-[var(--z-chrome)]">
+        <DocumentHeader />
+        <ReviewBar />
+      </div>
 
       <div className="document-container mx-auto w-full max-w-[var(--doc-measure)] flex-1 px-4">
         {docLevelChanges.map((change) => (
@@ -408,16 +431,21 @@ export function Canvas() {
                         'block-row group relative rounded-sm py-1 pr-2 transition-colors duration-75',
                         'hover:bg-accent/20',
                         block.id === activeId && 'bg-primary/5',
+                        // `Editable` suppresses the global focus outline so
+                        // prose is never boxed in, which left the 5% active
+                        // tint as the only cue — too faint to locate by eye.
+                        // Deepen it while focus is genuinely in the text.
+                        'has-[.editable:focus-visible]:bg-primary/10',
                         isCollapsed && 'bg-muted/20',
                         // Semantic tokens rather than raw palette values, so the
                         // states stay legible if the theme changes.
-                        isAiHidden && 'border-l-2 border-[var(--color-block-hidden)]/50 bg-[var(--color-block-hidden)]/5',
-                        isLocked && !isAiHidden && 'border-l-2 border-[var(--color-block-locked)]/50 bg-[var(--color-block-locked)]/5',
+                        isAiHidden && 'border-l-2 border-block-hidden/50 bg-block-hidden/5',
+                        isLocked && !isAiHidden && 'border-l-2 border-block-locked/50 bg-block-locked/5',
                         // A block with an open suggestion, and one an accepted
                         // change just landed on, both need to be findable
                         // without scrolling the whole document.
                         onBlock.length > 0 && 'bg-primary/5 ring-1 ring-primary/25',
-                        recentlyChanged.has(block.id) && 'bg-[var(--color-diff-add)]',
+                        recentlyChanged.has(block.id) && 'bg-diff-add',
                       )}
                       style={{ paddingLeft: 'var(--doc-gutter)' }}
                       data-block-id={block.id}

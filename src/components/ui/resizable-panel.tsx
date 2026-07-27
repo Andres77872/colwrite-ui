@@ -14,6 +14,14 @@ interface ResizeHandleProps {
   onResize: (delta: number) => void;
   /** Announced to assistive tech, e.g. "Resize sidebar". */
   label: string;
+  /**
+   * Current size and its bounds, in pixels. A focusable `separator` that
+   * responds to arrow keys but reports no value tells a screen-reader user
+   * that something moved without ever saying how far, or when a bound is hit.
+   */
+  value?: number;
+  min?: number;
+  max?: number;
   className?: string;
 }
 
@@ -27,7 +35,15 @@ const KEYBOARD_STEP = 16;
  * resizing left the panel widths entirely unavailable to anyone not using
  * a mouse.
  */
-export function ResizeHandle({ direction, onResize, label, className }: ResizeHandleProps) {
+export function ResizeHandle({
+  direction,
+  onResize,
+  label,
+  value,
+  min,
+  max,
+  className,
+}: ResizeHandleProps) {
   const [isDragging, setIsDragging] = React.useState(false);
   const startPos = React.useRef(0);
   const onResizeRef = React.useRef(onResize);
@@ -91,6 +107,10 @@ export function ResizeHandle({ direction, onResize, label, className }: ResizeHa
       role="separator"
       aria-label={label}
       aria-orientation={isHorizontal ? 'vertical' : 'horizontal'}
+      aria-valuenow={value === undefined ? undefined : Math.round(value)}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuetext={value === undefined ? undefined : `${Math.round(value)} pixels`}
       tabIndex={0}
       className={cn(
         'group/handle relative flex flex-shrink-0 select-none items-center justify-center rounded-sm',

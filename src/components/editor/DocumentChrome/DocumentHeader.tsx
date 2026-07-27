@@ -105,6 +105,23 @@ export function DocumentHeader() {
     }
   };
 
+  /**
+   * Autosave failures only ever surfaced as a `title` on the status span — and
+   * that span is `hidden … sm:flex`, so on a phone there was no indication at
+   * all, and on a desktop the reason needed a hover. Announce each distinct
+   * failure once; the inline status stays as the quiet steady-state readout.
+   */
+  const announcedSaveError = useRef<string | null>(null);
+  useEffect(() => {
+    if (!saveError) {
+      announcedSaveError.current = null;
+      return;
+    }
+    if (announcedSaveError.current === saveError) return;
+    announcedSaveError.current = saveError;
+    toast({ title: 'Autosave failed', description: saveError, variant: 'error' });
+  }, [saveError, toast]);
+
   const status = (() => {
     // A failed save outranks everything else: autosave errors were swallowed
     // entirely, so a document that had silently stopped saving looked exactly
@@ -137,8 +154,10 @@ export function DocumentHeader() {
   return (
     <div
       className={cn(
-        'sticky top-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-2',
-        'border-b border-border bg-card/95 px-4 py-2.5 backdrop-blur-sm z-[var(--z-sticky)]',
+        // Stickiness belongs to the wrapper in Canvas, which pins this and the
+        // review bar as one stack instead of letting them overlap.
+        'flex flex-wrap items-center justify-between gap-x-3 gap-y-2',
+        'border-b border-border bg-card/95 px-4 py-2.5 backdrop-blur-sm',
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">

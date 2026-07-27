@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { forwardRef, useCallback, useId, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -33,7 +33,7 @@ export const InlinePill = forwardRef<
       ref={ref}
       type={type}
       className={cn(
-        'inline-flex items-center rounded px-1 py-0.5 text-sm transition-colors',
+        'inline-flex items-center rounded-sm px-1 py-0.5 text-sm transition-colors',
         tone === 'error'
           ? 'bg-destructive/15 text-destructive hover:bg-destructive/25'
           : 'bg-primary/10 text-primary hover:bg-primary/20',
@@ -181,7 +181,7 @@ export function InlineFigureShell({
           )}
         >
           <GripVertical aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground/60" />
-          <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             {label}
           </span>
           <span className="ml-auto flex items-center gap-0.5">
@@ -249,7 +249,18 @@ export function InlineSettings({
   );
 }
 
-/** A labelled row inside a settings popover. */
+const SETTINGS_CAPTION =
+  'mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground';
+
+/**
+ * A labelled row inside a settings popover.
+ *
+ * With `htmlFor` the caption is a genuine `<label>` for one control. Without it
+ * the row groups several controls — or none — and the caption becomes a group
+ * name instead. It used to render `<label htmlFor={undefined}>` as a *sibling*
+ * of the children either way, which associates with nothing: most rows here
+ * ended up with a caption that assistive tech never tied to anything.
+ */
 export function SettingsRow({
   label,
   htmlFor,
@@ -261,16 +272,28 @@ export function SettingsRow({
   hint?: string;
   children: ReactNode;
 }) {
+  const captionId = useId();
+  const hintNode = hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null;
+
+  if (htmlFor) {
+    return (
+      <div className="mb-2 last:mb-0">
+        <label htmlFor={htmlFor} className={SETTINGS_CAPTION}>
+          {label}
+        </label>
+        {children}
+        {hintNode}
+      </div>
+    );
+  }
+
   return (
-    <div className="mb-2 last:mb-0">
-      <label
-        htmlFor={htmlFor}
-        className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
-      >
+    <div role="group" aria-labelledby={captionId} className="mb-2 last:mb-0">
+      <span id={captionId} className={SETTINGS_CAPTION}>
         {label}
-      </label>
+      </span>
       {children}
-      {hint && <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p>}
+      {hintNode}
     </div>
   );
 }

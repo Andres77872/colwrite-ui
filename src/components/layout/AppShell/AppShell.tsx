@@ -1,8 +1,9 @@
-import { useCallback, useEffect, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, type CSSProperties, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { usePanels } from '@/components/panels/panelsContextState';
 import { PANEL_CONFIG } from '@/components/panels/panelConfig';
 import { ResizeHandle } from '@/components/ui/resizable-panel';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
 
 interface AppShellProps {
   header?: ReactNode;
@@ -78,7 +79,14 @@ export function AppShell({ header, main, left, right, aside }: AppShellProps) {
             {leftCollapsed ? (
               <div className={GUTTER} aria-hidden="true" />
             ) : (
-              <ResizeHandle direction="horizontal" onResize={handleLeftResize} label="Resize sidebar" />
+              <ResizeHandle
+                direction="horizontal"
+                onResize={handleLeftResize}
+                label="Resize sidebar"
+                value={leftWidth}
+                min={PANEL_CONFIG.left.min}
+                max={PANEL_CONFIG.left.max}
+              />
             )}
           </>
         )}
@@ -95,6 +103,9 @@ export function AppShell({ header, main, left, right, aside }: AppShellProps) {
               direction="horizontal"
               onResize={handleRightResize}
               label="Resize tools panel"
+              value={rightWidth}
+              min={PANEL_CONFIG.right.min}
+              max={PANEL_CONFIG.right.max}
             />
             <aside
               className={cn(PANEL_SURFACE, 'flex flex-col transition-[width] duration-200 ease-out')}
@@ -119,81 +130,24 @@ export function AppShell({ header, main, left, right, aside }: AppShellProps) {
         )}
       </div>
 
-      {/* ---- Mobile overlays ---- */}
+      {/* ---- Mobile overlays ----
+          Radix `Sheet` rather than a hand-rolled dialog: it brings the focus
+          trap, initial focus and focus restore the previous version lacked. */}
       {!isDesktop && left && (
-        <MobileSheet
-          open={mobileNavOpen}
-          onClose={() => setMobileNavOpen(false)}
-          side="left"
-          label="Workspace navigation"
-        >
-          {left}
-        </MobileSheet>
+        <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+          <SheetContent side="left" title="Workspace navigation">
+            {left}
+          </SheetContent>
+        </Sheet>
       )}
 
       {!isDesktop && aside && (
-        <MobileSheet open={isOpen} onClose={close} side="right" label="Tools">
-          {aside}
-        </MobileSheet>
+        <Sheet open={isOpen} onOpenChange={(next) => !next && close()}>
+          <SheetContent side="right" title="Tools">
+            {aside}
+          </SheetContent>
+        </Sheet>
       )}
-    </div>
-  );
-}
-
-/* ----------------------------------------
-   Mobile sheet
-   ---------------------------------------- */
-
-function MobileSheet({
-  open,
-  onClose,
-  side,
-  label,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  side: 'left' | 'right';
-  label: string;
-  children: ReactNode;
-}) {
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKeyDown);
-    // Prevent the canvas behind the sheet from scrolling with it.
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-[var(--z-modal)] md:hidden">
-      <button
-        type="button"
-        className="absolute inset-0 bg-black/60 animate-in fade-in-0"
-        aria-label={`Close ${label.toLowerCase()}`}
-        onClick={onClose}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={label}
-        className={cn(
-          'absolute inset-y-0 flex w-[min(20rem,85vw)] flex-col border-border bg-card shadow-xl',
-          'animate-in fade-in-0',
-          side === 'left' ? 'left-0 border-r slide-in-from-left-2' : 'right-0 border-l slide-in-from-right-2',
-        )}
-      >
-        {children}
-      </div>
     </div>
   );
 }

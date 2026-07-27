@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
 import { searchArxiv, type ArxivResult } from '@/services/arxiv';
+import { cn } from '@/lib/utils';
+import { Alert } from '@/components/ui/alert';
 import { EmptyState } from '@/components/ui/empty-state';
-import { PaperCard, ScoreBadge, SearchForm, useExpandable } from '../shared';
+import { PaperCard, ResultsSkeleton, ScoreBadge, SearchForm, useExpandable } from '../shared';
 import { formatDate } from '@/lib/text';
-import { AlertCircle, Search, SearchX } from 'lucide-react';
+import { Search, SearchX } from 'lucide-react';
 
 export function ArxivPanel() {
   const [query, setQuery] = useState('');
@@ -56,13 +58,7 @@ export function ArxivPanel() {
       />
 
       {error && (
-        <div
-          role="alert"
-          className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-        >
-          <AlertCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
-          <span className="min-w-0 break-words">{error}</span>
-        </div>
+        <Alert>{error}</Alert>
       )}
 
       {hasResults && (
@@ -72,7 +68,16 @@ export function ArxivPanel() {
         </p>
       )}
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+      {/* Stale results used to sit at full strength while a new search ran,
+          reading as the answer to the query already in the box. */}
+      <div
+        className={cn(
+          'min-h-0 flex-1 space-y-3 overflow-y-auto',
+          loading && hasResults && 'pointer-events-none opacity-50 transition-opacity',
+        )}
+      >
+        {loading && !hasResults && <ResultsSkeleton />}
+
         {results.map((result, index) => {
           const key = `${result.id}-${index}`;
           return (

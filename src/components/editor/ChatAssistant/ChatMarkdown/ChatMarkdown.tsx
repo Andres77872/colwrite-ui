@@ -55,7 +55,7 @@ function renderInline(text: string): ReactNode {
     switch (token.type) {
       case 'code':
         return (
-          <code key={index} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">
+          <code key={index} className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[0.9em]">
             {token.value}
           </code>
         );

@@ -77,7 +77,7 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
         placeholder="Type something, or press '/' for commands…" 
         style={editableStyle} 
         slashEnabled 
-        className="text-[15px] leading-relaxed"
+        className="text-md leading-relaxed"
       />
       {mounts.map(({ id, el }: { id: string; el: HTMLElement }) => {
         const child = (block.children || []).find(c => c.id === id);

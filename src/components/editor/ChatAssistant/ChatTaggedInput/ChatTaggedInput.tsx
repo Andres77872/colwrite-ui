@@ -1,5 +1,6 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState, useCallback } from 'react';
+import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
+import { Kbd } from '@/components/ui/kbd';
 import { parseRefParts } from './refParts';
 
 type SelectionRange = { start: number; end: number };
@@ -248,7 +249,10 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
   }, [onChange, onEditRef, onRemoveRef, restoreCaretSoon, setCaretRange, value]);
 
   const charCount = value.length;
-  const isOverLimit = maxLength && charCount > maxLength;
+  const isOverLimit = Boolean(maxLength && charCount > maxLength);
+  // Was the literal string 'input-status', which collides the moment a second
+  // composer mounts — every one of them would then describe the first.
+  const statusId = useId();
 
   return (
     <div className="chat-tagged-input">
@@ -264,8 +268,11 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
         contentEditable={!disabled}
         role="textbox"
         aria-multiline="true"
-        aria-label={placeholder ? `Input field: ${placeholder}` : 'Text input field'}
-        aria-describedby={showStatus ? 'input-status' : undefined}
+        // `role="textbox"` already announces "edit"; prefixing "Input field:"
+        // made readers say it twice. The placeholder alone is the name.
+        aria-label={placeholder || 'Message'}
+        aria-invalid={isOverLimit || undefined}
+        aria-describedby={showStatus ? statusId : undefined}
         data-placeholder={placeholder || ''}
         onInput={handleInput}
         onKeyUp={handleKeyUp}
@@ -288,15 +295,15 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, {
         onKeyDown={handleKeyDown}
       />
       {showStatus && (
-        <div id="input-status" className="flex items-center justify-between mt-1 text-[10px] text-muted-foreground">
+        <div id={statusId} className="flex items-center justify-between mt-1 text-2xs text-muted-foreground">
           <div className="flex items-center gap-2">
             <span className="flex items-center gap-0.5">
-              <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">#</kbd> Reference
+              <Kbd>#</Kbd> Reference
             </span>
             {isFocused && (
               <>
                 <span className="flex items-center gap-0.5">
-                  <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">⌘</kbd>+<kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">⌫</kbd> Delete word
+                  <Kbd>⌘</Kbd>+<Kbd>⌫</Kbd> Delete word
                 </span>
               </>
             )}

@@ -13,6 +13,7 @@ import { ChatSessionsProvider } from './components/chat/ChatSessionsContext'
 import { useAuth } from './components/auth/authContextState'
 import { LandingPage } from './components/landing'
 import { Spinner } from './components/ui/spinner'
+import { ErrorBoundary } from './components/common/ErrorBoundary'
 
 function App() {
   const { user, status } = useAuth();
@@ -41,15 +42,15 @@ function App() {
             <AppShell
               header={<Topbar />}
               left={<Sidebar />}
-              main={<>
+              main={<ErrorBoundary label="the editor">
                 <Canvas />
                 <ChatAssistant />
                 <DocumentFooter />
                 <FloatingToolbar />
                 <SlashMenu />
-              </>}
+              </ErrorBoundary>}
               right={<ToolsRail />}
-              aside={<ToolsAside />}
+              aside={<ErrorBoundary label="this panel"><ToolsAside /></ErrorBoundary>}
             />
           </PanelsProvider>
         </ChatSessionsProvider>

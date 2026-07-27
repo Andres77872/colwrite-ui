@@ -43,6 +43,9 @@ export function SearchForm({
           aria-hidden="true"
           className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
         />
+        {/* Deliberately not disabled while loading: disabling a focused input
+            drops focus and stops the user refining a query they can already see
+            is wrong. The submit button is the control that guards re-entry. */}
         <Input
           type="search"
           className="pl-8"
@@ -50,7 +53,6 @@ export function SearchForm({
           aria-label={placeholder}
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
-          disabled={loading}
         />
       </div>
 

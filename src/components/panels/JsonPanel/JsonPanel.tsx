@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useEditor } from '@/editor';
 import { Button } from '@/components/ui/button';
@@ -26,6 +26,7 @@ export function JsonPanel() {
   const dirty = draft.text !== draft.base;
   const text = dirty ? draft.text : currentJson;
   const [parseError, setParseError] = useState<string | null>(null);
+  const parseErrorId = useId();
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<number | null>(null);
@@ -131,6 +132,9 @@ export function JsonPanel() {
         spellCheck={false}
         aria-label="Document JSON"
         aria-invalid={parseError !== null}
+        // `aria-invalid` says the field is wrong; without this the reason sits
+        // in an unassociated paragraph and is never read out with the field.
+        aria-describedby={parseError ? parseErrorId : undefined}
         onChange={(event) => {
           setDraft((current) => ({
             base: current.text === current.base ? currentJson : current.base,
@@ -143,6 +147,7 @@ export function JsonPanel() {
 
       {parseError && (
         <p
+          id={parseErrorId}
           role="alert"
           className="flex items-start gap-1.5 text-xs text-destructive"
         >

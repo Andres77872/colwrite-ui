@@ -15,15 +15,17 @@ import {
   type SemanticScholarSearchParams,
 } from '@/services/semanticScholar';
 import semanticScholarMark from '@/assets/semantic-scholar-mark.svg';
-import { AlertCircle, ExternalLink, Network, SearchX, X } from 'lucide-react';
+import { ExternalLink, Network, SearchX, X } from 'lucide-react';
+import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
+import { cn } from '@/lib/utils';
 import { safeExternalHttpUrl } from '@/lib/url';
-import { PaperCard, SearchForm, useExpandable } from '../shared';
+import { Disclosure, PaperCard, ResultsSkeleton, SearchForm, useExpandable } from '../shared';
 
 type ExplorationMode = CitationGraphDirection | 'recommendations';
 
@@ -144,13 +146,12 @@ function CitationContexts({
 }) {
   if (contexts.length === 0) return null;
   return (
-    <details className="mt-1 text-[11px]">
-      <summary
-        className="cursor-pointer rounded-sm font-medium text-foreground/80"
-        aria-label={`Show ${contexts.length} citation context${contexts.length === 1 ? '' : 's'} for ${paperTitle}`}
-      >
-        Citation contexts ({contexts.length})
-      </summary>
+    <Disclosure
+      className="mt-1 text-xs"
+      triggerClassName="text-foreground/80"
+      label={`Show ${contexts.length} citation context${contexts.length === 1 ? '' : 's'} for ${paperTitle}`}
+      summary={`Citation contexts (${contexts.length})`}
+    >
       <ol className="mt-1 max-h-32 list-decimal space-y-1 overflow-y-auto pl-5 pr-1 text-foreground/80">
         {contexts.map((context, index) => (
           <li key={`${index}:${context}`}>
@@ -160,7 +161,7 @@ function CitationContexts({
           </li>
         ))}
       </ol>
-    </details>
+    </Disclosure>
   );
 }
 
@@ -224,14 +225,14 @@ function EvidenceFinding({ finding }: { finding: ClaimEvidenceFinding }) {
         </Badge>
       </div>
       {metadata.length > 0 && (
-        <p className="text-[10px] capitalize text-muted-foreground">
+        <p className="text-2xs capitalize text-muted-foreground">
           {metadata.join(' · ')}
         </p>
       )}
       {finding.score !== null && (
         <p
           aria-label="Evidence relevance score"
-          className="text-[10px] tabular-nums text-muted-foreground"
+          className="text-2xs tabular-nums text-muted-foreground"
         >
           Retrieval relevance: {evidenceScoreLabel(finding.score)} (not claim confidence)
         </p>
@@ -239,14 +240,14 @@ function EvidenceFinding({ finding }: { finding: ClaimEvidenceFinding }) {
       <blockquote className="border-l-2 border-primary/30 pl-2 text-xs leading-relaxed text-foreground/85">
         “{finding.excerpt}”
       </blockquote>
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
+      <p className="text-xs leading-relaxed text-muted-foreground">
         {finding.explanation}
       </p>
       {finding.provenance.length > 0 && (
-        <details className="text-[10px] text-muted-foreground">
-          <summary className="cursor-pointer rounded-sm font-medium">
-            Provenance ({finding.provenance.length})
-          </summary>
+        <Disclosure
+          className="text-2xs text-muted-foreground"
+          summary={`Provenance (${finding.provenance.length})`}
+        >
           <ul
             className="mt-1 max-h-24 space-y-1 overflow-y-auto pl-3"
             aria-label="Evidence provenance"
@@ -261,10 +262,10 @@ function EvidenceFinding({ finding }: { finding: ClaimEvidenceFinding }) {
               </li>
             ))}
           </ul>
-        </details>
+        </Disclosure>
       )}
       {(finding.license || finding.open_access_status || finding.disclaimer) && (
-        <p aria-label="Evidence source terms" className="text-[10px] leading-relaxed text-muted-foreground">
+        <p aria-label="Evidence source terms" className="text-2xs leading-relaxed text-muted-foreground">
           {finding.open_access_status && (
             <span>Open-access status: {finding.open_access_status}. </span>
           )}
@@ -287,12 +288,12 @@ function ClaimAssessmentResult({ assessment }: { assessment: ClaimAssessment }) 
         <Badge variant={VERDICT_VARIANTS[assessment.verdict]}>
           {VERDICT_LABELS[assessment.verdict]}
         </Badge>
-        <span className="text-[11px] tabular-nums text-muted-foreground">
+        <span className="text-xs tabular-nums text-muted-foreground">
           Assessment confidence: {confidence}%
         </span>
       </div>
       <div>
-        <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <p className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
           Claim assessed
         </p>
         <p className="mt-0.5 text-xs leading-relaxed">{assessment.claim}</p>
@@ -317,7 +318,7 @@ function ClaimAssessmentResult({ assessment }: { assessment: ClaimAssessment }) 
       {assessment.limitations.length > 0 && (
         <div>
           <h3 className="text-xs font-semibold">Limitations</h3>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-muted-foreground">
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
             {assessment.limitations.map((limitation, index) => (
               <li key={`${index}:${limitation}`}>{limitation}</li>
             ))}
@@ -325,7 +326,7 @@ function ClaimAssessmentResult({ assessment }: { assessment: ClaimAssessment }) 
         </div>
       )}
 
-      <p className="border-t border-border/70 pt-2 text-[10px] leading-relaxed text-muted-foreground">
+      <p className="border-t border-border/70 pt-2 text-2xs leading-relaxed text-muted-foreground">
         {assessment.disclaimer}
       </p>
     </section>
@@ -540,17 +541,22 @@ export function SemanticScholarPanel() {
         label="Semantic Scholar results"
       />
 
-      <details className="rounded-md border border-border/70 bg-muted/20 px-2.5 py-1.5">
-        <summary className="cursor-pointer rounded-sm text-xs font-medium">
-          Search filters
-          {activeFilterCount > 0 && (
-            <Badge variant="secondary" className="ml-2 tabular-nums">
-              {activeFilterCount} active
-            </Badge>
-          )}
-        </summary>
+      <Disclosure
+        className="rounded-md border border-border/70 bg-muted/20 px-2.5 py-1.5"
+        triggerClassName="text-xs"
+        summary={
+          <>
+            Search filters
+            {activeFilterCount > 0 && (
+              <Badge variant="secondary" className="ml-2 tabular-nums">
+                {activeFilterCount} active
+              </Badge>
+            )}
+          </>
+        }
+      >
         <div className="mt-2 grid grid-cols-2 gap-2">
-          <label className="space-y-1 text-[10px] font-medium text-muted-foreground">
+          <label className="space-y-1 text-2xs font-medium text-muted-foreground">
             <span>Year or range</span>
             <Input
               value={year}
@@ -562,7 +568,7 @@ export function SemanticScholarPanel() {
               className="h-8 text-xs"
             />
           </label>
-          <label className="space-y-1 text-[10px] font-medium text-muted-foreground">
+          <label className="space-y-1 text-2xs font-medium text-muted-foreground">
             <span>Minimum citations</span>
             <Input
               type="number"
@@ -577,7 +583,7 @@ export function SemanticScholarPanel() {
               className="h-8 text-xs"
             />
           </label>
-          <label className="col-span-2 space-y-1 text-[10px] font-medium text-muted-foreground">
+          <label className="col-span-2 space-y-1 text-2xs font-medium text-muted-foreground">
             <span>Fields of study (comma-separated)</span>
             <Input
               value={fieldsOfStudy}
@@ -598,21 +604,26 @@ export function SemanticScholarPanel() {
             Open-access papers only
           </label>
         </div>
-      </details>
+      </Disclosure>
 
       <div className="flex items-end justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] leading-relaxed text-muted-foreground">
-            Enter one precise claim to assess it against retrieved source excerpts.
+          {/* The claim is the search box's text — there is no separate field.
+              The copy used to read "Enter one precise claim" next to nothing
+              but a year input, so the only visible instruction pointed at a
+              field that does not exist. */}
+          <p className="text-2xs leading-relaxed text-muted-foreground">
+            Assess reads the search box above as a single claim and checks it against
+            retrieved source excerpts.
           </p>
-          <label className="mt-1 block max-w-36 space-y-1 text-[10px] font-medium text-muted-foreground">
-            <span>Claim year (optional)</span>
+          <label className="mt-1 block max-w-40 space-y-1 text-2xs font-medium text-muted-foreground">
+            <span>Limit sources to year</span>
             <Input
               value={claimYear}
               onChange={(event) => setClaimYear(event.target.value)}
-              placeholder="2020-2026"
+              placeholder="Any year"
               maxLength={64}
-              aria-label="Claim assessment year"
+              aria-label="Limit claim sources to year"
               className="h-8 text-xs"
             />
           </label>
@@ -624,7 +635,8 @@ export function SemanticScholarPanel() {
           className="shrink-0"
           onClick={() => void onAssessClaim()}
           disabled={!query.trim()}
-          aria-label="Assess entered text as a claim"
+          aria-label="Assess the search text as a claim"
+          title={query.trim() ? undefined : 'Enter a claim in the search box first'}
           aria-busy={assessment?.loading || undefined}
         >
           {assessment?.loading && <Spinner />}
@@ -633,13 +645,7 @@ export function SemanticScholarPanel() {
       </div>
 
       {error && (
-        <div
-          role="alert"
-          className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-        >
-          <AlertCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
-          <span className="min-w-0 break-words">{error}</span>
-        </div>
+        <Alert>{error}</Alert>
       )}
 
       {hasResults && (
@@ -648,7 +654,16 @@ export function SemanticScholarPanel() {
         </p>
       )}
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+      {/* Stale results used to sit at full strength while a new search ran,
+          reading as the answer to the query already in the box. */}
+      <div
+        className={cn(
+          'min-h-0 flex-1 space-y-3 overflow-y-auto',
+          loading && hasResults && 'pointer-events-none opacity-50 transition-opacity',
+        )}
+      >
+        {loading && !hasResults && <ResultsSkeleton />}
+
         {assessment?.loading && (
           <div
             className="flex items-center justify-center gap-2 rounded-lg border border-border py-5 text-xs text-muted-foreground"
@@ -660,13 +675,7 @@ export function SemanticScholarPanel() {
         )}
 
         {assessment?.error && (
-          <div
-            role="alert"
-            className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-          >
-            <AlertCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
-            <span className="min-w-0 break-words">{assessment.error}</span>
-          </div>
+          <Alert>{assessment.error}</Alert>
         )}
 
         {assessment?.result && <ClaimAssessmentResult assessment={assessment.result} />}
@@ -745,7 +754,7 @@ export function SemanticScholarPanel() {
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <h3 className="text-xs font-semibold">{modeLabel(exploration.mode)}</h3>
-                <p className="truncate text-[11px] text-muted-foreground">
+                <p className="truncate text-xs text-muted-foreground">
                   {exploration.source.title}
                 </p>
               </div>
@@ -794,7 +803,7 @@ export function SemanticScholarPanel() {
                   {(entry.intents.length > 0 || entry.contexts.length > 0) && (
                     <div className="rounded-md border border-border/60 bg-background/50 px-2 py-1.5">
                       {entry.intents.length > 0 && (
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-xs text-muted-foreground">
                           Citation intent: {entry.intents.join(', ')}
                         </p>
                       )}
@@ -808,7 +817,10 @@ export function SemanticScholarPanel() {
               );
             })}
 
-            {exploration.loading && (
+            {/* Only for the first page. Paging keeps its busy state on the
+                button below, which used to unmount mid-request and drop the
+                list out from under the pointer. */}
+            {exploration.loading && exploration.items.length === 0 && (
               <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
                 <Spinner />
                 Loading graph…
@@ -823,15 +835,18 @@ export function SemanticScholarPanel() {
                 </p>
               )}
 
-            {!exploration.loading && exploration.nextOffset !== null && (
+            {exploration.nextOffset !== null && exploration.items.length > 0 && (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 className="w-full"
+                disabled={exploration.loading}
+                aria-busy={exploration.loading || undefined}
                 onClick={() => void explore(exploration.source, exploration.mode, true)}
               >
-                Load more
+                {exploration.loading && <Spinner />}
+                {exploration.loading ? 'Loading more…' : 'Load more'}
               </Button>
             )}
           </section>
@@ -854,7 +869,7 @@ export function SemanticScholarPanel() {
         )}
       </div>
 
-      <p className="flex items-center gap-1 text-[10px] text-muted-foreground">
+      <p className="flex items-center gap-1 text-2xs text-muted-foreground">
         <img
           src={semanticScholarMark}
           alt=""

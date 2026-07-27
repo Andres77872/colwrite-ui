@@ -139,7 +139,7 @@ async function runAssessment(claim = 'The intervention improves outcomes.') {
   fireEvent.change(screen.getByPlaceholderText('Search Semantic Scholar…'), {
     target: { value: claim },
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Assess entered text as a claim' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Assess the search text as a claim' }));
   await screen.findByRole('region', { name: 'Claim assessment' });
 }
 
@@ -360,6 +360,8 @@ describe('SemanticScholarPanel', () => {
     expect(screen.getByLabelText('Evidence relevance score').textContent).toContain(
       'Retrieval relevance: 0.93 (not claim confidence)',
     );
+    // Provenance is behind a disclosure now, so open it the way a reader would.
+    fireEvent.click(screen.getByRole('button', { name: /Provenance \(1\)/ }));
     expect(screen.getByLabelText('Evidence provenance').textContent).toContain(
       'semantic_scholar · /graph/v1/snippet/search · CorpusId:42',
     );
@@ -392,10 +394,10 @@ describe('SemanticScholarPanel', () => {
     fireEvent.change(screen.getByPlaceholderText('Search Semantic Scholar…'), {
       target: { value: 'A time-bounded claim' },
     });
-    fireEvent.change(screen.getByLabelText('Claim assessment year'), {
+    fireEvent.change(screen.getByLabelText('Limit claim sources to year'), {
       target: { value: '2021-2025' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Assess entered text as a claim' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Assess the search text as a claim' }));
     await screen.findByRole('region', { name: 'Claim assessment' });
 
     expect(serviceMocks.assessment).toHaveBeenCalledWith({
@@ -445,7 +447,7 @@ describe('SemanticScholarPanel', () => {
 
     render(<SemanticScholarPanel />);
     const field = screen.getByPlaceholderText('Search Semantic Scholar…');
-    const assess = screen.getByRole('button', { name: 'Assess entered text as a claim' });
+    const assess = screen.getByRole('button', { name: 'Assess the search text as a claim' });
     fireEvent.change(field, { target: { value: 'First claim' } });
     fireEvent.click(assess);
     fireEvent.change(field, { target: { value: 'Second claim' } });
@@ -469,7 +471,7 @@ describe('SemanticScholarPanel', () => {
     fireEvent.change(screen.getByPlaceholderText('Search Semantic Scholar…'), {
       target: { value: 'A precise claim' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Assess entered text as a claim' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Assess the search text as a claim' }));
 
     expect((await screen.findByRole('alert')).textContent).toContain(
       'Assessment provider unavailable',

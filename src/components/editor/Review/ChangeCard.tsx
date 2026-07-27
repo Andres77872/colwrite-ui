@@ -18,8 +18,8 @@ const KIND_STYLES: Record<
   { accent: string; badge: string; label: string }
 > = {
   insert: {
-    accent: 'border-l-[var(--color-diff-add-border)]',
-    badge: 'bg-[var(--color-diff-add)] text-[var(--color-diff-add-fg)]',
+    accent: 'border-l-diff-add-border',
+    badge: 'bg-diff-add text-diff-add-fg',
     label: 'Addition',
   },
   replace: {
@@ -28,8 +28,8 @@ const KIND_STYLES: Record<
     label: 'Rewrite',
   },
   delete: {
-    accent: 'border-l-[var(--color-diff-remove-border)]',
-    badge: 'bg-[var(--color-diff-remove)] text-[var(--color-diff-remove-fg)]',
+    accent: 'border-l-diff-remove-border',
+    badge: 'bg-diff-remove text-diff-remove-fg',
     label: 'Deletion',
   },
   reorder: {
@@ -64,8 +64,8 @@ function WordDiff({ before, after }: { before: string; after: string }) {
             className={cn(
               'rounded-sm',
               segment.type === 'insert'
-                ? 'bg-[var(--color-diff-add)] text-[var(--color-diff-add-fg)]'
-                : 'bg-[var(--color-diff-remove)] text-[var(--color-diff-remove-fg)] line-through decoration-1',
+                ? 'bg-diff-add text-diff-add-fg'
+                : 'bg-diff-remove text-diff-remove-fg line-through decoration-1',
             )}
           >
             {segment.value}
@@ -116,7 +116,7 @@ function ChangeBody({ change }: { change: ProposedChange }) {
   if (change.kind === 'delete') {
     const text = blockText(current);
     return (
-      <p className="whitespace-pre-wrap text-sm leading-relaxed text-[var(--color-diff-remove-fg)] line-through decoration-1">
+      <p className="whitespace-pre-wrap text-sm leading-relaxed text-diff-remove-fg line-through decoration-1">
         {text || 'Empty block'}
       </p>
     );
@@ -137,7 +137,7 @@ function ChangeBody({ change }: { change: ProposedChange }) {
     return (
       <p
         className={cn(
-          'whitespace-pre-wrap text-sm leading-relaxed text-[var(--color-diff-add-fg)]',
+          'whitespace-pre-wrap text-sm leading-relaxed text-diff-add-fg',
           block?.type === 'heading' && 'font-semibold',
         )}
       >
@@ -181,7 +181,7 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
       <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-1.5">
         <span
           className={cn(
-            'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
+            'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
             style.badge,
           )}
         >
@@ -196,7 +196,7 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
               <Button
                 size="sm"
                 variant="ghost"
-                className="h-7 gap-1 px-2 text-xs text-[var(--color-diff-add-fg)] hover:bg-[var(--color-diff-add)]"
+                className="h-7 gap-1 px-2 text-xs text-diff-add-fg hover:bg-diff-add"
                 onClick={() => accept(change.id)}
               >
                 <Check className="h-3.5 w-3.5" />
@@ -214,7 +214,7 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
             </>
           ) : (
             <span
-              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground"
               title="Accept the change this one builds on first."
             >
               <Lock aria-hidden="true" className="h-3 w-3" />

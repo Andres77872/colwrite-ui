@@ -25,10 +25,14 @@
   --color-popover: #16161f;
   --color-popover-foreground: #f0f2f5;
 
-  --color-elevated: #1a1a24;
-
-  /* Primary accent */
+  /* Primary accent.
+     `primary` is the brand hue for text, borders, rings and washes. `-strong`
+     is the one to fill a surface with when white text sits on top: #6366f1
+     against #ffffff measures 4.47:1, just under the 4.5:1 that 11–13px button
+     labels need, and every filled primary button in the app was failing on it.
+     #4f46e5 measures 6.3:1 and is the same hue one step down. */
   --color-primary: #6366f1;
+  --color-primary-strong: #4f46e5;
   --color-primary-foreground: #ffffff;
   --color-accent-dark: #4f46e5;
 
@@ -40,8 +44,12 @@
   --color-accent: #1f1f2e;
   --color-accent-foreground: #f0f2f5;
 
-  /* Status */
+  /* Status.
+     Same split as primary: #ef4444 carries white at only 3.76:1, so filled
+     destructive buttons use `-strong` (#dc2626, 4.8:1) while `text-destructive`
+     keeps the lighter hue, which it needs to stay legible on dark surfaces. */
   --color-destructive: #ef4444;
+  --color-destructive-strong: #dc2626;
   --color-destructive-foreground: #ffffff;
   --color-success: #22c55e;
   --color-success-foreground: #04140a;
@@ -117,6 +125,11 @@
   --text-2xl--line-height: 36px;
   --text-3xl: 36px;
   --text-3xl--line-height: 44px;
+  /* Display size for the marketing hero. The scale used to stop at 3xl, so the
+     landing page reached for Tailwind's stock `text-4xl`/`text-5xl` — the first
+     of which resolves to 36px, silently duplicating 3xl under another name. */
+  --text-4xl: 48px;
+  --text-4xl--line-height: 56px;
 
   /* ----------------------------------------
    * RADIUS
@@ -141,13 +154,23 @@
   --shadow-glow-sm: 0 0 10px rgb(99 102 241 / 0.1);
 
   /* ----------------------------------------
+   * MOTION
+   * One duration scale so the utilities, the named animations and the
+   * enter/exit keyframes below all agree. They previously ran on four
+   * unrelated sets of numbers.
+   * ---------------------------------------- */
+  --transition-fast: 120ms;
+  --transition-base: 150ms;
+  --transition-slow: 200ms;
+
+  /* ----------------------------------------
    * NAMED ANIMATIONS
    * ---------------------------------------- */
-  --animate-fade-in: fade-in 0.15s ease-out;
-  --animate-fade-out: fade-out 0.15s ease-out;
-  --animate-slide-in-up: slide-in-up 0.15s ease-out;
-  --animate-slide-in-down: slide-in-down 0.15s ease-out;
-  --animate-scale-in: scale-in 0.12s ease-out;
+  --animate-fade-in: fade-in var(--transition-base) ease-out;
+  --animate-fade-out: fade-out var(--transition-base) ease-out;
+  --animate-slide-in-up: slide-in-up var(--transition-base) ease-out;
+  --animate-slide-in-down: slide-in-down var(--transition-base) ease-out;
+  --animate-scale-in: scale-in var(--transition-fast) ease-out;
   --animate-spin: spin 1s linear infinite;
   --animate-shimmer: shimmer 1.4s ease-in-out infinite;
 }
@@ -159,6 +182,10 @@
    ============================================ */
 
 :root {
+  /* Single-mode by design. There is no `@custom-variant dark` and no light
+     token set: the shadows, scrollbars, modal scrim and the eight chart series
+     are all tuned and validated against #0a0a0f, so a palette flip alone would
+     not produce a working light theme. */
   color-scheme: dark;
 
   --z-base: 1;
@@ -220,7 +247,7 @@
     --tw-exit-scale: 1;
     --tw-exit-translate-x: 0;
     --tw-exit-translate-y: 0;
-    animation-duration: 150ms;
+    animation-duration: var(--transition-base);
     animation-fill-mode: both;
   }
 

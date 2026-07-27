@@ -21,7 +21,7 @@ export function ToolsRail() {
               variant="ghost"
               size="icon-sm"
               className={cn(
-                'h-9 w-9 text-muted-foreground hover:bg-muted hover:text-foreground',
+                'h-9 w-9 text-muted-foreground hover:bg-accent hover:text-foreground',
                 isOpen && 'text-foreground',
               )}
               onClick={toggle}
@@ -54,7 +54,7 @@ export function ToolsRail() {
                       'relative h-9 w-9 transition-colors duration-150',
                       isActive
                         ? 'bg-primary/10 text-primary'
-                        : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                        : 'text-muted-foreground hover:bg-accent hover:text-foreground',
                     )}
                     // On desktop the rail toggles the panel; on mobile the panel is an
                     // overlay, so re-tapping the active tool should close it too.

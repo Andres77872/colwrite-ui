@@ -59,7 +59,7 @@ export function CitationPill({ children }: { children: ReactNode }) {
 
 export function EquationChip({ children }: { children: ReactNode }) {
   return (
-    <span className="rounded bg-primary/10 px-1 py-0.5 font-mono text-[0.8em] text-primary">
+    <span className="rounded-sm bg-primary/10 px-1 py-0.5 font-mono text-[0.8em] text-primary">
       {children}
     </span>
   );
@@ -105,8 +105,8 @@ export function ReviewBarMock({ count = 3 }: { count?: number }) {
 
 const CHANGE_KINDS = {
   insert: {
-    accent: 'border-l-[var(--color-diff-add-border)]',
-    badge: 'bg-[var(--color-diff-add)] text-[var(--color-diff-add-fg)]',
+    accent: 'border-l-diff-add-border',
+    badge: 'bg-diff-add text-diff-add-fg',
     label: 'Addition',
     Icon: Plus,
   },
@@ -159,7 +159,7 @@ export function ChangeCardMock({
             </span>
           ) : (
             <>
-              <MockButton className="text-[var(--color-diff-add-fg)]">
+              <MockButton className="text-diff-add-fg">
                 <Check aria-hidden="true" />
                 Accept
               </MockButton>
@@ -180,17 +180,17 @@ export function ChangeCardMock({
 export function RewriteDiffBody() {
   return (
     <p className="whitespace-pre-wrap text-sm leading-relaxed">
-      <span className="rounded-sm bg-[var(--color-diff-remove)] text-[var(--color-diff-remove-fg)] line-through decoration-1">
+      <span className="rounded-sm bg-diff-remove text-diff-remove-fg line-through decoration-1">
         In this paper, we
       </span>{' '}
-      <span className="rounded-sm bg-[var(--color-diff-add)] text-[var(--color-diff-add-fg)]">
+      <span className="rounded-sm bg-diff-add text-diff-add-fg">
         We
       </span>
       <span className="text-muted-foreground"> show that sparse routing lets models scale </span>
-      <span className="rounded-sm bg-[var(--color-diff-remove)] text-[var(--color-diff-remove-fg)] line-through decoration-1">
+      <span className="rounded-sm bg-diff-remove text-diff-remove-fg line-through decoration-1">
         without a matching increase in
       </span>{' '}
-      <span className="rounded-sm bg-[var(--color-diff-add)] text-[var(--color-diff-add-fg)]">
+      <span className="rounded-sm bg-diff-add text-diff-add-fg">
         sublinearly in
       </span>
       <span className="text-muted-foreground"> compute.</span>
@@ -395,12 +395,12 @@ export function ColpaliResultMock() {
             p. {page}
           </Badge>
           <div aria-hidden="true" className="space-y-1.5 pt-1">
-            <div className="h-1 w-2/3 rounded bg-border" />
-            <div className="h-1 w-full rounded bg-border/70" />
-            <div className="h-1 w-5/6 rounded bg-border/70" />
+            <div className="h-1 w-2/3 rounded-sm bg-border" />
+            <div className="h-1 w-full rounded-sm bg-border/70" />
+            <div className="h-1 w-5/6 rounded-sm bg-border/70" />
             <div className="h-6 w-full rounded-sm border border-border/50 bg-muted/40" />
-            <div className="h-1 w-full rounded bg-border/70" />
-            <div className="h-1 w-3/4 rounded bg-border/70" />
+            <div className="h-1 w-full rounded-sm bg-border/70" />
+            <div className="h-1 w-3/4 rounded-sm bg-border/70" />
           </div>
         </div>
       ))}

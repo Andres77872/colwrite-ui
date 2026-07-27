@@ -64,8 +64,10 @@ describe('ChatRefPicker callbacks', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Open picker' }));
-    fireEvent.click(screen.getByRole('button', { name: /reference current document/i }));
-    fireEvent.click(screen.getByRole('button', { name: /hello paragraph/i }));
+    // The picker is a listbox, not a menu: focus stays in the composer and the
+    // highlight is virtual, so its entries are options.
+    fireEvent.click(screen.getByRole('option', { name: /reference current document/i }));
+    fireEvent.click(screen.getByRole('option', { name: /hello paragraph/i }));
 
     await act(async () => {
       await new Promise(requestAnimationFrame);

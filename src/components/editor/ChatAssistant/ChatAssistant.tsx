@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { usePersistentState, isBoolean } from '@/hooks/usePersistentState';
@@ -126,11 +126,22 @@ function DocumentChatAssistant() {
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
   // What was sent last, so a failed turn can be retried without retyping.
   const [lastSent, setLastSent] = useState<string | null>(null);
+  const unsavedNoticeId = useId();
 
   const visibleMessages = useMemo(
     () => messages.filter((m) => m.role !== 'system'),
     [messages],
   );
+
+  // The finished reply, announced once. Empty while streaming so the live
+  // region stays silent until there is something whole to read out.
+  const completedReply = useMemo(() => {
+    if (isStreaming) return '';
+    for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
+      if (visibleMessages[i].role === 'assistant') return visibleMessages[i].content;
+    }
+    return '';
+  }, [isStreaming, visibleMessages]);
 
   const patchActive = useCallback((update: (message: ChatMessage) => ChatMessage) => {
     const id = activeMessageIdRef.current;
@@ -384,7 +395,7 @@ function DocumentChatAssistant() {
         <Sparkles aria-hidden="true" className="h-4 w-4 text-primary" />
         Assistant
         {proposals.pendingCount > 0 && (
-          <span className="ml-1 rounded-full bg-primary px-1.5 text-[11px] font-medium text-primary-foreground">
+          <span className="ml-1 rounded-full bg-primary px-1.5 text-xs font-medium text-primary-foreground">
             {proposals.pendingCount}
           </span>
         )}
@@ -469,7 +480,10 @@ function DocumentChatAssistant() {
           pinnedToBottom.current = bottom;
           setAtBottom(bottom);
         }}
-        aria-live="polite"
+        // Deliberately not a live region. Markdown arrives token by token, so
+        // `aria-live` here made a screen reader restart the whole growing reply
+        // on every chunk. The typing indicator and `agentStatus` below already
+        // announce progress, and `role="status"` announces the finished reply.
         aria-busy={isStreaming}
       >
         {visibleMessages.length === 0 && (
@@ -485,12 +499,24 @@ function DocumentChatAssistant() {
                   type="button"
                   onClick={() => send(suggestion)}
                   disabled={!documentId}
+                  // `aria-disabled` alongside `disabled` so the reason below is
+                  // reachable: these are the only three affordances in the
+                  // empty state, and on an unsaved document all three used to
+                  // sit greyed out with nothing saying why.
+                  aria-disabled={!documentId}
+                  aria-describedby={documentId ? undefined : unsavedNoticeId}
                   className="rounded-md border border-border px-2.5 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground disabled:opacity-50"
                 >
                   {suggestion}
                 </button>
               ))}
             </div>
+
+            {!documentId && (
+              <p id={unsavedNoticeId} className="text-center text-xs text-muted-foreground">
+                Save the document to use these.
+              </p>
+            )}
           </div>
         )}
 
@@ -560,6 +586,10 @@ function DocumentChatAssistant() {
             </div>
           );
         })}
+
+        <p role="status" aria-live="polite" className="sr-only">
+          {completedReply}
+        </p>
 
         {isStreaming && agentStatus && (
           <p className="flex items-center gap-2 text-xs text-muted-foreground">

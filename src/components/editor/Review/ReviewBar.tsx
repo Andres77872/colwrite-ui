@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirmContext';
 import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
 import { describeChange } from '@/editor/proposals';
@@ -28,6 +29,7 @@ export function ReviewBar() {
     clearError,
   } = useProposals();
   const [listOpen, setListOpen] = useState(false);
+  const confirm = useConfirm();
 
   const hasInvites = invites.length > 0;
   if (pendingCount === 0 && !hasInvites && !error) return null;
@@ -39,8 +41,33 @@ export function ReviewBar() {
     focusChange(pending[next].id);
   };
 
+  // Both of these act on every pending change at once and there is no undo,
+  // while deleting a single document already asks. Rejecting all was the
+  // sharpest edge in the app: one click discarded the whole batch silently.
+  const plural = `${pendingCount} change${pendingCount === 1 ? '' : 's'}`;
+
+  const onAcceptAll = async () => {
+    const ok = await confirm({
+      title: `Accept all ${plural}?`,
+      description: 'Every pending suggestion will be applied to the document.',
+      confirmLabel: 'Accept all',
+    });
+    if (ok) acceptAll();
+  };
+
+  const onRejectAll = async () => {
+    const ok = await confirm({
+      title: `Reject all ${plural}?`,
+      description: 'Every pending suggestion will be discarded. This cannot be undone.',
+      confirmLabel: 'Reject all',
+      destructive: true,
+    });
+    if (ok) rejectAll();
+  };
+
   return (
-    <div className="sticky top-0 z-[var(--z-chrome)] border-b border-border bg-card/95 backdrop-blur">
+    // Stickiness belongs to the wrapper in Canvas — see the comment there.
+    <div className="border-b border-border bg-card/95 backdrop-blur">
       {error && (
         <div
           role="alert"
@@ -129,7 +156,7 @@ export function ReviewBar() {
               >
                 {listOpen ? 'Hide list' : 'List'}
               </Button>
-              <Button size="sm" className="h-7 gap-1 px-2 text-xs" onClick={acceptAll}>
+              <Button size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => void onAcceptAll()}>
                 <Check className="h-3.5 w-3.5" />
                 Accept all
               </Button>
@@ -137,7 +164,7 @@ export function ReviewBar() {
                 size="sm"
                 variant="ghost"
                 className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
-                onClick={rejectAll}
+                onClick={() => void onRejectAll()}
               >
                 <X className="h-3.5 w-3.5" />
                 Reject all
@@ -153,7 +180,7 @@ export function ReviewBar() {
                     type="button"
                     onClick={() => focusChange(change.id)}
                     className={cn(
-                      'flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs transition-colors hover:bg-accent/40',
+                      'flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-xs transition-colors hover:bg-accent/40',
                       focusedChangeId === change.id && 'bg-accent/40',
                     )}
                   >

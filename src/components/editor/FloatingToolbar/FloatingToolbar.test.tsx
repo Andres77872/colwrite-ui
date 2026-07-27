@@ -170,6 +170,49 @@ afterEach(() => {
   document.getSelection()?.removeAllRanges();
 });
 
+describe('FloatingToolbar keyboard operation', () => {
+  it('applies formatting from click, which is the event Enter and Space produce', async () => {
+    const { editable } = await mountEditor();
+    // jsdom does not implement execCommand at all, so it has to be installed
+    // before it can be observed.
+    const exec = vi.fn(() => true);
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: exec });
+
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+
+    const bold = await screen.findByRole('button', { name: /^Bold/ });
+    // Not `mouseDown`: the format buttons used to carry their action there, so
+    // a keyboard user could select text and never apply a style to it.
+    fireEvent.click(bold);
+
+    expect(exec).toHaveBeenCalledWith('bold', false);
+    Reflect.deleteProperty(document, 'execCommand');
+  });
+
+  it('keeps the toolbar open while focus is on one of its buttons', async () => {
+    const { editable } = await mountEditor();
+
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+
+    const bold = await screen.findByRole('button', { name: /^Bold/ });
+    act(() => {
+      bold.focus();
+      // Moving focus off the text greys the selection out, which used to
+      // dismiss the toolbar the instant a keyboard user reached it.
+      document.getSelection()?.removeAllRanges();
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    expect(screen.getByRole('toolbar', { name: 'Text formatting' })).toBeTruthy();
+  });
+});
+
 describe('FloatingToolbar structured citation acceptance', () => {
   it('commits every citation placeholder together with its corresponding child', async () => {
     const { editable } = await mountEditor();
@@ -181,7 +224,9 @@ describe('FloatingToolbar structured citation acceptance', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Search references' }));
 
     const accept = await screen.findByRole('button', { name: 'Accept suggestion' });
-    fireEvent.mouseDown(accept);
+    // `click`, not `mouseDown` — the control has to answer the event that Enter
+    // and Space produce, or the suggestion cannot be accepted without a mouse.
+    fireEvent.click(accept);
 
     await waitFor(() => {
       const block = paragraph(editorRef.current?.doc ?? { version: 1, blocks: [] });
