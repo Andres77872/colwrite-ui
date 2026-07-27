@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { ExternalLink, FileDown, Link2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { truncateAtSentence } from '@/lib/text';
+import { safeExternalHttpUrl } from '@/lib/url';
 
 export interface PaperCardProps {
   index: number;
@@ -16,6 +17,12 @@ export interface PaperCardProps {
   thumbnailUrl?: string | null;
   pdfUrl?: string | null;
   doi?: string | null;
+  /** Human-readable label for the primary `url`, e.g. arXiv or Semantic Scholar. */
+  primaryLinkLabel?: string;
+  /** Provider-specific actions such as citation/reference graph exploration. */
+  actions?: ReactNode;
+  /** Provider-specific terms or provenance shown below the resource links. */
+  notice?: ReactNode;
   expanded: boolean;
   onToggleExpanded: () => void;
   abstractPreviewChars?: number;
@@ -62,6 +69,9 @@ export function PaperCard({
   thumbnailUrl,
   pdfUrl,
   doi,
+  primaryLinkLabel = 'Source',
+  actions,
+  notice,
   expanded,
   onToggleExpanded,
   abstractPreviewChars = 280,
@@ -73,6 +83,9 @@ export function PaperCard({
     : truncateAtSentence(fullAbstract, abstractPreviewChars);
   const metaParts = meta.filter((part): part is string => Boolean(part && part.trim()));
   const displayTitle = title?.trim() || 'Untitled';
+  const sourceUrl = safeExternalHttpUrl(url);
+  const downloadUrl = safeExternalHttpUrl(pdfUrl);
+  const previewUrl = safeExternalHttpUrl(thumbnailUrl);
 
   return (
     <article className="rounded-lg border border-border bg-card p-3 transition-colors hover:border-border/80">
@@ -82,10 +95,10 @@ export function PaperCard({
       </div>
 
       <h3 className="text-sm font-medium leading-snug">
-        {url ? (
+        {sourceUrl ? (
           <a
             className="rounded-sm text-primary hover:underline"
-            href={url}
+            href={sourceUrl}
             target="_blank"
             rel="noreferrer noopener"
           >
@@ -102,11 +115,11 @@ export function PaperCard({
         </p>
       )}
 
-      {(fullAbstract || thumbnailUrl) && (
+      {(fullAbstract || previewUrl) && (
         <div className="mt-2 flex gap-3">
-          {thumbnailUrl && (
+          {previewUrl && (
             <img
-              src={thumbnailUrl}
+              src={previewUrl}
               alt={`First matching page of “${displayTitle}”`}
               loading="lazy"
               className="h-28 w-20 shrink-0 rounded-sm bg-muted object-cover"
@@ -130,11 +143,18 @@ export function PaperCard({
         </div>
       )}
 
-      {(url || pdfUrl || doi) && (
+      {(sourceUrl || downloadUrl || doi || actions) && (
         <div className="mt-2.5 flex flex-wrap items-center gap-3 text-xs">
-          {url && <ResourceLink href={url} icon={ExternalLink}>arXiv</ResourceLink>}
-          {pdfUrl && <ResourceLink href={pdfUrl} icon={FileDown}>PDF</ResourceLink>}
+          {sourceUrl && <ResourceLink href={sourceUrl} icon={ExternalLink}>{primaryLinkLabel}</ResourceLink>}
+          {downloadUrl && <ResourceLink href={downloadUrl} icon={FileDown}>PDF</ResourceLink>}
           {doi && <ResourceLink href={`https://doi.org/${doi}`} icon={Link2}>DOI</ResourceLink>}
+          {actions}
+        </div>
+      )}
+
+      {notice && (
+        <div className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+          {notice}
         </div>
       )}
     </article>

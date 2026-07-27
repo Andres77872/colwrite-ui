@@ -5,6 +5,10 @@ import { dispatchAction } from '@/services/actionDispatcher';
 import type { AiAction } from '@/config/aiActions';
 import { AIActionMenu } from './AIActionMenu/AIActionMenu';
 import {
+  commitMaterializedCitationSuggestion,
+  materializeCitationSuggestionForAction,
+} from './citationTags';
+import {
   clearChildPlaceholders,
   serializeEditableHtml,
 } from '@/components/common/Editable/editableHtml';
@@ -44,7 +48,7 @@ const EMPTY_STATE: FormatState = { bold: false, italic: false, underline: false,
  * this toolbar could not appear at all and the AI action menu was unreachable.
  */
 export function FloatingToolbar() {
-  const { exec, refs, updateHtml, documentId } = useEditor();
+  const { exec, refs, updateHtml, addParagraphChild, documentId } = useEditor();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const [states, setStates] = useState<FormatState>(EMPTY_STATE);
@@ -321,6 +325,21 @@ export function FloatingToolbar() {
         event.stopPropagation();
         stopped = true;
         abortRef.current?.abort();
+
+        const structured = materializeCitationSuggestionForAction(
+          action,
+          generated.textContent ?? '',
+        );
+        if (structured) {
+          commitMaterializedCitationSuggestion(
+            blockId,
+            structured,
+            addParagraphChild,
+            replaceWith,
+          );
+          return;
+        }
+
         const frag = document.createDocumentFragment();
         frag.append(...Array.from(generated.childNodes));
         // Accepting an empty generation keeps the original rather than
@@ -341,7 +360,7 @@ export function FloatingToolbar() {
 
       await runStream();
     },
-    [documentId, findBlockId, updateHtml],
+    [addParagraphChild, documentId, findBlockId, updateHtml],
   );
 
   if (!visible) return null;

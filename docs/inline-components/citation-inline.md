@@ -15,7 +15,8 @@ References:
 ## Purpose
 - Inline citations in numeric, author–year or IEEE style.
 - Multiple keys per citation, plus prefix / locator / suffix.
-- Sources attachable from arXiv search without leaving the document.
+- Sources attachable from a federated arXiv + Semantic Scholar search without
+  leaving the document. Either provider may fail independently.
 
 ## Data contract (src/editor/types.ts)
 ```ts
@@ -26,6 +27,15 @@ export type CitationSource = {
   year?: string;
   venue?: string;
   url?: string;
+  provider?: 'arxiv' | 'semantic_scholar' | 'manual';
+  providerId?: string;
+  doi?: string;
+  externalIds?: Record<string, string>;
+  pdfUrl?: string;
+  citationCount?: number;
+  influentialCitationCount?: number;
+  referenceCount?: number;
+  isOpenAccess?: boolean;
 };
 
 export type CitationChild = {
@@ -52,8 +62,15 @@ export type CitationChild = {
   A citation with no keys renders in the destructive tone.
 - Popover: shared `InlinePopover` with
   - Sources list (title · authors · year · venue, external link, detach).
-  - Find a source: arXiv search (`searchArxiv`), attach results; pasting a bare
-    identifier (DOI / `arXiv:` / numeric id) + Enter adds it as a key directly.
+  - Find a source: searches arXiv (`searchArxiv`) and the authenticated
+    application Semantic Scholar proxy (`searchSemanticScholar`) concurrently.
+    A partial provider failure still returns the other provider's results.
+  - DOI is the canonical key when present. Otherwise, Semantic Scholar records
+    use a canonical, versionless external arXiv ID when available, then fall
+    back to `S2:<paperId>`. This also deduplicates the same paper returned at
+    different arXiv versions; attached sources retain provider provenance.
+  - Pasting a bare identifier (DOI / `arXiv:` / `S2:` / numeric id) + Enter
+    adds it as a key directly.
   - Style segmented control; "Apply this style to all N citations" appears when
     other citations exist (style is a document-wide decision).
   - Prefix / Locator / Suffix fields.
@@ -71,6 +88,21 @@ export type CitationChild = {
 - Author–year renders first-author surname + year from `sources`; a key without
   resolved metadata falls back to the raw key (a wrong author is worse than a
   visible key).
+
+## Agent citation suggestions
+
+- The Floating Toolbar's **Search references** action accepts the backend's
+  strict self-closing `<citation ... />` format.
+- On accept, well-formed tags are converted into empty `data-child-id`
+  placeholders and normal `CitationChild` records. Surrounding response text
+  is preserved as text nodes.
+- A DOI supplied in the backend's portable `key` attribute is canonicalized
+  and takes identity precedence over an inferred Semantic Scholar paper ID.
+  The Semantic Scholar URL still determines the source's provider provenance.
+- Model output is never inserted as HTML. A malformed, unknown, or unsafe
+  citation tag disables the structured transform and the complete response
+  follows the existing plain-text acceptance path.
+- Other AI actions never run the citation-tag transform.
 
 ## Example JSON
 ```json

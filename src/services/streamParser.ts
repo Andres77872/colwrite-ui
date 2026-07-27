@@ -6,7 +6,12 @@ export type SSEEventHandlers = {
   onToken?: (content: string) => void;
   onStatus?: (status: string, detail: string) => void;
   onToolCallStart?: (tool: string, toolCallId: string, args: Record<string, unknown>) => void;
-  onToolCallEnd?: (tool: string, toolCallId: string, durationMs: number) => void;
+  onToolCallEnd?: (
+    tool: string,
+    toolCallId: string,
+    durationMs: number,
+    isError: boolean,
+  ) => void;
   onToolAction?: (action: ToolAction) => void;
   onError?: (errorCode: string, message: string) => void;
   onDone?: (
@@ -146,6 +151,7 @@ export async function parseSSEStream(
         typeof data.tool === 'string' ? data.tool : String(data.tool ?? ''),
         typeof data.tool_call_id === 'string' ? data.tool_call_id : String(data.tool_call_id ?? ''),
         typeof data.duration_ms === 'number' ? data.duration_ms : Number(data.duration_ms ?? 0),
+        data.is_error === true,
       );
     } else if (effectiveEvent === 'error') {
       handlers.onError?.(

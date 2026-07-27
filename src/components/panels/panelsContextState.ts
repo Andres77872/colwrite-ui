@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 
-export type ToolId = 'json' | 'arxiv' | 'colpali' | 'library' | 'chats';
+export type ToolId = 'json' | 'arxiv' | 'semantic-scholar' | 'colpali' | 'library' | 'chats';
 type SetStateAction<T> = T | ((previous: T) => T);
 
 export type PanelsContextValue = {

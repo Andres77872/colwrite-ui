@@ -87,6 +87,7 @@ export function ArxivPanel() {
               badge={<ScoreBadge score={result.score} />}
               pdfUrl={result.pdfUrl}
               doi={result.doi}
+              primaryLinkLabel="arXiv"
               expanded={isExpanded(key)}
               onToggleExpanded={() => toggle(key)}
             />

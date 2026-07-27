@@ -31,6 +31,17 @@ export type CitationSource = {
   year?: string;
   venue?: string;
   url?: string;
+  /** Search provider that resolved this source. Omitted for legacy/manual keys. */
+  provider?: 'arxiv' | 'semantic_scholar' | 'manual';
+  /** Stable identifier in the provider's own namespace. */
+  providerId?: string;
+  doi?: string;
+  externalIds?: Record<string, string>;
+  pdfUrl?: string;
+  citationCount?: number;
+  influentialCitationCount?: number;
+  referenceCount?: number;
+  isOpenAccess?: boolean;
 };
 
 export type CitationChild = {

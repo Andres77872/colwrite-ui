@@ -12,6 +12,8 @@ import {
   Sparkles,
   TriangleAlert,
   Wand2,
+  Network,
+  SearchCheck,
 } from 'lucide-react';
 
 export type ToolRunState = 'running' | 'done' | 'error';
@@ -37,6 +39,36 @@ const TOOL_META: Record<string, { label: string; running: string; icon: typeof W
   doc_edit: { label: 'Prepared changes', running: 'Drafting changes', icon: PenLine },
   doc_create: { label: 'Created a document', running: 'Creating a document', icon: FilePlus2 },
   search_citations: { label: 'Searched for sources', running: 'Searching for sources', icon: BookMarked },
+  semantic_scholar_search: {
+    label: 'Searched Semantic Scholar',
+    running: 'Searching Semantic Scholar',
+    icon: Network,
+  },
+  semantic_scholar_paper: {
+    label: 'Inspected a paper',
+    running: 'Inspecting paper metadata',
+    icon: FileSearch,
+  },
+  semantic_scholar_graph: {
+    label: 'Explored the citation graph',
+    running: 'Exploring the citation graph',
+    icon: Network,
+  },
+  semantic_scholar_recommendations: {
+    label: 'Found related papers',
+    running: 'Finding related papers',
+    icon: BookMarked,
+  },
+  semantic_scholar_snippets: {
+    label: 'Inspected source excerpts',
+    running: 'Searching source excerpts',
+    icon: SearchCheck,
+  },
+  validate_claim: {
+    label: 'Assessed a claim',
+    running: 'Assessing evidence for the claim',
+    icon: SearchCheck,
+  },
   add_details: { label: 'Expanded a passage', running: 'Expanding a passage', icon: Wand2 },
   more_concise: { label: 'Condensed a passage', running: 'Condensing a passage', icon: Scissors },
   aibeat: { label: 'Ran an instruction', running: 'Running your instruction', icon: Sparkles },

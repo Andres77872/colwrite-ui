@@ -47,3 +47,17 @@ currently consumes. The project therefore follows the dual-version compatibility
 Do not add npm peer overrides for this bridge.
 
 Document model details are in [docs/document-json.md](./docs/document-json.md).
+
+## Research providers
+
+The tools rail includes arXiv, ColPali, and Semantic Scholar. Semantic Scholar
+requests leave the browser only through the authenticated ColWrite API at
+`/api/research/semantic-scholar/*` (the development proxy maps that to the
+backend's `/research/semantic-scholar/*` routes); no Semantic Scholar API
+origin or credential is exposed in the Vite/browser environment. The provider
+mark is bundled locally and its attribution backlink is ordinary user
+navigation, not an API request. Search results can be explored through citation,
+reference, and recommendation graphs, and the inline citation picker searches
+arXiv and Semantic Scholar concurrently. The same panel can assess one precise
+claim against retrieved excerpts while preserving the backend's calibrated
+verdict, confidence, evidence, limitations, and disclaimer.

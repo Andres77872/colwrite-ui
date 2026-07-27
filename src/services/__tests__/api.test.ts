@@ -169,4 +169,26 @@ describe('typed API errors', () => {
       message: 'Name is required',
     });
   });
+
+  it('safely extracts a message nested in an object-valued detail', async () => {
+    const payload = {
+      detail: {
+        provider: 'semantic_scholar',
+        operation: 'search_papers',
+        message: 'Semantic Scholar is temporarily unavailable.',
+        retryable: true,
+      },
+    };
+    mockRoutes(() => json(payload, 503));
+
+    const error = await get('/research/semantic-scholar/search?query=test')
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 503,
+      data: payload,
+      message: 'Semantic Scholar is temporarily unavailable.',
+    });
+  });
 });

@@ -93,6 +93,7 @@ export function ColpaliPanel() {
               thumbnailUrl={result.page_image}
               pdfUrl={result.id ? `https://arxiv.org/pdf/${result.id}.pdf` : null}
               doi={result.doi}
+              primaryLinkLabel="arXiv"
               expanded={isExpanded(key)}
               onToggleExpanded={() => toggle(key)}
               abstractPreviewChars={240}

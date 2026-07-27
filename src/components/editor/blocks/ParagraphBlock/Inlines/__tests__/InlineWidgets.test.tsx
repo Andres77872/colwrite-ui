@@ -17,6 +17,23 @@ vi.mock('@/services', async () => ({
   listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
 }));
 
+const searchMocks = vi.hoisted(() => ({
+  arxiv: vi.fn(),
+  semanticScholar: vi.fn(),
+}));
+
+vi.mock('@/services/arxiv', () => ({
+  searchArxiv: searchMocks.arxiv,
+}));
+
+vi.mock('@/services/semanticScholar', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/semanticScholar')>();
+  return {
+    ...actual,
+    searchSemanticScholar: searchMocks.semanticScholar,
+  };
+});
+
 const { EditorProvider, useEditor } = await import('@/editor');
 const { CitationInline } = await import('../CitationInline/CitationInline');
 const { EquationInline } = await import('../EquationInline/EquationInline');
@@ -73,7 +90,19 @@ async function mount(child: ParagraphChild, extraBlocks: Block[] = []) {
   return utils;
 }
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  searchMocks.arxiv.mockReset();
+  searchMocks.semanticScholar.mockReset();
+  searchMocks.arxiv.mockResolvedValue([]);
+  searchMocks.semanticScholar.mockResolvedValue({
+    provider: 'semantic_scholar',
+    total: 0,
+    offset: 0,
+    next_offset: null,
+    data: [],
+  });
+});
 afterEach(cleanup);
 
 const citation = (id: string, over: Partial<ParagraphChild> = {}): ParagraphChild =>
@@ -116,13 +145,195 @@ describe('CitationInline', () => {
     await mount(citation('c1', { keys: [] }));
     fireEvent.click(screen.getByRole('button', { name: '[1]' }));
 
-    const field = screen.getByPlaceholderText('Search arXiv, or paste a key / DOI');
+    const field = screen.getByPlaceholderText(
+      'Search arXiv and Semantic Scholar, or paste a key / DOI',
+    );
     fireEvent.change(field, { target: { value: '2103.00020' } });
     fireEvent.keyDown(field, { key: 'Enter' });
 
     const block = harness.editor.blocks.find((b) => b.id === 'p1');
     expect(block?.type === 'paragraph' && block.children?.[0]).toMatchObject({
       keys: ['2103.00020'],
+    });
+  });
+
+  it('attaches Semantic Scholar results with canonical DOI and provider provenance', async () => {
+    searchMocks.semanticScholar.mockResolvedValue({
+      provider: 'semantic_scholar',
+      total: 1,
+      offset: 0,
+      next_offset: null,
+      data: [
+        {
+          provider: 'semantic_scholar',
+          paper_id: 'paper-with-doi',
+          corpus_id: 9,
+          external_ids: { DOI: 'https://doi.org/10.1000/ABC.' },
+          title: 'Semantic paper',
+          abstract: null,
+          url: 'https://www.semanticscholar.org/paper/paper-with-doi',
+          pdf_url: 'https://example.test/paper.pdf',
+          authors: [{ author_id: 'a1', name: 'A. Researcher' }],
+          year: 2024,
+          publication_date: null,
+          venue: 'Journal',
+          citation_count: 8,
+          influential_citation_count: 2,
+          reference_count: 5,
+          is_open_access: true,
+          open_access_pdf: null,
+          tldr: null,
+          publication_types: [],
+          fields_of_study: [],
+        },
+      ],
+    });
+    await mount(citation('c1', { keys: [], sources: [] }));
+    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+
+    const field = screen.getByPlaceholderText(
+      'Search arXiv and Semantic Scholar, or paste a key / DOI',
+    );
+    fireEvent.change(field, { target: { value: 'semantic query' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await act(async () => {});
+    fireEvent.click(screen.getByText('Semantic paper'));
+
+    const block = harness.editor.blocks.find((candidate) => candidate.id === 'p1');
+    expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({
+      keys: ['10.1000/abc'],
+      sources: [
+        {
+          key: '10.1000/abc',
+          provider: 'semantic_scholar',
+          providerId: 'paper-with-doi',
+          doi: '10.1000/abc',
+          citationCount: 8,
+          isOpenAccess: true,
+        },
+      ],
+    });
+  });
+
+  it('deduplicates federated arXiv versions under a portable arXiv key', async () => {
+    searchMocks.semanticScholar.mockResolvedValue({
+      provider: 'semantic_scholar',
+      total: 1,
+      offset: 0,
+      next_offset: null,
+      data: [
+        {
+          provider: 'semantic_scholar',
+          paper_id: 'semantic-arxiv-paper',
+          corpus_id: 10,
+          external_ids: { ArXiv: 'ARXIV:2401.01234v2' },
+          title: 'Federated paper',
+          abstract: null,
+          url: 'https://www.semanticscholar.org/paper/semantic-arxiv-paper',
+          pdf_url: null,
+          authors: [],
+          year: 2024,
+          publication_date: null,
+          venue: null,
+          citation_count: null,
+          influential_citation_count: null,
+          reference_count: null,
+          is_open_access: false,
+          open_access_pdf: null,
+          tldr: null,
+          publication_types: [],
+          fields_of_study: [],
+        },
+      ],
+    });
+    searchMocks.arxiv.mockResolvedValue([
+      {
+        id: '2401.01234v5',
+        title: 'Duplicate from arXiv',
+        url: 'https://arxiv.org/abs/2401.01234v5',
+      },
+    ]);
+    await mount(citation('c1', { keys: [], sources: [] }));
+    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+
+    const field = screen.getByPlaceholderText(
+      'Search arXiv and Semantic Scholar, or paste a key / DOI',
+    );
+    fireEvent.change(field, { target: { value: 'federated identity' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await act(async () => {});
+
+    expect(screen.getByText('Federated paper')).toBeTruthy();
+    expect(screen.queryByText('Duplicate from arXiv')).toBeNull();
+    fireEvent.click(screen.getByText('Federated paper'));
+
+    const block = harness.editor.blocks.find((candidate) => candidate.id === 'p1');
+    expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({
+      keys: ['2401.01234'],
+      sources: [
+        {
+          key: '2401.01234',
+          provider: 'semantic_scholar',
+          providerId: 'semantic-arxiv-paper',
+          externalIds: { ArXiv: 'ARXIV:2401.01234v2' },
+        },
+      ],
+    });
+  });
+
+  it('keeps Semantic Scholar results when arXiv fails and falls back to an S2 key', async () => {
+    searchMocks.arxiv.mockRejectedValue(new Error('arXiv unavailable'));
+    searchMocks.semanticScholar.mockResolvedValue({
+      provider: 'semantic_scholar',
+      total: 1,
+      offset: 0,
+      next_offset: null,
+      data: [
+        {
+          provider: 'semantic_scholar',
+          paper_id: 'paper-without-doi',
+          corpus_id: null,
+          external_ids: {},
+          title: 'S2 fallback paper',
+          abstract: null,
+          url: null,
+          pdf_url: null,
+          authors: [],
+          year: null,
+          publication_date: null,
+          venue: null,
+          citation_count: null,
+          influential_citation_count: null,
+          reference_count: null,
+          is_open_access: false,
+          open_access_pdf: null,
+          tldr: null,
+          publication_types: [],
+          fields_of_study: [],
+        },
+      ],
+    });
+    await mount(citation('c1', { keys: [], sources: [] }));
+    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+
+    const field = screen.getByPlaceholderText(
+      'Search arXiv and Semantic Scholar, or paste a key / DOI',
+    );
+    fireEvent.change(field, { target: { value: 'partial provider search' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await act(async () => {});
+
+    expect(screen.getByText('arXiv is unavailable; showing Semantic Scholar results.')).toBeTruthy();
+    fireEvent.click(screen.getByText('S2 fallback paper'));
+    const block = harness.editor.blocks.find((candidate) => candidate.id === 'p1');
+    expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({
+      keys: ['S2:paper-without-doi'],
+      sources: [
+        {
+          provider: 'semantic_scholar',
+          providerId: 'paper-without-doi',
+        },
+      ],
     });
   });
 });

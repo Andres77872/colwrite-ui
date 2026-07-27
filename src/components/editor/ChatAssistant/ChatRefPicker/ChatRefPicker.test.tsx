@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useRef, useState } from 'react';
 import type { ChatRefPickerHandle } from './ChatRefPicker';
 
@@ -13,6 +13,11 @@ vi.mock('@/services', () => ({
 
 const { EditorProvider } = await import('@/editor');
 const { ChatRefPicker } = await import('./ChatRefPicker');
+
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 function PickerHarness() {
   const [input, setInput] = useState('#');

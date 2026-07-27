@@ -55,6 +55,12 @@ function apiError(res: Response, data: unknown): ApiError {
         })
         .join('; ');
     } else if (typeof payload.detail === 'string') msg = payload.detail;
+    else if (
+      isUnknownRecord(payload.detail)
+      && typeof payload.detail.message === 'string'
+    ) {
+      msg = payload.detail.message;
+    }
   }
   return new ApiError(msg, res.status, data);
 }

@@ -8,7 +8,14 @@ import {
 } from './panelsContextState';
 export type { ToolId } from './panelsContextState';
 
-const TOOL_IDS: readonly ToolId[] = ['json', 'arxiv', 'colpali', 'library', 'chats'];
+const TOOL_IDS: readonly ToolId[] = [
+  'json',
+  'arxiv',
+  'semantic-scholar',
+  'colpali',
+  'library',
+  'chats',
+];
 
 const isToolId = (value: unknown): value is ToolId | null =>
   value === null || (typeof value === 'string' && (TOOL_IDS as readonly string[]).includes(value));

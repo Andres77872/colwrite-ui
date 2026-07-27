@@ -50,6 +50,48 @@ function emptyMessage(role: string, content = ''): ChatMessage {
   return { id: uid(), role, content, runs: [], proposed: 0 };
 }
 
+function boundedArgument(value: unknown, limit = 120): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  if (!normalized) return null;
+  return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1)}…`;
+}
+
+function toolRunDetail(tool: string, args: Record<string, unknown>): string | undefined {
+  if (tool === 'semantic_scholar_search') {
+    const query = boundedArgument(args.query);
+    return query ? `Query: “${query}”` : undefined;
+  }
+  if (tool === 'semantic_scholar_paper') {
+    const paperId = boundedArgument(args.paper_id);
+    return paperId ? `Paper: ${paperId}` : undefined;
+  }
+  if (tool === 'semantic_scholar_graph') {
+    const paperId = boundedArgument(args.paper_id, 80);
+    const direction = boundedArgument(args.direction, 20);
+    return [direction && `Direction: ${direction}`, paperId && `paper ${paperId}`]
+      .filter(Boolean)
+      .join(' · ') || undefined;
+  }
+  if (tool === 'semantic_scholar_recommendations') {
+    const paperId = boundedArgument(args.paper_id);
+    return paperId ? `Seed paper: ${paperId}` : undefined;
+  }
+  if (tool === 'semantic_scholar_snippets') {
+    const query = boundedArgument(args.query);
+    return query ? `Evidence query: “${query}”` : undefined;
+  }
+  if (tool === 'validate_claim') {
+    const claim = boundedArgument(args.claim);
+    return claim ? `Claim: “${claim}”` : undefined;
+  }
+  if (tool === 'search_citations') {
+    const text = typeof args.text === 'string' ? args.text.trim() : '';
+    return text ? `Checked a ${text.length.toLocaleString()}-character passage` : undefined;
+  }
+  return undefined;
+}
+
 export function ChatAssistant() {
   const { documentId } = useEditor();
   return <DocumentChatAssistant key={documentId ?? 'local'} />;
@@ -242,17 +284,22 @@ function DocumentChatAssistant() {
             patchActive((message) => ({ ...message, content: message.content + content }));
           },
           onStatus: (status, detail) => setAgentStatus({ status, detail }),
-          onToolCallStart: (tool, toolCallId) => {
+          onToolCallStart: (tool, toolCallId, args) => {
             setAgentStatus({ status: 'executing_tool', detail: `Running ${tool}…` });
             patchActive((message) => ({
               ...message,
               runs: [
                 ...message.runs,
-                { id: toolCallId || `${tool}:${message.runs.length}`, tool, state: 'running' },
+                {
+                  id: toolCallId || `${tool}:${message.runs.length}`,
+                  tool,
+                  state: 'running',
+                  detail: toolRunDetail(tool, args),
+                },
               ],
             }));
           },
-          onToolCallEnd: (tool, toolCallId, durationMs) => {
+          onToolCallEnd: (tool, toolCallId, durationMs, isError) => {
             patchActive((message) => {
               const index = message.runs.findIndex(
                 (run) =>
@@ -260,12 +307,24 @@ function DocumentChatAssistant() {
               );
               if (index === -1) return message;
               const runs = message.runs.slice();
-              runs[index] = { ...runs[index], state: 'done', durationMs };
+              runs[index] = {
+                ...runs[index],
+                state: isError ? 'error' : 'done',
+                durationMs,
+              };
               return { ...message, runs };
             });
           },
           onToolAction,
-          onError: (_code, message) => setError(message),
+          onError: (_code, message) => {
+            patchActive((active) => ({
+              ...active,
+              runs: active.runs.map((run) =>
+                run.state === 'running' ? { ...run, state: 'error' as const } : run,
+              ),
+            }));
+            setError(message);
+          },
           onDone: (chatId, threadId) => {
             if (chatId && !selectedChatId) setSelectedChatId(chatId);
             if (typeof threadId === 'number') setSelectedThreadId(threadId);

@@ -5,6 +5,7 @@ import { usePanels } from '../panelsContextState';
 import { toolMeta } from '../toolsConfig';
 import { JsonPanel } from '../JsonPanel';
 import { ArxivPanel } from '../ArxivPanel';
+import { SemanticScholarPanel } from '../SemanticScholarPanel';
 import { ColpaliPanel } from '../ColpaliPanel';
 import { LibraryPanel } from '../LibraryPanel';
 import { ChatsPanel } from '../ChatsPanel';
@@ -13,6 +14,7 @@ import { PanelRight, X } from 'lucide-react';
 const PANEL_BY_TOOL = {
   json: JsonPanel,
   arxiv: ArxivPanel,
+  'semantic-scholar': SemanticScholarPanel,
   colpali: ColpaliPanel,
   library: LibraryPanel,
   chats: ChatsPanel,

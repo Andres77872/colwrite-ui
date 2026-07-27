@@ -101,7 +101,21 @@ describe('parseSSEStream', () => {
     );
     await parseSSEStream(response, { onToolCallEnd });
     expect(onToolCallEnd).toHaveBeenCalledTimes(1);
-    expect(onToolCallEnd).toHaveBeenCalledWith('add_details', 'call_abc', 1500);
+    expect(onToolCallEnd).toHaveBeenCalledWith('add_details', 'call_abc', 1500, false);
+  });
+
+  it('marks a failed tool completion without exposing its result body', async () => {
+    const onToolCallEnd = vi.fn();
+    const response = createMockResponse(
+      'event: tool_call_end\ndata: {"tool":"semantic_scholar_search","tool_call_id":"call_s2","duration_ms":75,"is_error":true,"result":"must not be forwarded"}\n\n',
+    );
+    await parseSSEStream(response, { onToolCallEnd });
+    expect(onToolCallEnd).toHaveBeenCalledWith(
+      'semantic_scholar_search',
+      'call_s2',
+      75,
+      true,
+    );
   });
 
   // ── 6. Error event (stream continues after) ──
@@ -284,7 +298,7 @@ describe('parseSSEStream', () => {
     expect(onToolCallStart).toHaveBeenCalledWith(
       'add_details', 'call_1', { text: 'more' },
     );
-    expect(onToolCallEnd).toHaveBeenCalledWith('add_details', 'call_1', 500);
+    expect(onToolCallEnd).toHaveBeenCalledWith('add_details', 'call_1', 500, false);
     expect(onDone).toHaveBeenCalledWith(
       'abc', 1, { promptTokens: 10, completionTokens: 20 },
     );

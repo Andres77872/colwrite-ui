@@ -1,4 +1,4 @@
-import { BookOpen, FileCode, MessageSquare, ScanSearch, Search } from 'lucide-react';
+import { BookOpen, FileCode, MessageSquare, Network, ScanSearch, Search } from 'lucide-react';
 import type { ElementType } from 'react';
 import type { ToolId } from './panelsContextState';
 
@@ -27,6 +27,12 @@ export const TOOLS: readonly ToolMeta[] = [
     label: 'arXiv Search',
     description: 'Search academic papers by keyword.',
     icon: Search,
+  },
+  {
+    id: 'semantic-scholar',
+    label: 'Semantic Scholar',
+    description: 'Search papers and explore their citation graph.',
+    icon: Network,
   },
   {
     id: 'colpali',
