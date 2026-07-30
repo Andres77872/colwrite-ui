@@ -153,6 +153,46 @@ and was **not** made as part of the sync. Until then, overlays in Colwrite and i
 claude.ai/design both appear without their enter animation — which is why no
 preview card shows one.
 
+## Editor previews: use literal context values, never the real providers
+
+For anything under `src/components/editor` / `src/editor`, supply
+`EditorContext.Provider` / `ProposalsContext.Provider` with a literal value
+rather than mounting `EditorProvider`. Three reasons, in order of importance:
+
+1. **Determinism.** `EditorProvider` seeds state with `Date.now()` and `uid()`.
+   Non-deterministic render output churns design-sync's render hashes, so every
+   future sync would see those components as changed and re-verify them.
+2. `EditorProvider` fires `POST /api/document/list` on mount (fails offline,
+   silently) and arms a 5-second autosave timer after any mutation — which can
+   fire a failing PUT during a screenshot.
+3. Proposal state has no entry point except `receive(action)` fed by a live
+   `tool_action` stream, so `ReviewBar`/`ChangeCard` cannot be populated through
+   the real provider at all.
+
+`EditorContextValue` has ~50 required members and `ProposalsContextValue` 15, but
+each component reads only a handful, so
+`{...} as unknown as EditorContextValue` is the intended shape. Import
+`EditorContext` from `@/editor/editorContextState` (the `src/editor` barrel does
+**not** re-export it) and proposals types from `@/editor/proposals`.
+
+`ProposalsProvider` itself is side-effect-free (no network, no storage, no
+timers) but calls `useEditor()`, so it still requires an editor above it.
+
+## HARNESS HAZARD: ChatMarkdown fixtures must use a one-word code-fence info string
+
+`ChatMarkdown`'s `parseBlocks` (`src/components/editor/ChatAssistant/ChatMarkdown/ChatMarkdown.tsx`)
+**infinite-loops** on any line starting with ` ``` ` whose info string is not a
+single `\w*` run: the fence detector at :115 rejects it, and the paragraph
+exclusion at :162-171 also skips it, so `index` never advances. Verified by
+replaying the loop: ` ```py extra `, ` ``` python `, ` ```js title="a.js" `,
+` ```bash (run this) ` and the mid-stream partial ` ```py t ` all hang.
+
+Consequence for this sync: a `ChatMarkdown` preview fixture containing such a
+fence **hangs headless chromium forever** — the capture never returns and the
+run appears stuck rather than failing. Keep every fixture to a bare ` ``` ` or a
+single-word language until the source is fixed. Re-check this note if
+`ChatMarkdown` changes.
+
 ## Version coupling
 
 - The Tailwind CLI in `.ds-sync/` is pinned to **4.3.3** to match the repo's

@@ -49,6 +49,31 @@ const DS_BARRELS = [
   '../src/components/layout/Sidebar',
   '../src/components/layout/Topbar',
   '../src/components/layout/Shortcuts',
+  // Editor surface. Several of these are nested barrels rather than the area's
+  // top-level index because the area barrels do not re-export their sub-parts
+  // (e.g. ChatAssistant/index.ts exports only ChatAssistant).
+  '../src/components/editor/Canvas',
+  '../src/components/editor/BlockControls',
+  '../src/components/editor/DocumentChrome',
+  '../src/components/editor/DocumentsMenu',
+  '../src/components/editor/Review',
+  '../src/components/editor/FloatingToolbar',
+  '../src/components/editor/FloatingToolbar/AIActionMenu',
+  '../src/components/editor/SlashMenu',
+  '../src/components/editor/ChatAssistant',
+  '../src/components/editor/ChatAssistant/AgentActivity',
+  '../src/components/editor/ChatAssistant/ChatMarkdown',
+  '../src/components/editor/ChatAssistant/ChatRefPicker',
+  '../src/components/editor/ChatAssistant/ChatRefTags',
+  '../src/components/editor/ChatAssistant/ChatTaggedInput',
+  '../src/components/editor/blocks/ParagraphBlock',
+  '../src/components/editor/blocks/HeadingBlock',
+  '../src/components/editor/blocks/DividerBlock',
+  // The inline-widget atoms (InlinePill, InlineFigureShell, SettingsRow, …) and
+  // the chart renderer are real design-system primitives that no parent barrel
+  // re-exports, so they are named directly.
+  '../src/components/editor/blocks/ParagraphBlock/Inlines/shared',
+  '../src/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/ChartFigure',
 ];
 const DS_GLOBS = ['../src/**/*'];
 

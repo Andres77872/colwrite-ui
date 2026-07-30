@@ -31,9 +31,18 @@ export { ViewProvider } from '../src/components/layout/ViewContext';
 export { AuthProvider } from '../src/components/auth/AuthContext';
 export { EditorProvider } from '../src/editor';
 
+export { ProposalsProvider } from '../src/editor/ProposalsContext';
+export { ChatSessionsProvider } from '../src/components/chat/ChatSessionsContext';
+
 export { PanelsContext } from '../src/components/panels/panelsContextState';
 export { ViewContext } from '../src/components/layout/viewContextState';
 export { AuthContext } from '../src/components/auth/authContextState';
+// The editor surface needs these two the way Topbar needed AuthContext: a
+// preview must be able to hand a component a document, a pending proposal or a
+// chat session outright, since none of that state is reachable offline.
+export { EditorContext } from '../src/editor/editorContextState';
+export { ProposalsContext } from '../src/editor/proposalsContextState';
+export { ChatSessionsContext } from '../src/components/chat/chatSessionsState';
 
 // ── Gaps in the ui barrel ────────────────────────────────────────────────
 // These are all real, shipped `src/components/ui` code that
