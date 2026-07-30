@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { useToast } from '@/components/ui/toastContext';
@@ -12,7 +13,7 @@ import { ProfileHeader } from './ProfileHeader';
 import { StatTiles } from './StatTiles';
 import { ToolUsageList } from './ToolUsageList';
 import { UploadsSection } from './UploadsSection';
-import { AlertCircle, ArrowLeft, RefreshCw } from 'lucide-react';
+import { ArrowLeft, RefreshCw } from 'lucide-react';
 
 const ACTIVITY_DAYS = 30;
 
@@ -33,11 +34,6 @@ export function ProfileView() {
   const [overview, setOverview] = useState<UserOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  // Bumped on every successful load and used as the list sections' key. Those
-  // sections seed paging state from their props, and React keeps that state
-  // across a prop change — without this, Refresh updated the tiles and the
-  // chart while the documents and uploads lists kept showing the old fetch.
-  const [generation, setGeneration] = useState(0);
 
   const load = useCallback(async () => {
     // Keep effect-driven loads on the asynchronous side of the boundary, the
@@ -48,7 +44,6 @@ export function ProfileView() {
     try {
       const next = await getOverview(ACTIVITY_DAYS);
       setOverview(next);
-      setGeneration((previous) => previous + 1);
       setError(null);
     } catch (caught) {
       setError(errorMessage(caught, 'Could not load your profile'));
@@ -85,10 +80,12 @@ export function ProfileView() {
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6">
         {error ? (
           <>
-            <p role="alert" className="flex items-center gap-2 text-sm text-destructive">
-              <AlertCircle aria-hidden="true" className="h-4 w-4 shrink-0" />
+            {/* <Alert>, not a hand-rolled callout. The primitive's own doc
+                comment exists to stop exactly this duplication, and the library
+                panel already uses it for the same job. */}
+            <Alert variant="destructive" className="max-w-md">
               {error}
-            </p>
+            </Alert>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => void load()}>
                 <RefreshCw aria-hidden="true" />
@@ -135,15 +132,7 @@ export function ProfileView() {
           </Button>
         </div>
 
-        {error && (
-          <p
-            role="alert"
-            className="flex items-start gap-1.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-          >
-            <AlertCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
-            <span className="min-w-0 break-words">{error}</span>
-          </p>
-        )}
+        {error && <Alert variant="destructive">{error}</Alert>}
 
         <ProfileHeader
           identity={overview.identity}
@@ -155,9 +144,12 @@ export function ProfileView() {
 
         <ActivityChart activity={overview.activity} days={ACTIVITY_DAYS} />
 
+        {/* No `key={generation}` remount here any more. Both sections reconcile
+            a fresh first page against the pages they have already loaded
+            (`usePagedList`), so Refresh updates the rows instead of throwing
+            away everything the user paged in. */}
         <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
           <DocumentsSection
-            key={`documents-${generation}`}
             documents={overview.documents}
             totalKnown={overview.summary.documents_active}
             onOpen={(documentId) => void openDocument(documentId)}
@@ -166,9 +158,8 @@ export function ProfileView() {
         </div>
 
         <UploadsSection
-          key={`uploads-${generation}`}
-          uploads={overview.uploads}
-          totalKnown={overview.summary.uploads_active}
+          uploads={overview.resources}
+          totalKnown={overview.summary.resources_active}
           onChanged={() => void load()}
         />
       </div>

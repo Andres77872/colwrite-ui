@@ -4,6 +4,7 @@ import { ToastProvider } from '@/components/ui/toast';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { ViewProvider } from '@/components/layout/ViewContext';
 import type { UserOverview } from '@/services/userProfile';
+import { makeResource } from '@/services/__tests__/resourceFixtures';
 
 const switchTo = vi.fn(async () => {});
 const getOverview = vi.fn<() => Promise<UserOverview>>();
@@ -53,9 +54,11 @@ const OVERVIEW: UserOverview = {
     llm_calls_total: 51,
     tool_calls_total: 88,
     tool_calls_failed: 3,
-    uploads_active: 2,
-    uploads_bytes: 3_145_728,
-    last_upload_at: '2026-07-18T12:00:00',
+    resources_active: 2,
+    resources_bytes: 3_145_728,
+    last_resource_at: '2026-07-18T12:00:00',
+    resources_extracted: 1,
+    collections_active: 1,
   },
   activity: [],
   tools: [
@@ -77,22 +80,11 @@ const OVERVIEW: UserOverview = {
       chat_count: 3,
       agent_run_count: 9,
       save_count: 64,
-      upload_count: 1,
+      resource_count: 1,
     },
   ],
-  uploads: [
-    {
-      id: 1,
-      filename: 'reference.pdf',
-      content_type: 'application/pdf',
-      byte_size: 1_048_576,
-      checksum_sha256: 'a'.repeat(64),
-      document_id: null,
-      document_name: null,
-      created_at: '2026-07-18T12:00:00',
-      updated_at: '2026-07-18T12:00:00',
-    },
-  ],
+  resources: [makeResource()],
+  collections: [],
 };
 
 function renderProfile() {
@@ -158,8 +150,19 @@ describe('ProfileView', () => {
   it('opens a document and returns to the editor', async () => {
     renderProfile();
 
-    const open = await screen.findByRole('button', { name: 'Open' });
+    // "Open" alone is not a name a screen-reader user can act on in a list of
+    // documents, so each button names its document.
+    const open = await screen.findByRole('button', { name: 'Open Thesis draft' });
     open.click();
+
+    await waitFor(() => expect(switchTo).toHaveBeenCalledWith('507f1f77bcf86cd799439011'));
+  });
+
+  it('makes the document name itself open the document', async () => {
+    renderProfile();
+
+    const name = await screen.findByRole('button', { name: 'Thesis draft' });
+    name.click();
 
     await waitFor(() => expect(switchTo).toHaveBeenCalledWith('507f1f77bcf86cd799439011'));
   });
@@ -178,7 +181,7 @@ describe('ProfileView', () => {
     getOverview.mockResolvedValue({
       ...OVERVIEW,
       documents: [{ ...OVERVIEW.documents[0], name: 'Renamed elsewhere' }],
-      uploads: [{ ...OVERVIEW.uploads[0], filename: 'newer.pdf' }],
+      resources: [{ ...OVERVIEW.resources[0], filename: 'newer.pdf' }],
     });
     screen.getByRole('button', { name: /refresh/i }).click();
 

@@ -43,7 +43,7 @@ export const TOOLS: readonly ToolMeta[] = [
   {
     id: 'library',
     label: 'Library',
-    description: 'PDFs you have added to this session.',
+    description: 'Your PDFs — upload, search inside them, see what the assistant can read.',
     icon: BookOpen,
   },
   {

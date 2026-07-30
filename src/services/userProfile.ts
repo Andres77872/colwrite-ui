@@ -1,4 +1,5 @@
-import { buildUrl, del, get, post, put } from './api';
+import { get, put } from './api';
+import type { CollectionItem, ResourceItem } from './resources';
 
 /**
  * The application-owned user surface (`/users/me`).
@@ -49,9 +50,11 @@ export type UsageSummary = {
   llm_calls_total: number;
   tool_calls_total: number;
   tool_calls_failed: number;
-  uploads_active: number;
-  uploads_bytes: number;
-  last_upload_at: string | null;
+  resources_active: number;
+  resources_bytes: number;
+  last_resource_at: string | null;
+  resources_extracted: number;
+  collections_active: number;
 };
 
 /** One day of activity. Days with none are absent from the series. */
@@ -59,7 +62,7 @@ export type ActivityDay = {
   day: string;
   document_events: number;
   agent_run_events: number;
-  upload_events: number;
+  resource_events: number;
 };
 
 export type ToolUsage = {
@@ -80,19 +83,7 @@ export type UserDocument = {
   chat_count: number;
   agent_run_count: number;
   save_count: number;
-  upload_count: number;
-};
-
-export type UploadItem = {
-  id: number;
-  filename: string;
-  content_type: string;
-  byte_size: number;
-  checksum_sha256: string;
-  document_id: string | null;
-  document_name: string | null;
-  created_at: string | null;
-  updated_at: string | null;
+  resource_count: number;
 };
 
 export type UserOverview = {
@@ -102,7 +93,8 @@ export type UserOverview = {
   activity: ActivityDay[];
   tools: ToolUsage[];
   documents: UserDocument[];
-  uploads: UploadItem[];
+  resources: ResourceItem[];
+  collections: CollectionItem[];
 };
 
 export type ProfileUpdate = Partial<{
@@ -142,36 +134,13 @@ export async function listUserDocuments(
   );
 }
 
-export async function listUploads(
-  limit = 20,
-  offset = 0,
-): Promise<{ uploads: UploadItem[]; count: number }> {
-  return get<{ uploads: UploadItem[]; count: number }>(
-    `/users/me/uploads?limit=${limit}&offset=${offset}`,
-  );
-}
-
-/** Store a PDF, optionally attaching it to one of the user's documents. */
-export async function uploadPdf(
-  file: File,
-  documentId?: string,
-): Promise<{ upload: UploadItem }> {
-  const form = new FormData();
-  form.append('file', file);
-  if (documentId) form.append('document_id', documentId);
-  return post<{ upload: UploadItem }>('/users/me/uploads', form);
-}
-
-export async function deleteUpload(uploadId: number): Promise<void> {
-  await del<{ status: string; message: string }>(`/users/me/uploads/${uploadId}`);
-}
-
-/**
- * Same-origin URL for an upload's bytes.
+/*
+ * There is deliberately no upload API here.
  *
- * The session cookie rides along on a normal navigation, so this can be used
- * directly as an `href` — no blob download dance needed.
+ * `listUploads` / `uploadPdf` / `deleteUpload` / `uploadContentUrl` / the
+ * `UploadItem` alias all used to live in this file as one-line wrappers over
+ * `resources.ts`. They gave the app two words — "upload" and "resource" — for
+ * one row, which then leaked into the UI copy: the dashboard said "Uploaded
+ * PDFs" while the tiles beside it said "Resources". Call `resources.ts`
+ * directly.
  */
-export function uploadContentUrl(uploadId: number): string {
-  return buildUrl(`/users/me/uploads/${uploadId}/content`);
-}

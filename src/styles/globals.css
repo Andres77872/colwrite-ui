@@ -144,33 +144,24 @@
 
   /* ----------------------------------------
    * SHADOWS — tuned for dark surfaces
+   * Every level embeds a hairline white inset ring: on a near-black surface a
+   * drop shadow alone reads as nothing, so the ring carries the edge.
    * ---------------------------------------- */
-  --shadow-xs: 0 1px 0 rgb(0 0 0 / 0.3);
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(255 255 255 / 0.03);
   --shadow-md: 0 4px 16px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.03);
   --shadow-lg: 0 10px 25px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.04);
   --shadow-xl: 0 20px 40px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.05);
-  --shadow-glow: 0 0 20px rgb(99 102 241 / 0.15);
-  --shadow-glow-sm: 0 0 10px rgb(99 102 241 / 0.1);
-
-  /* ----------------------------------------
-   * MOTION
-   * One duration scale so the utilities, the named animations and the
-   * enter/exit keyframes below all agree. They previously ran on four
-   * unrelated sets of numbers.
-   * ---------------------------------------- */
-  --transition-fast: 120ms;
-  --transition-base: 150ms;
-  --transition-slow: 200ms;
 
   /* ----------------------------------------
    * NAMED ANIMATIONS
+   * Only the ones something actually uses. `fade-in`, `fade-out`,
+   * `slide-in-down` and `scale-in` were carried for a while with no consumer —
+   * an unused token still has to be read and reasoned about by the next
+   * person, so they are gone rather than reserved.
    * ---------------------------------------- */
-  --animate-fade-in: fade-in var(--transition-base) ease-out;
-  --animate-fade-out: fade-out var(--transition-base) ease-out;
   --animate-slide-in-up: slide-in-up var(--transition-base) ease-out;
-  --animate-slide-in-down: slide-in-down var(--transition-base) ease-out;
-  --animate-scale-in: scale-in var(--transition-fast) ease-out;
+  --animate-accordion-down: accordion-down var(--transition-base) ease-out;
+  --animate-accordion-up: accordion-up var(--transition-base) ease-out;
   --animate-spin: spin 1s linear infinite;
   --animate-shimmer: shimmer 1.4s ease-in-out infinite;
 }
@@ -187,6 +178,15 @@
      are all tuned and validated against #0a0a0f, so a palette flip alone would
      not produce a working light theme. */
   color-scheme: dark;
+
+  /* MOTION. One duration scale so the named animations and the enter/exit
+     keyframes agree. These live here rather than in `@theme` because
+     `--transition-*` is not a Tailwind v4 namespace: it generates no
+     utilities, so it is only ever read through var() in this file. Component
+     durations are plain utilities (`duration-120`). */
+  --transition-fast: 120ms;
+  --transition-base: 150ms;
+  --transition-slow: 200ms;
 
   --z-base: 1;
   --z-sticky: 10;
@@ -218,11 +218,7 @@
   to { height: 0; opacity: 0; }
 }
 
-@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
 @keyframes slide-in-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes slide-in-down { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes scale-in { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes shimmer { 50% { opacity: 0.45; } }
 
@@ -327,7 +323,14 @@
   }
 
   /* Every interactive element gets a visible keyboard affordance, including
-     the hand-rolled ones that never declared focus styles. */
+     the hand-rolled ones that never declared focus styles.
+
+     There are deliberately two mechanisms, and the rule between them is: this
+     outline is the default, and anything that opts into a `focus-visible:ring`
+     must also declare `focus-visible:outline-none`. Otherwise the element
+     paints a ring AND an outline at two different offsets, which reads as a
+     rendering bug. The `ui/` primitives all follow this; check it when adding
+     a ring to a hand-rolled control. */
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-ring;
   }

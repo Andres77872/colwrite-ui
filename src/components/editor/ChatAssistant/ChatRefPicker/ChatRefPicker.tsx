@@ -32,13 +32,9 @@ function LoadingRow({ label }: { label: string }) {
 }
 
 function toDocSummary(document: DocumentSummary): DocSummary | null {
-  const id = String(document._id ?? document.id ?? document.document_id ?? '');
+  const id = document.id;
   if (!id) return null;
-  const name =
-    (typeof document.name === 'string' && document.name) ||
-    (typeof document.title === 'string' && document.title) ||
-    undefined;
-  return { _id: id, name };
+  return { _id: id, name: document.name };
 }
 
 export type ChatRefPickerHandle = {
@@ -183,7 +179,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setRefError('');
     setResultsIndex(0);
     try {
-      const { documents } = await listRemote(1, 10);
+      const { documents } = await listRemote({ page: 1, limit: 10 });
       const docs = documents.map(toDocSummary).filter((doc): doc is DocSummary => doc !== null);
       setRefDocs(docs);
       setNavigationStack(prev => [...prev, { type: 'documents' }]);

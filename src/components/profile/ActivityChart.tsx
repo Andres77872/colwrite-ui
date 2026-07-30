@@ -17,7 +17,7 @@ import { Activity, BarChart3, Table2 } from 'lucide-react';
 const SERIES = [
   { key: 'document_events', label: 'Document edits', slot: 0 },
   { key: 'agent_run_events', label: 'Assistant runs', slot: 1 },
-  { key: 'upload_events', label: 'Uploads', slot: 2 },
+  { key: 'resource_events', label: 'Resources', slot: 2 },
 ] as const;
 
 type SeriesKey = (typeof SERIES)[number]['key'];
@@ -60,13 +60,13 @@ function densify(activity: ActivityDay[], days: number): DenseDay[] {
     const values = {
       document_events: entry?.document_events ?? 0,
       agent_run_events: entry?.agent_run_events ?? 0,
-      upload_events: entry?.upload_events ?? 0,
+      resource_events: entry?.resource_events ?? 0,
     };
     return {
       key,
       date,
       values,
-      total: values.document_events + values.agent_run_events + values.upload_events,
+      total: values.document_events + values.agent_run_events + values.resource_events,
     };
   });
 }
@@ -113,7 +113,9 @@ export function ActivityChart({
   const heading = (
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div>
-        <h3 className="text-md font-semibold">Activity</h3>
+        {/* An h2, like every sibling section on this page. It was an h3 under
+            the same h1, which skips a level for no structural reason. */}
+        <h2 className="text-md font-semibold">Activity</h2>
         <p className="text-xs text-muted-foreground">Last {days} days</p>
       </div>
       <Button
@@ -135,7 +137,9 @@ export function ActivityChart({
         <EmptyState
           icon={Activity}
           title="No activity yet"
-          description="Edits, assistant runs, and uploads from the last 30 days appear here."
+          // Interpolated: this said "last 30 days" while the heading right above
+          // it read from `days`, so any other window contradicted itself.
+          description={`Edits, assistant runs, and resource activity from the last ${days} days appear here.`}
         />
       </section>
     );
@@ -225,6 +229,16 @@ function Column({
   onDismiss: () => void;
 }) {
   const present = SERIES.filter((entry) => day.values[entry.key] > 0);
+  // The per-series breakdown belongs in the name, not only in the tooltip: the
+  // tooltip is a role="status" node that appears on focus, so a keyboard user
+  // was told the day's total and then had to hope the live region reached them
+  // for the split.
+  const label =
+    day.total === 0
+      ? `${shortDate(day.date)}: no activity`
+      : `${shortDate(day.date)}: ${day.total} event${day.total === 1 ? '' : 's'} — ${present
+          .map((entry) => `${day.values[entry.key]} ${entry.label.toLowerCase()}`)
+          .join(', ')}`;
   // The surface gaps are part of the column's height, so the scale has to pay
   // for them. Scaling against the full plot height instead let the busiest
   // day's stack finish a few pixels above its own axis maximum.
@@ -236,7 +250,7 @@ function Column({
       // The whole band is the hit target, not just the painted column, so a
       // quiet day is as easy to hover as a busy one.
       className={cn(
-        'group relative flex h-full min-w-0 flex-1 cursor-default flex-col justify-end rounded-sm',
+        'group relative flex h-full min-w-0 flex-1 flex-col justify-end rounded-sm',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         active && 'bg-foreground/5',
       )}
@@ -244,7 +258,7 @@ function Column({
       onMouseEnter={onActivate}
       onFocus={onActivate}
       onBlur={onDismiss}
-      aria-label={`${shortDate(day.date)}: ${day.total} event${day.total === 1 ? '' : 's'}`}
+      aria-label={label}
     >
       {/* Segments are separated by a 2px gap in the surface colour rather than
           a stroke — no ink that is not data. */}

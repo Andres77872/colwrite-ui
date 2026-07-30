@@ -1,5 +1,9 @@
 import { createContext, useContext, type MutableRefObject } from 'react';
-import type { DocumentInput, DocumentSummary } from '../services';
+import type {
+  DocumentInput,
+  DocumentListOptions,
+  DocumentListResult,
+} from '../services';
 import type { ApplyPatchResult } from './docOps';
 import type { Block, Doc, ParagraphChild, ToolOperation } from './types';
 
@@ -40,17 +44,27 @@ export type EditorContextValue = {
   save: () => void;
   newLocal: () => void;
   createRemote: (docOverride?: DocumentInput) => Promise<string>;
+  createAndSwitch: (doc: DocumentInput) => Promise<string>;
   saveRemote: (docOverride?: DocumentInput) => Promise<void>;
   loadRemote: (id: string) => Promise<void>;
   switchTo: (id: string) => Promise<void>;
   deleteRemote: (id: string) => Promise<void>;
   listRemote: (
-    page?: number,
-    limit?: number,
-    query?: string,
-  ) => Promise<{ documents: DocumentSummary[]; count: number }>;
+    options?: DocumentListOptions,
+    init?: { signal?: AbortSignal },
+  ) => Promise<DocumentListResult>;
+  /** Changes only after a successful mutation that can affect list contents/order. */
+  documentListRevision: number;
   lastSavedAt: number | null;
   isAutoSaving: boolean;
+  /**
+   * Whether an edit is queued for autosave or a save is in flight.
+   *
+   * A function rather than a value: the only caller is a `beforeunload`
+   * handler, which needs the answer at event time, and making it reactive would
+   * re-render the editor twice per debounce for nothing.
+   */
+  hasPendingEdits: () => boolean;
   lastSaveSource: 'auto' | 'manual' | null;
   saveError: string | null;
   clearSaveError: () => void;

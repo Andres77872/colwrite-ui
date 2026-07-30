@@ -5,8 +5,10 @@
  */
 import {
   BookMarked,
+  BookOpen,
   FilePlus2,
   FileSearch,
+  Library,
   PenLine,
   Scissors,
   Sparkles,
@@ -66,6 +68,24 @@ const TOOL_META: Record<string, { label: string; running: string; icon: typeof W
   validate_claim: {
     label: 'Assessed a claim',
     running: 'Assessing evidence for the claim',
+    icon: SearchCheck,
+  },
+  // The author's own PDFs. Worth naming as "your PDFs" rather than "the
+  // library": a writer who sees "Searched the library" has no way to tell a
+  // search of their own uploads from one of the citation databases above.
+  resource_ls: {
+    label: 'Listed your PDFs',
+    running: 'Checking which of your PDFs it can read',
+    icon: Library,
+  },
+  resource_read: {
+    label: 'Read one of your PDFs',
+    running: 'Reading one of your PDFs',
+    icon: BookOpen,
+  },
+  resource_search: {
+    label: 'Searched your PDFs',
+    running: 'Searching your PDFs',
     icon: SearchCheck,
   },
   add_details: { label: 'Expanded a passage', running: 'Expanding a passage', icon: Wand2 },

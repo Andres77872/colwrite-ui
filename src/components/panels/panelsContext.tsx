@@ -71,6 +71,13 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
     isBoolean,
   );
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // Same storage key the assistant used when it owned this itself, so an
+  // existing open/closed preference carries over.
+  const [assistantOpen, setAssistantOpen] = usePersistentState<boolean>(
+    'chat.expanded',
+    false,
+    isBoolean,
+  );
 
   // Drawers left open while resizing up to desktop would strand a backdrop
   // over a layout that no longer has anything to dismiss.
@@ -101,6 +108,10 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   const toggleLeftCollapsed = useCallback(
     () => setLeftCollapsed((v) => !v),
     [setLeftCollapsed],
+  );
+  const toggleAssistant = useCallback(
+    () => setAssistantOpen((v) => !v),
+    [setAssistantOpen],
   );
 
   // Clamping lives here rather than in AppShell so persisted values from an
@@ -143,8 +154,14 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       isDesktop,
       mobileNavOpen,
       setMobileNavOpen,
+      assistantOpen,
+      setAssistantOpen,
+      toggleAssistant,
     }),
     [
+      assistantOpen,
+      setAssistantOpen,
+      toggleAssistant,
       activeTool,
       setTool,
       isOpen,

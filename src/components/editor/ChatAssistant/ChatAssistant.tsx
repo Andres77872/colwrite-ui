@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { usePersistentState, isBoolean } from '@/hooks/usePersistentState';
+import { usePanels } from '@/components/panels/panelsContextState';
 import { useIsDesktop } from '@/hooks/useMediaQuery';
 import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
@@ -122,7 +123,10 @@ function DocumentChatAssistant() {
   const { selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId } =
     useChatSessions();
 
-  const [expanded, setExpanded] = usePersistentState<boolean>('chat.expanded', false, isBoolean);
+  // Open/closed is shell state (see PanelsContext): the Mod+J shortcut toggles
+  // it from outside this component. Maximized stays local — nothing else has a
+  // reason to touch it.
+  const { assistantOpen: expanded, setAssistantOpen: setExpanded } = usePanels();
   const [maximized, setMaximized] = usePersistentState<boolean>('chat.maximized', false, isBoolean);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -550,7 +554,7 @@ function DocumentChatAssistant() {
             onKeyDown={(event) => {
               if (nudge('move', event)) event.preventDefault();
             }}
-            className="flex h-7 w-4 items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex h-7 w-4 items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <GripVertical aria-hidden="true" className="h-4 w-4" />
           </button>
@@ -880,7 +884,8 @@ function ResizeHandles({
               // noise; the resize cursor is what actually announces it.
               'absolute z-10 rounded-full transition-colors hover:bg-primary/60',
               EDGE_CLASS[edge],
-              keyboard && 'focus-visible:bg-primary focus-visible:ring-2 focus-visible:ring-ring',
+              keyboard &&
+                'focus-visible:bg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             )}
           />
         );

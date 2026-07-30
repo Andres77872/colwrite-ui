@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { formatDateTime } from '@/lib/text';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -7,25 +8,42 @@ import { Skeleton, Spinner } from '@/components/ui/spinner';
 import { useConfirm } from '@/components/ui/confirmContext';
 import { useToast } from '@/components/ui/toastContext';
 import { useEditor } from '@/editor';
+import type {
+  DocumentListOptions,
+  DocumentSortBy,
+  DocumentSortOrder,
+  DocumentSummary,
+} from '@/services';
 import { AlertCircle, ChevronLeft, ChevronRight, FileText, Plus, RefreshCw, Trash2 } from 'lucide-react';
 
 const PAGE_SIZE = 10;
 const SEARCH_DEBOUNCE_MS = 350;
 
-interface DocumentSummary {
-  id: string;
-  title: string;
-}
+type SortValue = `${DocumentSortBy}:${DocumentSortOrder}`;
 
-/** The list endpoint has returned several id/title shapes over time. */
-function normalize(raw: Record<string, unknown>): DocumentSummary | null {
-  const id = String(raw._id ?? raw.id ?? raw.document_id ?? '');
-  if (!id) return null;
-  return { id, title: String(raw.title ?? raw.name ?? '').trim() || 'Untitled document' };
-}
+const SORT_OPTIONS: {
+  value: SortValue;
+  label: string;
+  sortBy: DocumentSortBy;
+  sortOrder: DocumentSortOrder;
+}[] = [
+  { value: 'updated_at:desc', label: 'Last updated — newest', sortBy: 'updated_at', sortOrder: 'desc' },
+  { value: 'updated_at:asc', label: 'Last updated — oldest', sortBy: 'updated_at', sortOrder: 'asc' },
+  { value: 'created_at:desc', label: 'Date created — newest', sortBy: 'created_at', sortOrder: 'desc' },
+  { value: 'created_at:asc', label: 'Date created — oldest', sortBy: 'created_at', sortOrder: 'asc' },
+  { value: 'name:asc', label: 'Title — A–Z', sortBy: 'name', sortOrder: 'asc' },
+  { value: 'name:desc', label: 'Title — Z–A', sortBy: 'name', sortOrder: 'desc' },
+];
 
 export function DocumentsMenu() {
-  const { listRemote, switchTo, createRemote, deleteRemote, documentId } = useEditor();
+  const {
+    listRemote,
+    switchTo,
+    createAndSwitch,
+    deleteRemote,
+    documentId,
+    documentListRevision,
+  } = useEditor();
   const confirm = useConfirm();
   const { toast } = useToast();
 
@@ -37,55 +55,89 @@ export function DocumentsMenu() {
   const [busy, setBusy] = useState<'create' | 'delete' | null>(null);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [sortBy, setSortBy] = useState<DocumentSortBy>('updated_at');
+  const [sortOrder, setSortOrder] = useState<DocumentSortOrder>('desc');
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const requestSequence = useRef(0);
+  const activeController = useRef<AbortController | null>(null);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(count / PAGE_SIZE)), [count]);
+  const sortValue: SortValue = `${sortBy}:${sortOrder}`;
 
   const fetchList = useCallback(
-    async (targetPage: number, search: string) => {
-      // Keep effect-driven fetches on the asynchronous side of the boundary;
-      // event-driven refreshes still begin in the same microtask.
-      await Promise.resolve();
+    async (options: DocumentListOptions) => {
+      activeController.current?.abort();
+      const controller = new AbortController();
+      activeController.current = controller;
+      const requestId = ++requestSequence.current;
       setLoading(true);
+
       try {
-        const res = await listRemote(targetPage, PAGE_SIZE, search);
-        setItems((res.documents ?? []).map(normalize).filter((d): d is DocumentSummary => d !== null));
-        setCount(res.count ?? 0);
+        const res = await listRemote(options, { signal: controller.signal });
+        if (controller.signal.aborted || requestId !== requestSequence.current) return;
+        setItems(res.documents);
+        setCount(res.count);
         setListError(null);
       } catch (error) {
-        // Reported in place rather than as a toast: this load is not something
-        // the user asked for, so it belongs where the missing list would be.
-        // (Previously it was swallowed entirely, leaving an empty list that
-        // was indistinguishable from "you have no documents".)
+        if (controller.signal.aborted || requestId !== requestSequence.current) return;
+        // This load is background work, so report it where the missing list
+        // would have been instead of interrupting the user with a toast.
         setListError(error instanceof Error ? error.message : 'Request failed');
         setItems([]);
         setCount(0);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted && requestId === requestSequence.current) {
+          setLoading(false);
+        }
       }
     },
     [listRemote],
   );
 
   useEffect(() => {
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       setDebouncedQuery(query.trim());
       setPage(1);
     }, SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    return () => window.clearTimeout(timer);
   }, [query]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void fetchList(page, debouncedQuery);
+      void fetchList({
+        page,
+        limit: PAGE_SIZE,
+        query: debouncedQuery || undefined,
+        sortBy,
+        sortOrder,
+      });
     }, 0);
-    return () => window.clearTimeout(timer);
-  }, [fetchList, page, debouncedQuery]);
+    return () => {
+      window.clearTimeout(timer);
+      activeController.current?.abort();
+    };
+  }, [
+    debouncedQuery,
+    documentListRevision,
+    fetchList,
+    page,
+    refreshRevision,
+    sortBy,
+    sortOrder,
+  ]);
+
+  const onSortChange = (value: string) => {
+    const selected = SORT_OPTIONS.find((option) => option.value === value);
+    if (!selected) return;
+    setSortBy(selected.sortBy);
+    setSortOrder(selected.sortOrder);
+    setPage(1);
+  };
 
   const onCreate = async () => {
     setBusy('create');
     try {
-      await createRemote({ version: 1, name: 'Untitled document', blocks: [] });
-      await fetchList(1, debouncedQuery);
+      await createAndSwitch({ version: 1, name: 'Untitled document', blocks: [] });
       setPage(1);
       toast({ title: 'Document created', variant: 'success' });
     } catch (error) {
@@ -102,8 +154,6 @@ export function DocumentsMenu() {
   const onLoad = async (id: string) => {
     if (id === documentId) return;
     try {
-      // switchTo flushes pending edits first: autosave is debounced 5s, so
-      // opening another document straight after typing dropped that typing.
       await switchTo(id);
     } catch (error) {
       toast({
@@ -116,7 +166,7 @@ export function DocumentsMenu() {
 
   const onDelete = async (doc: DocumentSummary) => {
     const ok = await confirm({
-      title: `Delete “${doc.title}”?`,
+      title: `Delete “${doc.name}”?`,
       description: 'This permanently removes the document and its chats. It cannot be undone.',
       confirmLabel: 'Delete',
       destructive: true,
@@ -127,10 +177,10 @@ export function DocumentsMenu() {
     try {
       await deleteRemote(doc.id);
       // Deleting the last item on the final page would otherwise strand the
-      // user on a page that no longer exists.
+      // user on a page that no longer exists. The context revision performs
+      // the actual refresh after the mutation.
       const nextPage = Math.min(page, Math.max(1, Math.ceil(Math.max(0, count - 1) / PAGE_SIZE)));
       setPage(nextPage);
-      await fetchList(nextPage, debouncedQuery);
       toast({ title: 'Document deleted', variant: 'success' });
     } catch (error) {
       toast({
@@ -159,7 +209,7 @@ export function DocumentsMenu() {
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => fetchList(page, debouncedQuery)}
+          onClick={() => setRefreshRevision((revision) => revision + 1)}
           disabled={loading}
           aria-label="Refresh document list"
           title="Refresh"
@@ -167,6 +217,19 @@ export function DocumentsMenu() {
           <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
         </Button>
       </div>
+
+      <select
+        className="h-8 w-full rounded-md border border-input bg-input px-2 text-xs text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+        value={sortValue}
+        aria-label="Sort documents"
+        onChange={(event) => onSortChange(event.target.value)}
+      >
+        {SORT_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
 
       <Button size="sm" onClick={onCreate} disabled={busy !== null} className="w-full">
         {busy === 'create' ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
@@ -184,6 +247,7 @@ export function DocumentsMenu() {
         {!showSkeleton &&
           items.map((doc) => {
             const isActive = documentId === doc.id;
+            const updatedLabel = formatDateTime(doc.updatedAt);
             return (
               <li key={doc.id}>
                 <div
@@ -205,7 +269,15 @@ export function DocumentsMenu() {
                         isActive ? 'text-primary' : 'text-muted-foreground',
                       )}
                     />
-                    <span className="truncate text-sm">{doc.title}</span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm">{doc.name}</span>
+                      <time
+                        dateTime={doc.updatedAt || undefined}
+                        className="block truncate text-2xs text-muted-foreground"
+                      >
+                        Updated {updatedLabel || '—'}
+                      </time>
+                    </span>
                   </button>
                   <Button
                     variant="ghost"
@@ -217,7 +289,7 @@ export function DocumentsMenu() {
                     )}
                     onClick={() => onDelete(doc)}
                     disabled={busy !== null}
-                    aria-label={`Delete ${doc.title}`}
+                    aria-label={`Delete ${doc.name}`}
                     title="Delete document"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -242,7 +314,7 @@ export function DocumentsMenu() {
             variant="outline"
             size="sm"
             className="mt-2"
-            onClick={() => fetchList(page, debouncedQuery)}
+            onClick={() => setRefreshRevision((revision) => revision + 1)}
           >
             Retry
           </Button>
@@ -266,7 +338,7 @@ export function DocumentsMenu() {
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            onClick={() => setPage((currentPage) => Math.max(1, currentPage - 1))}
             disabled={page <= 1 || loading}
             aria-label="Previous page"
           >
@@ -278,7 +350,7 @@ export function DocumentsMenu() {
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            onClick={() => setPage((currentPage) => Math.min(totalPages, currentPage + 1))}
             disabled={page >= totalPages || loading}
             aria-label="Next page"
           >

@@ -118,8 +118,12 @@ export function AppShell({ header, main, left, right, aside }: AppShellProps) {
         )}
         {aside && isDesktop && !isOpen && <div className={GUTTER} aria-hidden="true" />}
 
-        {/* Tools rail — narrow enough to stay put at every viewport */}
-        {right && (
+        {/* Tools rail — desktop only.
+            It used to render at every width on the theory that 52px is narrow
+            enough to stay put. On a 375px phone that 52px plus its gutter is a
+            sixth of the canvas, spent on a control whose panel is already an
+            overlay sheet reachable from the topbar. */}
+        {right && isDesktop && (
           <nav
             className={cn(PANEL_SURFACE, 'ml-2 overflow-y-auto p-1.5 transition-all duration-200 ease-out')}
             style={{ width: 'var(--rail-width)' }}

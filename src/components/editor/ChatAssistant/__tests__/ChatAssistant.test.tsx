@@ -57,6 +57,9 @@ const { ProposalsProvider } = await import('@/editor/ProposalsContext');
 const { useProposals } = await import('@/editor/proposalsContextState');
 const { ChatSessionsProvider } = await import('../../../chat/ChatSessionsContext');
 const { useChatSessions } = await import('../../../chat/chatSessionsState');
+// The assistant's open/closed state is shell state, so the panels provider is
+// part of its contract rather than an ambient convenience.
+const { PanelsProvider } = await import('../../../panels');
 const { ChatAssistant } = await import('../ChatAssistant');
 
 // ── Harness ──
@@ -109,7 +112,9 @@ async function mount() {
         <Capture />
         <ChatSessionsProvider>
           <CaptureChats />
-          <ChatAssistant />
+          <PanelsProvider>
+            <ChatAssistant />
+          </PanelsProvider>
         </ChatSessionsProvider>
       </ProposalsProvider>
     </EditorProvider>,

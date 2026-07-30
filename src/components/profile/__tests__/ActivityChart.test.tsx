@@ -16,8 +16,8 @@ function daysAgo(offset: number): string {
 }
 
 const SAMPLE: ActivityDay[] = [
-  { day: daysAgo(1), document_events: 4, agent_run_events: 2, upload_events: 1 },
-  { day: daysAgo(5), document_events: 9, agent_run_events: 0, upload_events: 0 },
+  { day: daysAgo(1), document_events: 4, agent_run_events: 2, resource_events: 1 },
+  { day: daysAgo(5), document_events: 9, agent_run_events: 0, resource_events: 0 },
 ];
 
 describe('ActivityChart', () => {
@@ -30,7 +30,7 @@ describe('ActivityChart', () => {
   it('always shows a legend, so identity never rests on colour alone', () => {
     render(<ActivityChart activity={SAMPLE} days={30} />);
 
-    for (const label of ['Document edits', 'Assistant runs', 'Uploads']) {
+    for (const label of ['Document edits', 'Assistant runs', 'Resources']) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
   });
@@ -42,46 +42,59 @@ describe('ActivityChart', () => {
     expect(screen.getByText('13')).toBeTruthy();
   });
 
+  /** The day columns: the only buttons here that carry an aria-label. */
+  function columns(): HTMLElement[] {
+    return screen.getAllByRole('button').filter((node) => node.hasAttribute('aria-label'));
+  }
+
+  function columnLabels(): string[] {
+    return columns().map((node) => node.getAttribute('aria-label') ?? '');
+  }
+
   it('renders one focusable column per day in the window', () => {
     render(<ActivityChart activity={SAMPLE} days={7} />);
 
     // Every column is a button so a keyboard user reaches the same values a
     // pointer user gets from hovering.
-    expect(screen.getAllByRole('button').filter((node) =>
-      node.getAttribute('aria-label')?.includes('event'),
-    )).toHaveLength(7);
+    expect(columns()).toHaveLength(7);
   });
 
   it('fills days the API omitted with zero rather than dropping them', () => {
     render(<ActivityChart activity={SAMPLE} days={7} />);
 
-    const quiet = screen
-      .getAllByRole('button')
-      .filter((node) => node.getAttribute('aria-label')?.includes('0 events'));
-    // Seven days, two of which had activity.
-    expect(quiet).toHaveLength(5);
+    // Seven days, two of which had activity. A quiet day is named as such
+    // rather than as "0 events", which reads like missing data.
+    expect(columnLabels().filter((label) => label.endsWith('no activity'))).toHaveLength(5);
   });
 
-  it('names the day and its total on each column for assistive tech', () => {
+  it('names the day, its total, and the split on each column for assistive tech', () => {
     render(<ActivityChart activity={SAMPLE} days={30} />);
 
-    const columns = screen
-      .getAllByRole('button')
-      .map((node) => node.getAttribute('aria-label') ?? '');
-    expect(columns.some((label) => label.endsWith(': 7 events'))).toBe(true);
-    expect(columns.some((label) => label.endsWith(': 9 events'))).toBe(true);
+    // The breakdown is in the name, not only in the hover tooltip: the tooltip
+    // is a role="status" node, so relying on it made the per-series split
+    // reachable by pointer and by luck.
+    expect(
+      columnLabels().some(
+        (label) =>
+          label.includes(': 7 events — ') &&
+          label.includes('4 document edits') &&
+          label.includes('2 assistant runs') &&
+          label.includes('1 resources'),
+      ),
+    ).toBe(true);
+    expect(columnLabels().some((label) => label.includes(': 9 events — '))).toBe(true);
   });
 
   it('shows a per-day tooltip on focus', () => {
     render(<ActivityChart activity={SAMPLE} days={30} />);
 
-    const busiest = screen
-      .getAllByRole('button')
-      .find((node) => node.getAttribute('aria-label')?.endsWith(': 7 events'));
+    const busiest = columns().find((node) =>
+      node.getAttribute('aria-label')?.includes(': 7 events'),
+    );
     fireEvent.focus(busiest!);
 
     const tooltip = screen.getByRole('status');
-    expect(within(tooltip).getByText('Uploads')).toBeTruthy();
+    expect(within(tooltip).getByText('Resources')).toBeTruthy();
   });
 
   it('offers a table twin so values are reachable without hovering', () => {

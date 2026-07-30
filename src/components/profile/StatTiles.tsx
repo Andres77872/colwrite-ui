@@ -59,9 +59,9 @@ function tiles(summary: UsageSummary): Tile[] {
       icon: Coins,
     },
     {
-      label: 'Uploads',
-      value: formatCompact(summary.uploads_active),
-      hint: formatBytes(summary.uploads_bytes),
+      label: 'Resources',
+      value: formatCompact(summary.resources_active),
+      hint: formatBytes(summary.resources_bytes),
       icon: FileStack,
     },
   ];
@@ -77,7 +77,9 @@ function tiles(summary: UsageSummary): Tile[] {
 export function StatTiles({ summary }: { summary: UsageSummary }) {
   return (
     <section aria-label="Usage summary">
-      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+      {/* Six across from `lg`, not `xl`: the page is capped at max-w-5xl, so the
+          whole lg range was rendering a 3×2 block with room for one row. */}
+      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         {tiles(summary).map((tile) => (
           <li
             key={tile.label}
@@ -85,13 +87,19 @@ export function StatTiles({ summary }: { summary: UsageSummary }) {
           >
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <tile.icon aria-hidden="true" className="h-3.5 w-3.5" />
-              <span className="truncate text-xs">{tile.label}</span>
+              <span className="truncate text-xs" title={tile.label}>
+                {tile.label}
+              </span>
             </div>
             {/* Proportional figures: tabular-nums makes a standalone value
                 like 121 read loose at this size. */}
             <p className="mt-1.5 text-2xl font-semibold leading-none">{tile.value}</p>
             {tile.hint && (
-              <p className="mt-1.5 truncate text-2xs text-muted-foreground">{tile.hint}</p>
+              // Titled because it truncates: at six columns "12.9K in · 4.2M
+              // out" loses its second half with nothing to reveal it.
+              <p className="mt-1.5 truncate text-2xs text-muted-foreground" title={tile.hint}>
+                {tile.hint}
+              </p>
             )}
           </li>
         ))}

@@ -28,3 +28,12 @@ dist-ssr
 *.sln
 *.sw?
 .codex
+
+# design-sync (claude.ai/design import). Durable inputs under .design-sync/
+# are committed; generated scaffolding and build output are not.
+.ds-sync/
+ds-bundle/
+ds-pkg/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules

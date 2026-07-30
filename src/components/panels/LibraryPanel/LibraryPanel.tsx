@@ -1,230 +1,939 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DragEvent } from 'react';
-import { uid } from '@/lib/uid';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react';
+import { FolderPlus, RefreshCw, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { formatBytes, formatDate } from '@/lib/text';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { EmptyState } from '@/components/ui/empty-state';
+import { Alert } from '@/components/ui/alert';
+import { Skeleton, Spinner } from '@/components/ui/spinner';
 import { useToast } from '@/components/ui/toastContext';
-import { BookOpen, FileText, SearchX, Upload, X } from 'lucide-react';
+import { useEditor } from '@/editor';
+import { partitionPdfs, skippedNonPdfMessage } from '@/lib/fileDrop';
+import { errorMessage } from '@/services/contracts';
+import { describeExtraction } from '@/components/common/ExtractionStatus';
+import {
+  MAX_SEARCH_QUERY_CHARS,
+  resourceLocationKey,
+  resourceScopeOptions,
+  searchResources,
+  type CollectionDeletePreview,
+  type CollectionItem,
+  type ExtractionStatus,
+  type ResourceAttachmentTarget,
+  type ResourceItem,
+  type ResourceLibraryLocation,
+  type ResourceSearchResponse,
+  type SmartResourceScope,
+} from '@/services/resources';
+import { useResourceLibrary } from './useResourceLibrary';
+import { useCollectionTree } from './useCollectionTree';
+import { ResourceDetail } from './ResourceDetail';
+import { CollectionTree } from './CollectionTree';
+import { CollectionFolderHeader } from './CollectionFolderHeader';
+import {
+  CollectionDeleteDialog,
+  CollectionEditorDialog,
+} from './CollectionDialogs';
+import {
+  CollectionPickerDialog,
+  type CollectionPickerTarget,
+} from './CollectionPickerDialog';
+import {
+  CollectionChildren,
+  ResourceList,
+  SearchResults,
+  UploadDropZone,
+} from './LibraryResources';
+import type { LibraryDragPayload } from './collectionDnd';
 
-export type LocalDoc = {
-  id: string;
-  name: string;
-  size: number;
-  lastModified: number;
-  /** Object URL used for the inline preview; revoked when the doc is removed. */
-  url: string;
+const SCOPES: ReadonlyArray<{ id: SmartResourceScope; label: string; hint: string }> = [
+  {
+    id: 'context',
+    label: 'Available',
+    hint: 'Everything the assistant can read while editing this document.',
+  },
+  { id: 'document', label: 'Attached', hint: 'Only files attached to this document.' },
+  { id: 'library', label: 'All', hint: 'Every PDF on your account.' },
+];
+
+/** Why the document-scoped views are unavailable, in the user's terms. */
+const NO_DOCUMENT_REASON = 'Save this document first.';
+
+type LibraryView =
+  | { kind: 'smart'; scope: SmartResourceScope }
+  | { kind: 'unfiled' }
+  | { kind: 'collection'; collectionId: number };
+
+type SearchState = {
+  term: string;
+  result: ResourceSearchResponse | null;
+  loading: boolean;
+  loadingMore: boolean;
+  error: string | null;
 };
 
-export function LibraryPanel() {
-  const [docs, setDocs] = useState<LocalDoc[]>([]);
-  const [query, setQuery] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const { toast } = useToast();
+type EditorState =
+  | { mode: 'create'; parentId: number | null; parentName: string | null }
+  | { mode: 'edit'; collection: CollectionItem };
 
-  // Revoking has to happen exactly once per URL, at unmount. Keying the
-  // cleanup on `docs` used to revoke every still-listed document's URL on each
-  // add or remove, so previews went blank as soon as a second file arrived.
-  const docsRef = useRef<LocalDoc[]>([]);
+type PickerState =
+  | { kind: 'collection'; collection: CollectionItem }
+  | { kind: 'resource'; resource: ResourceItem };
+
+/**
+ * The four independent things that can go wrong here.
+ *
+ * They used to share one slot coalesced with `??`, so a stale search error hid
+ * a fresh move failure and none of them could be dismissed. Keyed by source so
+ * each is shown, retried and dismissed on its own.
+ */
+type ProblemSource = 'search' | 'action' | 'selection' | 'library';
+
+const NO_SEARCH: SearchState = {
+  term: '',
+  result: null,
+  loading: false,
+  loadingMore: false,
+  error: null,
+};
+
+function loadedCollection(
+  branches: ReturnType<typeof useCollectionTree>['branches'],
+  collectionId: number,
+): CollectionItem | null {
+  for (const branch of Object.values(branches)) {
+    const found = branch.collections.find((collection) => collection.id === collectionId);
+    if (found) return found;
+  }
+  return null;
+}
+
+export function LibraryPanel() {
+  const { documentId } = useEditor();
+  const { toast } = useToast();
+  const [view, setView] = useState<LibraryView>({ kind: 'smart', scope: 'context' });
+  const [jump, setJump] = useState<{ offset: number; term: string } | null>(null);
+  const [filter, setFilter] = useState('');
+  const [search, setSearch] = useState<SearchState>(NO_SEARCH);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState<Partial<Record<ProblemSource, string>>>({});
+  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [picker, setPicker] = useState<PickerState | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [settledNotice, setSettledNotice] = useState('');
+  const folderActionRef = useRef<HTMLButtonElement>(null);
+  const newRootRef = useRef<HTMLButtonElement>(null);
+  const resourceMoveRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const resourceReturnFocusIdRef = useRef<number | null>(null);
+  const searchRequestRef = useRef(0);
+  const folderHeadingId = useId();
+
+  const effectiveView = useMemo<LibraryView>(() => {
+    if (view.kind === 'smart' && documentId === null && view.scope !== 'library') {
+      return { kind: 'smart', scope: 'library' };
+    }
+    return view;
+  }, [documentId, view]);
+
+  const location = useMemo<ResourceLibraryLocation>(() => {
+    if (effectiveView.kind === 'collection') {
+      return { kind: 'collection', collectionId: effectiveView.collectionId };
+    }
+    if (effectiveView.kind === 'unfiled') return { kind: 'unfiled' };
+    if (effectiveView.scope === 'library' || documentId === null) {
+      return { kind: 'smart', scope: 'library' };
+    }
+    return { kind: 'smart', scope: effectiveView.scope, documentId };
+  }, [documentId, effectiveView]);
+
+  const locationKey = resourceLocationKey(location);
+  const locationKeyRef = useRef(locationKey);
+  locationKeyRef.current = locationKey;
+  const library = useResourceLibrary(location);
+  const tree = useCollectionTree({ documentId });
+  const selectedResource = library.selected;
+  const selectedFolder =
+    effectiveView.kind === 'collection' && tree.selectedId === effectiveView.collectionId
+      ? tree.selectedCollection
+      : null;
+
   useEffect(() => {
-    docsRef.current = docs;
-  }, [docs]);
-  useEffect(
-    () => () => {
-      for (const doc of docsRef.current) URL.revokeObjectURL(doc.url);
+    if (selectedResource !== null || resourceReturnFocusIdRef.current === null) return;
+    const resourceId = resourceReturnFocusIdRef.current;
+    resourceReturnFocusIdRef.current = null;
+    queueMicrotask(() => {
+      const origin = document.querySelector<HTMLElement>(
+        `[data-library-resource-id="${resourceId}"]`,
+      );
+      // Falls back to the search box through a ref rather than a query on its
+      // aria-label: that coupled focus restoration to a copy string, so
+      // rewording the label silently broke it.
+      (origin ?? searchInputRef.current)?.focus();
+    });
+  }, [selectedResource]);
+
+  useEffect(() => {
+    searchRequestRef.current += 1;
+    setSearch(NO_SEARCH);
+    setFilter('');
+    setJump(null);
+    setActionError(null);
+    setDismissed({});
+    return () => {
+      searchRequestRef.current += 1;
+    };
+  }, [locationKey]);
+
+  // Announce a conversion finishing, once. Polling silently swapped a row's
+  // badge from Converting to Ready, which is invisible to anyone not watching
+  // that row.
+  const statusRef = useRef(new Map<number, ExtractionStatus | null>());
+  useEffect(() => {
+    const previous = statusRef.current;
+    const next = new Map<number, ExtractionStatus | null>();
+    const settled: string[] = [];
+    for (const resource of library.resources) {
+      next.set(resource.id, resource.extraction_status);
+      const before = previous.get(resource.id);
+      if (before === undefined || before === resource.extraction_status) continue;
+      if (!describeExtraction(before).settling) continue;
+      if (describeExtraction(resource.extraction_status).settling) continue;
+      settled.push(
+        `${resource.title || resource.filename}: ${describeExtraction(resource.extraction_status).label}`,
+      );
+    }
+    statusRef.current = next;
+    if (settled.length > 0) setSettledNotice(settled.join('. '));
+  }, [library.resources]);
+
+  const openUnfiled = useCallback(() => {
+    setView({ kind: 'unfiled' });
+    setActionError(null);
+    void tree.selectCollection(null);
+  }, [tree]);
+
+  const openSmart = (scope: SmartResourceScope) => {
+    setView({ kind: 'smart', scope });
+    setActionError(null);
+    void tree.selectCollection(null);
+  };
+
+  const openCollection = useCallback(
+    async (collectionId: number) => {
+      setView({ kind: 'collection', collectionId });
+      setActionError(null);
+      try {
+        await Promise.all([
+          tree.selectCollection(collectionId),
+          tree.loadChildren(collectionId),
+        ]);
+      } catch (caught) {
+        setActionError(errorMessage(caught, 'Could not open that folder'));
+      }
     },
-    [],
+    [tree],
   );
 
-  const selected = useMemo(() => docs.find((d) => d.id === selectedId) ?? null, [docs, selectedId]);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return docs;
-    return docs.filter((d) => d.name.toLowerCase().includes(q));
-  }, [docs, query]);
-
-  function addFiles(files: FileList | null) {
-    if (!files?.length) return;
-    const accepted: LocalDoc[] = [];
-    let rejected = 0;
-
-    for (const file of Array.from(files)) {
-      if (file.type !== 'application/pdf') {
-        rejected += 1;
-        continue;
-      }
-      accepted.push({
-        id: uid(),
-        name: file.name,
-        size: file.size,
-        lastModified: file.lastModified,
-        url: URL.createObjectURL(file),
-      });
+  const uploadTarget = useMemo<ResourceAttachmentTarget>(() => {
+    if (effectiveView.kind === 'collection') {
+      return { collectionId: effectiveView.collectionId };
     }
+    if (
+      effectiveView.kind === 'smart' &&
+      effectiveView.scope === 'document' &&
+      documentId !== null
+    ) {
+      return { documentId };
+    }
+    return { documentId: null };
+  }, [documentId, effectiveView]);
 
-    if (rejected > 0) {
-      // Non-PDFs were previously dropped in silence, which read as a bug.
+  const uploadTargetLabel =
+    effectiveView.kind === 'collection'
+      ? selectedFolder?.name ?? 'this folder'
+      : effectiveView.kind === 'smart' && effectiveView.scope === 'document'
+        ? 'the current document'
+        : 'Unfiled';
+
+  const addFiles = useCallback(
+    async (files: FileList | null) => {
+      const { pdfs, skipped } = partitionPdfs(files);
+      const skippedMessage = skippedNonPdfMessage(skipped);
+      if (skippedMessage) toast({ ...skippedMessage, variant: 'warning' });
+      if (pdfs.length === 0) return;
+
+      const { stored, failures } = await library.upload(pdfs, uploadTarget);
+      if (stored.length > 0) {
+        toast({
+          title: `Uploaded ${stored.length} file${stored.length === 1 ? '' : 's'}`,
+          description: `Added to ${uploadTargetLabel}. Converting to text now.`,
+          variant: 'success',
+        });
+        await tree.refreshLoaded();
+      }
+      if (failures.length > 0) {
+        toast({
+          title: `${failures.length} file${failures.length === 1 ? '' : 's'} rejected`,
+          description: failures.join(' · '),
+          variant: 'error',
+        });
+      }
+    },
+    [library, toast, tree, uploadTarget, uploadTargetLabel],
+  );
+
+  const onSearch = async (event: FormEvent) => {
+    event.preventDefault();
+    const term = search.term.trim();
+    const request = ++searchRequestRef.current;
+    const requestLocationKey = locationKey;
+    if (!term) {
+      setSearch(NO_SEARCH);
+      return;
+    }
+    setSearch((previous) => ({ ...previous, loading: true, error: null }));
+    const searchLocation: ResourceLibraryLocation =
+      location.kind === 'collection' ? { ...location, recursive: true } : location;
+    try {
+      const result = await searchResources({
+        query: term,
+        ...resourceScopeOptions(searchLocation),
+      });
+      if (
+        request !== searchRequestRef.current ||
+        requestLocationKey !== locationKeyRef.current
+      ) {
+        return;
+      }
+      setSearch((previous) => ({ ...previous, result, loading: false, error: null }));
+    } catch (caught) {
+      if (
+        request !== searchRequestRef.current ||
+        requestLocationKey !== locationKeyRef.current
+      ) {
+        return;
+      }
+      setSearch((previous) => ({
+        ...previous,
+        result: null,
+        loading: false,
+        error: errorMessage(caught, 'Search failed'),
+      }));
+    }
+  };
+
+  const loadMoreSearch = async () => {
+    const current = search.result;
+    if (!current || current.next_offset === null || search.loadingMore) return;
+    const request = ++searchRequestRef.current;
+    const requestLocationKey = locationKey;
+    const searchLocation: ResourceLibraryLocation =
+      location.kind === 'collection' ? { ...location, recursive: true } : location;
+    setSearch((previous) => ({ ...previous, loadingMore: true, error: null }));
+    try {
+      const page = await searchResources({
+        query: current.query,
+        ...resourceScopeOptions(searchLocation),
+        offset: current.next_offset,
+      });
+      if (
+        request !== searchRequestRef.current ||
+        requestLocationKey !== locationKeyRef.current
+      ) {
+        return;
+      }
+      setSearch((previous) => {
+        if (!previous.result || previous.result.query !== current.query) return previous;
+        const skipped = new Map(
+          [...previous.result.resources_skipped, ...page.resources_skipped].map((item) => [
+            item.resource_id,
+            item,
+          ]),
+        );
+        const result: ResourceSearchResponse = {
+          ...page,
+          matches: [...previous.result.matches, ...page.matches],
+          match_count: previous.result.match_count + page.match_count,
+          resources_searched:
+            previous.result.resources_searched + page.resources_searched,
+          resources_skipped: [...skipped.values()],
+          truncated: previous.result.truncated || page.truncated,
+        };
+        return { ...previous, result, loadingMore: false, error: null };
+      });
+    } catch (caught) {
+      if (
+        request !== searchRequestRef.current ||
+        requestLocationKey !== locationKeyRef.current
+      ) {
+        return;
+      }
+      setSearch((previous) => ({
+        ...previous,
+        loadingMore: false,
+        error: errorMessage(caught, 'Could not search more files'),
+      }));
+    }
+  };
+
+  const refreshCanonical = useCallback(async () => {
+    await Promise.allSettled([
+      library.refresh(),
+      tree.refreshLoaded(),
+      tree.selectedId === null ? Promise.resolve(null) : tree.refreshSelected(),
+    ]);
+  }, [library, tree]);
+
+  const movePayload = useCallback(
+    async (payload: LibraryDragPayload, targetCollectionId: number | null) => {
+      setActionError(null);
+      try {
+        if (payload.kind === 'collection') {
+          await tree.moveFolder(payload.id, targetCollectionId);
+        } else {
+          await library.move(
+            payload.id,
+            targetCollectionId === null ? {} : { collectionId: targetCollectionId },
+          );
+          searchRequestRef.current += 1;
+          setSearch(NO_SEARCH);
+          await tree.refreshLoaded();
+        }
+      } catch (caught) {
+        await refreshCanonical();
+        const message = errorMessage(caught, 'Could not move that item');
+        setActionError(message);
+        throw caught instanceof Error ? caught : new Error(message);
+      }
+    },
+    [library, refreshCanonical, tree],
+  );
+
+  const handleDrop = useCallback(
+    async (payload: LibraryDragPayload, targetCollectionId: number | null) => {
+      try {
+        await movePayload(payload, targetCollectionId);
+      } catch {
+        // The inline alert contains the authoritative server message. Keeping
+        // the rejection inside this event handler avoids an unhandled promise.
+      }
+    },
+    [movePayload],
+  );
+
+  const saveFolder = async (values: { name: string; description: string | null }) => {
+    if (!editor) return;
+    if (editor.mode === 'edit') {
+      await tree.renameFolder(editor.collection.id, values);
+      return;
+    }
+    const created = await tree.createFolder({ ...values, parentId: editor.parentId });
+    await openCollection(created.id);
+  };
+
+  const deleteFolder = async (
+    collectionId: number,
+    expected: CollectionDeletePreview,
+  ) => {
+    const result = await tree.deleteFolder(collectionId, expected);
+    openUnfiled();
+    await library.refresh();
+    if (result.cleanup_pending_count > 0) {
       toast({
-        title: `Skipped ${rejected} file${rejected === 1 ? '' : 's'}`,
-        description: 'Only PDF files can be added to the library.',
+        title: 'Folder deleted; storage cleanup is still pending',
+        description: `${result.cleanup_pending_count} PDF${result.cleanup_pending_count === 1 ? '' : 's'} still require background cleanup.`,
         variant: 'warning',
       });
+    } else {
+      toast({ title: 'Folder and its contents were permanently deleted', variant: 'success' });
     }
-    if (accepted.length === 0) return;
+    // The menu button that opened the dialog was deleted with its folder.
+    // Return keyboard focus to the stable new-root action instead.
+    queueMicrotask(() => newRootRef.current?.focus());
+  };
 
-    setDocs((prev) => [...accepted, ...prev]);
-    setSelectedId((current) => current ?? accepted[0].id);
+  const toggleFolderAttachment = async () => {
+    if (!selectedFolder || !documentId) return;
+    setAttachmentBusy(true);
+    setActionError(null);
+    const wasAttached = Boolean(tree.attachment?.direct);
+    try {
+      if (wasAttached) await tree.detachDocument(selectedFolder.id);
+      else await tree.attachDocument(selectedFolder.id);
+      toast({
+        title: wasAttached
+          ? `${selectedFolder.name} is no longer attached to this document`
+          : `${selectedFolder.name} is attached to this document`,
+        variant: 'success',
+      });
+    } catch (caught) {
+      setActionError(errorMessage(caught, 'Could not change the folder attachment'));
+    } finally {
+      setAttachmentBusy(false);
+    }
+  };
+
+  const moveFromPicker = async (target: CollectionPickerTarget) => {
+    if (!picker) return;
+    if (picker.kind === 'collection') {
+      const parentId = target.kind === 'collection' ? target.collectionId : null;
+      await movePayload({ kind: 'collection', id: picker.collection.id }, parentId);
+      return;
+    }
+
+    let attachmentTarget: ResourceAttachmentTarget;
+    if (target.kind === 'collection') attachmentTarget = { collectionId: target.collectionId };
+    else if (target.kind === 'document') attachmentTarget = { documentId: target.documentId };
+    else attachmentTarget = {};
+
+    try {
+      await library.move(picker.resource.id, attachmentTarget);
+      searchRequestRef.current += 1;
+      setSearch(NO_SEARCH);
+      await tree.refreshLoaded();
+      // Keep the detail view mounted until the dialog closes so Radix can
+      // restore focus to the Move button. The canonical list is already
+      // refreshed, so Back cannot reveal a stale row in the old location.
+      setJump(null);
+    } catch (caught) {
+      await refreshCanonical();
+      throw caught;
+    }
+  };
+
+  const selectedPath = useMemo(
+    () => (selectedFolder ? tree.path : []),
+    [selectedFolder, tree.path],
+  );
+  const inheritedFromAncestor = useMemo(
+    () =>
+      selectedPath
+        .slice(0, -1)
+        .some((crumb) => Boolean(loadedCollection(tree.branches, crumb.id)?.attachment?.direct)),
+    [selectedPath, tree.branches],
+  );
+
+  const childFolders =
+    effectiveView.kind === 'collection'
+      ? tree.childrenOf(effectiveView.collectionId)
+      : effectiveView.kind === 'unfiled'
+        ? tree.roots
+        : [];
+
+  if (selectedResource) {
+    return (
+      <>
+        <ResourceDetail
+          resource={selectedResource}
+          documentId={documentId}
+          highlight={jump?.term}
+          jumpToOffset={jump?.offset}
+          moveButtonRef={resourceMoveRef}
+          onBack={() => {
+            resourceReturnFocusIdRef.current = selectedResource.id;
+            void library.select(null);
+            setJump(null);
+          }}
+          onOpenMove={() => setPicker({ kind: 'resource', resource: selectedResource })}
+          onMove={async (id, target) => {
+            const moved = await library.move(id, target);
+            searchRequestRef.current += 1;
+            setSearch(NO_SEARCH);
+            return moved;
+          }}
+          onDeleted={async (id) => {
+            resourceReturnFocusIdRef.current = id;
+            await library.remove(id);
+            searchRequestRef.current += 1;
+            setSearch(NO_SEARCH);
+            await tree.refreshLoaded();
+            setJump(null);
+          }}
+          onRetry={library.retry}
+        />
+        {picker?.kind === 'resource' && (
+          <CollectionPickerDialog
+            open
+            mode="resource"
+            subjectName={selectedResource.filename}
+            controller={tree}
+            documentId={documentId}
+            initialTarget={
+              selectedResource.collection_id
+                ? { kind: 'collection', collectionId: selectedResource.collection_id }
+                : selectedResource.document_id === documentId && documentId
+                  ? { kind: 'document', documentId }
+                  : { kind: 'unfiled' }
+            }
+            onOpenChange={(open) => !open && setPicker(null)}
+            onMove={moveFromPicker}
+            returnFocusRef={resourceMoveRef}
+          />
+        )}
+      </>
+    );
   }
 
-  function onDrop(event: DragEvent) {
-    event.preventDefault();
-    event.stopPropagation();
-    setDragOver(false);
-    addFiles(event.dataTransfer?.files ?? null);
-  }
+  const folderView = effectiveView.kind === 'collection' || effectiveView.kind === 'unfiled';
+  const activeScope = effectiveView.kind === 'smart' ? effectiveView.scope : null;
 
-  function onRemove(id: string) {
-    setDocs((prev) => {
-      const doc = prev.find((d) => d.id === id);
-      if (doc) URL.revokeObjectURL(doc.url);
-      const remaining = prev.filter((d) => d.id !== id);
-      setSelectedId((current) => (current === id ? (remaining[0]?.id ?? null) : current));
-      return remaining;
+  const problems: Array<{ source: ProblemSource; message: string; retry?: () => void }> = [];
+  if (search.error) problems.push({ source: 'search', message: search.error });
+  if (actionError) problems.push({ source: 'action', message: actionError });
+  if (tree.selectionError) problems.push({ source: 'selection', message: tree.selectionError });
+  if (library.error) {
+    problems.push({
+      source: 'library',
+      message: library.error,
+      retry: () => void library.refresh(),
     });
   }
+  const visibleProblems = problems.filter(
+    (problem) => dismissed[problem.source] !== problem.message,
+  );
+
+  const dismiss = (source: ProblemSource, message: string) =>
+    setDismissed((previous) => ({ ...previous, [source]: message }));
+
+  // Shown as soon as more pages exist, not only once a page happens to push the
+  // count past four — otherwise the control appears mid-scroll and shifts the
+  // list under the pointer.
+  const showFilter =
+    library.resources.length > 4 || library.hasMore || filter.trim() !== '';
 
   return (
-    <div className="flex h-full flex-col gap-3">
-      <div
-        className={cn(
-          'rounded-lg border-2 border-dashed p-5 text-center transition-colors',
-          dragOver ? 'border-primary bg-primary/5' : 'border-border',
-        )}
-        onDragOver={(event) => {
-          event.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={onDrop}
-      >
-        <Upload aria-hidden="true" className="mx-auto mb-2 h-5 w-5 text-muted-foreground" />
-        <p className="text-sm font-medium">Drop PDFs here</p>
-        <p className="mb-3 text-xs text-muted-foreground">Files stay in this browser session</p>
-        <Button variant="outline" size="sm" onClick={() => inputRef.current?.click()}>
-          Choose files
+    <div className="flex h-full min-h-0 flex-col gap-2.5">
+      {documentId === null && (
+        <Alert variant="info" role="status" className="text-xs">
+          Save this document to attach files or folders. Until then, Available and Attached are unavailable and uploads go to Unfiled.
+        </Alert>
+      )}
+
+      <div className="flex items-center gap-1" role="group" aria-label="Which files to show">
+        {SCOPES.map((option) => {
+          const disabled = documentId === null && option.id !== 'library';
+          const hint = disabled ? `${option.hint} ${NO_DOCUMENT_REASON}` : option.hint;
+          return (
+            <span key={option.id} className="min-w-0 flex-1">
+              <Button
+                variant={activeScope === option.id ? 'secondary' : 'ghost'}
+                size="sm"
+                className="w-full px-1 text-xs"
+                aria-pressed={activeScope === option.id}
+                // The hint is a description, not part of the name: these are
+                // one-word toggles and "All — Every PDF on your account" is a
+                // worse name than "All". It used to live only in `title`, which
+                // is not announced at all — least of all on a disabled button,
+                // where the reason it is disabled is the whole point.
+                aria-describedby={`${folderHeadingId}-${option.id}-hint`}
+                disabled={disabled}
+                onClick={() => openSmart(option.id)}
+              >
+                {option.label}
+              </Button>
+              <span id={`${folderHeadingId}-${option.id}-hint`} className="sr-only">
+                {hint}
+              </span>
+            </span>
+          );
+        })}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="shrink-0"
+          disabled={library.refreshing}
+          onClick={() => void refreshCanonical()}
+          aria-label="Refresh library and folders"
+        >
+          <RefreshCw aria-hidden="true" className={cn(library.refreshing && 'animate-spin')} />
         </Button>
-        <input
-          ref={inputRef}
-          type="file"
-          accept="application/pdf"
-          multiple
-          className="sr-only"
-          aria-label="Add PDF files to the library"
-          onChange={(event) => {
-            addFiles(event.target.files);
-            // Reset so re-picking the same file fires `change` again.
-            event.target.value = '';
-          }}
-        />
       </div>
 
-      {docs.length > 0 && (
-        <Input
-          type="search"
-          placeholder="Filter by file name…"
-          aria-label="Filter library"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
+      <section className="rounded-lg border border-border p-1.5" aria-labelledby={folderHeadingId}>
+        <div className="mb-1 flex items-center justify-between gap-2 px-1">
+          <h3
+            id={folderHeadingId}
+            className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Folders
+          </h3>
+          <Button
+            ref={newRootRef}
+            variant="ghost"
+            size="xs"
+            onClick={() => setEditor({ mode: 'create', parentId: null, parentName: null })}
+          >
+            <FolderPlus aria-hidden="true" /> New
+          </Button>
+        </div>
+        <CollectionTree
+          controller={tree}
+          selected={
+            effectiveView.kind === 'unfiled'
+              ? 'unfiled'
+              : effectiveView.kind === 'collection'
+                ? effectiveView.collectionId
+                : null
+          }
+          className="max-h-44 overflow-y-auto"
+          onSelectUnfiled={openUnfiled}
+          onSelectCollection={(collectionId) => void openCollection(collectionId)}
+          onDrop={handleDrop}
+        />
+      </section>
+
+      {folderView && (
+        <CollectionFolderHeader
+          view={effectiveView.kind === 'unfiled' ? 'unfiled' : 'collection'}
+          collection={selectedFolder}
+          loading={tree.selecting}
+          path={selectedPath}
+          attachment={tree.attachment}
+          inheritedFromAncestor={inheritedFromAncestor}
+          attachmentBusy={attachmentBusy}
+          attachmentDisabledReason={documentId === null ? NO_DOCUMENT_REASON : null}
+          actionButtonRef={folderActionRef}
+          onSelectRoot={openUnfiled}
+          onSelectCollection={(collectionId) => void openCollection(collectionId)}
+          onCreateChild={() => {
+            if (selectedFolder) {
+              setEditor({
+                mode: 'create',
+                parentId: selectedFolder.id,
+                parentName: selectedFolder.name,
+              });
+            }
+          }}
+          onEdit={() => selectedFolder && setEditor({ mode: 'edit', collection: selectedFolder })}
+          onMove={() => selectedFolder && setPicker({ kind: 'collection', collection: selectedFolder })}
+          onDelete={() => setDeleteOpen(true)}
+          onToggleAttachment={() => void toggleFolderAttachment()}
         />
       )}
 
-      {/* Scroll on the wrapper so the empty states below stay outside the list
-          — they are not list items, and `<ul>` may only contain `<li>`. */}
-      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
-        <ul className="space-y-1.5">
-          {filtered.map((doc) => {
-            const isSelected = selectedId === doc.id;
-            return (
-              <li key={doc.id}>
-                <div
-                  className={cn(
-                    'group flex items-center gap-2 rounded-lg border transition-colors',
-                    isSelected ? 'border-primary bg-primary/10' : 'border-border bg-card hover:bg-accent',
-                  )}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setSelectedId(isSelected ? null : doc.id)}
-                    aria-pressed={isSelected}
-                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-2.5 text-left"
-                  >
-                    <FileText aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{doc.name}</span>
-                      <span className="block text-xs text-muted-foreground">
-                        {formatBytes(doc.size)} · {formatDate(doc.lastModified)}
-                      </span>
-                    </span>
-                  </button>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    className="mr-2 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
-                    onClick={() => onRemove(doc.id)}
-                    aria-label={`Remove ${doc.name}`}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-
-        {docs.length === 0 && (
-          <EmptyState
-            icon={BookOpen}
-            title="Your library is empty"
-            description="Add PDFs to keep reference material next to your draft."
+      <form onSubmit={onSearch} className="flex items-center gap-1.5">
+        <div className="relative min-w-0 flex-1">
+          <Search
+            aria-hidden="true"
+            className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
           />
-        )}
-
-        {docs.length > 0 && filtered.length === 0 && (
-          <EmptyState
-            icon={SearchX}
-            title="No matches"
-            description={`No file name contains “${query.trim()}”.`}
+          <Input
+            ref={searchInputRef}
+            type="search"
+            className="h-8 pl-7 text-xs"
+            placeholder={folderView ? 'Search this folder and subfolders…' : 'Search inside your PDFs…'}
+            // Tracks the scope, so the announced name and the visible
+            // placeholder cannot describe two different searches.
+            aria-label={
+              folderView ? 'Search this folder and its subfolders' : 'Search inside your PDFs'
+            }
+            value={search.term}
+            maxLength={MAX_SEARCH_QUERY_CHARS}
+            onChange={(event) => {
+              searchRequestRef.current += 1;
+              setSearch({
+                term: event.target.value,
+                result: null,
+                loading: false,
+                loadingMore: false,
+                error: null,
+              });
+            }}
           />
-        )}
-      </div>
+        </div>
+        <Button type="submit" size="sm" disabled={search.loading || !search.term.trim()}>
+          {/* The label stays put: swapping it for a bare spinner left the
+              button with no accessible name at all, and jumped its width. */}
+          {search.loading && <Spinner />}
+          {search.loading ? 'Finding…' : 'Find'}
+        </Button>
+      </form>
 
-      {selected && (
-        <div className="flex-shrink-0 overflow-hidden rounded-lg border border-border">
-          <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2">
-            <p className="min-w-0 truncate text-sm font-medium">{selected.name}</p>
-            <div className="flex flex-shrink-0 items-center gap-1">
-              <Button variant="outline" size="sm" asChild>
-                <a href={selected.url} target="_blank" rel="noreferrer noopener">
-                  Open
-                </a>
-              </Button>
+      {visibleProblems.map((problem) => (
+        <Alert key={problem.source} variant="destructive">
+          <div className="flex min-w-0 items-start gap-2">
+            <span className="min-w-0 flex-1 break-words">{problem.message}</span>
+            <div className="flex shrink-0 items-center gap-1">
+              {problem.retry && (
+                <Button variant="outline" size="xs" onClick={problem.retry}>
+                  <RefreshCw aria-hidden="true" />
+                  Retry
+                </Button>
+              )}
               <Button
                 variant="ghost"
-                size="icon-sm"
-                onClick={() => setSelectedId(null)}
-                aria-label="Close preview"
+                size="icon-xs"
+                onClick={() => dismiss(problem.source, problem.message)}
+                aria-label="Dismiss this error"
               >
-                <X className="h-3.5 w-3.5" />
+                <X aria-hidden="true" />
               </Button>
             </div>
           </div>
-          <iframe className="h-80 w-full border-0" src={selected.url} title={`Preview of ${selected.name}`} />
-        </div>
+        </Alert>
+      ))}
+
+      {search.result ? (
+        <SearchResults
+          result={search.result}
+          onClear={() => setSearch(NO_SEARCH)}
+          loadingMore={search.loadingMore}
+          onLoadMore={() => void loadMoreSearch()}
+          onOpen={(resourceId, offset, term) => {
+            resourceReturnFocusIdRef.current = resourceId;
+            setJump({ offset, term });
+            void library.select(resourceId).catch(() => setJump(null));
+          }}
+          onOpenResource={(resourceId) => {
+            resourceReturnFocusIdRef.current = resourceId;
+            setJump(null);
+            void library.select(resourceId).catch(() => undefined);
+          }}
+        />
+      ) : (
+        <>
+          {folderView && (
+            <CollectionChildren
+              collections={childFolders}
+              parentEffective={Boolean(tree.attachment?.effective)}
+              onOpen={(collectionId) => void openCollection(collectionId)}
+              onDrop={handleDrop}
+            />
+          )}
+
+          <UploadDropZone
+            compact={library.resources.length > 0 || childFolders.length > 0}
+            uploading={library.uploading}
+            targetLabel={uploadTargetLabel}
+            onFiles={(files) => void addFiles(files)}
+          />
+
+          {showFilter && (
+            <Input
+              type="search"
+              className="h-8 text-xs"
+              placeholder="Filter by name…"
+              aria-label="Filter the list by file name"
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+            />
+          )}
+
+          {/* A floor rather than pure `flex-1`: with eight fixed blocks stacked
+              above it, a short window squeezed this to nothing instead of
+              letting the panel scroll as a whole. */}
+          <div
+            className="min-h-32 flex-1 overflow-y-auto"
+            aria-busy={library.loading}
+          >
+            {library.loading && library.resources.length === 0 ? (
+              <div className="space-y-1.5">
+                <Skeleton className="h-14 w-full" />
+                <Skeleton className="h-14 w-full" />
+                <Skeleton className="h-14 w-full" />
+              </div>
+            ) : library.error && library.resources.length === 0 ? null : (
+              // Rows survive a failed refresh: blanking the list threw away
+              // rows that were still perfectly valid. But a failure with
+              // nothing loaded renders nothing at all rather than the empty
+              // state — "your library is empty" is a claim about the server,
+              // and a request that failed did not establish it.
+              <ResourceList
+                resources={library.resources}
+                filter={filter}
+                emptyTitle={
+                  effectiveView.kind === 'collection'
+                    ? 'No PDFs directly in this folder'
+                    : effectiveView.kind === 'unfiled'
+                      ? 'Unfiled is empty'
+                      : effectiveView.scope === 'document'
+                        ? 'Nothing attached to this document'
+                        : 'Your library is empty'
+                }
+                emptyDescription={
+                  effectiveView.kind === 'collection'
+                    ? 'Upload here or move a PDF into this folder.'
+                    : effectiveView.kind === 'unfiled'
+                      ? 'PDFs not assigned to a folder or document appear here.'
+                      : effectiveView.scope === 'document'
+                        ? 'Upload a PDF here to attach it to the current document.'
+                        : 'Add the papers you are writing against. The assistant reads them once conversion finishes.'
+                }
+                onOpen={(resource) => {
+                  resourceReturnFocusIdRef.current = resource.id;
+                  setJump(null);
+                  void library.select(resource);
+                }}
+              />
+            )}
+            {library.hasMore && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-2 w-full"
+                disabled={library.loadingMore}
+                onClick={() => void library.loadMore()}
+              >
+                {library.loadingMore && <Spinner />}
+                {library.loadingMore ? 'Loading…' : 'Show more PDFs'}
+              </Button>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* One polite region for the whole list. */}
+      <p className="sr-only" role="status">
+        {settledNotice}
+      </p>
+
+      {editor && (
+        <CollectionEditorDialog
+          key={editor.mode === 'edit' ? `edit-${editor.collection.id}` : `create-${editor.parentId ?? 'root'}`}
+          open
+          mode={editor.mode}
+          collection={editor.mode === 'edit' ? editor.collection : null}
+          parentName={editor.mode === 'create' ? editor.parentName : null}
+          onOpenChange={(open) => !open && setEditor(null)}
+          onSave={saveFolder}
+          returnFocusRef={editor.mode === 'create' && editor.parentId === null ? newRootRef : folderActionRef}
+        />
+      )}
+      {picker?.kind === 'collection' && (
+        <CollectionPickerDialog
+          open
+          mode="collection"
+          subjectName={picker.collection.name}
+          subjectCollectionId={picker.collection.id}
+          controller={tree}
+          initialTarget={
+            picker.collection.parent_id
+              ? { kind: 'collection', collectionId: picker.collection.parent_id }
+              : { kind: 'root' }
+          }
+          onOpenChange={(open) => !open && setPicker(null)}
+          onMove={moveFromPicker}
+          returnFocusRef={folderActionRef}
+        />
+      )}
+      {deleteOpen && selectedFolder && (
+        <CollectionDeleteDialog
+          open
+          collection={selectedFolder}
+          onOpenChange={setDeleteOpen}
+          onPreview={tree.previewDelete}
+          onDelete={deleteFolder}
+          returnFocusRef={folderActionRef}
+        />
       )}
     </div>
   );

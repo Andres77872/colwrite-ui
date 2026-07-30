@@ -92,7 +92,6 @@ export function DocumentHeader() {
     setBusy('delete');
     try {
       await deleteRemote(documentId);
-      newLocal();
       toast({ title: 'Document deleted', variant: 'success' });
     } catch (error) {
       toast({

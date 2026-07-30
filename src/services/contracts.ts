@@ -12,19 +12,38 @@ export type DocumentInput =
   | Block[]
   | (Partial<Doc> & { title?: string } & UnknownRecord)
 
-/**
- * The list endpoint has used several identifier and title keys over time.
- * Keep those wire fields typed while retaining unknown backend metadata.
- */
-export type DocumentSummary = UnknownRecord & {
-  _id?: string
-  id?: string
-  document_id?: string
-  name?: string
-  title?: string
-  version?: number
-  created_at?: string
-  updated_at?: string
+export type DocumentSortBy = 'updated_at' | 'created_at' | 'name'
+export type DocumentSortOrder = 'asc' | 'desc'
+
+export interface DocumentListOptions {
+  page?: number
+  limit?: number
+  query?: string
+  tags?: string[]
+  sortBy?: DocumentSortBy
+  sortOrder?: DocumentSortOrder
+}
+
+/** Canonical document metadata returned to all UI consumers. */
+export interface DocumentSummary {
+  id: string
+  name: string
+  version: number
+  tags: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DocumentListResult {
+  documents: DocumentSummary[]
+  count: number
+  page: number
+  limit: number
+  totalPages: number
+  sortBy: DocumentSortBy
+  sortOrder: DocumentSortOrder
+  status: string
+  message: string
 }
 
 export function isUnknownRecord(value: unknown): value is UnknownRecord {

@@ -13,6 +13,28 @@ export function truncateAtSentence(text: string | null | undefined, maxChars = 2
   return `${cut.trim()}…`;
 }
 
+/**
+ * Offsets of every case-insensitive occurrence of `needle` in `text`.
+ *
+ * Separate from the component that renders the marks so a caller can show a
+ * match count and step between hits without rendering the text twice to find
+ * out how many there are.
+ */
+export function matchOffsets(text: string, needle: string): number[] {
+  const term = needle.trim().toLowerCase();
+  if (!term) return [];
+  const haystack = text.toLowerCase();
+  const found: number[] = [];
+  let cursor = 0;
+  for (;;) {
+    const at = haystack.indexOf(term, cursor);
+    if (at === -1) break;
+    found.push(at);
+    cursor = at + term.length;
+  }
+  return found;
+}
+
 /** Human-readable file size, e.g. `1.4 MB`. */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';

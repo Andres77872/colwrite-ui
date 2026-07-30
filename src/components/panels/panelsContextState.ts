@@ -20,6 +20,17 @@ export type PanelsContextValue = {
   isDesktop: boolean;
   mobileNavOpen: boolean;
   setMobileNavOpen: (open: boolean) => void;
+  /**
+   * Whether the assistant window is showing.
+   *
+   * Lives here rather than inside ChatAssistant because it is shell state with
+   * a second owner: the keyboard shortcut has to toggle it, and two
+   * `usePersistentState` hooks on the same key are two independent useStates
+   * that happen to write to the same place.
+   */
+  assistantOpen: boolean;
+  setAssistantOpen: (open: SetStateAction<boolean>) => void;
+  toggleAssistant: () => void;
 };
 
 export const PanelsContext = createContext<PanelsContextValue | undefined>(undefined);

@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react';
 import type { Block, Doc, ParagraphChild, ToolOperation } from './types';
 import { loadDoc, saveDoc, loadDocumentId, saveDocumentId } from './storage';
 import {
@@ -9,7 +9,11 @@ import {
   type ApplyPatchResult,
 } from './docOps';
 import { createDocument as apiCreateDocument, saveDocument as apiSaveDocument, loadDocument as apiLoadDocument, deleteDocument as apiDeleteDocument, listDocuments as apiListDocuments } from '../services';
-import type { DocumentInput, DocumentSummary } from '../services';
+import type {
+  DocumentInput,
+  DocumentListOptions,
+  DocumentListResult,
+} from '../services';
 import { uid } from '../lib/uid';
 import { EditorContext, type EditorContextValue } from './editorContextState';
 export type { EditorContextValue } from './editorContextState';
@@ -22,6 +26,22 @@ function makeDefaultDoc(): Doc {
       { id: uid(), type: 'heading', level: 2, html: 'Your document' },
       { id: uid(), type: 'paragraph', html: 'Write something here. Select text to format. Use the + to insert blocks.', children: [], columns: 1 },
     ],
+  };
+}
+
+function documentInputToDoc(input: DocumentInput): Doc {
+  if (Array.isArray(input)) {
+    return { version: 1, blocks: input };
+  }
+  return {
+    version: typeof input.version === 'number' ? input.version : 1,
+    blocks: Array.isArray(input.blocks) ? input.blocks : [],
+    name:
+      typeof input.name === 'string'
+        ? input.name
+        : 'title' in input && typeof input.title === 'string'
+          ? input.title
+          : undefined,
   };
 }
 
@@ -78,8 +98,15 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   // would save itself forever.
   const versionRef = useRef<number>(doc.version ?? 1);
 
-  // Bumped only by real content edits; this is what arms the autosave timer.
+  // Revisions distinguish real edits from navigation. A document is dirty
+  // only while its edit revision is newer than the revision last confirmed by
+  // the server. Merely opening or leaving a document must not change
+  // `updated_at`.
   const [dirtyTick, setDirtyTick] = useState(0);
+  const editRevisionRef = useRef(0);
+  const persistedRevisionRef = useRef(0);
+  const saveInFlightRef = useRef<Promise<void> | null>(null);
+  const [documentListRevision, setDocumentListRevision] = useState(0);
 
   // True until the mount-time server fetch settles. Autosave stays disarmed
   // meanwhile so a cached draft cannot be written back before we know what the
@@ -110,6 +137,10 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   };
   const [lastSaveSource, setLastSaveSource] = useState<'auto' | 'manual' | null>(null);
   const autoSaveTimerRef = useRef<number | null>(null);
+  // Mirrors `isAutoSaving` for readers that run outside React's render cycle —
+  // specifically the beforeunload guard, which has to answer "is there
+  // unsaved work" synchronously at event time.
+  const isAutoSavingRef = useRef(false);
   const [hasAnyRemoteDocs, setHasAnyRemoteDocs] = useState<boolean | null>(null);
 
   // Local draft cache, keyed by the document it belongs to.
@@ -129,7 +160,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     let canceled = false;
     (async () => {
       try {
-        const res = await apiListDocuments(1, 1);
+        const res = await apiListDocuments({ page: 1, limit: 1 });
         if (!canceled) setHasAnyRemoteDocs((res.count || 0) > 0);
       } catch {
         // On error, assume true to avoid blocking normal autosave flows.
@@ -141,8 +172,9 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
   /** Apply a content change and arm the autosave timer. */
   const mutateDoc = (updater: (prev: Doc) => Doc) => {
+    editRevisionRef.current += 1;
     setDoc(updater);
-    setDirtyTick(tick => tick + 1);
+    setDirtyTick(editRevisionRef.current);
   };
 
   const setBlocks = (updater: (prev: Block[]) => Block[]) =>
@@ -158,10 +190,21 @@ export function EditorProvider({ children }: { children: ReactNode }) {
    * server-side. Skipping this is what made every save after the first fail:
    * the client kept optimistically locking on the version it first loaded.
    */
-  const adoptServerVersion = (version: number | undefined | null) => {
+  const applyServerVersion = (
+    version: number | undefined | null,
+    invalidateList: boolean,
+  ) => {
     if (typeof version !== 'number' || Number.isNaN(version)) return;
+    const changed = versionRef.current !== version;
     versionRef.current = version;
     setDoc(prev => (prev.version === version ? prev : { ...prev, version }));
+    if (invalidateList && changed) {
+      setDocumentListRevision(revision => revision + 1);
+    }
+  };
+
+  const adoptServerVersion = (version: number | undefined | null) => {
+    applyServerVersion(version, true);
   };
 
   const addBlockAtStart = (type: Block['type']): string => {
@@ -316,9 +359,15 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const exec = (cmd: string) => document.execCommand(cmd, false);
 
   const newLocal = () => {
+    if (autoSaveTimerRef.current !== null) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
     const next = makeDefaultDoc();
     setDoc(next);
     docRef.current = next;
+    editRevisionRef.current = 0;
+    persistedRevisionRef.current = 0;
     setDirtyTick(0);
     setDocumentId(null);
     documentIdRef.current = null;
@@ -331,28 +380,44 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   // API-backed persistence
   const createRemote = async (docOverride?: DocumentInput): Promise<string> => {
     const payload = docOverride ?? docRef.current;
+    const revisionAtStart = editRevisionRef.current;
     const res = await apiCreateDocument(payload);
+    const version = res.version ?? 1;
     setDocumentId(res.document_id);
     documentIdRef.current = res.document_id;
     loadedForIdRef.current = res.document_id;
-    versionRef.current = res.version ?? 1;
+    versionRef.current = version;
+    persistedRevisionRef.current = revisionAtStart;
+    setDoc(previous => (
+      previous.version === version ? previous : { ...previous, version }
+    ));
     setHasAnyRemoteDocs(true);
     setSaveError(null);
+    setDocumentListRevision(revision => revision + 1);
     return res.document_id;
   };
 
-  // Internal helper to centralize remote saves and mark source
+  // Serialize saves so a switch can wait for an active autosave, then
+  // re-check whether a newer edit still needs its own write.
   const doRemoteSave = async (source: 'auto' | 'manual', docOverride?: DocumentInput): Promise<void> => {
     // Cancel any pending autosave timer to avoid duplicate saves
     if (autoSaveTimerRef.current !== null) {
       clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = null;
     }
-    const targetId = documentIdRef.current;
-    const base = docOverride ?? docRef.current;
+    const pendingSave = saveInFlightRef.current;
+    if (pendingSave) {
+      try {
+        await pendingSave;
+      } catch {
+        // The caller that started the failed request reports it. Re-evaluate
+        // the current dirty revision here so an explicit retry can proceed.
+      }
+    }
 
+    const targetId = documentIdRef.current;
     if (!targetId) {
-      await createRemote(base);
+      await createRemote(docOverride ?? docRef.current);
       setLastSavedAt(Date.now());
       setLastSaveSource(source);
       return;
@@ -365,16 +430,54 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Always lock on the version the server last confirmed, not the one
-    // embedded in the (possibly much older) doc we are sending.
+    const revisionAtStart = editRevisionRef.current;
+    const hasUnsavedRevision = revisionAtStart > persistedRevisionRef.current;
+    if (!hasUnsavedRevision && docOverride === undefined) {
+      if (source === 'manual') {
+        setSaveError(null);
+        setLastSavedAt(Date.now());
+        setLastSaveSource(source);
+      }
+      return;
+    }
+
+    const base = docOverride ?? docRef.current;
     const payload: DocumentInput = Array.isArray(base)
       ? { blocks: base, version: versionRef.current }
       : { ...base, version: versionRef.current };
-    const res = await apiSaveDocument(targetId, payload);
-    adoptServerVersion(res?.version);
-    setSaveError(null);
-    setLastSavedAt(Date.now());
-    setLastSaveSource(source);
+
+    const request = (async () => {
+      const res = await apiSaveDocument(targetId, payload);
+      setDocumentListRevision(revision => revision + 1);
+
+      // A local reset can happen while a request is in flight. The old
+      // document was still saved, but its response must not alter the newly
+      // active document's version or clean revision.
+      if (
+        documentIdRef.current !== targetId
+        || loadedForIdRef.current !== targetId
+      ) {
+        return;
+      }
+
+      applyServerVersion(res?.version, false);
+      persistedRevisionRef.current = Math.max(
+        persistedRevisionRef.current,
+        revisionAtStart,
+      );
+      setSaveError(null);
+      setLastSavedAt(Date.now());
+      setLastSaveSource(source);
+    })();
+
+    saveInFlightRef.current = request;
+    try {
+      await request;
+    } finally {
+      if (saveInFlightRef.current === request) {
+        saveInFlightRef.current = null;
+      }
+    }
   };
 
   const saveRemote = async (docOverride?: DocumentInput): Promise<void> => {
@@ -387,6 +490,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     // old orphan does not keep failing the agent's edits forever.
     const loaded: Doc = { ...fetched, blocks: reconcileBlocks(fetched.blocks) };
     setDoc(loaded);
+    editRevisionRef.current = 0;
+    persistedRevisionRef.current = 0;
     setDirtyTick(0);
     setDocumentId(id);
     documentIdRef.current = id;
@@ -427,7 +532,14 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   // Keyed on `dirtyTick` rather than `doc` so adopting a server version does
   // not count as a change and re-arm the timer.
   useEffect(() => {
-    if (hasAnyRemoteDocs === null || isHydrating || dirtyTick === 0) return;
+    if (
+      hasAnyRemoteDocs === null
+      || isHydrating
+      || dirtyTick === 0
+      || editRevisionRef.current <= persistedRevisionRef.current
+    ) {
+      return;
+    }
 
     if (autoSaveTimerRef.current !== null) {
       clearTimeout(autoSaveTimerRef.current);
@@ -437,12 +549,15 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     if (hasAnyRemoteDocs === false && !documentId) return;
 
     autoSaveTimerRef.current = window.setTimeout(async () => {
+      autoSaveTimerRef.current = null;
+      isAutoSavingRef.current = true;
       setIsAutoSaving(true);
       try {
         await autoSave();
       } catch (error) {
         setSaveError(describeSaveError(error));
       } finally {
+        isAutoSavingRef.current = false;
         setIsAutoSaving(false);
       }
     }, 5000);
@@ -458,32 +573,72 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const switchTo = async (id: string): Promise<void> => {
     // Switching used to drop whatever had not hit the 5s autosave yet. The
     // assistant creating a document made that a routine occurrence.
-    if (documentIdRef.current && loadedForIdRef.current === documentIdRef.current) {
+    if (
+      documentIdRef.current
+      && loadedForIdRef.current === documentIdRef.current
+      && editRevisionRef.current > persistedRevisionRef.current
+    ) {
       try {
         await doRemoteSave('auto');
-      } catch {
+      } catch (error) {
         // A failed flush must not block the switch — the error is already
-        // surfaced through saveError, and the user asked to move on.
+        // retained in the keyed local draft, and the user asked to move on.
+        setSaveError(describeSaveError(error));
       }
     }
     await loadRemote(id);
   };
 
+  const createAndSwitch = async (input: DocumentInput): Promise<string> => {
+    if (
+      editRevisionRef.current > persistedRevisionRef.current
+      && (documentIdRef.current || editRevisionRef.current > 0)
+    ) {
+      await doRemoteSave('auto');
+    }
+
+    const next = documentInputToDoc(input);
+    const res = await apiCreateDocument(input);
+    const adopted = { ...next, version: res.version ?? 1 };
+
+    setDoc(adopted);
+    docRef.current = adopted;
+    setDocumentId(res.document_id);
+    documentIdRef.current = res.document_id;
+    loadedForIdRef.current = res.document_id;
+    versionRef.current = adopted.version;
+    editRevisionRef.current = 0;
+    persistedRevisionRef.current = 0;
+    setDirtyTick(0);
+    setHasAnyRemoteDocs(true);
+    setLastSavedAt(Date.now());
+    setLastSaveSource('manual');
+    setSaveError(null);
+    setDocumentListRevision(revision => revision + 1);
+    return res.document_id;
+  };
+
   const deleteRemote = async (id: string): Promise<void> => {
     await apiDeleteDocument(id);
-    if (documentId === id) setDocumentId(null);
+    if (documentIdRef.current === id) {
+      newLocal();
+    }
+    setDocumentListRevision(revision => revision + 1);
     try {
-      const res = await apiListDocuments(1, 1);
+      const res = await apiListDocuments({ page: 1, limit: 1 });
       setHasAnyRemoteDocs((res.count || 0) > 0);
     } catch {
       // On error, leave the previous value; UX will rely on existing state.
     }
   };
 
-  const listRemote = async (page = 1, limit = 10, query?: string): Promise<{ documents: DocumentSummary[]; count: number }> => {
-    const res = await apiListDocuments(page, limit, query);
-    return { documents: res.documents || [], count: res.count || 0 };
-  };
+  const listRemote = useCallback(
+    (
+      options: DocumentListOptions = {},
+      init?: { signal?: AbortSignal },
+    ): Promise<DocumentListResult> => apiListDocuments(options, init),
+    [],
+  );
 
   const getJSON = () => JSON.stringify(doc, null, 2);
   const setFromJSON = (json: string) => {
@@ -595,13 +750,20 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     save,
     newLocal,
     createRemote,
+    createAndSwitch,
     saveRemote,
     loadRemote,
     switchTo,
     deleteRemote,
     listRemote,
+    documentListRevision,
     lastSavedAt,
     isAutoSaving,
+    hasPendingEdits: () => (
+      editRevisionRef.current > persistedRevisionRef.current
+      || autoSaveTimerRef.current !== null
+      || isAutoSavingRef.current
+    ),
     lastSaveSource,
     saveError,
     clearSaveError: () => setSaveError(null),

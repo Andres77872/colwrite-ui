@@ -1,14 +1,17 @@
-import { useState } from 'react';
+import { useState, type ElementType } from 'react';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Spinner } from '@/components/ui/spinner';
 import { useToast } from '@/components/ui/toastContext';
 import { formatDateTime } from '@/lib/text';
+import { usePagedList } from '@/hooks/usePagedList';
 import { errorMessage } from '@/services/contracts';
 import { listUserDocuments, type UserDocument } from '@/services/userProfile';
 import { Bot, FileText, MessagesSquare, Paperclip, Save } from 'lucide-react';
 
 const PAGE_SIZE = 20;
+
+const keyOfDocument = (document: UserDocument) => document.document_id;
 
 /**
  * DocumentsSection — every document the user has written, with the activity
@@ -28,7 +31,10 @@ export function DocumentsSection({
   onOpen: (documentId: string) => void;
 }) {
   const { toast } = useToast();
-  const [items, setItems] = useState(documents);
+  const { items, serverOffset, appendPage } = usePagedList({
+    first: documents,
+    keyOf: keyOfDocument,
+  });
   const [loading, setLoading] = useState(false);
   const [exhausted, setExhausted] = useState(false);
 
@@ -37,10 +43,10 @@ export function DocumentsSection({
   const loadMore = async () => {
     setLoading(true);
     try {
-      const response = await listUserDocuments(PAGE_SIZE, items.length);
+      const response = await listUserDocuments(PAGE_SIZE, serverOffset);
       const fetched = response.documents ?? [];
       if (fetched.length === 0) setExhausted(true);
-      setItems((previous) => [...previous, ...fetched]);
+      appendPage(fetched);
     } catch (error) {
       toast({
         title: 'Could not load more documents',
@@ -71,10 +77,22 @@ export function DocumentsSection({
         <>
           <ul className="mt-3 divide-y divide-border/50">
             {items.map((document) => (
-              <li key={document.document_id} className="py-2.5">
+              <li
+                key={document.document_id}
+                className="rounded-md py-2.5 transition-colors hover:bg-accent/40 has-focus-visible:bg-accent/40"
+              >
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{document.name}</p>
+                    {/* The name is the primary action. "Open" sat right beside
+                        it while the name itself was inert, so the obvious thing
+                        to click was the one thing that did nothing. */}
+                    <button
+                      type="button"
+                      className="block max-w-full truncate text-left text-sm font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      onClick={() => onOpen(document.document_id)}
+                    >
+                      {document.name}
+                    </button>
                     <p className="mt-0.5 text-2xs text-muted-foreground">
                       v{document.version}
                       {document.updated_at && ` · edited ${formatDateTime(document.updated_at)}`}
@@ -83,8 +101,8 @@ export function DocumentsSection({
                       <Metric icon={Save} value={document.save_count} label="saves" />
                       <Metric icon={MessagesSquare} value={document.chat_count} label="chats" />
                       <Metric icon={Bot} value={document.agent_run_count} label="assistant runs" />
-                      {document.upload_count > 0 && (
-                        <Metric icon={Paperclip} value={document.upload_count} label="attachments" />
+                      {document.resource_count > 0 && (
+                        <Metric icon={Paperclip} value={document.resource_count} label="attachments" />
                       )}
                     </ul>
                   </div>
@@ -92,6 +110,7 @@ export function DocumentsSection({
                     variant="outline"
                     size="sm"
                     onClick={() => onOpen(document.document_id)}
+                    aria-label={`Open ${document.name}`}
                   >
                     Open
                   </Button>
@@ -123,7 +142,7 @@ function Metric({
   value,
   label,
 }: {
-  icon: React.ElementType;
+  icon: ElementType;
   value: number;
   label: string;
 }) {
