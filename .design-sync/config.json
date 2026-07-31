@@ -13,44 +13,176 @@
   "docsDir": "../.design-sync/docs",
   "readmeHeader": ".design-sync/conventions.md",
   "overrides": {
-    "Dialog": { "cardMode": "single", "primaryStory": "Confirm" },
-    "DialogTrigger": { "cardMode": "single", "primaryStory": "AsButton" },
-    "DialogContent": { "cardMode": "single", "primaryStory": "Narrow" },
-    "DialogHeader": { "cardMode": "single", "primaryStory": "TitleAndDescription" },
-    "DialogFooter": { "cardMode": "single", "primaryStory": "CancelAndConfirm" },
-    "DialogTitle": { "cardMode": "single", "primaryStory": "WithDescription" },
-    "DialogDescription": { "cardMode": "single", "primaryStory": "OneLine" },
-    "DialogClose": { "cardMode": "single", "primaryStory": "FooterCancel" },
-    "DialogOverlay": { "cardMode": "single", "primaryStory": "BehindTheDialog" },
-    "DialogPortal": { "cardMode": "single", "primaryStory": "EscapesAClippingPanel" },
-    "ShortcutsDialog": { "cardMode": "single", "primaryStory": "Open" },
-    "DropdownMenu": { "cardMode": "single" },
-    "DropdownMenuTrigger": { "cardMode": "single" },
-    "DropdownMenuContent": { "cardMode": "single" },
-    "DropdownMenuItem": { "cardMode": "single" },
-    "DropdownMenuLabel": { "cardMode": "single" },
-    "DropdownMenuSeparator": { "cardMode": "single" },
-    "DropdownMenuGroup": { "cardMode": "single" },
-    "DropdownMenuPortal": { "cardMode": "single" },
-    "DropdownMenuSub": { "cardMode": "single" },
-    "DropdownMenuSubTrigger": { "cardMode": "single" },
-    "DropdownMenuSubContent": { "cardMode": "single" },
-    "DropdownMenuRadioGroup": { "cardMode": "single" },
-    "Popover": { "cardMode": "single" },
-    "PopoverTrigger": { "cardMode": "single" },
-    "PopoverContent": { "cardMode": "single" },
-    "PopoverAnchor": { "cardMode": "single" },
-    "Sheet": { "cardMode": "single" },
-    "SheetTrigger": { "cardMode": "single" },
-    "SheetContent": { "cardMode": "single" },
-    "SheetClose": { "cardMode": "single" },
-    "Tooltip": { "cardMode": "single" },
-    "TooltipTrigger": { "cardMode": "single" },
-    "TooltipContent": { "cardMode": "single" },
-    "TooltipProvider": { "cardMode": "single" },
-    "ToastProvider": { "cardMode": "single" },
-    "ConfirmProvider": { "cardMode": "single" },
-    "AppShell": { "cardMode": "single", "primaryStory": "FullFrame", "viewport": "1600x900" }
+    "Dialog": {
+      "cardMode": "single",
+      "primaryStory": "Confirm"
+    },
+    "DialogTrigger": {
+      "cardMode": "single",
+      "primaryStory": "AsButton"
+    },
+    "DialogContent": {
+      "cardMode": "single",
+      "primaryStory": "Narrow"
+    },
+    "DialogHeader": {
+      "cardMode": "single",
+      "primaryStory": "TitleAndDescription"
+    },
+    "DialogFooter": {
+      "cardMode": "single",
+      "primaryStory": "CancelAndConfirm"
+    },
+    "DialogTitle": {
+      "cardMode": "single",
+      "primaryStory": "WithDescription"
+    },
+    "DialogDescription": {
+      "cardMode": "single",
+      "primaryStory": "OneLine"
+    },
+    "DialogClose": {
+      "cardMode": "single",
+      "primaryStory": "FooterCancel"
+    },
+    "DialogOverlay": {
+      "cardMode": "single",
+      "primaryStory": "BehindTheDialog"
+    },
+    "DialogPortal": {
+      "cardMode": "single",
+      "primaryStory": "EscapesAClippingPanel"
+    },
+    "ShortcutsDialog": {
+      "cardMode": "single",
+      "primaryStory": "Open"
+    },
+    "DropdownMenu": {
+      "cardMode": "single"
+    },
+    "DropdownMenuTrigger": {
+      "cardMode": "single"
+    },
+    "DropdownMenuContent": {
+      "cardMode": "single"
+    },
+    "DropdownMenuItem": {
+      "cardMode": "single"
+    },
+    "DropdownMenuLabel": {
+      "cardMode": "single"
+    },
+    "DropdownMenuSeparator": {
+      "cardMode": "single"
+    },
+    "DropdownMenuGroup": {
+      "cardMode": "single"
+    },
+    "DropdownMenuPortal": {
+      "cardMode": "single"
+    },
+    "DropdownMenuSub": {
+      "cardMode": "single"
+    },
+    "DropdownMenuSubTrigger": {
+      "cardMode": "single"
+    },
+    "DropdownMenuSubContent": {
+      "cardMode": "single"
+    },
+    "DropdownMenuRadioGroup": {
+      "cardMode": "single"
+    },
+    "Popover": {
+      "cardMode": "single"
+    },
+    "PopoverTrigger": {
+      "cardMode": "single"
+    },
+    "PopoverContent": {
+      "cardMode": "single"
+    },
+    "PopoverAnchor": {
+      "cardMode": "single"
+    },
+    "Sheet": {
+      "cardMode": "single"
+    },
+    "SheetTrigger": {
+      "cardMode": "single"
+    },
+    "SheetContent": {
+      "cardMode": "single"
+    },
+    "SheetClose": {
+      "cardMode": "single"
+    },
+    "Tooltip": {
+      "cardMode": "single"
+    },
+    "TooltipTrigger": {
+      "cardMode": "single"
+    },
+    "TooltipContent": {
+      "cardMode": "single"
+    },
+    "TooltipProvider": {
+      "cardMode": "single"
+    },
+    "ToastProvider": {
+      "cardMode": "single"
+    },
+    "ConfirmProvider": {
+      "cardMode": "single"
+    },
+    "AppShell": {
+      "cardMode": "single",
+      "primaryStory": "FullFrame",
+      "viewport": "1600x900"
+    },
+    "BlockControls": {
+      "cardMode": "single"
+    },
+    "SlashMenu": {
+      "cardMode": "single"
+    },
+    "FloatingToolbar": {
+      "cardMode": "single"
+    },
+    "ChatRefPicker": {
+      "cardMode": "single"
+    },
+    "ChatAssistant": {
+      "cardMode": "single"
+    },
+    "Canvas": {
+      "cardMode": "single"
+    },
+    "AIActionMenu": {
+      "cardMode": "single"
+    },
+    "InlinePopover": {
+      "cardMode": "single"
+    },
+    "InlineSettings": {
+      "cardMode": "single"
+    },
+    "ChatTaggedInput": {
+      "cardMode": "column"
+    },
+    "DocumentFooter": {
+      "cardMode": "column"
+    },
+    "DocumentsMenu": {
+      "cardMode": "column"
+    },
+    "ReviewBar": {
+      "cardMode": "column"
+    },
+    "DocumentHeader": {
+      "cardMode": "single",
+      "primaryStory": "Saved"
+    }
   },
   "dtsPropsFor": {
     "Alert": "  /** Pass `null` to drop the leading icon. Defaults to the variant's icon. */\n  icon?: React.ElementType | null;\n  variant?: \"destructive\" | \"warning\" | \"info\" | \"success\";\n  /** `alert` is assertive by default — pass `role=\"status\"` for ambient notes. */\n  role?: string;\n  className?: string;\n  id?: string;\n  style?: React.CSSProperties;\n  children?: React.ReactNode;",
@@ -59,5 +191,31 @@
     "ExtractionBadge": "  status: \"pending\" | \"running\" | \"ready\" | \"failed\" | \"unsupported\" | null;\n  error?: string;\n  /** Add the state hint to the accessible name. Off by default. */\n  describe?: boolean;\n  className?: string;",
     "Sidebar": "  /** Takes no props — reads the app's view and panel context. */\n  children?: never;",
     "Topbar": "  /** Takes no props — reads the app's view, panel and auth context. */\n  children?: never;"
-  }
+  },
+  "extraFonts": [
+    "../node_modules/@fontsource/inter/400.css",
+    "../node_modules/@fontsource/inter/500.css",
+    "../node_modules/@fontsource/inter/600.css",
+    "../node_modules/@fontsource/inter/700.css",
+    "../node_modules/katex/dist/fonts/KaTeX_AMS-Regular.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Caligraphic-Bold.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Caligraphic-Regular.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Fraktur-Bold.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Fraktur-Regular.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Main-Bold.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Main-BoldItalic.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Main-Italic.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Main-Regular.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Math-BoldItalic.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Math-Italic.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_SansSerif-Bold.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_SansSerif-Italic.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_SansSerif-Regular.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Script-Regular.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Size1-Regular.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Size2-Regular.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Size3-Regular.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Size4-Regular.woff2",
+    "../node_modules/katex/dist/fonts/KaTeX_Typewriter-Regular.woff2"
+  ]
 }

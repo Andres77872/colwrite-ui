@@ -225,6 +225,7 @@ function EquationInlineContent(props: InlineWidgetProps<EquationChild>) {
   const trigger = display ? (
     <button
       type="button"
+      aria-label={latex || 'Empty equation'}
       className="grid w-full grid-cols-[1fr_auto] items-center gap-2 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-border hover:bg-card"
       title="Edit equation"
     >
@@ -234,7 +235,11 @@ function EquationInlineContent(props: InlineWidgetProps<EquationChild>) {
       )}
     </button>
   ) : (
-    <InlinePill tone={hasError ? 'error' : 'default'} title={hasError ? rendered.error : 'Edit equation'}>
+    <InlinePill
+      aria-label={latex || 'Empty equation'}
+      tone={hasError ? 'error' : 'default'}
+      title={hasError ? rendered.error : 'Edit equation'}
+    >
       {preview('text-sm')}
     </InlinePill>
   );

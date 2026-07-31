@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "name": "Legacy HTML normalization",
+  "blocks": [
+    {
+      "id": "legacy-heading",
+      "type": "heading",
+      "level": 2,
+      "html": "<h2><b>Outer heading wrapper</b></h2>"
+    },
+    {
+      "id": "legacy-paragraph",
+      "type": "paragraph",
+      "html": "<p>Outer paragraph</p><div>Browser line<br>next line</div><strike>old strike</strike><span class=\"portal\" contenteditable=\"false\" data-child-id='legacy-table'><button>stale control</button></span>",
+      "children": [
+        {
+          "id": "legacy-table",
+          "type": "table",
+          "rows": 2,
+          "cols": 2,
+          "data": [
+            ["Header A", "Header B"],
+            ["Value A", "Value B"]
+          ],
+          "header": true
+        }
+      ]
+    }
+  ]
+}

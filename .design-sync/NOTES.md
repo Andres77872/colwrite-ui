@@ -3,6 +3,87 @@
 Repo-specific gotchas for syncing this design system to claude.ai/design.
 Read this before re-running the sync.
 
+## The export subsystem is deliberately cut out of the bundle
+
+The second sync (editor surface, 70 → 102 components) hit this and it will
+recur, because it comes from app code that is still moving. `build-ds-pkg.mjs`
+now generates four kinds of path pin to deal with it; all are computed, not
+enumerated, so new files of the same shape need no edit.
+
+**1. `.ttf` has no loader.** `src/lib/katex.ts` imports
+`katex/dist/katex.min.css`, whose every `@font-face` lists woff2 + woff + ttf.
+The converter's loader map (`lib/bundle.mjs`) handles
+`.svg/.png/.woff/.woff2` but not `.ttf` → 20 × `No loader is configured for
+".ttf" files`, build exits 1. Fixed by pinning that specifier to a generated
+copy with the ttf sources stripped; woff2 is kept, which every current browser
+uses. Forking `lib/bundle.mjs` to add a loader would also work but the skill
+says not to touch that file.
+
+**2. `src/export/katexOfflineCss.ts` needs the RAW stylesheet.** It regex-matches
+the woff2+woff+ttf triple and *throws* unless all 20 faces are rewritten. So the
+`virtual:colwrite-katex-css` pin serves the unstripped text — pointing it at the
+stripped copy breaks that module at import time, not just cosmetically.
+
+**3. Vite `?inline` asset imports.** Vite strips the query; esbuild treats
+`foo.woff2?inline` as a literal path that does not exist. All 28 are pinned to
+the real files, where the `.woff2` dataurl loader produces the data URI the
+importing code expects.
+
+**4. `renderStandaloneHtml` is stubbed — this is the important one.**
+Measured, the standalone-HTML exporter cost **1.55 MB of the bundle**:
+`react-dom/server` (browser AND legacy, 780 KB) for `renderToString`, `parse5`
+(195 KB) for sanitising, and 579 KB of base64 KaTeX/fontsource faces. Total was
+3252 KB; stubbing it brings the bundle to **1457 KB**. A server renderer in the
+artifact every rendered design loads is simply wrong, and none of it is
+design-system surface.
+
+It is reachable only because `DocumentHeader` renders `DocumentExportDialog`,
+and **esbuild inlines dynamic `import()` for an IIFE build** — so the app being
+lazy about it does not keep it out. The dialog's other two imports
+(`@/export/download`, `@/export/types`) are small and stay real, so it still
+mounts and renders; only producing an actual export file is unavailable.
+
+**The seam matters:** only `@/`-prefixed specifiers can be redirected by
+`tsconfig.paths`. Pinning `@/export/styles` does **not** work, because
+`renderStandaloneHtml.tsx` imports it as a relative `./styles`. Pick a cut point
+that is imported through the alias.
+
+If the export work later moves behind a real lazy boundary, or stops embedding
+fonts at module scope, revisit — the stub can then go.
+
+**5. KaTeX's stylesheet must be appended to `ds.css`, not left to the bundler.**
+esbuild *does* extract `import 'katex/dist/katex.min.css'` into a CSS output,
+but the converter's `_ds_bundle.css` is a copy of `cfg.cssEntry` (`ds-pkg/ds.css`),
+so that extracted CSS is discarded and never reaches a card or a design.
+
+The symptom is not "unstyled maths" and is easy to misread: KaTeX emits **both**
+a MathML span and an HTML span for every equation, and
+`.katex-mathml{clip:rect(1px,1px,1px,1px)}` is what hides the MathML one.
+Without the stylesheet the browser renders both, so **every equation appears
+twice** — once typeset, once as mangled plain text. That is exactly what the
+first 102-component build produced.
+
+Fixed by appending the stripped stylesheet to `ds.css` in `build-ds-pkg.mjs`,
+with `url(fonts/…)` repointed to `url(./fonts/…)`; the 20 woff2 faces are
+delivered there by `cfg.extraFonts`. The same append is where the dark-surface
+and fallback-card rules already live.
+
+**`cfg.extraFonts` also carries Inter.** `--font-sans` now leads with `"Inter"`,
+which tripped `[FONT_MISSING]` — the DS pane and every design would have fallen
+back to a system stack. Four `@fontsource/inter` weights (400/500/600/700) are
+wired alongside the katex faces.
+
+Safe-by-construction note: `extraFonts` is **not** part of the grade key. Only
+`provider`, `storyImports`, `extraEntries` and `.design-sync/overrides/*.mjs`
+bytes are hashed into the global slice (`configSlicesFor`), and `cardMode` /
+`primaryStory` are stripped per component — so the font wiring and the
+`[GRID_OVERFLOW]` remedies below carried all 102 grades forward.
+
+**`[GRID_OVERFLOW]` remedies applied:** `cardMode: "column"` for
+`ChatTaggedInput`, `DocumentFooter`, `DocumentsMenu` and `ReviewBar` (all render
+wider than a grid cell); `cardMode: "single"` + `primaryStory: "Saved"` for
+`DocumentHeader`, whose toast positions outside its cell.
+
 ## Re-sync risks — what can silently go stale
 
 Read this first on the next sync; each item is something that will not announce
@@ -108,9 +189,14 @@ itself.
     near-black inline, assuming a white page. Fixed with
     `[data-ds-fallback] { background-color: #fff }`.
   Both rules ship in `_ds_bundle.css` and are correct for real designs too.
-- Fonts: the DS uses system stacks only (`--font-sans` / `--font-mono`), so no
-  `@font-face` and no `[FONT_MISSING]`. `fonts/` is legitimately empty. KaTeX in
-  `index.html` is a CDN dependency of the editor, not of the DS.
+- Fonts: the DS's own type is system stacks only (`--font-sans` /
+  `--font-mono`), so no `@font-face` of its own and no `[FONT_MISSING]`;
+  `fonts/` is legitimately empty. **KaTeX is the exception** — since it moved
+  from a CDN `<script>` to the npm package, its stylesheet and woff2 faces are
+  bundled, which is why `_ds_bundle.js` is ~1.4 MB rather than ~580 KB. The
+  `@fontsource/inter` and `@fontsource/source-serif-4` deps are used only by
+  `src/export/`, which is stubbed out of the bundle (see above), so they do not
+  ship.
 
 ## Build ORDER matters: regenerate CSS after authoring previews
 
@@ -204,15 +290,31 @@ single-word language until the source is fixed. Re-check this note if
 - Playwright for the render check: `playwright@1.61.1` in `.ds-sync/`, matching
   the already-cached `chromium-1228` in `~/.cache/ms-playwright`. A different
   playwright version will fail with `Executable doesn't exist`.
+- `katex@0.18.1` is now a real runtime dependency of the DS (not just of
+  `src/export/`). If it is upgraded, re-check that the `@font-face` triple in
+  `katex.min.css` still matches the strip regex in `build-ds-pkg.mjs` **and**
+  the `sourceRule` regex in `src/export/katexOfflineCss.ts` — both parse that
+  stylesheet's exact shape, and both fail loudly rather than silently.
 
 ## Scope
 
 - Synced surface: `src/components/ui` (61 exports) + `src/components/common`
   (BrandMark, BrandLockup, Editable, ErrorBoundary, ExtractionBadge) +
-  `src/components/layout` (AppShell, Sidebar, Topbar, ShortcutsDialog) = **70
-  components**. Set in `DS_BARRELS` in the generator.
-- Not synced: `panels/`, `editor/`, `profile/`, `landing/`, `chat/`, `auth/` —
-  app views wired to app contexts and services.
+  `src/components/layout` (AppShell, Sidebar, Topbar, ShortcutsDialog) +
+  **the editor surface** (added in the second sync) = **102 components**. Set in
+  `DS_BARRELS` in the generator.
+- The editor surface is 32 components across five new groups: `Editor`
+  (Canvas, DocumentHeader, DocumentFooter, BlockControls, FloatingToolbar,
+  SlashMenu, AIActionMenu, DocumentsMenu), `Editor blocks` (Paragraph, Heading,
+  Divider), `Inline widgets` (Citation, Equation, Graph, Table, AiBeat,
+  ChartFigure, plus the InlineShell atoms InlinePill, InlinePopover,
+  InlineSettings, InlineFigureShell, SettingsRow, SettingsCheck,
+  SettingsFooter), `Assistant` (ChatAssistant, ChatMarkdown, AgentActivity,
+  ChatRefPicker, ChatRefTags, ChatTaggedInput) and `Review` (ReviewBar,
+  ChangeCard).
+- Still not synced: `panels/`, `profile/`, `landing/`, `chat/`, `auth/` — app
+  views wired to app contexts and services. `src/export/` is also out of scope
+  (that is where the `katex` and `parse5` npm deps are used, not in the DS).
 - 38 of the 70 are compound subparts (`CardHeader`, `DialogTitle`,
   `DropdownMenuItem`, …). By explicit user decision all 70 get their own `.d.ts`,
   usage doc and card; subpart previews render the real parent composition, which
@@ -385,12 +487,102 @@ app frame with an 800px canvas plus a 280px sidebar and a 320px tools panel need
   `DropdownMenuRadioGroup` have **no call sites in `src/`** — their previews are
   composed from the DS's own vocabulary rather than ported, and their docs say so.
 
+## Editor-surface previews: what the second sync learned
+
+Every one of these cost a debugging cycle. The pattern throughout: components
+that look prop-driven actually reach into context, and overlays that look
+forceable actually are not.
+
+**Context is deeper than the destructure suggests.** Grepping a component for
+`useEditor()` is not enough — the `Editable` it renders calls it too.
+`HeadingBlock` declares no context use and still throws without an
+`EditorContext`. `CitationInline` and `EquationInline` take full props *and*
+call `useEditor()`. `Canvas` needs `ConfirmProvider` not for itself but for the
+`BlockControls` it renders per block; without it the whole canvas paints as an
+empty surface with no error visible in the card.
+
+**`registerEditable` must really register.** A no-op passes the crash check and
+still breaks rendering: the effect that mounts inline widgets looks its host up
+as `refs.current[block.id]`, so with a no-op every `[data-child-id]` placeholder
+stays empty and no widget appears. Make it `(id, el) => { refs.current[id] = el }`.
+
+**Inline children need a placeholder in the html.** `block.children` alone does
+nothing — the paragraph html must contain `<span data-child-id="…"></span>`
+where each widget goes.
+
+**Citation authors must be `"Surname, Initials"`.** `firstAuthorSurname` splits
+on `,` `;` and ` and `, so `"Hoffmann et al."` renders as `(al., 2022)`. Use
+`"Hoffmann, J., Borgeaud, S."`.
+
+**What can and cannot be forced open**, verified per component:
+- `BlockControls` — YES. Open state is in the editor context
+  (`openMenuBlockId` + `openMenuType`), so both menus render open.
+- `SlashMenu` — YES, via its real trigger: register a contenteditable in
+  `refs`, put a caret in it, then
+  `window.dispatchEvent(new CustomEvent('colwrite:open-slash-menu', {detail:{blockId}}))`.
+  It measures the caret rect, so the caret must be real and the rect non-zero.
+- `FloatingToolbar` — YES, by making a real non-collapsed selection inside an
+  element carrying the **`editable` class** (that class is how it finds the
+  field).
+- `ChatRefPicker` — YES, via the `openAt()` ref handle. But its list is
+  `absolute bottom-full`, so it needs a **`relative` wrapper** or it resolves
+  against the root and lands at a negative top, off the card.
+- `ChatAssistant` — YES, `assistantOpen` comes from `PanelsContext`.
+- `InlinePopover`, `InlineSettings`, `AIActionMenu` — **NO.** All hold `open` in
+  internal state with no prop. Cards show the closed trigger.
+- `InlineFigureShell`'s control header — **NO.** `opacity-0` until hover.
+
+**Cells deliberately removed rather than shipped** (each rendered identically to
+a sibling, or rendered nothing). The reason is written into the preview file at
+the point of removal, so it does not get re-added:
+`SlashMenu.Filtering` (query lives in the menu's own search field, not the block
+text) · `ReviewBar.SteppingThroughABatch` (`focusedChangeId` highlights document
+cards, not the bar) · `BlockControls.Resting` (affordances are hover-revealed →
+empty card) · `DocumentFooter.LocalDraftNotYetSaved` (`documentId` only gates the
+null-return) · `InlineFigureShell.WithSettingsControl` (`controls` lands in the
+hidden header) · `SettingsCheck.WithHint` (see below) · `DividerBlock.OnItsOwn`
+and `InlineSettings.OnItsOwn` (single hairline / 14px icon on an empty card —
+this is what tripped `[RENDER_BLANK]`) · two of three `ChatRefPicker` cells (its
+root menu is two fixed options, so document count changes nothing).
+
+**`SettingsCheck`'s `hint` is a `title` attribute, not visible text** — unlike
+`SettingsRow`'s, which renders as a paragraph. It never appears in a screenshot
+and touch users never see it. Documented in `docs/SettingsCheck.md`.
+
+## SAFELIST gap: `pt-*` stops at 24, `h-*` goes to 96
+
+Beyond the arbitrary-value trap already documented above, the *named* scale is
+not uniformly emitted either. `pt-80` is absent from `ds.css` (the padding scale
+stops around `pt-24`) while `h-80` and `h-96` are present. A preview needing
+large vertical offset should use **spacer divs** (`<div className="h-96" />`)
+rather than padding. `SlashMenu` and `ChatRefPicker` both depend on this.
+
+Corollary worth restating because it bit twice in one run: `preview-rebuild.mjs`
+does not recompile CSS, so a class first used by a preview does nothing until
+`build-ds-pkg.mjs` runs again — and `package-build.mjs` is what copies
+`ds-pkg/ds.css` to `ds-bundle/_ds_bundle.css`. During a scoped iteration loop,
+`cp ds-pkg/ds.css ds-bundle/_ds_bundle.css` after `build-ds-pkg.mjs` is enough
+to see new utilities without a full rebuild.
+
 ## Known render warns
 
-None. The final validate reported **70/70 previews render cleanly** — no
-`[RENDER]`, `[RENDER_BLANK]`, `[RENDER_THIN]`, `[GRID_OVERFLOW]`, `[FONT_MISSING]`
-or `[CSS_*]` lines. A warn on a future sync is therefore new: investigate it
-rather than assuming it was always there.
+**First sync (70 components):** none. Validate reported 70/70 clean — no
+`[RENDER]`, `[RENDER_BLANK]`, `[RENDER_THIN]`, `[GRID_OVERFLOW]`,
+`[FONT_MISSING]` or `[CSS_*]` lines.
+
+**Second sync (102 components):** the last complete validate — run before the
+32 editor previews were authored, when they were all still floor cards —
+reported 102/102 rendering, `bad` on only `DividerBlock` and `InlineSettings`,
+both floor-card artefacts now fixed by real previews. Authoring also cleared the
+`[RENDER_THIN]` on `InlineFigureShell` and `SettingsRow`.
+
+**No clean full validate exists for the 102-component build yet** — the run that
+would have produced it is the one blocked on the `.ttf` failure above. Treat the
+first validate after that is fixed as establishing the baseline, not as a
+regression report.
+
+One informational line is expected and fine: `tokens: 248 defined, 163
+referenced (1 missing, below threshold)`.
 
 One informational line is expected and fine: `tokens: 248 defined, 163
 referenced (1 missing, below threshold)`.

@@ -16,6 +16,7 @@ import type {
 } from '../services';
 import { uid } from '../lib/uid';
 import { EditorContext, type EditorContextValue } from './editorContextState';
+import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 export type { EditorContextValue } from './editorContextState';
 
 function makeDefaultDoc(): Doc {
@@ -141,6 +142,37 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   // specifically the beforeunload guard, which has to answer "is there
   // unsaved work" synchronously at event time.
   const isAutoSavingRef = useRef(false);
+
+  /**
+   * Capture the DOM-backed editable values synchronously before export.
+   *
+   * React state normally follows on the next frame. Export is user-initiated
+   * and must include the character still visible under the caret even when
+   * that state update has not committed yet.
+   */
+  const getExportSnapshot = (): {
+    document: Doc;
+    baseVersion: number;
+    localRevision: number;
+    dirty: boolean;
+  } => {
+    const document = structuredClone(doc);
+    document.version = versionRef.current;
+    document.blocks = document.blocks.map((block) => {
+      if (block.type === 'divider') return block;
+      const editable = refs.current[block.id];
+      return editable ? { ...block, html: serializeEditableHtml(editable) } : block;
+    });
+    return {
+      document,
+      baseVersion: versionRef.current,
+      localRevision: editRevisionRef.current,
+      dirty: editRevisionRef.current > persistedRevisionRef.current
+        || autoSaveTimerRef.current !== null
+        || isAutoSavingRef.current,
+    };
+  };
+
   const [hasAnyRemoteDocs, setHasAnyRemoteDocs] = useState<boolean | null>(null);
 
   // Local draft cache, keyed by the document it belongs to.
@@ -749,6 +781,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     setFromJSON,
     save,
     newLocal,
+    getExportSnapshot,
     createRemote,
     createAndSwitch,
     saveRemote,

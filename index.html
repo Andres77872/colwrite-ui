@@ -14,14 +14,6 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>ColWrite — Assistant writer for arXiv papers</title>
 
-    <!-- KaTeX typesets equations. Loaded here rather than bundled so the CSS
-         is available before first paint; `src/lib/katex.ts` owns the
-         ready/unavailable states, and equations stay editable either way.
-         Chart.js used to sit beside this for the inline figures — those now
-         render as plain SVG, so a figure no longer depends on a CDN. -->
-    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   </head>
   <body>
     <div id="root"></div>

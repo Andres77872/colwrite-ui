@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "name": "Unsafe renderer corpus",
+  "blocks": [
+    {
+      "id": "unsafe-heading",
+      "type": "heading",
+      "level": 1,
+      "html": "<script>alert(1)</script><img src=\"file:///etc/passwd\">Visible heading"
+    },
+    {
+      "id": "unsafe-paragraph",
+      "type": "paragraph",
+      "html": "<style>@import 'https://evil.test/x.css'</style><iframe src=\"http://127.0.0.1\"></iframe><a href=\"javascript:alert(1)\" onclick=\"steal()\" style=\"background:url(file:///etc/shadow)\">safe label</a><span data-child-id='unsafe-graph'><svg onload=\"steal()\"></svg></span>",
+      "children": [
+        {
+          "id": "unsafe-graph",
+          "type": "graph",
+          "kind": "bar",
+          "data": {
+            "values": [1, 2],
+            "labels": ["A", "B"],
+            "colors": ["url(file:///etc/passwd)", "expression(alert(1))"]
+          },
+          "title": "</style><script>alert(1)</script>",
+          "caption": "The strings above must remain inert text."
+        }
+      ]
+    }
+  ]
+}

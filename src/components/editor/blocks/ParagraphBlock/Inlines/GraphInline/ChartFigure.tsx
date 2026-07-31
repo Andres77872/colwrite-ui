@@ -36,6 +36,8 @@ export type ChartFigureProps = {
   xLabel?: string;
   yLabel?: string;
   className?: string;
+  /** Export uses the same SVG without hover hit targets or tooltips. */
+  interactive?: boolean;
 };
 
 type Hover = { index: number; x: number; y: number } | null;
@@ -52,7 +54,7 @@ function positionPieSlices(slices: PieSlice[]) {
 }
 
 export function ChartFigure(props: ChartFigureProps) {
-  const { kind, values, labels, className } = props;
+  const { kind, values, labels, className, interactive = true } = props;
   const [hover, setHover] = useState<Hover>(null);
 
   if (values.length === 0) {
@@ -78,7 +80,7 @@ export function ChartFigure(props: ChartFigureProps) {
         <CartesianChart {...props} hover={hover} setHover={setHover} labelFor={labelFor} />
       )}
 
-      {hover !== null && (
+      {interactive && hover !== null && (
         <div
           role="tooltip"
           className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-md border border-border bg-popover px-2 py-1 text-xs shadow-md"
@@ -109,7 +111,7 @@ type InnerProps = ChartFigureProps & {
   labelFor: (index: number) => string;
 };
 
-function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover, labelFor }: InnerProps) {
+function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover, labelFor, interactive = true }: InnerProps) {
   const { min, max, ticks } = useMemo(() => linearScale(values), [values]);
   const color = seriesColor(0, colors);
 
@@ -144,7 +146,7 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
       className="w-full"
       role="img"
       aria-label={`${kind} chart with ${values.length} values`}
-      onMouseLeave={() => setHover(null)}
+      onMouseLeave={interactive ? () => setHover(null) : undefined}
     >
       {/* Gridlines: solid hairlines one step off the surface, never dashed. */}
       {ticks.map((tick) => (
@@ -280,7 +282,7 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
 
       {/* Hit targets are the full band, not the mark: a 2px-wide bar or a 4px
           dot is not something anyone can reliably point at. */}
-      {values.map((_, index) => (
+      {interactive && values.map((_, index) => (
         <rect
           key={`hit-${index}`}
           x={PLOT.left + band * index}
@@ -305,7 +307,7 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
    Pie
    ---------------------------------------- */
 
-function PieChart({ values, colors, labels, hover, setHover, labelFor }: InnerProps) {
+function PieChart({ values, colors, labels, hover, setHover, labelFor, interactive = true }: InnerProps) {
   const slices = useMemo(() => pieSlices(values), [values]);
   const radius = 88;
   const cx = 110;
@@ -328,7 +330,7 @@ function PieChart({ values, colors, labels, hover, setHover, labelFor }: InnerPr
         className="h-40 w-40 shrink-0"
         role="img"
         aria-label={`Pie chart with ${slices.length} slices`}
-        onMouseLeave={() => setHover(null)}
+        onMouseLeave={interactive ? () => setHover(null) : undefined}
       >
         {drawn.map((slice) => (
           <path
@@ -339,7 +341,7 @@ function PieChart({ values, colors, labels, hover, setHover, labelFor }: InnerPr
             stroke="var(--color-card)"
             strokeWidth={2}
             opacity={hover && hover.index !== slice.index ? 0.55 : 1}
-            onMouseEnter={() => setHover({ index: slice.index, x: 50, y: 20 })}
+            onMouseEnter={interactive ? () => setHover({ index: slice.index, x: 50, y: 20 }) : undefined}
           />
         ))}
       </svg>

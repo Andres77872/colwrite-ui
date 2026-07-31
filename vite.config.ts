@@ -1,10 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { rawKatexCssPlugin } from './vite.raw-katex'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [rawKatexCssPlugin(), react(), tailwindcss()],
   resolve: {
     alias: {
       // Resolved from `import.meta.url` rather than `__dirname` so the config

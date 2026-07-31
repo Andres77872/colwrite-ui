@@ -1,0 +1,80 @@
+import { useEffect, useRef } from 'react';
+import { EditorContext, FloatingToolbar } from 'colwrite-ui';
+
+// FloatingToolbar is the selection toolbar: formatting on the left, the AI
+// action menu on the right. It appears only while there is a non-collapsed
+// selection inside an element carrying the `editable` class — that class is
+// how it finds the active field, and until it was added to Editable the
+// toolbar could not appear at all.
+//
+// So the only honest way to preview it is to make a real selection. Each cell
+// renders a contenteditable paragraph, registers it in the editor's `refs` map
+// the way the canvas does, and then selects a range inside it in an effect.
+// The toolbar's own visibility logic runs untouched — nothing here forces
+// `visible`, which is internal state with no prop.
+//
+// The toolbar positions itself from the selection rect, so each cell reserves
+// vertical room above the text for it to land in.
+
+type Ctx = React.ContextType<typeof EditorContext>;
+
+const noop = () => {};
+
+function Selected({ text, select }: { text: string; select: 'all' | 'phrase' }) {
+  const hostRef = useRef<HTMLParagraphElement | null>(null);
+  const refs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  useEffect(() => {
+    const host = hostRef.current;
+    const node = host?.firstChild;
+    if (!host || !node) return;
+    refs.current.p1 = host as unknown as HTMLDivElement;
+
+    const range = document.createRange();
+    if (select === 'all') {
+      range.selectNodeContents(host);
+    } else {
+      const offset = text.indexOf('learning-rate schedule');
+      range.setStart(node, offset);
+      range.setEnd(node, offset + 'learning-rate schedule'.length);
+    }
+    const selection = document.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }, [text, select]);
+
+  const editor = {
+    exec: noop,
+    refs: refs.current ? { current: refs.current } : { current: {} },
+    updateHtml: noop,
+    addParagraphChild: () => 'new-child',
+    documentId: 'doc-1',
+  };
+
+  return (
+    <EditorContext.Provider value={editor as unknown as Ctx}>
+      <div className="relative min-h-[13rem] w-[40rem] pt-24">
+        <p
+          ref={hostRef}
+          className="editable text-sm leading-relaxed text-muted-foreground outline-none"
+          contentEditable
+          suppressContentEditableWarning
+        >
+          {text}
+        </p>
+        <FloatingToolbar />
+      </div>
+    </EditorContext.Provider>
+  );
+}
+
+const SENTENCE =
+  'We show that the reported scaling behaviour holds only once the learning-rate schedule is decoupled from the batch size.';
+
+export function OverAPhrase() {
+  return <Selected text={SENTENCE} select="phrase" />;
+}
+
+export function OverAWholeParagraph() {
+  return <Selected text={SENTENCE} select="all" />;
+}

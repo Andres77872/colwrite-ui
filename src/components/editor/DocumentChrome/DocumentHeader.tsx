@@ -6,7 +6,8 @@ import { Spinner } from '@/components/ui/spinner';
 import { useConfirm } from '@/components/ui/confirmContext';
 import { useToast } from '@/components/ui/toastContext';
 import { useEditor } from '@/editor';
-import { AlertCircle, Check, Cloud, CloudOff, FilePlus, Save, Trash2 } from 'lucide-react';
+import { AlertCircle, Check, Cloud, CloudOff, Download, FilePlus, Save, Trash2 } from 'lucide-react';
+import { DocumentExportDialog } from './DocumentExportDialog';
 
 const DEFAULT_TITLE = 'Untitled document';
 
@@ -28,6 +29,7 @@ export function DocumentHeader() {
 
   const [busy, setBusy] = useState<null | 'save' | 'delete'>(null);
   const [editing, setEditing] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const title = doc.name?.trim() || DEFAULT_TITLE;
@@ -205,6 +207,10 @@ export function DocumentHeader() {
           <FilePlus className="h-3.5 w-3.5" />
           New
         </Button>
+        <Button variant="ghost" size="sm" onClick={() => setExportOpen(true)} disabled={busy !== null}>
+          <Download className="h-3.5 w-3.5" />
+          Export
+        </Button>
         <Button size="sm" onClick={onSave} disabled={busy !== null}>
           {busy === 'save' ? <Spinner /> : <Save className="h-3.5 w-3.5" />}
           Save
@@ -221,6 +227,7 @@ export function DocumentHeader() {
           {busy === 'delete' ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" />}
         </Button>
       </div>
+      <DocumentExportDialog open={exportOpen} onOpenChange={setExportOpen} />
     </div>
   );
 }

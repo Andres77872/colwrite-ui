@@ -43,6 +43,12 @@ export type EditorContextValue = {
   setFromJSON: (json: string) => void;
   save: () => void;
   newLocal: () => void;
+  getExportSnapshot: () => {
+    document: Doc;
+    baseVersion: number;
+    localRevision: number;
+    dirty: boolean;
+  };
   createRemote: (docOverride?: DocumentInput) => Promise<string>;
   createAndSwitch: (doc: DocumentInput) => Promise<string>;
   saveRemote: (docOverride?: DocumentInput) => Promise<void>;

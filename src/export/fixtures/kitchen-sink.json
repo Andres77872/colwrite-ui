@@ -1,0 +1,94 @@
+{
+  "version": 7,
+  "name": "Export kitchen sink — العربية 日本語 😀",
+  "blocks": [
+    {
+      "id": "heading-1",
+      "type": "heading",
+      "level": 1,
+      "html": "Rich <em>document</em> export"
+    },
+    {
+      "id": "paragraph-1",
+      "type": "paragraph",
+      "columns": 2,
+      "html": "Bold <strong>text</strong>, a <a href=\"https://example.test/paper\">safe link</a>, citation <span data-child-id=\"citation-1\"></span>, math <span data-child-id=\"equation-inline\"></span>.<span data-child-id=\"table-1\"></span><span data-child-id=\"equation-display\"></span><span data-child-id=\"graph-1\"></span><span data-child-id=\"beat-1\"></span>",
+      "children": [
+        {
+          "id": "citation-1",
+          "type": "citation",
+          "keys": ["10.1000/example"],
+          "style": "author-year",
+          "locator": "p. 21",
+          "sources": [
+            {
+              "key": "10.1000/example",
+              "title": "Example paper",
+              "authors": "Doe, Jane",
+              "year": "2025",
+              "url": "https://example.test/paper",
+              "provider": "manual",
+              "doi": "10.1000/example"
+            }
+          ]
+        },
+        {
+          "id": "equation-inline",
+          "type": "equation",
+          "latex": "E=mc^2",
+          "display": false,
+          "numbered": false
+        },
+        {
+          "id": "table-1",
+          "type": "table",
+          "rows": 3,
+          "cols": 3,
+          "data": [["Name", "Q1", "Q2"], ["Alpha", "12", "18"], ["Beta", "9", "15"]],
+          "header": true,
+          "align": ["left", "right", "right"],
+          "caption": "Table 1. Quarterly results."
+        },
+        {
+          "id": "equation-display",
+          "type": "equation",
+          "latex": "\\\\int_0^1 x^2 \\\\, dx = \\\\frac{1}{3}",
+          "display": true,
+          "numbered": true,
+          "labelId": "eq-integral"
+        },
+        {
+          "id": "graph-1",
+          "type": "graph",
+          "kind": "area",
+          "data": {
+            "values": [-2, 1, 4, 3],
+            "labels": ["Q1", "Q2", "Q3", "Q4"],
+            "colors": ["#2563eb"]
+          },
+          "title": "Quarterly change",
+          "caption": "Figure 1. Change including a negative baseline.",
+          "xLabel": "Quarter",
+          "yLabel": "Value"
+        },
+        {
+          "id": "beat-1",
+          "type": "aiBeat",
+          "message": "Strengthen the transition",
+          "prompt": "private author style",
+          "output": "Candidate transition"
+        }
+      ]
+    },
+    {
+      "id": "divider-1",
+      "type": "divider"
+    },
+    {
+      "id": "heading-2",
+      "type": "heading",
+      "level": 2,
+      "html": "Conclusion"
+    }
+  ]
+}

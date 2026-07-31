@@ -104,7 +104,7 @@
    * TYPOGRAPHY
    * v4 reads --text-*; the paired --text-*--line-height sets leading.
    * ---------------------------------------- */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 
   --text-2xs: 10px;

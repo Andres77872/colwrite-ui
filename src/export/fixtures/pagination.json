@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "name": "Pagination boundaries",
+  "blocks": [
+    {
+      "id": "pagination-heading",
+      "type": "heading",
+      "level": 1,
+      "html": "A heading near a page boundary"
+    },
+    {
+      "id": "long-prose",
+      "type": "paragraph",
+      "columns": 1,
+      "html": "This paragraph deliberately repeats enough prose to exercise widows, orphans, and predictable page fragmentation. This paragraph deliberately repeats enough prose to exercise widows, orphans, and predictable page fragmentation. This paragraph deliberately repeats enough prose to exercise widows, orphans, and predictable page fragmentation. This paragraph deliberately repeats enough prose to exercise widows, orphans, and predictable page fragmentation. This paragraph deliberately repeats enough prose to exercise widows, orphans, and predictable page fragmentation. This paragraph deliberately repeats enough prose to exercise widows, orphans, and predictable page fragmentation.<span data-child-id=\"long-table\"></span>Content following the table must remain in source order.",
+      "children": [
+        {
+          "id": "long-table",
+          "type": "table",
+          "rows": 12,
+          "cols": 4,
+          "header": true,
+          "align": ["left", "right", "right", "right"],
+          "caption": "A table expected to cross a page.",
+          "data": [
+            ["Item", "First", "Second", "Third"],
+            ["Row 1", "1", "2", "3"],
+            ["Row 2", "2", "4", "6"],
+            ["Row 3", "3", "6", "9"],
+            ["Row 4", "4", "8", "12"],
+            ["Row 5", "5", "10", "15"],
+            ["Row 6", "6", "12", "18"],
+            ["Row 7", "7", "14", "21"],
+            ["Row 8", "8", "16", "24"],
+            ["Row 9", "9", "18", "27"],
+            ["Row 10", "10", "20", "30"],
+            ["Row 11", "11", "22", "33"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "columns",
+      "type": "paragraph",
+      "columns": 2,
+      "html": "Two-column text exercises fragmentation between the column and page contexts. Two-column text exercises fragmentation between the column and page contexts. Two-column text exercises fragmentation between the column and page contexts. Two-column text exercises fragmentation between the column and page contexts."
+    },
+    {
+      "id": "unbreakable",
+      "type": "paragraph",
+      "html": "An intentionally long token must wrap rather than overflow: abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789."
+    }
+  ]
+}
