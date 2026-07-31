@@ -516,6 +516,68 @@ describe('the transcript after a turn', () => {
   });
 });
 
+describe('document-scoped streams', () => {
+  it('aborts on document switch and ignores mismatched or late tool events', async () => {
+    let handlers!: SSEEventHandlers;
+    let signal!: AbortSignal;
+    let finish!: () => void;
+    streamAgentChat.mockImplementation(
+      (
+        _params: unknown,
+        nextHandlers: SSEEventHandlers,
+        options: { signal?: AbortSignal },
+      ) => {
+        handlers = nextHandlers;
+        signal = options.signal!;
+        return new Promise((resolve) => {
+          finish = () => resolve({ chatId: null, threadId: null, usage: null });
+        });
+      },
+    );
+
+    await mount();
+    await compose('keep this scoped');
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+    await waitFor(() => expect(streamAgentChat).toHaveBeenCalledTimes(1));
+
+    // Even before navigation, an event naming another document is invalid for
+    // this assistant instance.
+    act(() => {
+      handlers.onToolAction?.(
+        proposal({
+          documentId: 'another-document',
+          actions: [{ op: 'delete_block', blockId: 'a' }],
+        }),
+      );
+    });
+    expect(harness.review.pendingCount).toBe(0);
+
+    await act(async () => {
+      await harness.editor.switchTo('doc-2');
+    });
+    expect(signal.aborted).toBe(true);
+    expect(harness.editor.documentId).toBe('doc-2');
+
+    // A transport or mock may still hold and invoke callbacks after abort.
+    // Neither proposals nor the new document's chat selection may change.
+    await act(async () => {
+      handlers.onToolAction?.(
+        proposal({ actions: [{ op: 'delete_block', blockId: 'a' }] }),
+      );
+      handlers.onDone?.('stale-chat', 99, { promptTokens: 0, completionTokens: 0 });
+      finish();
+      await Promise.resolve();
+    });
+
+    expect(harness.review.pendingCount).toBe(0);
+    expect(harness.chats.selectedChatId).toBeNull();
+    expect(harness.chats.selectedThreadId).toBeNull();
+    expect(harness.editor.blocks.map((block) => block.id)).toEqual(['a', 'b']);
+  });
+});
+
 describe('the assistant window', () => {
   it('can be moved and resized from the keyboard', async () => {
     await mount();

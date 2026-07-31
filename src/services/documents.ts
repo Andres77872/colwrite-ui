@@ -1,6 +1,5 @@
-import { get, post, postBlob, put, del, type ApiRequestInit } from './api';
+import { get, post, put, del, type ApiRequestInit } from './api';
 import type { Block, Doc } from '../editor/types';
-import type { DocumentExportRequest } from '../export/types';
 import { coerceBlock } from '../editor/docOps';
 import {
   type DocumentInput,
@@ -81,8 +80,10 @@ function toEditorDoc(payload: unknown): Doc {
     const version = typeof payload.version === 'number' ? payload.version : 1;
     return { version, blocks: normalizeBlocks(payload.blocks), name };
   }
-  // Fallback to empty doc if unexpected shape
-  return { version: 1, blocks: [] };
+  // An empty blocks array is a valid blank document. A payload with no blocks
+  // field at all is not: treating a malformed success as a blank document made
+  // a failed load indistinguishable from an intentional empty file.
+  throw new Error('The server returned an invalid document.');
 }
 
 /** HTTP status the backend uses for an optimistic-concurrency failure. */
@@ -120,8 +121,14 @@ export async function saveDocument(
 }
 
 // Load a document by ID and return our Doc shape
-export async function loadDocument(documentId: string): Promise<Doc> {
-  const res = await get<{ document: unknown; status?: string; message?: string }>(`/document/load/${encodeURIComponent(documentId)}`);
+export async function loadDocument(
+  documentId: string,
+  init?: { signal?: AbortSignal },
+): Promise<Doc> {
+  const res = await get<{ document: unknown; status?: string; message?: string }>(
+    `/document/load/${encodeURIComponent(documentId)}`,
+    init,
+  );
   return toEditorDoc(res.document);
 }
 
@@ -246,38 +253,6 @@ export async function listDocuments(
 // Delete a document by ID
 export async function deleteDocument(documentId: string): Promise<{ status: string; message: string }> {
   return del<{ status: string; message: string }>(`/document/delete/${encodeURIComponent(documentId)}`);
-}
-
-function exportFilename(disposition: string | null, fallback: string): string {
-  const encoded = disposition?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-  if (encoded) {
-    try {
-      const decoded = decodeURIComponent(encoded);
-      const basename = decoded.replaceAll('\\', '/').split('/').at(-1)?.trim();
-      if (basename) return basename;
-    } catch {
-      // Fall through to the safe local filename.
-    }
-  }
-  return fallback;
-}
-
-export async function exportDocument(
-  documentId: string,
-  payload: DocumentExportRequest,
-  format: 'html' | 'pdf',
-): Promise<{ blob: Blob; filename: string }> {
-  const response = await postBlob(
-    `/document/export/${encodeURIComponent(documentId)}?format=${format}`,
-    payload,
-  );
-  return {
-    blob: await response.blob(),
-    filename: exportFilename(
-      response.headers.get('content-disposition'),
-      `document.${format}`,
-    ),
-  };
 }
 
 // Utility helpers to transform shapes if needed externally

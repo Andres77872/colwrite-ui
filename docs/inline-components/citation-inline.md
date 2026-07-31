@@ -15,8 +15,9 @@ References:
 ## Purpose
 - Inline citations in numeric, author–year or IEEE style.
 - Multiple keys per citation, plus prefix / locator / suffix.
-- Sources attachable from a federated arXiv + Semantic Scholar search without
-  leaving the document. Either provider may fail independently.
+- Sources attachable from the account-enabled arXiv and/or Semantic Scholar
+  search without leaving the document. Either selected provider may fail
+  independently; Semantic Scholar defaults off.
 
 ## Data contract (src/editor/types.ts)
 ```ts
@@ -62,9 +63,13 @@ export type CitationChild = {
   A citation with no keys renders in the destructive tone.
 - Popover: shared `InlinePopover` with
   - Sources list (title · authors · year · venue, external link, detach).
-  - Find a source: searches arXiv (`searchArxiv`) and the authenticated
-    application Semantic Scholar proxy (`searchSemanticScholar`) concurrently.
-    A partial provider failure still returns the other provider's results.
+  - Find a source: searches only the paper sources enabled in Profile → Agent
+    tools. When both are selected, arXiv (`searchArxiv`) and the authenticated
+    Semantic Scholar proxy (`searchSemanticScholar`) run concurrently. A
+    partial provider failure still returns the other provider's results.
+  - While preferences load, provider search is disabled. With every source
+    off, identifiers and arbitrary citation keys can still be attached
+    manually; existing stored source provenance is never removed.
   - DOI is the canonical key when present. Otherwise, Semantic Scholar records
     use a canonical, versionless external arXiv ID when available, then fall
     back to `S2:<paperId>`. This also deduplicates the same paper returned at

@@ -13,6 +13,8 @@ export type EditorContextValue = {
   refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
   registerEditable: (id: string, element: HTMLDivElement | null) => void;
   documentId: string | null;
+  /** The requested document while the committed document remains on screen. */
+  loadingDocumentId: string | null;
   activeId: string | null;
   setActive: (id: string | null) => void;
   openMenuBlockId: string | null;
@@ -52,8 +54,11 @@ export type EditorContextValue = {
   createRemote: (docOverride?: DocumentInput) => Promise<string>;
   createAndSwitch: (doc: DocumentInput) => Promise<string>;
   saveRemote: (docOverride?: DocumentInput) => Promise<void>;
-  loadRemote: (id: string) => Promise<void>;
-  switchTo: (id: string) => Promise<void>;
+  loadRemote: (id: string) => Promise<boolean>;
+  switchTo: (
+    id: string,
+    options?: { source?: 'selection' | 'history' },
+  ) => Promise<boolean>;
   deleteRemote: (id: string) => Promise<void>;
   listRemote: (
     options?: DocumentListOptions,
@@ -74,6 +79,12 @@ export type EditorContextValue = {
   lastSaveSource: 'auto' | 'manual' | null;
   saveError: string | null;
   clearSaveError: () => void;
+  documentLoadNotice: {
+    id: number;
+    title: string;
+    description: string;
+  } | null;
+  clearDocumentLoadNotice: () => void;
   adoptServerVersion: (version: number | undefined | null) => void;
   hasAnyRemoteDocs: boolean | null;
   applyPatch: (ops: ToolOperation[], options?: { persist?: boolean }) => ApplyPatchResult;

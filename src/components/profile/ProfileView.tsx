@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import { useToast } from '@/components/ui/toastContext';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useEditor } from '@/editor';
 import { useView } from '@/components/layout/viewContextState';
 import { errorMessage } from '@/services/contracts';
@@ -13,7 +13,8 @@ import { ProfileHeader } from './ProfileHeader';
 import { StatTiles } from './StatTiles';
 import { ToolUsageList } from './ToolUsageList';
 import { UploadsSection } from './UploadsSection';
-import { ArrowLeft, RefreshCw } from 'lucide-react';
+import { AgentToolsPreferences } from '@/components/preferences';
+import { ArrowLeft, LayoutDashboard, RefreshCw, SlidersHorizontal } from 'lucide-react';
 
 const ACTIVITY_DAYS = 30;
 
@@ -28,8 +29,7 @@ const ACTIVITY_DAYS = 30;
  */
 export function ProfileView() {
   const { setView } = useView();
-  const { switchTo } = useEditor();
-  const { toast } = useToast();
+  const { documentId, loadingDocumentId, switchTo } = useEditor();
 
   const [overview, setOverview] = useState<UserOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,51 +60,17 @@ export function ProfileView() {
   }, [load]);
 
   const openDocument = async (documentId: string) => {
+    if (documentId === loadingDocumentId) return;
     try {
-      await switchTo(documentId);
-      setView('workspace');
-    } catch (caught) {
-      toast({
-        title: 'Could not open the document',
-        description: errorMessage(caught, 'Request failed'),
-        variant: 'error',
-      });
+      const committed = await switchTo(documentId);
+      if (committed) setView('workspace');
+    } catch {
+      // The editor emits the one shared load notice; keep the profile visible.
     }
   };
 
   const onProfileSaved = (profile: UserProfile) =>
     setOverview((previous) => (previous ? { ...previous, profile } : previous));
-
-  if (!overview) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6">
-        {error ? (
-          <>
-            {/* <Alert>, not a hand-rolled callout. The primitive's own doc
-                comment exists to stop exactly this duplication, and the library
-                panel already uses it for the same job. */}
-            <Alert variant="destructive" className="max-w-md">
-              {error}
-            </Alert>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => void load()}>
-                <RefreshCw aria-hidden="true" />
-                Try again
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setView('workspace')}>
-                Back to editor
-              </Button>
-            </div>
-          </>
-        ) : (
-          <span className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner />
-            Loading your profile…
-          </span>
-        )}
-      </div>
-    );
-  }
 
   return (
     // The whole page scrolls as one column; sections never nest their own
@@ -132,36 +98,74 @@ export function ProfileView() {
           </Button>
         </div>
 
-        {error && <Alert variant="destructive">{error}</Alert>}
+        <Tabs defaultValue="overview" className="flex flex-col gap-2">
+          <TabsList className="w-fit">
+            <TabsTrigger value="overview" className="gap-1.5">
+              <LayoutDashboard aria-hidden="true" className="h-3.5 w-3.5" />
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value="agent-tools" className="gap-1.5">
+              <SlidersHorizontal aria-hidden="true" className="h-3.5 w-3.5" />
+              Agent tools
+            </TabsTrigger>
+          </TabsList>
 
-        <ProfileHeader
-          identity={overview.identity}
-          profile={overview.profile}
-          onSaved={onProfileSaved}
-        />
+          <TabsContent value="overview" className="mt-0 flex flex-col gap-4">
+            {error && <Alert variant="destructive">{error}</Alert>}
+            {!overview ? (
+              <div className="flex min-h-56 flex-col items-center justify-center gap-3">
+                {error ? (
+                  <Button variant="outline" size="sm" onClick={() => void load()}>
+                    <RefreshCw aria-hidden="true" />
+                    Try again
+                  </Button>
+                ) : (
+                  <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Spinner />
+                    Loading your profile…
+                  </span>
+                )}
+              </div>
+            ) : (
+              <>
+                <ProfileHeader
+                  identity={overview.identity}
+                  profile={overview.profile}
+                  onSaved={onProfileSaved}
+                />
 
-        <StatTiles summary={overview.summary} />
+                <StatTiles summary={overview.summary} />
 
-        <ActivityChart activity={overview.activity} days={ACTIVITY_DAYS} />
+                <ActivityChart activity={overview.activity} days={ACTIVITY_DAYS} />
 
-        {/* No `key={generation}` remount here any more. Both sections reconcile
-            a fresh first page against the pages they have already loaded
-            (`usePagedList`), so Refresh updates the rows instead of throwing
-            away everything the user paged in. */}
-        <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
-          <DocumentsSection
-            documents={overview.documents}
-            totalKnown={overview.summary.documents_active}
-            onOpen={(documentId) => void openDocument(documentId)}
-          />
-          <ToolUsageList tools={overview.tools} />
-        </div>
+                {/* No `key={generation}` remount here any more. Both sections reconcile
+                    a fresh first page against the pages they have already loaded
+                    (`usePagedList`), so Refresh updates the rows instead of throwing
+                    away everything the user paged in. */}
+                <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+                  <DocumentsSection
+                    documents={overview.documents}
+                    totalKnown={overview.summary.documents_active}
+                    onOpen={(documentId) => void openDocument(documentId)}
+                    currentDocumentId={documentId}
+                    loadingDocumentId={loadingDocumentId}
+                  />
+                  <ToolUsageList tools={overview.tools} />
+                </div>
 
-        <UploadsSection
-          uploads={overview.resources}
-          totalKnown={overview.summary.resources_active}
-          onChanged={() => void load()}
-        />
+                <UploadsSection
+                  uploads={overview.resources}
+                  totalKnown={overview.summary.resources_active}
+                  onChanged={() => void load()}
+                />
+              </>
+            )}
+          </TabsContent>
+
+          <TabsContent value="agent-tools" className="mt-0" forceMount>
+            <AgentToolsPreferences />
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );

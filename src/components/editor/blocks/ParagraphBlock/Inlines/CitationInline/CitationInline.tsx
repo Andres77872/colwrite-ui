@@ -23,6 +23,7 @@ import {
   stopEditorEvents,
   useInlineChild,
 } from '../shared';
+import { useAgentTools } from '@/components/preferences';
 import { ExternalLink, Plus, Search, X } from 'lucide-react';
 
 /**
@@ -176,6 +177,9 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
   const { child } = props;
   const { patch, remove } = useInlineChild(props);
   const { blocks, updateParagraphChild } = useEditor();
+  const { isSourceEnabled, loading: preferencesLoading } = useAgentTools();
+  const arxivEnabled = isSourceEnabled('arxiv');
+  const semanticScholarEnabled = isSourceEnabled('semantic_scholar');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<CitationSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -270,27 +274,47 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
   const runSearch = async () => {
     const text = query.trim();
     if (!text || searching) return;
+    if (!arxivEnabled && !semanticScholarEnabled) {
+      setSearchError(
+        'No paper search source is enabled. Paste a citation key or enable a source in Agent tools.',
+      );
+      setResults(null);
+      return;
+    }
     setSearching(true);
     setSearchError('');
     setSearchWarning('');
     try {
       const [semanticScholar, arxiv] = await Promise.allSettled([
-        searchSemanticScholar({ query: text, limit: 6 }),
-        searchArxiv({ query: text, limit: 6 }),
+        semanticScholarEnabled
+          ? searchSemanticScholar({ query: text, limit: 6 })
+          : Promise.resolve(null),
+        arxivEnabled ? searchArxiv({ query: text, limit: 6 }) : Promise.resolve(null),
       ]);
 
-      if (semanticScholar.status === 'rejected' && arxiv.status === 'rejected') {
-        setSearchError('Could not reach either source index. Add the key by hand instead.');
+      const semanticFailed =
+        semanticScholarEnabled && semanticScholar.status === 'rejected';
+      const arxivFailed = arxivEnabled && arxiv.status === 'rejected';
+      const enabledCount = Number(semanticScholarEnabled) + Number(arxivEnabled);
+      const failedCount = Number(semanticFailed) + Number(arxivFailed);
+      if (enabledCount > 0 && failedCount === enabledCount) {
+        const label =
+          semanticScholarEnabled && arxivEnabled
+            ? 'either source index'
+            : semanticScholarEnabled
+              ? 'Semantic Scholar'
+              : 'arXiv';
+        setSearchError(`Could not reach ${label}. Add the key by hand instead.`);
         setResults([]);
         return;
       }
 
       const semanticResults =
-        semanticScholar.status === 'fulfilled'
+        semanticScholar.status === 'fulfilled' && semanticScholar.value !== null
           ? semanticScholar.value.data.map(semanticScholarCandidate)
           : [];
       const arxivResults =
-        arxiv.status === 'fulfilled'
+        arxiv.status === 'fulfilled' && arxiv.value !== null
           ? arxiv.value
               .map(arxivCandidate)
               .filter((candidate): candidate is CitationSearchResult => candidate !== null)
@@ -299,9 +323,9 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
       // richer provenance and citation-graph metadata.
       setResults(deduplicateCandidates([...semanticResults, ...arxivResults]));
 
-      if (semanticScholar.status === 'rejected') {
+      if (semanticFailed) {
         setSearchWarning('Semantic Scholar is unavailable; showing arXiv results.');
-      } else if (arxiv.status === 'rejected') {
+      } else if (arxivFailed) {
         setSearchWarning('arXiv is unavailable; showing Semantic Scholar results.');
       }
     } catch {
@@ -312,6 +336,20 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
       setSearching(false);
     }
   };
+
+  const enabledSourceLabels = [
+    arxivEnabled ? 'arXiv' : null,
+    semanticScholarEnabled ? 'Semantic Scholar' : null,
+  ].filter((label): label is string => label !== null);
+  const sourceSearchLabel =
+    enabledSourceLabels.length === 2
+      ? enabledSourceLabels.join(' and ')
+      : enabledSourceLabels[0];
+  const searchPlaceholder = preferencesLoading
+    ? 'Loading paper source preferences…'
+    : sourceSearchLabel
+      ? `Search ${sourceSearchLabel}, or paste a key / DOI`
+      : 'Paste a citation key or DOI';
 
   /**
    * Citation style is a document-wide decision, so changing it here offers to
@@ -425,18 +463,24 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                   id={`citation-search-${child.id}`}
                   type="text"
                   value={query}
-                  placeholder="Search arXiv and Semantic Scholar, or paste a key / DOI"
+                  placeholder={searchPlaceholder}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key !== 'Enter') return;
                     event.preventDefault();
                     // A bare identifier is a key, not a search: pasting
                     // "2103.00020" should attach it, not query for it.
-                    if (/^(10\.\d{4,}\/|arXiv:|S2:|\d{4}\.\d{4,})/i.test(query.trim())) {
+                    const isIdentifier =
+                      /^(10\.\d{4,}\/|arXiv:|S2:|\d{4}\.\d{4,})/i.test(query.trim());
+                    if (
+                      isIdentifier ||
+                      (!preferencesLoading && !arxivEnabled && !semanticScholarEnabled)
+                    ) {
                       addManualKey(query.trim());
                       setQuery('');
                       return;
                     }
+                    if (preferencesLoading) return;
                     runSearch();
                   }}
                   className="h-8 min-w-0 flex-1 px-2"
@@ -446,7 +490,12 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                   variant="outline"
                   size="icon-sm"
                   onClick={runSearch}
-                  disabled={searching || !query.trim()}
+                  disabled={
+                    searching ||
+                    preferencesLoading ||
+                    enabledSourceLabels.length === 0 ||
+                    !query.trim()
+                  }
                   aria-label="Search"
                 >
                   {searching ? <Spinner className="h-3.5 w-3.5" /> : <Search className="h-3.5 w-3.5" />}
@@ -462,6 +511,12 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
               {searchWarning && (
                 <p role="status" className="mt-1 text-xs text-muted-foreground">
                   {searchWarning}
+                </p>
+              )}
+
+              {!preferencesLoading && enabledSourceLabels.length === 0 && !searchError && (
+                <p role="status" className="mt-1 text-xs text-muted-foreground">
+                  Paper search is off. You can still paste a DOI, arXiv id, or citation key.
                 </p>
               )}
 

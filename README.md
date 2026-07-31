@@ -22,6 +22,16 @@ npm ci
 - `npm run build` — typecheck and create the production bundle.
 - `npm run preview` — serve the production bundle locally.
 
+## Document export
+
+Document export runs entirely in the browser. The editor snapshot is rendered
+once with the shared static renderer: standalone HTML is downloaded as a local
+file, while PDF opens the browser's native print dialog where the user chooses
+Save as PDF. Unsaved local edits are included.
+
+There is no document-export API route, Node renderer service, internal port,
+shared token, or Playwright/Chromium deployment dependency.
+
 ## Vite 8
 
 The project uses Vite 8’s default Rolldown/Oxc toolchain, Lightning CSS processing, and
@@ -164,16 +174,24 @@ and legacy stale-link repairs. No new `VITE_*` variable or frontend feature flag
 is required; the existing `VITE_API_BASE` must simply route these endpoints to a
 compatible backend.
 
-## Research providers
+## Research providers and agent tools
 
-The tools rail includes arXiv, ColPali, and Semantic Scholar. Semantic Scholar
-requests leave the browser only through the authenticated ColWrite API at
+Profile → Agent tools loads the server-owned capability catalog and lets the
+account select every writing, research, PDF-library, and document tool. It also
+controls paper-search sources used by the agent, citation picker, and research
+rail. Until that request succeeds, all optional integrations fail closed.
+
+arXiv is enabled by default. Semantic Scholar is explicit opt-in and remains
+off for new and legacy accounts; its rail panel is hidden and no new request is
+made until enabled. Existing Semantic Scholar citation metadata remains
+renderable and removable. When selected, requests leave the browser only
+through the authenticated ColWrite API at
 `/api/research/semantic-scholar/*` (the development proxy maps that to the
 backend's `/research/semantic-scholar/*` routes); no Semantic Scholar API
-origin or credential is exposed in the Vite/browser environment. The provider
-mark is bundled locally and its attribution backlink is ordinary user
-navigation, not an API request. Search results can be explored through citation,
-reference, and recommendation graphs, and the inline citation picker searches
-arXiv and Semantic Scholar concurrently. The same panel can assess one precise
-claim against retrieved excerpts while preserving the backend's calibrated
-verdict, confidence, evidence, limitations, and disclaimer.
+origin or credential is exposed in the Vite/browser environment.
+
+The provider mark is bundled locally and its attribution backlink is ordinary
+user navigation, not an API request. Enabled results can be explored through
+citation, reference, and recommendation graphs. The same panel can assess one
+precise claim against retrieved excerpts while preserving the backend's
+calibrated verdict, confidence, evidence, limitations, and disclaimer.

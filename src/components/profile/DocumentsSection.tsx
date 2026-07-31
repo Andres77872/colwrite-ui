@@ -24,11 +24,15 @@ export function DocumentsSection({
   documents,
   totalKnown,
   onOpen,
+  currentDocumentId,
+  loadingDocumentId,
 }: {
   documents: UserDocument[];
   /** Active document count from the usage summary, used to offer "load more". */
   totalKnown: number;
   onOpen: (documentId: string) => void;
+  currentDocumentId: string | null;
+  loadingDocumentId: string | null;
 }) {
   const { toast } = useToast();
   const { items, serverOffset, appendPage } = usePagedList({
@@ -76,7 +80,10 @@ export function DocumentsSection({
       ) : (
         <>
           <ul className="mt-3 divide-y divide-border/50">
-            {items.map((document) => (
+            {items.map((document) => {
+              const pending = loadingDocumentId === document.document_id;
+              const current = currentDocumentId === document.document_id;
+              return (
               <li
                 key={document.document_id}
                 className="rounded-md py-2.5 transition-colors hover:bg-accent/40 has-focus-visible:bg-accent/40"
@@ -90,6 +97,7 @@ export function DocumentsSection({
                       type="button"
                       className="block max-w-full truncate text-left text-sm font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onClick={() => onOpen(document.document_id)}
+                      aria-current={current ? 'true' : undefined}
                     >
                       {document.name}
                     </button>
@@ -112,11 +120,13 @@ export function DocumentsSection({
                     onClick={() => onOpen(document.document_id)}
                     aria-label={`Open ${document.name}`}
                   >
-                    Open
+                    {pending && <Spinner />}
+                    {pending ? 'Opening…' : 'Open'}
                   </Button>
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
 
           {canLoadMore && (

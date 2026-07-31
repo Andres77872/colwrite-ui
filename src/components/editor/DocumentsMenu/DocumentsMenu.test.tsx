@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
   editorState: {
     documentId: null as string | null,
+    loadingDocumentId: null as string | null,
     documentListRevision: 0,
   },
 }));
@@ -22,6 +23,7 @@ vi.mock('@/editor', () => ({
     createAndSwitch: mocks.createAndSwitch,
     deleteRemote: mocks.deleteRemote,
     documentId: mocks.editorState.documentId,
+    loadingDocumentId: mocks.editorState.loadingDocumentId,
     documentListRevision: mocks.editorState.documentListRevision,
   }),
 }));
@@ -68,9 +70,10 @@ function listResult(
 
 beforeEach(() => {
   mocks.editorState.documentId = null;
+  mocks.editorState.loadingDocumentId = null;
   mocks.editorState.documentListRevision = 0;
   mocks.listRemote.mockReset().mockResolvedValue(listResult());
-  mocks.switchTo.mockReset().mockResolvedValue(undefined);
+  mocks.switchTo.mockReset().mockResolvedValue(true);
   mocks.createAndSwitch.mockReset().mockResolvedValue('new-document');
   mocks.deleteRemote.mockReset().mockResolvedValue(undefined);
   mocks.confirm.mockReset().mockResolvedValue(false);
@@ -210,5 +213,44 @@ describe('DocumentsMenu listing controls', () => {
       title: 'Document created',
       variant: 'success',
     });
+  });
+
+  it('keeps current semantics on the committed row and marks only the pending row', async () => {
+    mocks.editorState.documentId = 'current';
+    mocks.editorState.loadingDocumentId = 'pending';
+    mocks.listRemote.mockResolvedValue(listResult([
+      documentSummary('Current', 'current'),
+      documentSummary('Pending', 'pending'),
+      documentSummary('Other', 'other'),
+    ]));
+
+    render(<DocumentsMenu />);
+
+    const current = (await screen.findByText('Current')).closest('button');
+    const pending = screen.getByText('Pending').closest('button');
+    expect(current?.getAttribute('aria-current')).toBe('true');
+    expect(pending?.getAttribute('aria-current')).toBeNull();
+    expect(screen.getByText('Opening…')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'New document' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Delete Current' }).hasAttribute('disabled')).toBe(true);
+
+    fireEvent.click(pending!);
+    expect(mocks.switchTo).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Other').closest('button')!);
+    expect(mocks.switchTo).toHaveBeenCalledWith('other');
+  });
+
+  it('dismisses a mobile drawer callback only after the requested document commits', async () => {
+    const onDocumentCommitted = vi.fn();
+    render(<DocumentsMenu onDocumentCommitted={onDocumentCommitted} />);
+    const row = (await screen.findByText('Research notes')).closest('button');
+
+    fireEvent.click(row!);
+    await waitFor(() => expect(onDocumentCommitted).toHaveBeenCalledTimes(1));
+
+    mocks.switchTo.mockRejectedValueOnce(new Error('No access'));
+    fireEvent.click(row!);
+    await waitFor(() => expect(mocks.switchTo).toHaveBeenCalledTimes(2));
+    expect(onDocumentCommitted).toHaveBeenCalledTimes(1);
   });
 });

@@ -15,11 +15,18 @@ export function Spinner({ className }: { className?: string }) {
  * Preferable to a bare "Loading…" string: it preserves layout and avoids
  * the jump that happens when real rows arrive.
  */
-export function Skeleton({ className }: { className?: string }) {
+export function Skeleton({
+  className,
+  style,
+}: {
+  className?: string;
+  style?: React.CSSProperties;
+}) {
   return (
     <div
       aria-hidden="true"
       className={cn('animate-shimmer rounded-md bg-muted/60', className)}
+      style={style}
     />
   );
 }

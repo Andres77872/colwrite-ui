@@ -72,6 +72,14 @@ function useFloatingToolbar() {
       window.removeEventListener('colwrite:slash-menu-visibility', onSlashVisibility as EventListener);
   }, []);
 
+  const ownerDocumentId = useRef(documentId);
+  useEffect(() => {
+    if (ownerDocumentId.current === documentId) return;
+    ownerDocumentId.current = documentId;
+    savedRangeRef.current = null;
+    setVisible(false);
+  }, [documentId]);
+
   useEffect(() => {
     const onSelectionChange = () => {
       // Moving focus onto a toolbar button greys the selection out, which used
@@ -424,6 +432,7 @@ function useRovingTabIndex(
 }
 
 export function FloatingToolbar() {
+  const { loadingDocumentId } = useEditor();
   const { visible, pos, states, activeIndex, setActiveIndex, toolbarRef, onFormat, onAi } =
     useFloatingToolbar();
 
@@ -446,7 +455,7 @@ export function FloatingToolbar() {
     items[next].focus();
   };
 
-  if (!visible) return null;
+  if (!visible || Boolean(loadingDocumentId)) return null;
 
   return (
     <div

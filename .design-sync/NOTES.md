@@ -84,6 +84,40 @@ bytes are hashed into the global slice (`configSlicesFor`), and `cardMode` /
 wider than a grid cell); `cardMode: "single"` + `primaryStory: "Saved"` for
 `DocumentHeader`, whose toast positions outside its cell.
 
+## Third sync: a new app context broke four components (and how it was caught)
+
+This is the pattern to expect from now on, so read it before diagnosing a
+similar failure.
+
+Uncommitted app work added `src/components/preferences/AgentToolsContext`, and
+four already-synced components started calling `useAgentTools()`:
+`AIActionMenu`, `CitationInline`, and — transitively — `FloatingToolbar` (it
+renders AIActionMenu) and `ParagraphBlock` (it renders CitationInline). The
+hook throws without its provider, so the first three rendered **root empty**
+and ParagraphBlock rendered but threw, silently dropping its citation.
+
+**The anchor diff said all 102 were `unchanged`.** That is correct and worth
+internalising: `gradeKey` follows *preview* sources, and no preview had moved.
+Only `package-validate.mjs`'s render check caught this. **A re-sync verdict of
+`unchanged` is never on its own evidence that a component still renders** —
+the DS source can move underneath a preview that is byte-identical.
+
+Fixed the way the editor surface already does it: the **raw context plus a
+literal value**, never the real provider. `AgentToolsProvider` GETs
+`/users/me/agent-tools` on mount and **fails closed** until the server answers,
+so mounting it in a static capture would both fire a failing request and
+photograph the degraded state — an empty AI menu and a CitationInline with its
+arXiv / Semantic Scholar lookups hidden. `.design-sync/preview-providers.ts`
+now exports `AgentToolsContext` and a shared `agentToolsAllEnabled` fixture;
+the four previews wrap with it.
+
+**Correction to an earlier note in this file:** `preview-providers.ts` is *not*
+wired through `cfg.extraEntries` — the config has no such key. It is wired by
+`BUNDLE_ONLY` in `build-ds-pkg.mjs`, which appends it to `ds-pkg/entry.ts`.
+That distinction is load-bearing: `extraEntries` **is** part of the global
+grade slice, `BUNDLE_ONLY` is not, so editing `preview-providers.ts` costs
+nothing in carried-forward grades. Only the four edited previews re-graded.
+
 ## Re-sync risks — what can silently go stale
 
 Read this first on the next sync; each item is something that will not announce
@@ -97,6 +131,15 @@ itself.
    `ExtractionBadge` changes its props — especially the `ExtractionStatus` union
    in `src/services/resources.ts` — the config still ships the old shape and the
    design agent codes against a lie. Re-check these six against source.
+   *Third sync: all six re-checked. Five held; `ExtractionBadge.error` had
+   drifted (source `string | null`, config `string`) and was corrected. This
+   check earns its keep — run it every time.*
+9. **`agentToolsAllEnabled` in `preview-providers.ts` is an inlined fixture.**
+   It claims every agent capability is on and casts away the rest of
+   `AgentToolsContextValue`. If a component starts reading `settings`,
+   `loaded`, `refresh` or `updateSettings`, the cast hides it and the card
+   renders a lie rather than throwing. Same standing risk as the literal
+   `EditorContext` values.
 3. **`.design-sync/preview-providers.ts` reaches into app internals**
    (`components/panels`, `components/auth`, `components/layout`, `src/editor`).
    Moving or renaming any of those modules breaks the build with a resolve error
@@ -479,6 +522,14 @@ app frame with an 800px canvas plus a 280px sidebar and a 320px tools panel need
 - **Not exported by `dropdown-menu.tsx`**: `DropdownMenuRadioItem`,
   `DropdownMenuCheckboxItem`, `DropdownMenuShortcut`. Docs use the honest
   fallback (`DropdownMenuItem inset` + a positioned `Check`; `Kbd` + `ml-auto`).
+- **`CitationInline` numeric style shows one bracket, whatever the key count.**
+  `[${number}]` is built from the citation's document position
+  (`CitationInline.tsx:240`); only `author-year` maps over `keys` and joins with
+  `'; '`. So `MultipleKeys` with `style: 'numeric'` renders `[1]`, which is
+  truthful but makes that cell name promise more than the render can show. If
+  the cell is ever reworked, switch it to `author-year` to actually demonstrate
+  multiple keys — and keep a numeric cell somewhere, since that would otherwise
+  leave the style uncarded.
 - **Handler props are stripped from every emitted `.d.ts`** alongside native DOM
   props: `onOpenChange`, `onSelect`, `onValueChange`, `onEscapeKeyDown`,
   `onInteractOutside` are all absent from `<Name>Props` but do exist. Every
@@ -576,16 +627,17 @@ reported 102/102 rendering, `bad` on only `DividerBlock` and `InlineSettings`,
 both floor-card artefacts now fixed by real previews. Authoring also cleared the
 `[RENDER_THIN]` on `InlineFigureShell` and `SettingsRow`.
 
-**No clean full validate exists for the 102-component build yet** — the run that
-would have produced it is the one blocked on the `.ttf` failure above. Treat the
-first validate after that is fixed as establishing the baseline, not as a
-regression report.
+**Third sync — this is the baseline.** After the `AgentToolsContext` fix above,
+validate reported **102/102 rendering, `bad` 0, `thin` 0, `variantsIdentical`
+0, `fallbackCard` 0** — no `[RENDER]`, `[RENDER_BLANK]`, `[RENDER_THIN]`,
+`[GRID_OVERFLOW]`, `[FONT_MISSING]` or `[CSS_*]` lines, and every one of the
+seven contact sheets eyeballed clean. Treat this as the reference: any warn on
+a later run is new.
 
-One informational line is expected and fine: `tokens: 248 defined, 163
-referenced (1 missing, below threshold)`.
-
-One informational line is expected and fine: `tokens: 248 defined, 163
-referenced (1 missing, below threshold)`.
+One informational line is expected and fine: `tokens: 251 defined, 165
+referenced (1 missing, below threshold)`. (It read 248/163 through the second
+sync; the app's own token additions move these counts, so compare the *shape*
+of the line — still 1 missing, still below threshold — not the numbers.)
 
 ## Prop contracts
 

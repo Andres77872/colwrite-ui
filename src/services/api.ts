@@ -156,36 +156,6 @@ export async function post<T>(path: string, body?: unknown, init?: ApiRequestIni
   return request<T>('POST', path, body, init);
 }
 
-/** POST JSON and retain a successful binary response and its download headers. */
-export async function postBlob(path: string, body: unknown): Promise<Response> {
-  const requestInit: RequestInit = {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/pdf, text/html',
-    },
-    body: JSON.stringify(body),
-  };
-  let response = await fetch(buildUrl(path), requestInit);
-  if (response.status === 401 && !isSelfReporting(path) && (await ensureRefreshed())) {
-    response = await fetch(buildUrl(path), requestInit);
-  }
-  if (response.ok) return response;
-
-  const text = await response.text();
-  let data: unknown;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = null;
-  }
-  if (response.status === 401 || response.status === 403) {
-    emitRequireLogin(response.status === 403 ? 'forbidden' : 'expired');
-  }
-  throw apiError(response, data);
-}
-
 export async function put<T>(path: string, body?: unknown, init?: ApiRequestInit): Promise<T> {
   return request<T>('PUT', path, body, init);
 }

@@ -139,12 +139,19 @@ describe('boot-time session check', () => {
   it('never renders as signed in when the session is gone', async () => {
     mockRoutes(() => json({ detail: 'Missing session token' }, 401));
     localStorage.setItem('cw_user', JSON.stringify({ name: 'root_admin', email: '' }));
+    localStorage.setItem('colwrite:lastDocId', 'previous-account-doc');
+    localStorage.setItem(
+      'colwrite:doc:previous-account-doc',
+      JSON.stringify({ documentId: 'previous-account-doc', doc: { blocks: [] } }),
+    );
 
     renderAuth();
 
     await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('anonymous'));
     expect(screen.getByTestId('user').textContent).toBe('none');
     expect(localStorage.getItem('cw_user')).toBeNull();
+    expect(localStorage.getItem('colwrite:lastDocId')).toBeNull();
+    expect(localStorage.getItem('colwrite:doc:previous-account-doc')).toBeNull();
   });
 
   it('does not call the API for a visitor who never signed in', async () => {
@@ -161,6 +168,11 @@ describe('involuntary sign-out', () => {
   it('explains why the dialog reopened', async () => {
     mockRoutes(() => json(PROFILE_SUCCESS));
     localStorage.setItem('cw_user', JSON.stringify({ name: 'root_admin', email: '' }));
+    localStorage.setItem('colwrite:lastDocId', 'previous-account-doc');
+    localStorage.setItem(
+      'colwrite:doc:previous-account-doc',
+      JSON.stringify({ documentId: 'previous-account-doc', doc: { blocks: [] } }),
+    );
     renderAuth();
     await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('authenticated'));
 
@@ -174,6 +186,8 @@ describe('involuntary sign-out', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain('Your session expired');
     expect(screen.getByTestId('status').textContent).toBe('anonymous');
+    expect(localStorage.getItem('colwrite:lastDocId')).toBeNull();
+    expect(localStorage.getItem('colwrite:doc:previous-account-doc')).toBeNull();
   });
 
   it('does not reopen the dialog when signing out on purpose', async () => {

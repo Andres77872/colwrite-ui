@@ -118,7 +118,7 @@ export function ChatAssistant() {
 
 function DocumentChatAssistant() {
   const editor = useEditor();
-  const { documentId } = editor;
+  const { documentId, loadingDocumentId } = editor;
   const proposals = useProposals();
   const { selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId } =
     useChatSessions();
@@ -136,6 +136,7 @@ function DocumentChatAssistant() {
   const [atBottom, setAtBottom] = useState(true);
 
   const abortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const inputHostRef = useRef<ChatTaggedInputHandle | null>(null);
@@ -151,6 +152,29 @@ function DocumentChatAssistant() {
   const [lastSent, setLastSent] = useState<string | null>(null);
   const unsavedNoticeId = useId();
   const composerHintId = useId();
+
+  useEffect(() => {
+    if (!loadingDocumentId) return;
+    // A stream is scoped to the committed document. Stop it before a different
+    // body can commit so late tool events cannot mutate or stage work against
+    // the wrong document.
+    abortRef.current?.abort();
+    abortRef.current = null;
+    refPickerRef.current?.close();
+  }, [loadingDocumentId]);
+
+  // The document-keyed assistant intentionally remounts on navigation so its
+  // transcript is scoped to one document. Stop the old network stream as part
+  // of that boundary; mocks and transports may still invoke retained
+  // callbacks, so every callback below also checks that its controller is live.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, []);
 
   // Below `md` there is no room to place a window: it fills the canvas, and
   // dragging it anywhere would only push it off screen.
@@ -203,6 +227,11 @@ function DocumentChatAssistant() {
    */
   const onToolAction = useCallback(
     (action: ToolAction) => {
+      // Tool events name the document they were produced against. Never stage
+      // one in a different active document, even if a transport delivers it
+      // after the stream was aborted.
+      if (!mountedRef.current || action.documentId !== documentId) return;
+
       // Only a genuine redelivery is a duplicate. The id alone is not enough:
       // providers that number tool calls per request reuse `call_0`, and some
       // send none at all. The previous fallback keyed on the document version,
@@ -222,7 +251,7 @@ function DocumentChatAssistant() {
         patchActive((message) => ({ ...message, proposed: message.proposed + changes }));
       }
     },
-    [patchActive, proposals],
+    [documentId, patchActive, proposals],
   );
 
   // Follow new output only while the reader is already at the bottom, so
@@ -318,7 +347,7 @@ function DocumentChatAssistant() {
   };
 
   const send = async (text: string) => {
-    if (!text || isStreaming) return;
+    if (!text || isStreaming || loadingDocumentId) return;
     if (!documentId) {
       setError('Save this document before chatting about it.');
       return;
@@ -341,6 +370,11 @@ function DocumentChatAssistant() {
     const controller = new AbortController();
     abortRef.current = controller;
     setIsStreaming(true);
+    const streamIsLive = () => (
+      mountedRef.current
+      && abortRef.current === controller
+      && !controller.signal.aborted
+    );
 
     try {
       await streamAgentChat(
@@ -352,11 +386,16 @@ function DocumentChatAssistant() {
         },
         {
           onToken: (content) => {
+            if (!streamIsLive()) return;
             setAgentStatus(null);
             patchActive((message) => ({ ...message, content: message.content + content }));
           },
-          onStatus: (status, detail) => setAgentStatus({ status, detail }),
+          onStatus: (status, detail) => {
+            if (!streamIsLive()) return;
+            setAgentStatus({ status, detail });
+          },
           onToolCallStart: (tool, toolCallId, args) => {
+            if (!streamIsLive()) return;
             // The activity list below spells this out step by step; the status
             // line is only there so something moves before the first token.
             setAgentStatus({ status: 'executing_tool', detail: `${toolRunningLabel(tool)}…` });
@@ -374,6 +413,7 @@ function DocumentChatAssistant() {
             }));
           },
           onToolCallEnd: (tool, toolCallId, durationMs, isError) => {
+            if (!streamIsLive()) return;
             patchActive((message) => {
               const index = message.runs.findIndex(
                 (run) =>
@@ -389,8 +429,12 @@ function DocumentChatAssistant() {
               return { ...message, runs };
             });
           },
-          onToolAction,
+          onToolAction: (action) => {
+            if (!streamIsLive()) return;
+            onToolAction(action);
+          },
           onError: (_code, message) => {
+            if (!streamIsLive()) return;
             patchActive((active) => ({
               ...active,
               runs: active.runs.map((run) =>
@@ -400,6 +444,7 @@ function DocumentChatAssistant() {
             setError(message);
           },
           onDone: (chatId, threadId) => {
+            if (!streamIsLive()) return;
             const id = chatId || selectedChatId;
             // This transcript *is* the conversation these ids name, so mark it
             // loaded before the ids land and the loader chases them.
@@ -416,22 +461,29 @@ function DocumentChatAssistant() {
       );
     } catch (e) {
       // An aborted stream is a deliberate stop, not a failure to report.
-      if (!controller.signal.aborted) {
+      if (streamIsLive()) {
         setError(e instanceof Error ? e.message : 'Something went wrong');
       }
     } finally {
-      setIsStreaming(false);
-      abortRef.current = null;
-      setAgentStatus(null);
-      // A tool that never reported completion would otherwise spin forever.
-      patchActive((message) => ({
-        ...message,
-        runs: message.runs.map((run) =>
-          run.state === 'running' ? { ...run, state: 'done' as const } : run,
-        ),
-      }));
-      activeMessageIdRef.current = null;
-      setActiveMessageId(null);
+      // A newer send owns the UI now, or this document's assistant has
+      // unmounted. The older completion must not clean up the new stream.
+      if (
+        mountedRef.current
+        && (abortRef.current === null || abortRef.current === controller)
+      ) {
+        setIsStreaming(false);
+        if (abortRef.current === controller) abortRef.current = null;
+        setAgentStatus(null);
+        // A tool that never reported completion would otherwise spin forever.
+        patchActive((message) => ({
+          ...message,
+          runs: message.runs.map((run) =>
+            run.state === 'running' ? { ...run, state: 'done' as const } : run,
+          ),
+        }));
+        activeMessageIdRef.current = null;
+        setActiveMessageId(null);
+      }
     }
   };
 

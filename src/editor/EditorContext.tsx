@@ -17,6 +17,7 @@ import type {
 import { uid } from '../lib/uid';
 import { EditorContext, type EditorContextValue } from './editorContextState';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
+import { emitDocumentTransitionStart } from './documentTransition';
 export type { EditorContextValue } from './editorContextState';
 
 function makeDefaultDoc(): Doc {
@@ -77,9 +78,53 @@ function migrateLegacyInlineAiBeats(doc: Doc): Doc {
   }
 }
 
+function urlDocumentId(): string | null {
+  if (typeof window === 'undefined') return null;
+  const requested = new URLSearchParams(window.location.search).get('doc');
+  return requested || null;
+}
+
+type MountDocumentSelection = {
+  committedDocumentId: string | null;
+  committedDocument: Doc;
+  requestedDocumentId: string | null;
+};
+
+function mountDocumentSelection(): MountDocumentSelection {
+  const cachedDocumentId = loadDocumentId();
+  const requestedDocumentId = urlDocumentId();
+  const targetDocumentId = requestedDocumentId ?? cachedDocumentId;
+  const targetDocument = targetDocumentId ? loadDoc(targetDocumentId) : null;
+  const cachedDocument = cachedDocumentId ? loadDoc(cachedDocumentId) : null;
+  const localDocument = loadDoc(null);
+
+  // A remote id is committed only when the body beside it is keyed to that
+  // exact id. Otherwise the editor owns a safe cached/local body while the
+  // remote id remains merely requested.
+  const committedDocumentId = targetDocument
+    ? targetDocumentId
+    : cachedDocument
+      ? cachedDocumentId
+      : null;
+  const committedDocument = targetDocument ?? cachedDocument ?? localDocument ?? makeDefaultDoc();
+
+  return {
+    committedDocumentId,
+    committedDocument,
+    requestedDocumentId: targetDocumentId,
+  };
+}
+
 export function EditorProvider({ children }: { children: ReactNode }) {
+  // A shared document link is more specific than the last locally cached id.
+  // Selecting it before either provider runs an effect also means mount
+  // hydration performs one request for the URL document instead of briefly
+  // reopening the cached one.
+  const [mountSelection] = useState<MountDocumentSelection>(mountDocumentSelection);
+  const initialDocumentId = mountSelection.committedDocumentId;
+  const initialRequestedDocumentId = mountSelection.requestedDocumentId;
   const [doc, setDoc] = useState<Doc>(
-    () => migrateLegacyInlineAiBeats(loadDoc() ?? makeDefaultDoc()),
+    () => migrateLegacyInlineAiBeats(mountSelection.committedDocument),
   );
   const blocks = doc.blocks;
   const refs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -87,10 +132,18 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     refs.current[id] = element;
   };
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
-  const [documentId, setDocumentId] = useState<string | null>(() => loadDocumentId());
+  const [documentId, setDocumentId] = useState<string | null>(initialDocumentId);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadingDocumentId, setLoadingDocumentId] = useState<string | null>(
+    initialRequestedDocumentId,
+  );
+  const loadingDocumentIdRef = useRef<string | null>(initialRequestedDocumentId);
+  const noticeSequenceRef = useRef(0);
+  const [documentLoadNotice, setDocumentLoadNotice] = useState<
+    EditorContextValue['documentLoadNotice']
+  >(null);
 
   // Saves are optimistically locked on the version. The authoritative value
   // lives in a ref rather than in `doc`, because adopting a new version has to
@@ -108,11 +161,11 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const persistedRevisionRef = useRef(0);
   const saveInFlightRef = useRef<Promise<void> | null>(null);
   const [documentListRevision, setDocumentListRevision] = useState(0);
-
-  // True until the mount-time server fetch settles. Autosave stays disarmed
-  // meanwhile so a cached draft cannot be written back before we know what the
-  // server actually holds.
-  const [isHydrating, setIsHydrating] = useState<boolean>(() => loadDocumentId() !== null);
+  const autoSaveTimerRef = useRef<number | null>(null);
+  // Mirrors `isAutoSaving` for readers that run outside React's render cycle —
+  // specifically the beforeunload guard, which has to answer "is there
+  // unsaved work" synchronously at event time.
+  const isAutoSavingRef = useRef(false);
 
   // Latest doc/id without waiting for a re-render. Callbacks captured by the
   // chat stream can outlive several renders, and saving from a stale closure
@@ -128,6 +181,49 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   // PUT can write one document's body over another's — the id and the body are
   // separate pieces of state that briefly disagree while switching documents.
   const loadedForIdRef = useRef<string | null>(documentId);
+  // All document loads share one sequence. A transition reserves its token
+  // before doing any asynchronous work; only that token may later commit or
+  // report a failure. Mount hydration owns token zero.
+  const documentRequestRef = useRef(0);
+  const documentLoadControllerRef = useRef<AbortController | null>(null);
+  const beginDocumentTransition = (id: string | null) => {
+    documentRequestRef.current += 1;
+    emitDocumentTransitionStart();
+    documentLoadControllerRef.current?.abort();
+    documentLoadControllerRef.current = null;
+    loadingDocumentIdRef.current = id;
+    setLoadingDocumentId(id);
+    setDocumentLoadNotice(null);
+    if (autoSaveTimerRef.current !== null) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    return documentRequestRef.current;
+  };
+  const finishDocumentTransition = (requestToken: number) => {
+    if (requestToken !== documentRequestRef.current) return;
+    loadingDocumentIdRef.current = null;
+    setLoadingDocumentId(null);
+    documentLoadControllerRef.current = null;
+  };
+  const reportDocumentLoadFailure = (
+    error: unknown,
+    options?: { mount?: boolean; source?: 'selection' | 'history' },
+  ) => {
+    const detail = error instanceof Error && error.message
+      ? error.message
+      : 'The request failed.';
+    const title = options?.source === 'history'
+      ? 'Could not open that document from history'
+      : 'Could not open document';
+    setDocumentLoadNotice({
+      id: ++noticeSequenceRef.current,
+      title,
+      description: options?.mount
+        ? `${detail} Showing your local copy.`
+        : `${detail} Your current document remains open.`,
+    });
+  };
   // Global menu state - only one block menu open at a time
   const [openMenuBlockId, setOpenMenuBlockId] = useState<string | null>(null);
   const [openMenuType, setOpenMenuType] = useState<'add' | 'options' | null>(null);
@@ -137,11 +233,6 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     setOpenMenuType(type);
   };
   const [lastSaveSource, setLastSaveSource] = useState<'auto' | 'manual' | null>(null);
-  const autoSaveTimerRef = useRef<number | null>(null);
-  // Mirrors `isAutoSaving` for readers that run outside React's render cycle —
-  // specifically the beforeunload guard, which has to answer "is there
-  // unsaved work" synchronously at event time.
-  const isAutoSavingRef = useRef(false);
 
   /**
    * Capture the DOM-backed editable values synchronously before export.
@@ -177,14 +268,18 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
   // Local draft cache, keyed by the document it belongs to.
   useEffect(() => {
-    const raf = requestAnimationFrame(() => saveDoc(doc, documentId));
+    if (loadingDocumentId !== null) return;
+    const raf = requestAnimationFrame(() => {
+      if (loadingDocumentIdRef.current === null) saveDoc(doc, documentId);
+    });
     return () => cancelAnimationFrame(raf);
-  }, [doc, documentId]);
+  }, [doc, documentId, loadingDocumentId]);
 
   // Persist current document id
   useEffect(() => {
+    if (loadingDocumentId !== null) return;
     saveDocumentId(documentId);
-  }, [documentId]);
+  }, [documentId, loadingDocumentId]);
 
   // Determine whether the account has any remote documents to tailor
   // the initial Canvas experience and gate autosave behavior.
@@ -204,6 +299,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
   /** Apply a content change and arm the autosave timer. */
   const mutateDoc = (updater: (prev: Doc) => Doc) => {
+    if (loadingDocumentIdRef.current !== null) return;
     editRevisionRef.current += 1;
     setDoc(updater);
     setDirtyTick(editRevisionRef.current);
@@ -391,10 +487,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const exec = (cmd: string) => document.execCommand(cmd, false);
 
   const newLocal = () => {
-    if (autoSaveTimerRef.current !== null) {
-      clearTimeout(autoSaveTimerRef.current);
-      autoSaveTimerRef.current = null;
-    }
+    const requestToken = beginDocumentTransition(null);
     const next = makeDefaultDoc();
     setDoc(next);
     docRef.current = next;
@@ -407,24 +500,38 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     versionRef.current = 1;
     setLastSavedAt(null);
     setSaveError(null);
+    setActiveId(null);
+    setOpenMenuBlockId(null);
+    setOpenMenuType(null);
+    finishDocumentTransition(requestToken);
   };
 
   // API-backed persistence
   const createRemote = async (docOverride?: DocumentInput): Promise<string> => {
+    const requestToken = beginDocumentTransition(null);
     const payload = docOverride ?? docRef.current;
     const revisionAtStart = editRevisionRef.current;
     const res = await apiCreateDocument(payload);
     const version = res.version ?? 1;
-    setDocumentId(res.document_id);
-    documentIdRef.current = res.document_id;
-    loadedForIdRef.current = res.document_id;
-    versionRef.current = version;
-    persistedRevisionRef.current = revisionAtStart;
-    setDoc(previous => (
-      previous.version === version ? previous : { ...previous, version }
-    ));
+
+    // The creation itself succeeded even if navigation moved on while it was
+    // in flight, so list metadata still changes. Only the still-current
+    // transition may adopt the created document into the editor.
+    if (requestToken === documentRequestRef.current) {
+      setDocumentId(res.document_id);
+      documentIdRef.current = res.document_id;
+      loadedForIdRef.current = res.document_id;
+      versionRef.current = version;
+      persistedRevisionRef.current = revisionAtStart;
+      setDoc(previous => (
+        previous.version === version ? previous : { ...previous, version }
+      ));
+      setSaveError(null);
+      setActiveId(null);
+      setOpenMenuBlockId(null);
+      setOpenMenuType(null);
+    }
     setHasAnyRemoteDocs(true);
-    setSaveError(null);
     setDocumentListRevision(revision => revision + 1);
     return res.document_id;
   };
@@ -449,9 +556,14 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
     const targetId = documentIdRef.current;
     if (!targetId) {
-      await createRemote(docOverride ?? docRef.current);
-      setLastSavedAt(Date.now());
-      setLastSaveSource(source);
+      const createdId = await createRemote(docOverride ?? docRef.current);
+      if (
+        documentIdRef.current === createdId
+        && loadedForIdRef.current === createdId
+      ) {
+        setLastSavedAt(Date.now());
+        setLastSaveSource(source);
+      }
       return;
     }
 
@@ -516,8 +628,27 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     await doRemoteSave('manual', docOverride);
   };
 
-  const loadRemote = async (id: string): Promise<void> => {
-    const fetched = await apiLoadDocument(id);
+  const loadRemoteForRequest = async (
+    id: string,
+    requestToken: number,
+  ): Promise<boolean> => {
+    // A newer transition can supersede this one while it is waiting for a dirty
+    // save to flush. Do not start an obsolete GET afterward.
+    if (requestToken !== documentRequestRef.current) return false;
+
+    let fetched: Doc;
+    const controller = new AbortController();
+    documentLoadControllerRef.current = controller;
+    try {
+      fetched = await apiLoadDocument(id, { signal: controller.signal });
+    } catch (error) {
+      // Callers surface only the latest failure. An older request failing after
+      // the author has moved on is no longer actionable.
+      if (requestToken !== documentRequestRef.current || controller.signal.aborted) return false;
+      throw error;
+    }
+    if (requestToken !== documentRequestRef.current || controller.signal.aborted) return false;
+
     // Self-heal documents saved before html/children were kept in step, so an
     // old orphan does not keep failing the agent's edits forever.
     const loaded: Doc = { ...fetched, blocks: reconcileBlocks(fetched.blocks) };
@@ -531,34 +662,64 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     loadedForIdRef.current = id;
     versionRef.current = loaded.version ?? 1;
     setSaveError(null);
+    setActiveId(null);
+    setOpenMenuBlockId(null);
+    setOpenMenuType(null);
+    return true;
   };
 
-  const hydrateRemote = useEffectEvent((id: string) => loadRemote(id));
+  const loadRemote = async (id: string): Promise<boolean> => {
+    if (id === documentIdRef.current && loadingDocumentIdRef.current === null) return true;
+    if (id === loadingDocumentIdRef.current) return false;
+    const requestToken = beginDocumentTransition(id);
+    try {
+      return await loadRemoteForRequest(id, requestToken);
+    } catch (error) {
+      if (requestToken === documentRequestRef.current) {
+        reportDocumentLoadFailure(error);
+      }
+      throw error;
+    } finally {
+      finishDocumentTransition(requestToken);
+    }
+  };
+
+  const hydrateRemote = useEffectEvent(
+    (id: string, requestToken: number) => loadRemoteForRequest(id, requestToken),
+  );
   const autoSave = useEffectEvent(() => doRemoteSave('auto'));
 
   // Hydrate from the server on mount. The cached draft is a fallback for going
   // offline, not a source of truth: adopting it unconditionally meant a stale
   // (or another account's) body could be saved over the real document.
   useEffect(() => {
-    const id = documentIdRef.current;
+    const id = initialRequestedDocumentId;
     if (!id) return;
 
     let cancelled = false;
-    void hydrateRemote(id)
-      .catch(() => {
-        // Keep the cached draft — it is at least known to belong to this id.
-        if (!cancelled) {
-          setSaveError('Could not reach the server; showing your last local copy.');
+    const hydrationToken = 0;
+    void hydrateRemote(id, hydrationToken)
+      .catch((error) => {
+        if (!cancelled && hydrationToken === documentRequestRef.current) {
+          // The committed state was selected synchronously from a body keyed to
+          // its own id, so failure only has to reveal it again.
+          reportDocumentLoadFailure(error, { mount: true });
         }
       })
       .finally(() => {
-        if (!cancelled) setIsHydrating(false);
+        if (!cancelled && hydrationToken === documentRequestRef.current) {
+          finishDocumentTransition(hydrationToken);
+        }
       });
     return () => {
       cancelled = true;
+      if (hydrationToken === documentRequestRef.current) {
+        documentLoadControllerRef.current?.abort();
+        documentLoadControllerRef.current = null;
+      }
     };
     // Mount only: later document switches go through loadRemote/switchTo.
-  }, []);
+  }, [initialRequestedDocumentId]);
 
   // Debounced remote auto-save (5 seconds after last change).
   // Keyed on `dirtyTick` rather than `doc` so adopting a server version does
@@ -566,7 +727,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (
       hasAnyRemoteDocs === null
-      || isHydrating
+      || loadingDocumentId !== null
       || dirtyTick === 0
       || editRevisionRef.current <= persistedRevisionRef.current
     ) {
@@ -599,10 +760,18 @@ export function EditorProvider({ children }: { children: ReactNode }) {
         autoSaveTimerRef.current = null;
       }
     };
-  }, [dirtyTick, documentId, hasAnyRemoteDocs, isHydrating]);
+  }, [dirtyTick, documentId, hasAnyRemoteDocs, loadingDocumentId]);
 
   /** Flush pending local edits, then switch to another document. */
-  const switchTo = async (id: string): Promise<void> => {
+  const switchTo = async (
+    id: string,
+    options?: { source?: 'selection' | 'history' },
+  ): Promise<boolean> => {
+    if (id === documentIdRef.current && loadingDocumentIdRef.current === null) return true;
+    // Duplicate activation is ignored without disabling the row, so focus stays
+    // where the author put it and a different row can still supersede the load.
+    if (id === loadingDocumentIdRef.current) return false;
+    const requestToken = beginDocumentTransition(id);
     // Switching used to drop whatever had not hit the 5s autosave yet. The
     // assistant creating a document made that a routine occurrence.
     if (
@@ -615,10 +784,21 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         // A failed flush must not block the switch — the error is already
         // retained in the keyed local draft, and the user asked to move on.
-        setSaveError(describeSaveError(error));
+        if (requestToken === documentRequestRef.current) {
+          setSaveError(describeSaveError(error));
+        }
       }
     }
-    await loadRemote(id);
+    try {
+      return await loadRemoteForRequest(id, requestToken);
+    } catch (error) {
+      if (requestToken === documentRequestRef.current) {
+        reportDocumentLoadFailure(error, { source: options?.source });
+      }
+      throw error;
+    } finally {
+      finishDocumentTransition(requestToken);
+    }
   };
 
   const createAndSwitch = async (input: DocumentInput): Promise<string> => {
@@ -629,30 +809,44 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       await doRemoteSave('auto');
     }
 
+    const requestToken = beginDocumentTransition(null);
     const next = documentInputToDoc(input);
     const res = await apiCreateDocument(input);
     const adopted = { ...next, version: res.version ?? 1 };
 
-    setDoc(adopted);
-    docRef.current = adopted;
-    setDocumentId(res.document_id);
-    documentIdRef.current = res.document_id;
-    loadedForIdRef.current = res.document_id;
-    versionRef.current = adopted.version;
-    editRevisionRef.current = 0;
-    persistedRevisionRef.current = 0;
-    setDirtyTick(0);
+    if (requestToken === documentRequestRef.current) {
+      setDoc(adopted);
+      docRef.current = adopted;
+      setDocumentId(res.document_id);
+      documentIdRef.current = res.document_id;
+      loadedForIdRef.current = res.document_id;
+      versionRef.current = adopted.version;
+      editRevisionRef.current = 0;
+      persistedRevisionRef.current = 0;
+      setDirtyTick(0);
+      setLastSavedAt(Date.now());
+      setLastSaveSource('manual');
+      setSaveError(null);
+      setActiveId(null);
+      setOpenMenuBlockId(null);
+      setOpenMenuType(null);
+    }
     setHasAnyRemoteDocs(true);
-    setLastSavedAt(Date.now());
-    setLastSaveSource('manual');
-    setSaveError(null);
     setDocumentListRevision(revision => revision + 1);
     return res.document_id;
   };
 
   const deleteRemote = async (id: string): Promise<void> => {
+    const deletingActiveDocument = documentIdRef.current === id;
+    const requestToken = deletingActiveDocument
+      ? beginDocumentTransition(null)
+      : documentRequestRef.current;
     await apiDeleteDocument(id);
-    if (documentIdRef.current === id) {
+    if (
+      deletingActiveDocument
+      && requestToken === documentRequestRef.current
+      && documentIdRef.current === id
+    ) {
       newLocal();
     }
     setDocumentListRevision(revision => revision + 1);
@@ -696,6 +890,9 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     ops: ToolOperation[],
     options?: { persist?: boolean },
   ): ApplyPatchResult => {
+    if (loadingDocumentIdRef.current !== null) {
+      return { blocks: docRef.current.blocks, desynced: ops, touched: [] };
+    }
     let outcome: ApplyPatchResult = { blocks: [], desynced: [], touched: [] };
 
     const update = (prev: Doc): Doc => {
@@ -740,7 +937,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const save = () => {
-    saveDoc(doc);
+    if (loadingDocumentIdRef.current !== null) return;
+    saveDoc(doc, documentId);
     saveDocumentId(documentId);
     setLastSavedAt(Date.now());
   };
@@ -751,6 +949,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     refs,
     registerEditable,
     documentId,
+    loadingDocumentId,
     activeId,
     setActive: setActiveId,
     openMenuBlockId,
@@ -800,6 +999,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     lastSaveSource,
     saveError,
     clearSaveError: () => setSaveError(null),
+    documentLoadNotice,
+    clearDocumentLoadNotice: () => setDocumentLoadNotice(null),
     adoptServerVersion,
     hasAnyRemoteDocs,
     applyPatch,

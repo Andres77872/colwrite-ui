@@ -188,7 +188,7 @@
     "Alert": "  /** Pass `null` to drop the leading icon. Defaults to the variant's icon. */\n  icon?: React.ElementType | null;\n  variant?: \"destructive\" | \"warning\" | \"info\" | \"success\";\n  /** `alert` is assertive by default — pass `role=\"status\"` for ambient notes. */\n  role?: string;\n  className?: string;\n  id?: string;\n  style?: React.CSSProperties;\n  children?: React.ReactNode;",
     "EmptyState": "  /** Presentational only — hidden from the a11y tree. */\n  icon?: React.ElementType;\n  title: string;\n  description?: React.ReactNode;\n  action?: React.ReactNode;\n  /** `panel` suits narrow side panels; `page` suits the main canvas. */\n  size?: \"panel\" | \"page\";\n  className?: string;",
     "ErrorBoundary": "  children: React.ReactNode;\n  /** Named in the fallback copy, e.g. \"the editor\". */\n  label: string;",
-    "ExtractionBadge": "  status: \"pending\" | \"running\" | \"ready\" | \"failed\" | \"unsupported\" | null;\n  error?: string;\n  /** Add the state hint to the accessible name. Off by default. */\n  describe?: boolean;\n  className?: string;",
+    "ExtractionBadge": "  status: \"pending\" | \"running\" | \"ready\" | \"failed\" | \"unsupported\" | null;\n  error?: string | null;\n  /** Add the state hint to the accessible name. Off by default. */\n  describe?: boolean;\n  className?: string;",
     "Sidebar": "  /** Takes no props — reads the app's view and panel context. */\n  children?: never;",
     "Topbar": "  /** Takes no props — reads the app's view, panel and auth context. */\n  children?: never;"
   },

@@ -120,7 +120,7 @@ export function Topbar() {
             ) : (
               <DropdownMenuItem onClick={() => setView('profile')}>
                 <User aria-hidden="true" className="mr-2 h-4 w-4" />
-                Profile and usage
+                Profile &amp; preferences
               </DropdownMenuItem>
             )}
             <DropdownMenuSeparator />

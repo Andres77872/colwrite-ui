@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useEditor } from '@/editor';
-import { exportDocument } from '@/services';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -15,10 +14,10 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { useToast } from '@/components/ui/toastContext';
 import { downloadBlob, exportFilename } from '@/export/download';
+import { printStandaloneHtml } from '@/export/print';
 import type {
   AiBeatExportMode,
   DocumentExportOptions,
-  DocumentExportRequest,
   ExportOrientation,
   ExportPageSize,
   ExportProfile,
@@ -33,7 +32,7 @@ const selectClass =
   'h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring';
 
 export function DocumentExportDialog({ open, onOpenChange }: Props) {
-  const { documentId, getExportSnapshot } = useEditor();
+  const { getExportSnapshot } = useEditor();
   const { toast } = useToast();
   const [format, setFormat] = useState<'html' | 'pdf'>('pdf');
   const [profile, setProfile] = useState<ExportProfile>('paper');
@@ -49,7 +48,6 @@ export function DocumentExportDialog({ open, onOpenChange }: Props) {
   };
 
   const runExport = async () => {
-    if (format === 'pdf' && !documentId) return;
     setBusy(true);
     try {
       const snapshot = getExportSnapshot();
@@ -60,29 +58,24 @@ export function DocumentExportDialog({ open, onOpenChange }: Props) {
         include_title: includeTitle,
         ai_beat: aiBeat,
       };
-      const payload: DocumentExportRequest = {
-        document: snapshot.document,
-        snapshot: {
-          base_version: snapshot.baseVersion,
-          local_revision: snapshot.localRevision,
-          dirty: snapshot.dirty,
-        },
-        options,
+      const exportSnapshot = {
+        base_version: snapshot.baseVersion,
+        local_revision: snapshot.localRevision,
+        dirty: snapshot.dirty,
       };
+      const { renderStandaloneHtml } = await import('@/export/renderStandaloneHtml');
+      const html = renderStandaloneHtml(snapshot.document, options, exportSnapshot);
 
       if (format === 'html') {
-        const { renderStandaloneHtml } = await import('@/export/renderStandaloneHtml');
-        const html = renderStandaloneHtml(payload.document, options, payload.snapshot);
         downloadBlob(
           new Blob([html], { type: 'text/html;charset=utf-8' }),
-          exportFilename(payload.document.name, 'html'),
+          exportFilename(snapshot.document.name, 'html'),
         );
       } else {
-        const artifact = await exportDocument(documentId!, payload, 'pdf');
-        downloadBlob(artifact.blob, artifact.filename);
+        await printStandaloneHtml(html);
       }
       toast({
-        title: format === 'html' ? 'HTML exported' : 'PDF exported',
+        title: format === 'html' ? 'HTML exported' : 'Print dialog opened',
         variant: 'success',
       });
       onOpenChange(false);
@@ -104,6 +97,7 @@ export function DocumentExportDialog({ open, onOpenChange }: Props) {
           <DialogTitle>Export document</DialogTitle>
           <DialogDescription>
             Export the exact document currently visible in the editor, including edits still waiting for autosave.
+            PDF opens your browser's print dialog; choose Save as PDF there.
           </DialogDescription>
         </DialogHeader>
 
@@ -178,19 +172,13 @@ export function DocumentExportDialog({ open, onOpenChange }: Props) {
           </label>
         </div>
 
-        {format === 'pdf' && !documentId && (
-          <p className="mt-4 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning">
-            Save this document once before requesting a server PDF. Standalone HTML can be exported now.
-          </p>
-        )}
-
         <DialogFooter className="mt-6">
           <DialogClose asChild>
             <Button variant="ghost" disabled={busy}>Cancel</Button>
           </DialogClose>
-          <Button onClick={runExport} disabled={busy || (format === 'pdf' && !documentId)}>
+          <Button onClick={runExport} disabled={busy}>
             {busy && <Spinner />}
-            {busy ? 'Rendering…' : `Export ${format.toUpperCase()}`}
+            {busy ? 'Rendering…' : format === 'pdf' ? 'Print / Save PDF' : 'Export HTML'}
           </Button>
         </DialogFooter>
       </DialogContent>

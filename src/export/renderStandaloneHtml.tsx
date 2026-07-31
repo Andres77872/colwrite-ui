@@ -1,4 +1,4 @@
-/* eslint-disable react-refresh/only-export-components -- server-side static renderer, not an HMR module */
+/* eslint-disable react-refresh/only-export-components -- static export renderer, not an HMR module */
 
 import { renderToStaticMarkup } from 'react-dom/server';
 import katex from 'katex';

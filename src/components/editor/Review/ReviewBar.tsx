@@ -6,6 +6,7 @@ import { useProposals } from '@/editor/proposalsContextState';
 import { describeChange } from '@/editor/proposals';
 import { AlertCircle, Check, ChevronDown, ChevronUp, FileText, Sparkles, X } from 'lucide-react';
 import { useState } from 'react';
+import { Spinner } from '@/components/ui/spinner';
 
 /**
  * Sticky summary of everything the assistant is waiting on.
@@ -15,7 +16,7 @@ import { useState } from 'react';
  * idea whether they have seen all of it.
  */
 export function ReviewBar() {
-  const { blocks, switchTo } = useEditor();
+  const { blocks, loadingDocumentId, switchTo } = useEditor();
   const {
     pending,
     pendingCount,
@@ -87,7 +88,9 @@ export function ReviewBar() {
         </div>
       )}
 
-      {invites.map((invite) => (
+      {invites.map((invite) => {
+        const opening = loadingDocumentId === invite.documentId;
+        return (
         <div
           key={invite.id}
           className="flex flex-wrap items-center gap-2 border-b border-border/60 px-4 py-2 text-xs"
@@ -98,24 +101,29 @@ export function ReviewBar() {
             size="sm"
             className="h-7 px-2 text-xs"
             onClick={() => {
-              dismissInvite(invite.id);
-              switchTo(invite.documentId).catch(() => {
-                /* surfaced by the editor's own save/load error banner */
-              });
+              if (opening) return;
+              void switchTo(invite.documentId)
+                .then((committed) => {
+                  if (committed) dismissInvite(invite.id);
+                })
+                .catch(() => undefined);
             }}
           >
-            Open it
+            {opening && <Spinner />}
+            {opening ? 'Opening…' : 'Open it'}
           </Button>
           <Button
             size="sm"
             variant="ghost"
             className="h-7 px-2 text-xs"
             onClick={() => dismissInvite(invite.id)}
+            disabled={opening}
           >
             Stay here
           </Button>
         </div>
-      ))}
+        );
+      })}
 
       {pendingCount > 0 && (
         <>

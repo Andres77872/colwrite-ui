@@ -15,6 +15,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Sparkles } from 'lucide-react';
 import { AI_ACTION_REGISTRY, type AiAction, type AiActionGroup } from '@/config/aiActions';
+import { useAgentTools } from '@/components/preferences';
 
 interface AIActionMenuProps {
   disabled?: boolean;
@@ -39,10 +40,17 @@ const CUSTOM_LANGUAGE = '__other__';
  * what makes that safe: opening the menu moves DOM focus off the text.
  */
 export function AIActionMenu({ disabled, onAction }: AIActionMenuProps) {
+  const { isToolEnabled } = useAgentTools();
   const [customLanguage, setCustomLanguage] = useState('');
   const [showCustomInput, setShowCustomInput] = useState(false);
 
-  const visibleActions = Object.values(AI_ACTION_REGISTRY).filter((action) => !action.hidden);
+  const visibleActions = Object.values(AI_ACTION_REGISTRY).filter(
+    (action) =>
+      !action.hidden &&
+      (action.dispatch !== 'agent_tool' ||
+        !action.toolName ||
+        isToolEnabled(action.toolName)),
+  );
 
   const run = (action: AiAction, language?: string) => {
     setShowCustomInput(false);

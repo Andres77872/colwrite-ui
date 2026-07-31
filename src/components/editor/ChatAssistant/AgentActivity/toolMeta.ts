@@ -88,6 +88,11 @@ const TOOL_META: Record<string, { label: string; running: string; icon: typeof W
     running: 'Searching your PDFs',
     icon: SearchCheck,
   },
+  resource_retrieve: {
+    label: 'Retrieved relevant PDF passages',
+    running: 'Finding relevant passages in your PDFs',
+    icon: SearchCheck,
+  },
   add_details: { label: 'Expanded a passage', running: 'Expanding a passage', icon: Wand2 },
   more_concise: { label: 'Condensed a passage', running: 'Condensing a passage', icon: Scissors },
   aibeat: { label: 'Ran an instruction', running: 'Running your instruction', icon: Sparkles },
@@ -112,4 +117,3 @@ export function formatDuration(ms?: number): string | null {
   if (!ms || ms < 50) return null;
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
-

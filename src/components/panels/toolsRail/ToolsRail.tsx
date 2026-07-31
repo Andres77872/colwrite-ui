@@ -1,9 +1,10 @@
-import { useRef, useState, type KeyboardEvent } from 'react';
+import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePanels } from '../panelsContextState';
-import { TOOLS } from '../toolsConfig';
+import { toolsForEnabledSources } from '../toolsConfig';
+import { useAgentTools } from '@/components/preferences';
 import { PanelRight } from 'lucide-react';
 
 /**
@@ -18,11 +19,17 @@ import { PanelRight } from 'lucide-react';
  */
 export function ToolsRail() {
   const { activeTool, setTool, isOpen, toggle, isDesktop } = usePanels();
+  const { isSourceEnabled } = useAgentTools();
+  const tools = useMemo(
+    () => toolsForEnabledSources(isSourceEnabled),
+    [isSourceEnabled],
+  );
 
-  // The toggle occupies slot 0; the tools follow in `TOOLS` order.
-  const count = TOOLS.length + 1;
+  // The toggle occupies slot 0; enabled tools follow in registry order.
+  const count = tools.length + 1;
   const [focusIndex, setFocusIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const effectiveFocusIndex = Math.min(focusIndex, count - 1);
 
   // Slots are read out of the DOM in the key handler rather than tracked in a
   // ref map: the map had to be populated from ref callbacks built during
@@ -40,11 +47,11 @@ export function ToolsRail() {
     switch (event.key) {
       case 'ArrowDown':
         event.preventDefault();
-        focusSlot(focusIndex + 1);
+        focusSlot(effectiveFocusIndex + 1);
         break;
       case 'ArrowUp':
         event.preventDefault();
-        focusSlot(focusIndex - 1);
+        focusSlot(effectiveFocusIndex - 1);
         break;
       case 'Home':
         event.preventDefault();
@@ -59,7 +66,7 @@ export function ToolsRail() {
 
   const slotProps = (index: number) => ({
     'data-rail-slot': index,
-    tabIndex: index === focusIndex ? 0 : -1,
+    tabIndex: index === effectiveFocusIndex ? 0 : -1,
     onFocus: () => setFocusIndex(index),
   });
 
@@ -98,7 +105,7 @@ export function ToolsRail() {
       <div className="my-2 h-px w-6 bg-border/50" role="presentation" />
 
       <div className="flex flex-col gap-1">
-        {TOOLS.map((tool, index) => {
+        {tools.map((tool, index) => {
           const Icon = tool.icon;
           const isActive = activeTool === tool.id && isOpen;
 

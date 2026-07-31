@@ -2,15 +2,18 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  switchTo: vi.fn(async () => undefined),
+  switchTo: vi.fn(async () => true),
   documentId: 'doc-1' as string | null,
-  toast: vi.fn(),
+  loadingDocumentId: null as string | null,
 }));
 
 vi.mock('@/editor', () => ({
-  useEditor: () => ({ documentId: mocks.documentId, switchTo: mocks.switchTo }),
+  useEditor: () => ({
+    documentId: mocks.documentId,
+    loadingDocumentId: mocks.loadingDocumentId,
+    switchTo: mocks.switchTo,
+  }),
 }));
-vi.mock('@/components/ui/toastContext', () => ({ useToast: () => ({ toast: mocks.toast }) }));
 
 const { ViewProvider } = await import('../ViewContext');
 const { useView } = await import('../viewContextState');
@@ -40,9 +43,9 @@ function renderAt(search: string) {
 }
 
 beforeEach(() => {
-  mocks.switchTo.mockReset().mockResolvedValue(undefined);
-  mocks.toast.mockReset();
+  mocks.switchTo.mockReset().mockResolvedValue(true);
   mocks.documentId = 'doc-1';
+  mocks.loadingDocumentId = null;
 });
 
 afterEach(() => {
@@ -81,11 +84,13 @@ describe('ViewProvider routing', () => {
     await waitFor(() => expect(window.location.search).toBe('?doc=doc-1'));
   });
 
-  it('opens the document named by ?doc on load', async () => {
+  it('does not load a startup target a second time while the editor is hydrating it', () => {
     mocks.documentId = null;
+    mocks.loadingDocumentId = 'doc-9';
     renderAt('?doc=doc-9');
 
-    await waitFor(() => expect(mocks.switchTo).toHaveBeenCalledWith('doc-9'));
+    expect(mocks.switchTo).not.toHaveBeenCalled();
+    expect(window.location.search).toBe('?doc=doc-9');
   });
 
   it('does not re-open the document that is already open', () => {
@@ -93,17 +98,21 @@ describe('ViewProvider routing', () => {
     expect(mocks.switchTo).not.toHaveBeenCalled();
   });
 
-  it('reports a document it cannot open instead of showing an empty editor', async () => {
-    mocks.documentId = null;
-    mocks.switchTo.mockRejectedValue(new Error('Not found'));
+  it('restores the committed URL after startup hydration fails', async () => {
+    mocks.documentId = 'doc-1';
+    mocks.loadingDocumentId = 'missing';
+    const view = renderAt('?doc=missing');
 
-    renderAt('?doc=missing');
-
-    await waitFor(() =>
-      expect(mocks.toast).toHaveBeenCalledWith(
-        expect.objectContaining({ title: 'Could not open that document', variant: 'error' }),
-      ),
+    expect(window.location.search).toBe('?doc=missing');
+    mocks.loadingDocumentId = null;
+    view.rerender(
+      <ViewProvider>
+        <Harness />
+      </ViewProvider>,
     );
+
+    await waitFor(() => expect(window.location.search).toBe('?doc=doc-1'));
+    expect(mocks.switchTo).not.toHaveBeenCalled();
   });
 
   it('follows the back button between surfaces', async () => {

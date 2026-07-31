@@ -35,13 +35,18 @@ const SORT_OPTIONS: {
   { value: 'name:desc', label: 'Title — Z–A', sortBy: 'name', sortOrder: 'desc' },
 ];
 
-export function DocumentsMenu() {
+export function DocumentsMenu({
+  onDocumentCommitted,
+}: {
+  onDocumentCommitted?: () => void;
+} = {}) {
   const {
     listRemote,
     switchTo,
     createAndSwitch,
     deleteRemote,
     documentId,
+    loadingDocumentId,
     documentListRevision,
   } = useEditor();
   const confirm = useConfirm();
@@ -135,6 +140,7 @@ export function DocumentsMenu() {
   };
 
   const onCreate = async () => {
+    if (loadingDocumentId) return;
     setBusy('create');
     try {
       await createAndSwitch({ version: 1, name: 'Untitled document', blocks: [] });
@@ -152,19 +158,18 @@ export function DocumentsMenu() {
   };
 
   const onLoad = async (id: string) => {
-    if (id === documentId) return;
+    if (id === documentId || id === loadingDocumentId) return;
     try {
-      await switchTo(id);
-    } catch (error) {
-      toast({
-        title: 'Could not open document',
-        description: error instanceof Error ? error.message : undefined,
-        variant: 'error',
-      });
+      const committed = await switchTo(id);
+      if (committed) onDocumentCommitted?.();
+    } catch {
+      // The editor owns the single load-failure notice and retains this row's
+      // committed document and drawer state.
     }
   };
 
   const onDelete = async (doc: DocumentSummary) => {
+    if (loadingDocumentId) return;
     const ok = await confirm({
       title: `Delete “${doc.name}”?`,
       description: 'This permanently removes the document and its chats. It cannot be undone.',
@@ -231,7 +236,12 @@ export function DocumentsMenu() {
         ))}
       </select>
 
-      <Button size="sm" onClick={onCreate} disabled={busy !== null} className="w-full">
+      <Button
+        size="sm"
+        onClick={onCreate}
+        disabled={busy !== null || Boolean(loadingDocumentId)}
+        className="w-full"
+      >
         {busy === 'create' ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
         New document
       </Button>
@@ -247,6 +257,7 @@ export function DocumentsMenu() {
         {!showSkeleton &&
           items.map((doc) => {
             const isActive = documentId === doc.id;
+            const isPending = loadingDocumentId === doc.id;
             const updatedLabel = formatDateTime(doc.updatedAt);
             return (
               <li key={doc.id}>
@@ -271,12 +282,19 @@ export function DocumentsMenu() {
                     />
                     <span className="min-w-0">
                       <span className="block truncate text-sm">{doc.name}</span>
-                      <time
-                        dateTime={doc.updatedAt || undefined}
-                        className="block truncate text-2xs text-muted-foreground"
-                      >
-                        Updated {updatedLabel || '—'}
-                      </time>
+                      {isPending ? (
+                        <span className="flex items-center gap-1 text-2xs text-muted-foreground">
+                          <Spinner />
+                          Opening…
+                        </span>
+                      ) : (
+                        <time
+                          dateTime={doc.updatedAt || undefined}
+                          className="block truncate text-2xs text-muted-foreground"
+                        >
+                          Updated {updatedLabel || '—'}
+                        </time>
+                      )}
                     </span>
                   </button>
                   <Button
@@ -288,7 +306,7 @@ export function DocumentsMenu() {
                       'opacity-0 focus-visible:opacity-100 group-hover:opacity-100',
                     )}
                     onClick={() => onDelete(doc)}
-                    disabled={busy !== null}
+                    disabled={busy !== null || Boolean(loadingDocumentId)}
                     aria-label={`Delete ${doc.name}`}
                     title="Delete document"
                   >

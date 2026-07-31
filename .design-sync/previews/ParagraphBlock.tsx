@@ -1,4 +1,4 @@
-import { EditorContext, ParagraphBlock } from 'colwrite-ui';
+import { AgentToolsContext, EditorContext, ParagraphBlock, agentToolsAllEnabled } from 'colwrite-ui';
 
 // ParagraphBlock is the workhorse block: contenteditable prose in `html`, plus
 // an optional `children` array of inline widgets (citation, equation, graph,
@@ -7,6 +7,10 @@ import { EditorContext, ParagraphBlock } from 'colwrite-ui';
 // It reads six things from the editor and nothing else, so a literal context
 // value covers it — never the real EditorProvider, which is non-deterministic
 // and hits the network on mount (see .design-sync/NOTES.md).
+//
+// The citation cell mounts CitationInline, which calls useAgentTools(), so the
+// frame supplies that literal too — without it the paragraph still renders but
+// throws on the widget, and the citation never appears.
 //
 // `columns` is the layout axis: a paragraph can be set to render its prose in
 // two columns, which is the one thing about this block that is not inherited
@@ -37,7 +41,9 @@ const EDITOR = {
 function Frame({ children }: { children: React.ReactNode }) {
   return (
     <EditorContext.Provider value={EDITOR as unknown as Ctx}>
-      <div className="mx-auto w-full max-w-[var(--doc-measure)] px-6">{children}</div>
+      <AgentToolsContext.Provider value={agentToolsAllEnabled}>
+        <div className="mx-auto w-full max-w-[var(--doc-measure)] px-6">{children}</div>
+      </AgentToolsContext.Provider>
     </EditorContext.Provider>
   );
 }

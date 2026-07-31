@@ -1,22 +1,34 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ToastProvider } from '@/components/ui/toast';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { ViewProvider } from '@/components/layout/ViewContext';
 import type { UserOverview } from '@/services/userProfile';
 import { makeResource } from '@/services/__tests__/resourceFixtures';
 
-const switchTo = vi.fn(async () => {});
+const switchTo = vi.fn<(_id: string) => Promise<boolean>>(async () => true);
 const getOverview = vi.fn<() => Promise<UserOverview>>();
+const editorState = {
+  documentId: null as string | null,
+  loadingDocumentId: null as string | null,
+};
 
 // The editor context is mocked rather than mounted: the dashboard only uses
 // it to open a document, and a real EditorProvider would pull the whole
 // document-loading stack into a test about rendering an account page.
-vi.mock('@/editor', () => ({ useEditor: () => ({ switchTo }) }));
+vi.mock('@/editor', () => ({ useEditor: () => ({ ...editorState, switchTo }) }));
 vi.mock('@/services/userProfile', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/userProfile')>();
   return { ...actual, getOverview: () => getOverview() };
 });
+vi.mock('@/components/preferences', () => ({
+  AgentToolsPreferences: () => (
+    <section aria-label="Agent preferences">
+      Agent capability controls
+      <input aria-label="Agent preference draft" />
+    </section>
+  ),
+}));
 
 const { ProfileView } = await import('../ProfileView');
 
@@ -101,6 +113,9 @@ function renderProfile() {
 
 beforeEach(() => {
   switchTo.mockClear();
+  switchTo.mockResolvedValue(true);
+  editorState.documentId = null;
+  editorState.loadingDocumentId = null;
   getOverview.mockReset();
   getOverview.mockResolvedValue(OVERVIEW);
 });
@@ -122,6 +137,40 @@ describe('ProfileView', () => {
     expect(screen.getByText('@ada')).toBeTruthy();
     expect(screen.getByText('Computational linguistics')).toBeTruthy();
     expect(screen.getByText('Analytical Engine Lab')).toBeTruthy();
+  });
+
+  it('provides a dedicated agent tools preferences tab', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Ada Lovelace', level: 1 });
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Agent tools' }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    expect(await screen.findByRole('region', { name: 'Agent preferences' })).toBeTruthy();
+  });
+
+  it('keeps an unsaved preferences draft when switching profile tabs', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Ada Lovelace', level: 1 });
+
+    const agentTab = screen.getByRole('tab', { name: 'Agent tools' });
+    fireEvent.mouseDown(agentTab, { button: 0, ctrlKey: false });
+    const draft = await screen.findByRole('textbox', { name: 'Agent preference draft' });
+    fireEvent.change(draft, { target: { value: 'unsaved choice' } });
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Overview' }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.mouseDown(agentTab, { button: 0, ctrlKey: false });
+
+    expect(
+      (screen.getByRole('textbox', {
+        name: 'Agent preference draft',
+      }) as HTMLInputElement).value,
+    ).toBe('unsaved choice');
   });
 
   it('renders the usage tiles from the summary', async () => {
@@ -167,6 +216,19 @@ describe('ProfileView', () => {
     await waitFor(() => expect(switchTo).toHaveBeenCalledWith('507f1f77bcf86cd799439011'));
   });
 
+  it('shows pending feedback without marking the requested row current', async () => {
+    editorState.documentId = 'another-document';
+    editorState.loadingDocumentId = '507f1f77bcf86cd799439011';
+    renderProfile();
+
+    const name = await screen.findByRole('button', { name: 'Thesis draft' });
+    expect(name.getAttribute('aria-current')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open Thesis draft' }).textContent).toContain('Opening…');
+
+    name.click();
+    expect(switchTo).not.toHaveBeenCalled();
+  });
+
   it('lists uploaded PDFs with their size', async () => {
     renderProfile();
 
@@ -198,5 +260,18 @@ describe('ProfileView', () => {
     await screen.findByRole('alert');
     expect(screen.getByText('Service unavailable')).toBeTruthy();
     expect(screen.getByRole('button', { name: /try again/i })).toBeTruthy();
+  });
+
+  it('keeps agent preferences reachable when overview loading fails', async () => {
+    getOverview.mockRejectedValue(new Error('Overview unavailable'));
+    renderProfile();
+    await screen.findByText('Overview unavailable');
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Agent tools' }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    expect(await screen.findByRole('region', { name: 'Agent preferences' })).toBeTruthy();
   });
 });

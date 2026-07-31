@@ -126,18 +126,14 @@ describe('toEditorDoc', () => {
     expect(result.blocks).toEqual(sampleBlocks);
   });
 
-  // 15. null payload → fallback empty doc
-  it('15. returns fallback { version:1, blocks:[] } for null', () => {
-    const result = toEditorDoc(null);
-    expect(result.version).toBe(1);
-    expect(result.blocks).toEqual([]);
+  // 15. null payload is a malformed successful response
+  it('15. rejects null rather than turning it into an empty document', () => {
+    expect(() => toEditorDoc(null)).toThrow(/invalid document/i);
   });
 
-  // 16. undefined payload → fallback empty doc
-  it('16. returns fallback { version:1, blocks:[] } for undefined', () => {
-    const result = toEditorDoc(undefined);
-    expect(result.version).toBe(1);
-    expect(result.blocks).toEqual([]);
+  // 16. undefined payload is malformed too
+  it('16. rejects undefined rather than turning it into an empty document', () => {
+    expect(() => toEditorDoc(undefined)).toThrow(/invalid document/i);
   });
 
   // 17. Payload with blocks array but version as string → coerces to 1
@@ -154,13 +150,10 @@ describe('toEditorDoc', () => {
     expect(result.name).toBe('Via Title');
   });
 
-  // 19. Backend wrapper { document: { ... } } — current code does NOT unwrap
-  it('19. { document: {...} } wrapper returns fallback (current behavior, no unwrapping)', () => {
+  // 19. This transform receives the inner document, so another wrapper is malformed.
+  it('19. rejects a nested document wrapper', () => {
     const payload = { document: { blocks: sampleBlocks, version: 3 } };
-    const result = toEditorDoc(payload);
-    // The code checks payload.blocks directly, not payload.document.blocks
-    expect(result.version).toBe(1);
-    expect(result.blocks).toEqual([]);
+    expect(() => toEditorDoc(payload)).toThrow(/invalid document/i);
   });
 
   // 20. Payload with empty blocks array

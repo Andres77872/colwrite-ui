@@ -21,6 +21,19 @@ const searchMocks = vi.hoisted(() => ({
   arxiv: vi.fn(),
   semanticScholar: vi.fn(),
 }));
+const preferenceState = vi.hoisted(() => ({
+  arxiv: true,
+  semanticScholar: true,
+  loading: false,
+}));
+
+vi.mock('@/components/preferences', () => ({
+  useAgentTools: () => ({
+    isSourceEnabled: (sourceId: string) =>
+      sourceId === 'arxiv' ? preferenceState.arxiv : preferenceState.semanticScholar,
+    loading: preferenceState.loading,
+  }),
+}));
 
 vi.mock('@/services/arxiv', () => ({
   searchArxiv: searchMocks.arxiv,
@@ -102,6 +115,9 @@ beforeEach(() => {
     next_offset: null,
     data: [],
   });
+  preferenceState.arxiv = true;
+  preferenceState.semanticScholar = true;
+  preferenceState.loading = false;
 });
 afterEach(cleanup);
 
@@ -155,6 +171,65 @@ describe('CitationInline', () => {
     expect(block?.type === 'paragraph' && block.children?.[0]).toMatchObject({
       keys: ['2103.00020'],
     });
+  });
+
+  it('does not contact Semantic Scholar when that source is disabled', async () => {
+    preferenceState.semanticScholar = false;
+    await mount(citation('c1', { keys: [] }));
+    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+
+    const field = screen.getByPlaceholderText('Search arXiv, or paste a key / DOI');
+    fireEvent.change(field, { target: { value: 'arxiv-only query' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await act(async () => {});
+
+    expect(searchMocks.arxiv).toHaveBeenCalledWith({
+      query: 'arxiv-only query',
+      limit: 6,
+    });
+    expect(searchMocks.semanticScholar).not.toHaveBeenCalled();
+  });
+
+  it('keeps manual citation entry available when every paper source is off', async () => {
+    preferenceState.arxiv = false;
+    preferenceState.semanticScholar = false;
+    await mount(citation('c1', { keys: [] }));
+    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+
+    expect(screen.getByPlaceholderText('Paste a citation key or DOI')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    const field = screen.getByPlaceholderText('Paste a citation key or DOI');
+    fireEvent.change(field, { target: { value: 'smith2020' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+
+    const block = harness.editor.blocks.find((candidate) => candidate.id === 'p1');
+    expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({
+      keys: ['smith2020'],
+    });
+    expect(searchMocks.arxiv).not.toHaveBeenCalled();
+    expect(searchMocks.semanticScholar).not.toHaveBeenCalled();
+  });
+
+  it('does not turn a search phrase into a citation key while preferences load', async () => {
+    preferenceState.arxiv = false;
+    preferenceState.semanticScholar = false;
+    preferenceState.loading = true;
+    await mount(citation('c1', { keys: [], sources: [] }));
+    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+
+    const field = screen.getByPlaceholderText('Loading paper source preferences…');
+    fireEvent.change(field, { target: { value: 'graph neural networks' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+
+    const block = harness.editor.blocks.find((candidate) => candidate.id === 'p1');
+    expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({
+      keys: [],
+    });
+    expect(searchMocks.arxiv).not.toHaveBeenCalled();
+    expect(searchMocks.semanticScholar).not.toHaveBeenCalled();
   });
 
   it('attaches Semantic Scholar results with canonical DOI and provider provenance', async () => {

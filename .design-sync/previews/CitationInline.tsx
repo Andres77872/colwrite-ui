@@ -1,4 +1,4 @@
-import { CitationInline, EditorContext } from 'colwrite-ui';
+import { AgentToolsContext, CitationInline, EditorContext, agentToolsAllEnabled } from 'colwrite-ui';
 
 // CitationInline is the citation widget embedded in a paragraph. It is a
 // type-guard wrapper: it renders nothing unless `child.type === 'citation'`,
@@ -12,6 +12,10 @@ import { CitationInline, EditorContext } from 'colwrite-ui';
 // It ALSO calls useEditor() internally (to resolve keys against the document),
 // so props alone are not enough — without an EditorContext above it the widget
 // throws outright. A literal value is supplied, never the real provider.
+//
+// Same for useAgentTools(), which gates its arXiv and Semantic Scholar lookup
+// affordances: the real provider fails closed offline, so the all-enabled
+// literal is what shows the widget's full surface.
 
 const refs = { current: {} as Record<string, HTMLDivElement | null> };
 const noop = () => {};
@@ -31,7 +35,9 @@ const EDITOR = { blocks: [], documentId: 'doc-1', refs };
 function Sentence({ children }: { children: React.ReactNode }) {
   return (
     <EditorContext.Provider value={EDITOR as unknown as Ctx}>
-      <p className="max-w-[40rem] text-sm leading-relaxed text-muted-foreground">{children}</p>
+      <AgentToolsContext.Provider value={agentToolsAllEnabled}>
+        <p className="max-w-[40rem] text-sm leading-relaxed text-muted-foreground">{children}</p>
+      </AgentToolsContext.Provider>
     </EditorContext.Provider>
   );
 }

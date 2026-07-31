@@ -9,6 +9,7 @@ import { SemanticScholarPanel } from '../SemanticScholarPanel';
 import { ColpaliPanel } from '../ColpaliPanel';
 import { LibraryPanel } from '../LibraryPanel';
 import { ChatsPanel } from '../ChatsPanel';
+import { useAgentTools } from '@/components/preferences';
 import { PanelRight, X } from 'lucide-react';
 
 const PANEL_BY_TOOL = {
@@ -25,6 +26,7 @@ const PANEL_BY_TOOL = {
  */
 export function ToolsAside() {
   const { activeTool, close } = usePanels();
+  const { isSourceEnabled } = useAgentTools();
 
   if (!activeTool) {
     return (
@@ -38,6 +40,16 @@ export function ToolsAside() {
   }
 
   const meta = toolMeta(activeTool);
+  if (meta.sourceId && !isSourceEnabled(meta.sourceId)) {
+    return (
+      <EmptyState
+        icon={meta.icon}
+        title={`${meta.label} is disabled`}
+        description="Enable this paper source in Profile → Agent tools before using it."
+        className="h-full"
+      />
+    );
+  }
   const Panel = PANEL_BY_TOOL[activeTool];
   const Icon = meta.icon;
 

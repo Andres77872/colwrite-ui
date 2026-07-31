@@ -1,4 +1,4 @@
-import { AIActionMenu } from 'colwrite-ui';
+import { AgentToolsContext, AIActionMenu, agentToolsAllEnabled } from 'colwrite-ui';
 
 // AIActionMenu is the AI half of the selection toolbar: the actions that can be
 // run against the current text selection, grouped edit / reference / transform,
@@ -12,14 +12,19 @@ import { AIActionMenu } from 'colwrite-ui';
 // component takes `disabled` and `onAction` and forwards no `open` — so these
 // cards show the trigger at rest. The menu's own vocabulary (groups, items,
 // submenu) is visible in the DropdownMenu* component cards.
+//
+// It calls useAgentTools() to filter its `agent_tool` actions and throws
+// without that context, so every cell supplies the literal all-enabled value.
 
 const noop = () => {};
 
 function Toolbar({ children }: { children: React.ReactNode }) {
   return (
-    <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-popover p-1 shadow-md">
-      {children}
-    </div>
+    <AgentToolsContext.Provider value={agentToolsAllEnabled}>
+      <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-popover p-1 shadow-md">
+        {children}
+      </div>
+    </AgentToolsContext.Provider>
   );
 }
 

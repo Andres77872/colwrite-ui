@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { EditorProvider } from './editor'
+import { EditorProvider, useEditor } from './editor'
 import { ProposalsProvider } from './editor/ProposalsContext'
 import { AppShell } from './components/layout/AppShell'
 import { Canvas } from './components/editor/Canvas'
@@ -20,6 +20,9 @@ import { LandingPage } from './components/landing'
 import { ProfileView } from './components/profile'
 import { Spinner } from './components/ui/spinner'
 import { ErrorBoundary } from './components/common/ErrorBoundary'
+import { AgentToolsProvider } from './components/preferences'
+import { DocumentLoadingBoundary } from './components/editor/DocumentLoading'
+import { useToast } from './components/ui/toastContext'
 
 function App() {
   const { user, status } = useAuth();
@@ -43,22 +46,25 @@ function App() {
   }
 
   return (
-    <EditorProvider>
-      {/* Inside EditorProvider: pending agent changes are applied through the
-          editor's own patch path once the author accepts them. */}
-      <ProposalsProvider>
-        <ChatSessionsProvider>
-          <PanelsProvider>
-            {/* Innermost, so switching surfaces never remounts the editor:
-                the profile page can open a document and land back on it with
-                the workspace exactly as it was left. */}
-            <ViewProvider>
-              <Surface />
-            </ViewProvider>
-          </PanelsProvider>
-        </ChatSessionsProvider>
-      </ProposalsProvider>
-    </EditorProvider>
+    <AgentToolsProvider key={`${user.email}\u0000${user.name}`}>
+      <EditorProvider>
+        {/* Navigation must outlive every document-scoped provider. In particular,
+            it needs to update ?doc= after a switch without being remounted by
+            that same switch and re-reading the previous URL. */}
+        <ViewProvider>
+          {/* Pending agent changes are applied through the editor's own patch path
+              once the author accepts them. These providers reset their tagged
+              document state without remounting the workspace. */}
+          <ProposalsProvider>
+            <ChatSessionsProvider>
+              <PanelsProvider>
+                <Surface />
+              </PanelsProvider>
+            </ChatSessionsProvider>
+          </ProposalsProvider>
+        </ViewProvider>
+      </EditorProvider>
+    </AgentToolsProvider>
   )
 }
 
@@ -80,7 +86,7 @@ function useSurfaceChange(view: AppView) {
       firstRender.current = false;
       return;
     }
-    setAnnouncement(view === 'profile' ? 'Profile and usage' : 'Editor');
+    setAnnouncement(view === 'profile' ? 'Profile and preferences' : 'Editor');
     regionRef.current?.focus();
   }, [view]);
 
@@ -114,9 +120,10 @@ function Surface() {
     </>
   );
 
-  if (view === 'profile') {
-    return (
-      <>
+  return (
+    <>
+      <DocumentLoadNotice />
+      {view === 'profile' ? (
         <AppShell
           header={
             <ErrorBoundary label="the toolbar">
@@ -125,51 +132,80 @@ function Surface() {
           }
           main={
             <ErrorBoundary label="your profile">
-              {/* tabIndex -1 so focus can be moved here on a surface change
-                  without making the container a tab stop. */}
               <div ref={regionRef} tabIndex={-1} className="flex min-h-0 flex-1 flex-col outline-none">
                 <ProfileView />
               </div>
             </ErrorBoundary>
           }
         />
-        {chrome}
-      </>
-    )
-  }
-
-  return (
-    <>
-      <AppShell
-        header={
-          <ErrorBoundary label="the toolbar">
-            <Topbar />
-          </ErrorBoundary>
-        }
-        left={
-          <ErrorBoundary label="the sidebar">
-            <Sidebar />
-          </ErrorBoundary>
-        }
-        main={<ErrorBoundary label="the editor">
-          <div ref={regionRef} tabIndex={-1} className="flex min-h-0 flex-1 flex-col outline-none">
-            <Canvas />
-          </div>
-          <ChatAssistant />
-          <DocumentFooter />
-          <FloatingToolbar />
-          <SlashMenu />
-        </ErrorBoundary>}
-        right={
-          <ErrorBoundary label="the tools rail">
-            <ToolsRail />
-          </ErrorBoundary>
-        }
-        aside={<ErrorBoundary label="this panel"><ToolsAside /></ErrorBoundary>}
-      />
+      ) : (
+        <AppShell
+          header={
+            <ErrorBoundary label="the toolbar">
+              <Topbar />
+            </ErrorBoundary>
+          }
+          left={
+            <ErrorBoundary label="the sidebar">
+              <Sidebar />
+            </ErrorBoundary>
+          }
+          main={
+            <ErrorBoundary label="the editor">
+              <DocumentLoadingBoundary regionRef={regionRef}>
+                <Canvas />
+                <ChatAssistant />
+                <DocumentFooter />
+                <FloatingToolbar />
+                <SlashMenu />
+              </DocumentLoadingBoundary>
+            </ErrorBoundary>
+          }
+          right={
+            <ErrorBoundary label="the tools rail">
+              <ToolsRail />
+            </ErrorBoundary>
+          }
+          aside={<ErrorBoundary label="this panel"><DocumentToolBoundary><ToolsAside /></DocumentToolBoundary></ErrorBoundary>}
+        />
+      )}
       {chrome}
     </>
   )
+}
+
+function DocumentLoadNotice() {
+  const { documentLoadNotice, clearDocumentLoadNotice } = useEditor();
+  const { toast } = useToast();
+  const announced = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!documentLoadNotice || announced.current === documentLoadNotice.id) return;
+    announced.current = documentLoadNotice.id;
+    toast({
+      title: documentLoadNotice.title,
+      description: documentLoadNotice.description,
+      variant: 'error',
+    });
+    clearDocumentLoadNotice();
+  }, [clearDocumentLoadNotice, documentLoadNotice, toast]);
+
+  return null;
+}
+
+function DocumentToolBoundary({ children }: { children: React.ReactNode }) {
+  const { loadingDocumentId } = useEditor();
+  const pending = Boolean(loadingDocumentId);
+  return (
+    <div
+      className="flex h-full flex-col"
+      inert={pending}
+      aria-disabled={pending || undefined}
+      aria-busy={pending}
+    >
+      {children}
+    </div>
+  );
 }
 
 export default App

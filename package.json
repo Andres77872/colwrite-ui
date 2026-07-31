@@ -11,8 +11,6 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build",
-    "build:renderer": "vite build --config vite.renderer.config.ts",
-    "renderer": "npm run build:renderer && node renderer/server.mjs",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "preview": "vite preview",

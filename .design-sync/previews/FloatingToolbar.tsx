@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { EditorContext, FloatingToolbar } from 'colwrite-ui';
+import { AgentToolsContext, EditorContext, FloatingToolbar, agentToolsAllEnabled } from 'colwrite-ui';
 
 // FloatingToolbar is the selection toolbar: formatting on the left, the AI
 // action menu on the right. It appears only while there is a non-collapsed
@@ -15,6 +15,10 @@ import { EditorContext, FloatingToolbar } from 'colwrite-ui';
 //
 // The toolbar positions itself from the selection rect, so each cell reserves
 // vertical room above the text for it to land in.
+//
+// The AI half is AIActionMenu, which calls useAgentTools() — without that
+// context the toolbar throws and the card renders empty, so the literal
+// all-enabled value is supplied alongside the editor one.
 
 type Ctx = React.ContextType<typeof EditorContext>;
 
@@ -53,17 +57,19 @@ function Selected({ text, select }: { text: string; select: 'all' | 'phrase' }) 
 
   return (
     <EditorContext.Provider value={editor as unknown as Ctx}>
-      <div className="relative min-h-[13rem] w-[40rem] pt-24">
-        <p
-          ref={hostRef}
-          className="editable text-sm leading-relaxed text-muted-foreground outline-none"
-          contentEditable
-          suppressContentEditableWarning
-        >
-          {text}
-        </p>
-        <FloatingToolbar />
-      </div>
+      <AgentToolsContext.Provider value={agentToolsAllEnabled}>
+        <div className="relative min-h-[13rem] w-[40rem] pt-24">
+          <p
+            ref={hostRef}
+            className="editable text-sm leading-relaxed text-muted-foreground outline-none"
+            contentEditable
+            suppressContentEditableWarning
+          >
+            {text}
+          </p>
+          <FloatingToolbar />
+        </div>
+      </AgentToolsContext.Provider>
     </EditorContext.Provider>
   );
 }

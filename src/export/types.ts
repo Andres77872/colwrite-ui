@@ -1,5 +1,3 @@
-import type { Doc } from '@/editor/types';
-
 export type ExportProfile = 'editor-faithful' | 'paper';
 export type ExportPageSize = 'A4' | 'Letter';
 export type ExportOrientation = 'portrait' | 'landscape';
@@ -17,12 +15,6 @@ export type DocumentExportSnapshot = {
   base_version: number;
   local_revision: number;
   dirty: boolean;
-};
-
-export type DocumentExportRequest = {
-  document: Doc;
-  snapshot: DocumentExportSnapshot;
-  options: DocumentExportOptions;
 };
 
 export const DEFAULT_EXPORT_OPTIONS: DocumentExportOptions = {

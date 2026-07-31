@@ -50,7 +50,15 @@ const ITEMS: readonly SlashItem[] = [
 ];
 
 export function SlashMenu() {
-  const { refs, updateHtml, addParagraphChild, documentId, createRemote, blocks } = useEditor();
+  const {
+    refs,
+    updateHtml,
+    addParagraphChild,
+    documentId,
+    loadingDocumentId,
+    createRemote,
+    blocks,
+  } = useEditor();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const [blockId, setBlockId] = useState<string | null>(null);
@@ -62,6 +70,16 @@ export function SlashMenu() {
   const listRef = useRef<HTMLDivElement | null>(null);
   const insertionRangeRef = useRef<Range | null>(null);
   const listboxId = useId();
+  const ownerDocumentId = useRef(documentId);
+
+  useEffect(() => {
+    if (ownerDocumentId.current === documentId) return;
+    ownerDocumentId.current = documentId;
+    insertionRangeRef.current = null;
+    setVisible(false);
+    setBlockId(null);
+    setQuery('');
+  }, [documentId]);
 
   const filteredItems = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -271,7 +289,7 @@ export function SlashMenu() {
     [],
   );
 
-  if (!visible) return null;
+  if (!visible || Boolean(loadingDocumentId)) return null;
 
   const activeItemId = filteredItems[activeIndex]
     ? `${listboxId}-${filteredItems[activeIndex].id}`

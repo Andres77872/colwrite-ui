@@ -62,6 +62,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   const clearLocalSession = useCallback(() => {
+    // Document drafts are account data. Every session teardown must clear
+    // them, including expiry and a failed boot-time identity check—not only
+    // an intentional logout.
+    clearCachedDocs();
     try {
       localStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem(LEGACY_TOKEN_KEY);
@@ -118,10 +122,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // server can clear the HttpOnly cookie, so a failure here leaves the
     // session alive on the API until it expires.
     logoutApi().catch(() => {});
-    // Cached drafts are document content, not session data — leaving them
-    // behind meant the next account to sign in on this browser opened the
-    // previous one's document body.
-    clearCachedDocs();
     clearLocalSession();
     setNotice(null);
   }, [clearLocalSession]);
