@@ -4,7 +4,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import katex from 'katex';
 import type {
   CitationChild,
-  CitationSource,
   Doc,
   EquationChild,
   GraphChild,
@@ -12,6 +11,15 @@ import type {
   ParagraphChild,
   TableChild,
 } from '@/editor/types';
+import {
+  buildBibliography,
+  citationAnchorId,
+  citationLabelParts,
+  formatReference,
+  referenceAnchorId,
+  referenceMarker,
+  type Bibliography,
+} from '@/editor/citations';
 import { ChartFigure } from '@/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/ChartFigure';
 import { exportStyles } from './styles';
 import {
@@ -30,7 +38,7 @@ export const DOCUMENT_RENDERER_VERSION = '1.0.0';
 export class ExportValidationError extends Error {}
 
 type Numbering = {
-  citations: Map<string, number>;
+  bibliography: Bibliography;
   equations: Map<string, number>;
 };
 
@@ -43,64 +51,110 @@ function escapeAttribute(value: string): string {
 }
 
 function numberingFor(doc: Doc): Numbering {
-  const citations = new Map<string, number>();
   const equations = new Map<string, number>();
-  let citationNumber = 0;
   let equationNumber = 0;
   for (const block of doc.blocks) {
     if (block.type !== 'paragraph') continue;
     for (const child of block.children ?? []) {
-      if (child.type === 'citation') citations.set(child.id, ++citationNumber);
       if (child.type === 'equation' && child.display && child.numbered) {
         equations.set(child.id, ++equationNumber);
       }
     }
   }
-  return { citations, equations };
+  return { bibliography: buildBibliography(doc.blocks), equations };
 }
 
-function firstAuthorSurname(authors: string | undefined): string | null {
-  const first = authors?.split(/\s*(?:;|\band\b)\s*/i)[0]?.trim();
-  if (!first) return null;
-  if (first.includes(',')) return first.split(',')[0]?.trim() || null;
-  const words = first.split(/\s+/);
-  return words.at(-1) || null;
-}
-
-function citationLabel(child: CitationChild, number: number): string {
-  const prefix = child.prefix ? `${child.prefix} ` : '';
-  const trailing = [child.locator, child.suffix].filter(Boolean).join(', ');
-  if ((child.style ?? 'numeric') === 'author-year') {
-    const byKey = new Map((child.sources ?? []).map((source) => [source.key, source]));
-    const parts = (child.keys ?? []).map((key) => {
-      const source = byKey.get(key);
-      const surname = firstAuthorSurname(source?.authors);
-      return surname && source?.year ? `${surname}, ${source.year}` : key;
-    });
-    const body = parts.length ? parts.join('; ') : 'citation';
-    return `${prefix}(${body}${trailing ? `, ${trailing}` : ''})`;
+/**
+ * A citation, with every number linked to the entry it stands for.
+ *
+ * It used to link the whole label to the publisher instead — the one
+ * destination the reader can reach unaided, and the one that is unreachable
+ * offline or on paper. `[1, 4]` now resolves inside the document as two
+ * separate links, and the reference entry carries the outbound link, which is
+ * the direction every published paper uses.
+ */
+function CitationView({
+  child,
+  bibliography,
+  hasReferences,
+}: {
+  child: CitationChild;
+  bibliography: Bibliography;
+  hasReferences: boolean;
+}) {
+  const parts = citationLabelParts(child, bibliography);
+  if (!hasReferences || !parts.some((part) => part.entry)) {
+    return <span className="citation">{parts.map((part) => part.text).join('')}</span>;
   }
-  return `${prefix}[${number}]${trailing ? `, ${trailing}` : ''}`;
+  return (
+    // The anchor sits on the wrapper: one id per citation, whatever it links to.
+    <span className="citation" id={citationAnchorId(child.id)}>
+      {parts.map((part, index) =>
+        part.entry ? (
+          <a href={`#${referenceAnchorId(part.entry)}`} key={index}>
+            {part.text}
+          </a>
+        ) : (
+          <span key={index}>{part.text}</span>
+        ),
+      )}
+    </span>
+  );
 }
 
-function firstCitationUrl(child: CitationChild): string | null {
-  const sources = child.sources ?? [];
-  for (const key of child.keys ?? []) {
-    const source: CitationSource | undefined = sources.find((candidate) => candidate.key === key);
-    const url = safeHttpUrl(source?.url) ?? safeHttpUrl(source?.pdfUrl);
-    if (url) return url;
-  }
-  return null;
-}
+function ReferencesView({
+  bibliography,
+  options,
+}: {
+  bibliography: Bibliography;
+  options: DocumentExportOptions;
+}) {
+  const { entries, style } = bibliography;
+  if (!options.include_references || entries.length === 0) return null;
 
-function CitationView({ child, number }: { child: CitationChild; number: number }) {
-  const label = citationLabel(child, number);
-  const url = firstCitationUrl(child);
-  return url ? (
-    <a className="citation" href={url} rel="noopener noreferrer">
-      {label}
-    </a>
-  ) : <span className="citation">{label}</span>;
+  return (
+    <section className="references" aria-labelledby="references-heading">
+      <h2 className="export-heading level-2" id="references-heading">
+        References
+      </h2>
+      <ol className="reference-list">
+        {entries.map((entry) => {
+          const parts = formatReference(entry, style);
+          const href = safeHttpUrl(parts.href);
+          return (
+            <li className="reference-item" id={referenceAnchorId(entry)} key={entry.key}>
+              <span className="reference-marker">{referenceMarker(entry, style)}</span>
+              <span className="reference-body">
+                {parts.text}
+                {href && (
+                  <>
+                    {' '}
+                    <a className="reference-link" href={href} rel="noopener noreferrer">
+                      {parts.linkLabel}
+                    </a>
+                  </>
+                )}
+                {/* Back-links, the way a printed index reads: one target per
+                    place the source is used, so a reader can walk from the
+                    bibliography into the argument. */}
+                <span className="reference-backlinks">
+                  {entry.usages.map((usage) => (
+                    <a
+                      className="reference-backlink"
+                      href={`#${citationAnchorId(usage.childId)}`}
+                      key={usage.childId}
+                    >
+                      ↑{entry.usages.length > 1 ? usage.ordinal : ''}
+                    </a>
+                  ))}
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
 }
 
 function katexMarkup(child: EquationChild): { html?: string; error?: string } {
@@ -226,9 +280,23 @@ function BlockChildView({
   return null;
 }
 
-function InlineChildView({ child, numbering }: { child: ParagraphChild; numbering: Numbering }) {
+function InlineChildView({
+  child,
+  numbering,
+  options,
+}: {
+  child: ParagraphChild;
+  numbering: Numbering;
+  options: DocumentExportOptions;
+}) {
   if (child.type === 'citation') {
-    return <CitationView child={child} number={numbering.citations.get(child.id) ?? 1} />;
+    return (
+      <CitationView
+        child={child}
+        bibliography={numbering.bibliography}
+        hasReferences={options.include_references}
+      />
+    );
   }
   if (child.type === 'equation') return <InlineEquationView child={child} />;
   return null;
@@ -296,7 +364,14 @@ function ParagraphView({
         />,
       );
     } else {
-      run.push(<InlineChildView key={`child-${child.id}`} child={child} numbering={numbering} />);
+      run.push(
+        <InlineChildView
+          key={`child-${child.id}`}
+          child={child}
+          numbering={numbering}
+          options={options}
+        />,
+      );
     }
   }
   flush();
@@ -337,6 +412,7 @@ function DocumentView({ doc, options }: { doc: Doc; options: DocumentExportOptio
         }
         return <ParagraphView key={block.id} block={block} numbering={numbering} options={options} />;
       })}
+      <ReferencesView bibliography={numbering.bibliography} options={options} />
     </main>
   );
 }

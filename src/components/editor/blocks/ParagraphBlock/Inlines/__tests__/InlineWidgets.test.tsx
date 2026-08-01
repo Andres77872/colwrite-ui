@@ -50,6 +50,7 @@ vi.mock('@/services/semanticScholar', async (importOriginal) => {
 const { EditorProvider, useEditor } = await import('@/editor');
 const { CitationInline } = await import('../CitationInline/CitationInline');
 const { EquationInline } = await import('../EquationInline/EquationInline');
+const { ReferencesSection } = await import('@/components/editor/References');
 
 const captureRef = createRef<ReturnType<typeof useEditor>>();
 const harness = {
@@ -96,6 +97,9 @@ async function mount(child: ParagraphChild, extraBlocks: Block[] = []) {
     <EditorProvider>
       <Capture />
       <Host blockId="p1" child={child} />
+      {/* The other half of a citation: mounted so the jump between them is
+          exercised against the real reference list, not a stub. */}
+      <ReferencesSection />
     </EditorProvider>,
   );
   // Flush the provider's mount effects (remote-listing probe, draft cache).
@@ -103,8 +107,17 @@ async function mount(child: ParagraphChild, extraBlocks: Block[] = []) {
   return utils;
 }
 
+// jsdom has no scrollIntoView; the citation ↔ reference jump calls it.
+const scrollIntoView = vi.fn();
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+
 beforeEach(() => {
   localStorage.clear();
+  scrollIntoView.mockClear();
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: scrollIntoView,
+  });
   searchMocks.arxiv.mockReset();
   searchMocks.semanticScholar.mockReset();
   searchMocks.arxiv.mockResolvedValue([]);
@@ -119,13 +132,22 @@ beforeEach(() => {
   preferenceState.semanticScholar = true;
   preferenceState.loading = false;
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: originalScrollIntoView,
+  });
+});
 
 const citation = (id: string, over: Partial<ParagraphChild> = {}): ParagraphChild =>
   ({ id, type: 'citation', keys: ['k1'], style: 'numeric', ...over }) as ParagraphChild;
 
+/** The pill's accessible name describes the sources; its text is the label. */
+const pill = () => screen.getByRole('group', { name: 'Citation' }).querySelector('button')!;
+
 describe('CitationInline', () => {
-  it('numbers citations across the whole document, not per paragraph', async () => {
+  it('numbers by source, so one paper cited three times is [1] every time', async () => {
     const other: Block = {
       id: 'p2',
       type: 'paragraph',
@@ -134,9 +156,26 @@ describe('CitationInline', () => {
     };
     await mount(citation('c1'), [other]);
 
-    // c1 is first in document order; the two in p2 follow it.
-    expect(screen.getByRole('button', { name: '[1]' })).toBeTruthy();
+    // All three cite `k1`, which is one entry in the reference list.
+    expect(pill().textContent).toBe('[1]');
     expect(harness.editor.blocks.find((b) => b.id === 'p2')).toBeTruthy();
+  });
+
+  it('numbers a second source separately and collapses a run into a range', async () => {
+    const other: Block = {
+      id: 'p2',
+      type: 'paragraph',
+      html: 'text',
+      children: [citation('c2', { keys: ['k2'] }), citation('c3', { keys: ['k3'] })],
+    };
+    await mount(citation('c1', { keys: ['k1', 'k2', 'k3'] }), [other]);
+
+    expect(pill().textContent).toBe('[1–3]');
+  });
+
+  it('brackets each number separately in IEEE style', async () => {
+    await mount(citation('c1', { style: 'ieee', keys: ['k1', 'k2', 'k3'] }));
+    expect(pill().textContent).toBe('[1]–[3]');
   });
 
   it('renders author–year from the attached source, key as fallback', async () => {
@@ -148,18 +187,90 @@ describe('CitationInline', () => {
       }),
     );
 
-    expect(screen.getByRole('button', { name: '(Smith, 2020; unknown)' })).toBeTruthy();
+    expect(pill().textContent).toBe('(Smith, 2020; unknown)');
+  });
+
+  it('separates two sources that share an author and year', async () => {
+    const other: Block = {
+      id: 'p2',
+      type: 'paragraph',
+      html: 'text',
+      children: [
+        citation('c2', {
+          style: 'author-year',
+          keys: ['smith2020b'],
+          sources: [{ key: 'smith2020b', title: 'Second', authors: 'J. Smith', year: '2020' }],
+        }),
+      ],
+    };
+    await mount(
+      citation('c1', {
+        style: 'author-year',
+        keys: ['smith2020a'],
+        sources: [{ key: 'smith2020a', title: 'First', authors: 'J. Smith', year: '2020' }],
+      }),
+      [other],
+    );
+
+    // Alphabetical by title inside the shared author/year group: First, Second.
+    expect(pill().textContent).toBe('(Smith, 2020a)');
+  });
+
+  it('puts an author–year signal phrase inside the parentheses', async () => {
+    await mount(
+      citation('c1', {
+        style: 'author-year',
+        prefix: 'see',
+        locator: 'p. 12',
+        keys: ['smith2020'],
+        sources: [{ key: 'smith2020', title: 'T', authors: 'J. Smith', year: '2020' }],
+      }),
+    );
+
+    expect(pill().textContent).toBe('(see Smith, 2020, p. 12)');
   });
 
   it('marks a citation with no keys as needing a source', async () => {
     await mount(citation('c1', { keys: [] }));
-    const pill = screen.getByRole('button', { name: '[1]' });
-    expect(pill.className).toContain('bg-destructive/15');
+    // `[1]` would name a reference entry that does not exist.
+    expect(pill().textContent).toBe('[?]');
+    expect(pill().className).toContain('bg-destructive/15');
+    expect(pill().getAttribute('aria-label')).toBe('Citation with no source attached');
+  });
+
+  it('names its sources for screen readers rather than reading out "[1]"', async () => {
+    await mount(
+      citation('c1', {
+        keys: ['smith2020'],
+        sources: [{ key: 'smith2020', title: 'Attention Is All You Need' }],
+      }),
+    );
+
+    expect(pill().getAttribute('aria-label')).toBe(
+      'Citation [1]: Attention Is All You Need',
+    );
+  });
+
+  it('jumps from the citation to the reference entry it stands for', async () => {
+    await mount(
+      citation('c1', {
+        keys: ['k1'],
+        sources: [{ key: 'k1', title: 'Attention Is All You Need', year: '2017' }],
+      }),
+    );
+    fireEvent.click(pill());
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show reference 1 for Attention Is All You Need' }),
+    );
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    // Focus lands on the entry, and the popover does not pull it back.
+    expect(document.activeElement?.id).toBe('ref-1');
   });
 
   it('adds a pasted identifier as a key instead of searching for it', async () => {
     await mount(citation('c1', { keys: [] }));
-    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+    fireEvent.click(pill());
 
     const field = screen.getByPlaceholderText(
       'Search arXiv and Semantic Scholar, or paste a key / DOI',
@@ -176,7 +287,7 @@ describe('CitationInline', () => {
   it('does not contact Semantic Scholar when that source is disabled', async () => {
     preferenceState.semanticScholar = false;
     await mount(citation('c1', { keys: [] }));
-    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+    fireEvent.click(pill());
 
     const field = screen.getByPlaceholderText('Search arXiv, or paste a key / DOI');
     fireEvent.change(field, { target: { value: 'arxiv-only query' } });
@@ -194,7 +305,7 @@ describe('CitationInline', () => {
     preferenceState.arxiv = false;
     preferenceState.semanticScholar = false;
     await mount(citation('c1', { keys: [] }));
-    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+    fireEvent.click(pill());
 
     expect(screen.getByPlaceholderText('Paste a citation key or DOI')).toBeTruthy();
     expect(
@@ -218,7 +329,7 @@ describe('CitationInline', () => {
     preferenceState.semanticScholar = false;
     preferenceState.loading = true;
     await mount(citation('c1', { keys: [], sources: [] }));
-    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+    fireEvent.click(pill());
 
     const field = screen.getByPlaceholderText('Loading paper source preferences…');
     fireEvent.change(field, { target: { value: 'graph neural networks' } });
@@ -264,7 +375,7 @@ describe('CitationInline', () => {
       ],
     });
     await mount(citation('c1', { keys: [], sources: [] }));
-    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+    fireEvent.click(pill());
 
     const field = screen.getByPlaceholderText(
       'Search arXiv and Semantic Scholar, or paste a key / DOI',
@@ -329,7 +440,7 @@ describe('CitationInline', () => {
       },
     ]);
     await mount(citation('c1', { keys: [], sources: [] }));
-    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+    fireEvent.click(pill());
 
     const field = screen.getByPlaceholderText(
       'Search arXiv and Semantic Scholar, or paste a key / DOI',
@@ -389,7 +500,7 @@ describe('CitationInline', () => {
       ],
     });
     await mount(citation('c1', { keys: [], sources: [] }));
-    fireEvent.click(screen.getByRole('button', { name: '[1]' }));
+    fireEvent.click(pill());
 
     const field = screen.getByPlaceholderText(
       'Search arXiv and Semantic Scholar, or paste a key / DOI',

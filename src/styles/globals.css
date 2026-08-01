@@ -221,6 +221,15 @@
 @keyframes slide-in-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes shimmer { 50% { opacity: 0.45; } }
+/* Two beats rather than one long fade: a single decay is easy to miss when the
+   jump lands mid-scroll, and the second pulse arrives after the scroll settles. */
+@keyframes reveal-flash {
+  0%, 100% { background-color: transparent; box-shadow: 0 0 0 0 transparent; }
+  12%, 55% {
+    background-color: color-mix(in oklab, var(--color-primary) 26%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 26%, transparent);
+  }
+}
 
 /* ============================================
    ENTER/EXIT ANIMATION UTILITIES
@@ -512,6 +521,21 @@
   .chat-composer-input[data-empty]::before {
     content: attr(data-placeholder);
     @apply pointer-events-none absolute inset-x-3 top-2 text-muted-foreground;
+  }
+
+  /* ----------------------------------------
+     Cross-reference navigation
+
+     Applied imperatively by `lib/reveal.ts` to whatever a citation ↔ reference
+     jump lands on, so it has to work on a pill inside a contenteditable and on
+     a reference row alike. `outline` is left alone: the same element usually
+     takes focus at the same moment, and the focus ring is the part that must
+     survive.
+     ---------------------------------------- */
+
+  .reveal-flash {
+    border-radius: var(--radius-sm);
+    animation: reveal-flash 1.4s ease-out;
   }
 
   /* ----------------------------------------

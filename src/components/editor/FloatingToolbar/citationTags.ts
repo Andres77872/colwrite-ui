@@ -1,4 +1,5 @@
 import type { CitationChild, CitationSource } from '@/editor/types';
+import { canonicalDoi } from '@/editor/citations';
 import type { AiAction } from '@/config/aiActions';
 import { uid } from '@/lib/uid';
 
@@ -73,18 +74,6 @@ function parseAttributes(source: string): Record<string, string> | null {
   }
   if (source.slice(cursor).trim()) return null;
   return attributes;
-}
-
-function canonicalDoi(value?: string): string | undefined {
-  if (!value) return undefined;
-  const normalized = value
-    .trim()
-    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
-    .replace(/^doi:\s*/i, '')
-    .replace(/[)\].,;]+$/, '');
-  return /^10\.\d{4,9}\/\S+$/i.test(normalized)
-    ? normalized.toLocaleLowerCase()
-    : undefined;
 }
 
 function httpUrl(value?: string): URL | null {

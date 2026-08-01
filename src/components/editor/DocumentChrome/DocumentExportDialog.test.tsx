@@ -70,6 +70,7 @@ describe('DocumentExportDialog', () => {
         orientation: 'portrait',
         include_title: false,
         ai_beat: 'omit',
+        include_references: true,
       },
       { base_version: 4, local_revision: 12, dirty: true },
     );

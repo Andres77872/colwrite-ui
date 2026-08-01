@@ -9,6 +9,12 @@ export type DocumentExportOptions = {
   orientation: ExportOrientation;
   include_title: boolean;
   ai_beat: AiBeatExportMode;
+  /**
+   * Append the reference list, and make each citation a link into it. Off
+   * leaves citations as plain labels, because `[1]` linking to a section that
+   * was not exported is worse than `[1]` linking to nothing.
+   */
+  include_references: boolean;
 };
 
 export type DocumentExportSnapshot = {
@@ -23,6 +29,7 @@ export const DEFAULT_EXPORT_OPTIONS: DocumentExportOptions = {
   orientation: 'portrait',
   include_title: false,
   ai_beat: 'omit',
+  include_references: true,
 };
 
 export const HTML_EXPORT_OPTIONS: DocumentExportOptions = {

@@ -7,7 +7,18 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
-import { useEditor } from '@/editor';
+import {
+  canonicalArxivId,
+  canonicalDoi,
+  citationLabel,
+  formatReference,
+  referenceMarker,
+  useBibliography,
+  useEditor,
+  yearOf,
+  type BibliographyEntry,
+} from '@/editor';
+import { revealReferenceEntry } from '@/components/editor/References/navigation';
 import { searchArxiv, type ArxivResult } from '@/services/arxiv';
 import {
   researchAuthorsLabel,
@@ -24,7 +35,7 @@ import {
   useInlineChild,
 } from '../shared';
 import { useAgentTools } from '@/components/preferences';
-import { ExternalLink, Plus, Search, X } from 'lucide-react';
+import { ExternalLink, ListOrdered, Plus, Search, X } from 'lucide-react';
 
 /**
  * Type-guard wrapper. It declares no hooks, so returning early here is safe;
@@ -40,22 +51,10 @@ export function CitationInline({ child, ...rest }: InlineWidgetProps) {
 type Style = NonNullable<CitationChild['style']>;
 
 const STYLES: Array<{ value: Style; label: string; example: string }> = [
-  { value: 'numeric', label: 'Numeric', example: '[1]' },
+  { value: 'numeric', label: 'Numeric', example: '[1–3]' },
   { value: 'author-year', label: 'Author–year', example: '(Smith, 2020)' },
-  { value: 'ieee', label: 'IEEE', example: '[1]' },
+  { value: 'ieee', label: 'IEEE', example: '[1]–[3]' },
 ];
-
-/** Surname of the first author, which is what a citation actually shows. */
-function firstAuthorSurname(authors?: string): string | undefined {
-  const first = authors?.split(/[,;]|\band\b/)[0]?.trim();
-  if (!first) return undefined;
-  const parts = first.split(/\s+/);
-  return parts[parts.length - 1] || undefined;
-}
-
-function yearOf(date?: string): string | undefined {
-  return date?.match(/\d{4}/)?.[0];
-}
 
 const EMPTY_KEYS: string[] = [];
 const EMPTY_SOURCES: CitationSource[] = [];
@@ -70,33 +69,6 @@ type CitationSearchResult = {
   year?: string;
   source: CitationSource;
 };
-
-function canonicalDoi(raw?: string | null): string | undefined {
-  if (!raw) return undefined;
-  const normalized = raw
-    .trim()
-    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
-    .replace(/^doi:\s*/i, '')
-    .replace(/[)\].,;]+$/, '');
-  return /^10\.\d{4,9}\/\S+$/i.test(normalized)
-    ? normalized.toLocaleLowerCase()
-    : undefined;
-}
-
-function canonicalArxivId(raw?: string | null): string | undefined {
-  if (!raw) return undefined;
-  const normalized = raw
-    .trim()
-    .replace(/^https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\//i, '')
-    .replace(/^arxiv:\s*/i, '')
-    .replace(/[?#].*$/, '')
-    .replace(/\/+$/, '')
-    .replace(/\.pdf$/i, '')
-    .replace(/v\d+$/i, '')
-    .trim()
-    .toLowerCase();
-  return normalized || undefined;
-}
 
 function arxivCandidate(result: ArxivResult): CitationSearchResult | null {
   const providerId = result.id.trim();
@@ -177,6 +149,7 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
   const { child } = props;
   const { patch, remove } = useInlineChild(props);
   const { blocks, updateParagraphChild } = useEditor();
+  const bibliography = useBibliography();
   const { isSourceEnabled, loading: preferencesLoading } = useAgentTools();
   const arxivEnabled = isSourceEnabled('arxiv');
   const semanticScholarEnabled = isSourceEnabled('semantic_scholar');
@@ -193,25 +166,7 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
   const sources = child.sources ?? EMPTY_SOURCES;
   const style: Style = child.style ?? 'numeric';
 
-  /**
-   * Citation number, counted across the whole document.
-   *
-   * This used to count citations within the containing paragraph, so a paper
-   * with citations in three paragraphs showed "[1]" three times. Numbering is
-   * a property of the document, and getting it wrong is visible on every page.
-   */
-  const number = useMemo(() => {
-    let count = 0;
-    for (const block of blocks) {
-      if (block.type !== 'paragraph') continue;
-      for (const candidate of block.children ?? []) {
-        if (candidate.type !== 'citation') continue;
-        count += 1;
-        if (candidate.id === child.id) return count;
-      }
-    }
-    return count || 1;
-  }, [blocks, child.id]);
+  const label = citationLabel(child, bibliography);
 
   const byKey = useMemo(() => {
     const map = new Map<string, CitationSource>();
@@ -219,31 +174,27 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
     return map;
   }, [sources]);
 
-  const sourceFor = (key: string): CitationSource | undefined => byKey.get(key);
-
-  const label = useMemo(() => {
-    const prefix = child.prefix ? `${child.prefix} ` : '';
-    const trailing = [child.locator, child.suffix].filter(Boolean).join(', ');
-
-    if (style === 'author-year') {
-      const parts = keys.map((key) => {
-        const source = byKey.get(key);
-        const author = firstAuthorSurname(source?.authors);
-        // Falls back to the raw key rather than inventing an author: a
-        // citation showing the wrong name is worse than one showing a key.
-        return author && source?.year ? `${author}, ${source.year}` : key;
-      });
-      const body = parts.length ? parts.join('; ') : 'citation';
-      return `${prefix}(${body}${trailing ? `, ${trailing}` : ''})`;
-    }
-
-    return `${prefix}[${number}]${trailing ? `, ${trailing}` : ''}`;
-  }, [child.prefix, child.locator, child.suffix, keys, number, byKey, style]);
+  /**
+   * What this citation stands for, spelled out.
+   *
+   * The pill's accessible name used to be its own text — "[1], button" — which
+   * tells a screen-reader user the one thing they can already infer and none of
+   * what they need.
+   */
+  const description = useMemo(() => {
+    if (keys.length === 0) return 'Citation with no source attached';
+    const titles = keys.map((key) => {
+      const entry = bibliography.byKey.get(key);
+      return entry?.source.title ?? byKey.get(key)?.title ?? key;
+    });
+    return `Citation ${label}: ${titles.join('; ')}`;
+  }, [bibliography, byKey, keys, label]);
 
   const attach = (result: CitationSearchResult) => {
-    if (keys.includes(result.key)) return;
+    // Re-attaching a key that is already there is an upgrade, not a no-op: it
+    // is how a key typed by hand acquires a title.
     patch({
-      keys: [...keys, result.key],
+      keys: keys.includes(result.key) ? keys : [...keys, result.key],
       sources: [...sources.filter((source) => source.key !== result.key), result.source],
     });
   };
@@ -258,11 +209,14 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
   const addManualKey = (raw: string) => {
     const key = canonicalDoi(raw) ?? raw.trim();
     if (!key || keys.includes(key)) return;
+    // If the document already cites this key with metadata, adopt it rather
+    // than adding a second, blank-looking entry for the same paper.
+    const known = bibliography.byKey.get(key)?.source;
     patch({
       keys: [...keys, key],
       sources: [
         ...sources,
-        {
+        known ?? {
           key,
           provider: 'manual',
           ...(canonicalDoi(key) ? { doi: canonicalDoi(key) } : {}),
@@ -390,19 +344,16 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
         trigger={
           <InlinePill
             tone={keys.length === 0 ? 'error' : 'default'}
-            title={
-              keys.length === 0
-                ? 'This citation has no source yet'
-                : sources.length
-                  ? sources.map((source) => source.title ?? source.key).join('\n')
-                  : keys.join(', ')
-            }
+            aria-label={description}
+            // Same text on hover: a reader scanning a cited paragraph should
+            // not have to open each pill to find out which paper it is.
+            title={description}
           >
             {label}
           </InlinePill>
         }
       >
-        {(close) => (
+        {(close, closeAndLeave) => (
           <>
             <SettingsRow label="Sources">
               {keys.length === 0 ? (
@@ -411,48 +362,22 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                 </p>
               ) : (
                 <ul className="space-y-1">
-                  {keys.map((key) => {
-                    const source = sourceFor(key);
-                    const sourceUrl = safeExternalHttpUrl(source?.url);
-                    return (
-                      <li
-                        key={key}
-                        className="flex items-start gap-2 rounded-md border border-border px-2 py-1.5"
-                      >
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-xs font-medium">
-                            {source?.title ?? key}
-                          </span>
-                          {source && (
-                            <span className="block truncate text-xs text-muted-foreground">
-                              {[source.authors, source.year, source.venue]
-                                .filter(Boolean)
-                                .join(' · ')}
-                            </span>
-                          )}
-                        </span>
-                        {sourceUrl && (
-                          <a
-                            href={sourceUrl}
-                            target="_blank"
-                            rel="noreferrer noopener"
-                            className="shrink-0 text-muted-foreground hover:text-foreground"
-                            aria-label={`Open ${source?.title ?? key}`}
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </a>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => detach(key)}
-                          aria-label={`Remove ${key}`}
-                          className="shrink-0 text-muted-foreground hover:text-destructive"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </li>
-                    );
-                  })}
+                  {keys.map((key) => (
+                    <SourceRow
+                      key={key}
+                      sourceKey={key}
+                      source={byKey.get(key)}
+                      entry={bibliography.byKey.get(key) ?? null}
+                      style={style}
+                      onDetach={() => detach(key)}
+                      // Reveal first, then dismiss without the usual focus
+                      // return: the entry is where the reader asked to be.
+                      onShowReference={(entry) => {
+                        revealReferenceEntry(entry);
+                        closeAndLeave();
+                      }}
+                    />
+                  ))}
                 </ul>
               )}
             </SettingsRow>
@@ -533,13 +458,17 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                       <button
                         type="button"
                         onClick={() => attach(result)}
-                        disabled={keys.includes(result.key)}
-                        className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/50 disabled:opacity-40"
+                        className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/50"
                       >
                         <Plus aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-1">
                             <span className="min-w-0 flex-1 truncate text-xs">{result.title}</span>
+                            {keys.includes(result.key) && (
+                              <Badge variant="outline" className="h-4 shrink-0 px-1 text-2xs">
+                                Attached
+                              </Badge>
+                            )}
                             <Badge variant="secondary" className="h-4 shrink-0 px-1 text-2xs">
                               {result.providerLabel}
                             </Badge>
@@ -632,5 +561,84 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
         )}
       </InlinePopover>
     </span>
+  );
+}
+
+/**
+ * One attached source, shown the way it will appear in the reference list.
+ *
+ * Editing a citation used to mean reading a title and trusting that the
+ * bibliography agreed; the row now renders through the same `formatReference`
+ * the reference list uses, so what is checked here is what is published.
+ */
+function SourceRow({
+  sourceKey,
+  source,
+  entry,
+  style,
+  onDetach,
+  onShowReference,
+}: {
+  sourceKey: string;
+  source: CitationSource | undefined;
+  entry: BibliographyEntry | null;
+  style: Style;
+  onDetach: () => void;
+  onShowReference: (entry: BibliographyEntry) => void;
+}) {
+  const resolved = entry?.source ?? source;
+  const url = safeExternalHttpUrl(resolved?.url ?? resolved?.pdfUrl);
+  const title = resolved?.title ?? sourceKey;
+  const formatted = entry
+    ? formatReference(entry, style).text
+    : [resolved?.authors, resolved?.year, resolved?.venue].filter(Boolean).join(' · ');
+  // An unresolved entry formats to its own key, which the title line already is.
+  const detail = formatted === title ? '' : formatted;
+
+  return (
+    <li className="flex items-start gap-2 rounded-md border border-border px-2 py-1.5">
+      {entry && (
+        <button
+          type="button"
+          onClick={() => onShowReference(entry)}
+          title="Show in the reference list"
+          aria-label={`Show reference ${entry.number} for ${title}`}
+          className="mt-px shrink-0 rounded-xs px-1 text-xs tabular-nums text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          {referenceMarker(entry, style) || `#${entry.number}`}
+        </button>
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs font-medium">{title}</span>
+        {detail && (
+          <span className="block truncate text-xs text-muted-foreground">{detail}</span>
+        )}
+        {entry && entry.usages.length > 1 && (
+          <span className="mt-0.5 flex items-center gap-1 text-2xs text-muted-foreground">
+            <ListOrdered aria-hidden="true" className="h-3 w-3" />
+            Cited {entry.usages.length} times in this document
+          </span>
+        )}
+      </span>
+      {url && (
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label={`Open ${title}`}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      )}
+      <button
+        type="button"
+        onClick={onDetach}
+        aria-label={`Remove ${sourceKey}`}
+        className="shrink-0 text-muted-foreground hover:text-destructive"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </li>
   );
 }

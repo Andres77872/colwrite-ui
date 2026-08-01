@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Block, Doc, ParagraphChild, ToolOperation } from './types';
+import { buildBibliography } from './citations';
+import { BibliographyContext } from './bibliographyContextState';
 import { loadDoc, saveDoc, loadDocumentId, saveDocumentId } from './storage';
 import {
   applyPatchToBlocks,
@@ -943,6 +945,10 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     setLastSavedAt(Date.now());
   };
 
+  // Numbering, ordering and back-links are all derived from the same scan, so
+  // it happens once here rather than inside each citation widget.
+  const bibliography = useMemo(() => buildBibliography(blocks), [blocks]);
+
   const value: EditorContextValue = {
     doc,
     blocks,
@@ -1008,5 +1014,9 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     markRecentlyChanged,
   };
 
-  return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;
+  return (
+    <EditorContext.Provider value={value}>
+      <BibliographyContext.Provider value={bibliography}>{children}</BibliographyContext.Provider>
+    </EditorContext.Provider>
+  );
 }

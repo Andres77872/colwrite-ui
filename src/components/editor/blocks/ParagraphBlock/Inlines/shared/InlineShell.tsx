@@ -51,6 +51,11 @@ export const InlinePill = forwardRef<
  * forgot: stop the surrounding contenteditable from seeing popover events,
  * keep Radix from moving focus into the panel (the caret belongs to the
  * document), and hand children a `close` for the Done button.
+ *
+ * `closeAndLeave` is the same close for an action that has already sent focus
+ * somewhere else on purpose — a citation jumping to its reference entry. The
+ * ordinary close returns focus to the trigger, which for those actions undoes
+ * the navigation the moment the exit animation finishes.
  */
 export function InlinePopover({
   align = 'start',
@@ -61,13 +66,26 @@ export function InlinePopover({
   align?: 'start' | 'center' | 'end';
   trigger: ReactNode;
   contentClassName?: string;
-  children: (close: () => void) => ReactNode;
+  children: (close: () => void, closeAndLeave: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  // State rather than a ref: it is set in the same batch as `open`, so the
+  // panel re-renders with the matching `onCloseAutoFocus` before it unmounts.
+  const [restoreFocus, setRestoreFocus] = useState(true);
   const close = useCallback(() => setOpen(false), []);
+  const closeAndLeave = useCallback(() => {
+    setRestoreFocus(false);
+    setOpen(false);
+  }, []);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) setRestoreFocus(true);
+        setOpen(next);
+      }}
+    >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
         align={align}
@@ -75,9 +93,12 @@ export function InlinePopover({
         // The paragraph underneath is contenteditable; without this the first
         // keystroke in a field lands in the document instead.
         onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => {
+          if (!restoreFocus) event.preventDefault();
+        }}
         {...stopEditorEvents}
       >
-        {children(close)}
+        {children(close, closeAndLeave)}
       </PopoverContent>
     </Popover>
   );

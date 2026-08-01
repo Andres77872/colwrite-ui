@@ -20,6 +20,7 @@ import { ParagraphBlock } from '../blocks/ParagraphBlock';
 import { HeadingBlock } from '../blocks/HeadingBlock';
 import { DividerBlock } from '../blocks/DividerBlock';
 import { ChangeCard, ReviewBar } from '../Review';
+import { ReferencesSection } from '../References';
 import { useProposals } from '@/editor/proposalsContextState';
 import { changesForBlock, documentChanges, edgeChanges, orphanChanges } from '@/editor/proposals';
 import { ChevronRight, FileText, Plus, Sparkles } from 'lucide-react';
@@ -509,6 +510,11 @@ export function Canvas() {
         {trailingChanges.map((change) => (
           <ChangeCard key={change.id} change={change} />
         ))}
+
+        {/* Below the last block and the add-block affordance, where a paper's
+            bibliography sits. It renders nothing until something is cited. */}
+        <ReferencesSection />
+
 
         {/* Trailing space so the last block can scroll clear of the footer. */}
         <div aria-hidden="true" className="h-32" />

@@ -57,6 +57,7 @@ const DS_BARRELS = [
   '../src/components/editor/DocumentChrome',
   '../src/components/editor/DocumentsMenu',
   '../src/components/editor/Review',
+  '../src/components/editor/References',
   '../src/components/editor/FloatingToolbar',
   '../src/components/editor/FloatingToolbar/AIActionMenu',
   '../src/components/editor/SlashMenu',

@@ -43,6 +43,14 @@ export { AuthContext } from '../src/components/auth/authContextState';
 // preview must be able to hand a component a document, a pending proposal or a
 // chat session outright, since none of that state is reachable offline.
 export { EditorContext } from '../src/editor/editorContextState';
+// Citation numbering is a property of the whole document, so `CitationInline`
+// reads the bibliography rather than counting for itself. A preview supplying a
+// literal `EditorContext` gets no bibliography with it — the real one is built
+// by `EditorProvider` — and every pill would render `[?]`. Exporting the
+// context and the builder lets a preview derive the real thing from the same
+// blocks it already declares, so what a card shows is what the widget prints.
+export { BibliographyContext } from '../src/editor/bibliographyContextState';
+export { buildBibliography } from '../src/editor/citations';
 export { ProposalsContext } from '../src/editor/proposalsContextState';
 export { ChatSessionsContext } from '../src/components/chat/chatSessionsState';
 export { AgentToolsContext } from '../src/components/preferences/agentToolsContextState';

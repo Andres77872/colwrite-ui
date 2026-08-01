@@ -17,6 +17,7 @@ const options: DocumentExportOptions = {
   orientation: 'portrait',
   include_title: false,
   ai_beat: 'omit',
+  include_references: true,
 };
 const snapshot = { base_version: 4, local_revision: 12, dirty: true };
 
@@ -161,6 +162,46 @@ describe('renderStandaloneHtml', () => {
     paragraph.html += '<span data-child-id="citation"></span>';
 
     expect(() => renderStandaloneHtml(doc, options, snapshot)).toThrow(ExportValidationError);
+  });
+
+  it('links every citation to its reference entry, and the entry back to each usage', () => {
+    const doc = kitchenSink();
+    const paragraph = doc.blocks[1];
+    if (paragraph.type !== 'paragraph') throw new Error('fixture is invalid');
+    // A second citation of the same paper: one entry, two back-links.
+    paragraph.html += '<span data-child-id="citation-again"></span>';
+    paragraph.children?.push({
+      id: 'citation-again',
+      type: 'citation',
+      keys: ['10.1000/example'],
+      style: 'author-year',
+      sources: [{ key: '10.1000/example' }],
+    });
+
+    const html = renderStandaloneHtml(doc, options, snapshot);
+
+    expect(html).toContain('<section class="references"');
+    expect(html).toContain('id="ref-1"');
+    expect(html).toContain('href="#ref-1"');
+    expect(html).toContain('id="cite-citation"');
+    expect(html).toContain('href="#cite-citation"');
+    expect(html).toContain('href="#cite-citation-again"');
+    // The entry, not the citation, carries the outbound link.
+    expect(html).toContain('https://doi.org/10.1000/example');
+    // One paper cited twice is one row.
+    expect(html.match(/class="reference-item"/g)).toHaveLength(1);
+  });
+
+  it('omits the reference list, and every link into it, when asked to', () => {
+    const html = renderStandaloneHtml(
+      kitchenSink(),
+      { ...options, include_references: false },
+      snapshot,
+    );
+
+    expect(html).not.toContain('class="references"');
+    expect(html).not.toContain('href="#ref-');
+    expect(html).toContain('<span class="citation">');
   });
 
   it('uses explicit paper dimensions and editor-faithful scaling', () => {

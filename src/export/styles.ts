@@ -96,6 +96,22 @@ code,kbd{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.9
 mark{background:#fef3c7;color:inherit}
 .export-divider{border:0;border-top:1px solid currentColor;opacity:.28;margin:1.7em 0}
 .citation{white-space:normal}
+/* A citation number is a link but reads as body text: underlining every one of
+   them turns a cited paragraph into a rash of blue. */
+.citation a{color:inherit;text-decoration:none}
+.citation a:hover{text-decoration:underline}
+.references{margin-top:2.2em;break-before:auto}
+.references .export-heading{margin-top:0}
+.reference-list{list-style:none;margin:0;padding:0;font-size:.92em}
+.reference-item{display:flex;gap:.6em;margin:0 0 .55em;break-inside:avoid}
+.reference-marker{flex:0 0 auto;min-width:2.2em;font-variant-numeric:tabular-nums;color:#596273}
+.reference-marker:empty{display:none}
+.reference-body{min-width:0}
+.reference-link{overflow-wrap:anywhere}
+.reference-backlinks{margin-left:.4em;white-space:nowrap}
+.reference-backlink{margin-right:.25em;font-size:.85em;text-decoration:none;font-variant-numeric:tabular-nums}
+.reference-backlink:hover{text-decoration:underline}
+.profile-editor-faithful .reference-marker{color:#9aa3b4}
 .display-equation{
   display:grid;
   grid-template-columns:1fr auto 1fr;

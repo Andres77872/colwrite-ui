@@ -39,6 +39,7 @@ export function DocumentExportDialog({ open, onOpenChange }: Props) {
   const [pageSize, setPageSize] = useState<ExportPageSize>('A4');
   const [orientation, setOrientation] = useState<ExportOrientation>('portrait');
   const [includeTitle, setIncludeTitle] = useState(false);
+  const [includeReferences, setIncludeReferences] = useState(true);
   const [aiBeat, setAiBeat] = useState<AiBeatExportMode>('omit');
   const [busy, setBusy] = useState(false);
 
@@ -57,6 +58,7 @@ export function DocumentExportDialog({ open, onOpenChange }: Props) {
         orientation,
         include_title: includeTitle,
         ai_beat: aiBeat,
+        include_references: includeReferences,
       };
       const exportSnapshot = {
         base_version: snapshot.baseVersion,
@@ -169,6 +171,20 @@ export function DocumentExportDialog({ open, onOpenChange }: Props) {
               disabled={busy}
             />
             Include the document name as a title in the body
+          </label>
+          <label className="flex items-start gap-2 text-sm sm:col-span-2">
+            <Checkbox
+              className="mt-0.5"
+              checked={includeReferences}
+              onCheckedChange={(checked) => setIncludeReferences(checked === true)}
+              disabled={busy}
+            />
+            <span>
+              Append the reference list
+              <span className="block text-xs text-muted-foreground">
+                Each citation links to its entry, and each entry links back to where it is cited.
+              </span>
+            </span>
           </label>
         </div>
 
