@@ -16,9 +16,9 @@ export interface InlineWidgetProps<TChild extends ParagraphChild = ParagraphChil
   refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
 }
 
-/** AiBeat additionally needs to be able to create the document it streams into. */
+/** AiBeat additionally needs the document it streams against to exist. */
 export interface AiBeatWidgetProps<TChild extends ParagraphChild = ParagraphChild>
   extends InlineWidgetProps<TChild> {
   documentId: string | null;
-  createRemote: () => Promise<string>;
+  ensureRemoteDocument: () => Promise<string | null>;
 }

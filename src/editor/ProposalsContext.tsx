@@ -102,12 +102,27 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         op.op === 'create_document',
     );
     const invited = createOp !== undefined;
-    const set = buildChangeSet(action);
+
+    /**
+     * A `tool_action` names the document it was produced against, and that is
+     * not always this one. `doc_create` names the document it just made — by
+     * definition a different id — and its whole payload is the announcement.
+     * Anything else carrying a foreign id is a stray event from a run against
+     * another document, whose operations must never be staged here.
+     *
+     * So the two halves are scoped separately: block operations require an
+     * exact match, invitations do not.
+     */
+    const targetsThisDocument =
+      ownerDocumentId !== null && action.documentId === ownerDocumentId;
+    const set = targetsThisDocument ? buildChangeSet(action) : null;
 
     updateForDocument((current) => {
       let invites = current.invites;
       if (
         createOp
+        && createOp.documentId
+        && createOp.documentId !== ownerDocumentId
         && !invites.some((invite) => invite.documentId === createOp.documentId)
       ) {
         invites = [
@@ -117,11 +132,11 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       }
 
       let error = current.error;
-      if (action.status === 'error') {
+      if (action.status === 'error' && (targetsThisDocument || invited)) {
         error = action.message || 'The assistant could not prepare that edit.';
       }
 
-      if (action.status === 'applied' || set.changes.length === 0) {
+      if (!set || action.status === 'applied' || set.changes.length === 0) {
         return invites === current.invites && error === current.error
           ? current
           : { ...current, invites, error };
@@ -151,7 +166,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
 
     // A server running in `auto` apply mode has already committed; replaying
     // it as a proposal would ask the author to approve something already saved.
-    if (action.status === 'applied' && set.changes.length > 0) {
+    if (set && action.status === 'applied' && set.changes.length > 0) {
       if (activeDocumentIdRef.current !== ownerDocumentId) {
         return { changes: 0, invited };
       }
@@ -171,7 +186,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       return { changes: 0, invited };
     }
 
-    return { changes: set.changes.length, invited };
+    return { changes: set?.changes.length ?? 0, invited };
   }, [
     adoptServerVersion,
     applyPatch,

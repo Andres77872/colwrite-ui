@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -16,6 +17,7 @@ import { useIsDesktop } from '@/hooks/useMediaQuery';
 import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
 import { streamAgentChat } from '@/services/agentChat';
+import type { SSEEventHandlers } from '@/services/streamParser';
 import type { ToolAction } from '@/editor/types';
 import { useChatSessions } from '../../chat/chatSessionsState';
 import { listMessages, listThreads } from '@/services/chats';
@@ -34,6 +36,8 @@ import {
   CornerDownLeft,
   GripVertical,
   Maximize2,
+  FileClock,
+  FileText,
   MessageSquarePlus,
   Minimize2,
   RotateCcw,
@@ -112,13 +116,18 @@ function toolRunDetail(tool: string, args: Record<string, unknown>): string | un
 }
 
 export function ChatAssistant() {
-  const { documentId } = useEditor();
-  return <DocumentChatAssistant key={documentId ?? 'local'} />;
+  // Keyed on the document *session*, not on its id. Opening another document
+  // starts a new session and so a new transcript; saving the draft that is
+  // already open only gives it an id, and must not throw away the conversation
+  // that asked for it to be saved in the first place.
+  const { documentSessionId } = useEditor();
+  return <DocumentChatAssistant key={documentSessionId} />;
 }
 
 function DocumentChatAssistant() {
   const editor = useEditor();
-  const { documentId, loadingDocumentId } = editor;
+  const { documentId, loadingDocumentId, ensureRemoteDocument, hasPendingEdits, saveRemote } =
+    editor;
   const proposals = useProposals();
   const { selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId } =
     useChatSessions();
@@ -134,6 +143,40 @@ function DocumentChatAssistant() {
   const [error, setError] = useState('');
   const [agentStatus, setAgentStatus] = useState<{ status: string; detail: string } | null>(null);
   const [atBottom, setAtBottom] = useState(true);
+
+  /**
+   * The document this session is attached to, and the chat and thread it is
+   * on, as of the last commit.
+   *
+   * A turn outlives several renders, and the first message on an unsaved draft
+   * changes both mid-flight. The session setters in particular are rebuilt
+   * whenever the owning document id changes and refuse writes from a callback
+   * bound to the previous one — a turn that attached the document while it ran
+   * would otherwise finish holding the setters from before the attach, drop the
+   * chat id the server had just created, and start a new conversation with
+   * every following message.
+   *
+   * Synced in a layout effect rather than during render: a render React
+   * discards must not be the one that decides which document a reply belongs
+   * to. Everything that reads these is a network callback or an event handler,
+   * so committed values are current by the time they run.
+   */
+  const documentIdRef = useRef(documentId);
+  const sessionRef = useRef({
+    selectedChatId,
+    selectedThreadId,
+    setSelectedChatId,
+    setSelectedThreadId,
+  });
+  useLayoutEffect(() => {
+    documentIdRef.current = documentId;
+    sessionRef.current = {
+      selectedChatId,
+      selectedThreadId,
+      setSelectedChatId,
+      setSelectedThreadId,
+    };
+  }, [documentId, selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId]);
 
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
@@ -189,6 +232,38 @@ function DocumentChatAssistant() {
     [messages],
   );
 
+  /**
+   * What this session is attached to.
+   *
+   * A conversation belongs to one document: the agent reads and edits that
+   * document, and the server stores the chat against it. The panel floats over
+   * a workspace the author can navigate away from, and the assistant can create
+   * documents other than the one on screen — so "nothing happened" is much
+   * more often "that happened somewhere else". Naming the document here is
+   * what makes the difference visible.
+   *
+   * A draft with no id is a genuinely different state, not a document with a
+   * name: nothing is attached to it yet, and saying so is the point.
+   */
+  const attachment = useMemo(() => {
+    const name = editor.doc.name?.trim() || 'Untitled document';
+    return documentId
+      ? {
+          attached: true as const,
+          name,
+          label: name,
+          hint: `This conversation is kept with “${name}”, and every edit in it is made to that document.`,
+          regionLabel: `Writing assistant for ${name}`,
+        }
+      : {
+          attached: false as const,
+          name,
+          label: 'Not saved yet',
+          hint: 'Asking saves this document and keeps the conversation with it from then on.',
+          regionLabel: 'Writing assistant for a document that has not been saved yet',
+        };
+  }, [documentId, editor.doc.name]);
+
   // The finished reply, announced once. Empty while streaming so the live
   // region stays silent until there is something whole to read out.
   const completedReply = useMemo(() => {
@@ -227,10 +302,22 @@ function DocumentChatAssistant() {
    */
   const onToolAction = useCallback(
     (action: ToolAction) => {
+      if (!mountedRef.current) return;
+
       // Tool events name the document they were produced against. Never stage
       // one in a different active document, even if a transport delivers it
       // after the stream was aborted.
-      if (!mountedRef.current || action.documentId !== documentId) return;
+      //
+      // Creating a document is the exception, and the reason this used to look
+      // like the assistant doing nothing at all: `doc_create` names the
+      // document it has just made, which is never the one on screen. Matching
+      // ids here dropped the event before anything could offer it to the
+      // author. The review layer scopes the two halves properly — operations
+      // to this document, invitations to the one that was created.
+      const announcesNewDocument = action.actions.some(
+        (op) => op.op === 'create_document',
+      );
+      if (action.documentId !== documentIdRef.current && !announcesNewDocument) return;
 
       // Only a genuine redelivery is a duplicate. The id alone is not enough:
       // providers that number tool calls per request reuse `call_0`, and some
@@ -251,7 +338,7 @@ function DocumentChatAssistant() {
         patchActive((message) => ({ ...message, proposed: message.proposed + changes }));
       }
     },
-    [documentId, patchActive, proposals],
+    [patchActive, proposals],
   );
 
   // Follow new output only while the reader is already at the bottom, so
@@ -348,10 +435,6 @@ function DocumentChatAssistant() {
 
   const send = async (text: string) => {
     if (!text || isStreaming || loadingDocumentId) return;
-    if (!documentId) {
-      setError('Save this document before chatting about it.');
-      return;
-    }
 
     setError('');
     setInput('');
@@ -377,88 +460,176 @@ function DocumentChatAssistant() {
     );
 
     try {
-      await streamAgentChat(
-        {
-          message: text,
-          document_id: documentId,
-          chat_id: selectedChatId,
-          thread_id: selectedThreadId,
+      /**
+       * Attach before anything else.
+       *
+       * Everything in a turn is addressed by document id — the agent reads and
+       * edits `document_id`, and the chat session is stored against it — so a
+       * draft that lives only in this browser has nothing for the assistant to
+       * act on. Saving it here is the whole point: the author asked about *this*
+       * document, and from this moment the session belongs to it.
+       */
+      let turnDocumentId = documentIdRef.current;
+      if (!turnDocumentId) {
+        setAgentStatus({
+          status: 'attaching',
+          detail: 'Saving this document so the assistant can work on it…',
+        });
+        turnDocumentId = await ensureRemoteDocument();
+        if (!streamIsLive()) return;
+        if (!turnDocumentId) {
+          setError(
+            'This document could not be saved, so there is nothing for the assistant to work on yet.',
+          );
+          return;
+        }
+        setAgentStatus(null);
+      } else if (hasPendingEdits()) {
+        // The agent reads the *stored* document. Edits sit in this browser for
+        // five seconds before autosave takes them, which is long enough to ask
+        // a question about a paragraph the server has never seen — and to get
+        // back a rewrite of the version the author had already replaced.
+        setAgentStatus({ status: 'saving', detail: 'Saving your latest edits…' });
+        try {
+          await saveRemote();
+        } catch {
+          // Reported by the editor's own save notice. Asking about a document
+          // one revision behind still beats refusing to answer at all.
+        }
+        if (!streamIsLive()) return;
+        setAgentStatus(null);
+      }
+
+      // Captured for the whole turn. A conversation belongs to the document it
+      // was started on; nothing below may silently move it to another one.
+      let turnChatId = sessionRef.current.selectedChatId;
+      let turnThreadId = sessionRef.current.selectedThreadId;
+
+      // A chat id can outlive the chat it names — deleted from the chats panel
+      // in another tab, or left behind in this browser after the document it
+      // belonged to was removed. The server answers `CHAT_NOT_FOUND` and the
+      // session used to stay wedged on that dead id for good. Recover once, as
+      // a new conversation on the document that is actually open.
+      let recover: 'chat' | 'thread' | null = null;
+      let alreadyRecovered = false;
+
+      const handlers: SSEEventHandlers = {
+        onToken: (content) => {
+          if (!streamIsLive()) return;
+          setAgentStatus(null);
+          patchActive((message) => ({ ...message, content: message.content + content }));
         },
-        {
-          onToken: (content) => {
-            if (!streamIsLive()) return;
-            setAgentStatus(null);
-            patchActive((message) => ({ ...message, content: message.content + content }));
-          },
-          onStatus: (status, detail) => {
-            if (!streamIsLive()) return;
-            setAgentStatus({ status, detail });
-          },
-          onToolCallStart: (tool, toolCallId, args) => {
-            if (!streamIsLive()) return;
-            // The activity list below spells this out step by step; the status
-            // line is only there so something moves before the first token.
-            setAgentStatus({ status: 'executing_tool', detail: `${toolRunningLabel(tool)}…` });
-            patchActive((message) => ({
-              ...message,
-              runs: [
-                ...message.runs,
-                {
-                  id: toolCallId || `${tool}:${message.runs.length}`,
-                  tool,
-                  state: 'running',
-                  detail: toolRunDetail(tool, args),
-                },
-              ],
-            }));
-          },
-          onToolCallEnd: (tool, toolCallId, durationMs, isError) => {
-            if (!streamIsLive()) return;
-            patchActive((message) => {
-              const index = message.runs.findIndex(
-                (run) =>
-                  run.state === 'running' && (toolCallId ? run.id === toolCallId : run.tool === tool),
-              );
-              if (index === -1) return message;
-              const runs = message.runs.slice();
-              runs[index] = {
-                ...runs[index],
-                state: isError ? 'error' : 'done',
-                durationMs,
-              };
-              return { ...message, runs };
-            });
-          },
-          onToolAction: (action) => {
-            if (!streamIsLive()) return;
-            onToolAction(action);
-          },
-          onError: (_code, message) => {
-            if (!streamIsLive()) return;
-            patchActive((active) => ({
-              ...active,
-              runs: active.runs.map((run) =>
-                run.state === 'running' ? { ...run, state: 'error' as const } : run,
-              ),
-            }));
-            setError(message);
-          },
-          onDone: (chatId, threadId) => {
-            if (!streamIsLive()) return;
-            const id = chatId || selectedChatId;
-            // This transcript *is* the conversation these ids name, so mark it
-            // loaded before the ids land and the loader chases them.
-            if (id) {
-              loadedConversation.current = `${documentId}:${id}:${
-                typeof threadId === 'number' ? threadId : selectedThreadId ?? 'latest'
-              }`;
-            }
-            if (chatId && !selectedChatId) setSelectedChatId(chatId);
-            if (typeof threadId === 'number') setSelectedThreadId(threadId);
-          },
+        onStatus: (status, detail) => {
+          if (!streamIsLive()) return;
+          setAgentStatus({ status, detail });
         },
-        { signal: controller.signal },
-      );
+        onToolCallStart: (tool, toolCallId, args) => {
+          if (!streamIsLive()) return;
+          // The activity list below spells this out step by step; the status
+          // line is only there so something moves before the first token.
+          setAgentStatus({ status: 'executing_tool', detail: `${toolRunningLabel(tool)}…` });
+          patchActive((message) => ({
+            ...message,
+            runs: [
+              ...message.runs,
+              {
+                id: toolCallId || `${tool}:${message.runs.length}`,
+                tool,
+                state: 'running',
+                detail: toolRunDetail(tool, args),
+              },
+            ],
+          }));
+        },
+        onToolCallEnd: (tool, toolCallId, durationMs, isError) => {
+          if (!streamIsLive()) return;
+          patchActive((message) => {
+            const index = message.runs.findIndex(
+              (run) =>
+                run.state === 'running' && (toolCallId ? run.id === toolCallId : run.tool === tool),
+            );
+            if (index === -1) return message;
+            const runs = message.runs.slice();
+            runs[index] = {
+              ...runs[index],
+              state: isError ? 'error' : 'done',
+              durationMs,
+            };
+            return { ...message, runs };
+          });
+        },
+        onToolAction: (action) => {
+          if (!streamIsLive()) return;
+          onToolAction(action);
+        },
+        onError: (code, message) => {
+          if (!streamIsLive()) return;
+          if (!alreadyRecovered && (code === 'CHAT_NOT_FOUND' || code === 'THREAD_NOT_FOUND')) {
+            // Reported by the retry below if that fails too, so the author is
+            // never shown an error the app is about to resolve by itself.
+            recover = code === 'CHAT_NOT_FOUND' ? 'chat' : 'thread';
+            return;
+          }
+          patchActive((active) => ({
+            ...active,
+            runs: active.runs.map((run) =>
+              run.state === 'running' ? { ...run, state: 'error' as const } : run,
+            ),
+          }));
+          setError(message);
+        },
+        onDone: (chatId, threadId) => {
+          if (!streamIsLive()) return;
+          const id = chatId || turnChatId;
+          // This transcript *is* the conversation these ids name, so mark it
+          // loaded before the ids land and the loader chases them.
+          if (id) {
+            loadedConversation.current = `${turnDocumentId}:${id}:${
+              typeof threadId === 'number' ? threadId : turnThreadId ?? 'latest'
+            }`;
+          }
+          // Through the ref, because attaching the document mid-turn rebuilt
+          // these setters around the id the session now has, and the ones this
+          // closure captured refuse to write for a document that has moved on.
+          if (chatId && chatId !== turnChatId) {
+            turnChatId = chatId;
+            sessionRef.current.setSelectedChatId(chatId);
+          }
+          if (typeof threadId === 'number' && threadId !== turnThreadId) {
+            turnThreadId = threadId;
+            sessionRef.current.setSelectedThreadId(threadId);
+          }
+        },
+      };
+
+      for (;;) {
+        recover = null;
+        await streamAgentChat(
+          {
+            message: text,
+            document_id: turnDocumentId,
+            chat_id: turnChatId,
+            thread_id: turnThreadId,
+            mode: 'assistant',
+          },
+          handlers,
+          { signal: controller.signal },
+        );
+
+        if (!recover || !streamIsLive()) break;
+
+        alreadyRecovered = true;
+        if (recover === 'chat') {
+          turnChatId = null;
+          sessionRef.current.setSelectedChatId(null);
+        }
+        turnThreadId = null;
+        sessionRef.current.setSelectedThreadId(null);
+        loadedConversation.current = null;
+        // The failed attempt reached no tools, but a redelivered id from it
+        // must not block the retry's own staging.
+        processedToolCallIds.current = new Set();
+      }
     } catch (e) {
       // An aborted stream is a deliberate stop, not a failure to report.
       if (streamIsLive()) {
@@ -545,6 +716,10 @@ function DocumentChatAssistant() {
         className="absolute bottom-4 right-4 shadow-lg z-[var(--z-floating)]"
         onClick={() => setExpanded(true)}
         aria-expanded={false}
+        // Hover only. Overriding the accessible name to carry the document
+        // would make it stop matching the word on the button, which is what
+        // speech input types against.
+        title={attachment.hint}
       >
         <Sparkles aria-hidden="true" className="h-4 w-4 text-primary" />
         Assistant
@@ -568,7 +743,10 @@ function DocumentChatAssistant() {
     <div
       ref={panelRef}
       role="complementary"
-      aria-label="Writing assistant"
+      // Naming the document in the region label is how this reaches a screen
+      // reader: the line in the header is small, muted, and not focusable, so
+      // it would otherwise only be discovered by reading the whole panel.
+      aria-label={attachment.regionLabel}
       onKeyDown={onPanelKeyDown}
       style={geometry}
       className={cn(
@@ -606,14 +784,43 @@ function DocumentChatAssistant() {
             onKeyDown={(event) => {
               if (nudge('move', event)) event.preventDefault();
             }}
-            className="flex h-7 w-4 items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            // `shrink-0`: the only unprotected item in the header row. Once the
+            // title column started carrying a document name it asked for real
+            // width, and the grip was what gave way — the drag handle narrowed
+            // to a sliver on exactly the documents whose names are worth
+            // reading.
+            className="flex h-7 w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <GripVertical aria-hidden="true" className="h-4 w-4" />
           </button>
         )}
 
         <Sparkles aria-hidden="true" className="h-4 w-4 shrink-0 text-primary" />
-        <h2 className="truncate text-sm font-semibold">Assistant</h2>
+        {/* Sized to its content and allowed to shrink, so a long document name
+            truncates rather than pushing the window controls off the header,
+            and the run state below still sits beside the title. */}
+        <div className="flex min-w-0 flex-col">
+          <h2 className="truncate text-sm font-semibold">Assistant</h2>
+          {/* The one line in the panel that says which document this
+              conversation acts on. `title` carries the full name, because the
+              header is narrow and a truncated one is exactly the case where
+              the author needs to be sure. */}
+          <p
+            title={attachment.hint}
+            className="flex min-w-0 items-center gap-1 text-2xs text-muted-foreground"
+          >
+            {/* Deliberately the same muted treatment in both states. An
+                unattached draft is not a problem to fix — the next message
+                attaches it — so the difference is carried by the icon and the
+                words rather than by a colour that reads as a warning. */}
+            {attachment.attached ? (
+              <FileText aria-hidden="true" className="h-3 w-3 shrink-0" />
+            ) : (
+              <FileClock aria-hidden="true" className="h-3 w-3 shrink-0" />
+            )}
+            <span className="truncate">{attachment.label}</span>
+          </p>
+        </div>
 
         {/* Only the run state. The pending count has its own row below, which
             says the same thing and can be acted on — three copies of one fact
@@ -700,7 +907,13 @@ function DocumentChatAssistant() {
           {visibleMessages.length === 0 && (
             <div className="space-y-4 py-4">
               <div className="space-y-1.5 text-center">
-                <p className="text-sm font-medium">Ask about this document</p>
+                {/* The start of a session is where saying which document it is
+                    about costs nothing and settles it for the rest of the
+                    conversation. */}
+                <p className="text-sm font-medium text-balance">
+                  Ask about{' '}
+                  <span className="text-primary">“{attachment.name}”</span>
+                </p>
                 <p className="text-xs text-muted-foreground text-balance">
                   Suggestions, rewrites, structure, summaries or references. Edits arrive as
                   changes you accept in the document — nothing is written behind your back.
@@ -712,23 +925,20 @@ function DocumentChatAssistant() {
                     key={suggestion}
                     type="button"
                     onClick={() => onSuggestion(suggestion)}
-                    disabled={!documentId}
-                    // `aria-disabled` alongside `disabled` so the reason below is
-                    // reachable: these are the only three affordances in the
-                    // empty state, and on an unsaved document all three used to
-                    // sit greyed out with nothing saying why.
-                    aria-disabled={!documentId}
                     aria-describedby={documentId ? undefined : unsavedNoticeId}
-                    className="rounded-full border border-border bg-secondary/40 px-2.5 py-1 text-left text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-secondary hover:text-foreground disabled:opacity-50"
+                    className="rounded-full border border-border bg-secondary/40 px-2.5 py-1 text-left text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-secondary hover:text-foreground"
                   >
                     {suggestion}
                   </button>
                 ))}
               </div>
 
+              {/* These used to be greyed out until the author saved. Sending now
+                  saves the document itself and keeps the conversation with it,
+                  so the only thing left worth saying is that it will. */}
               {!documentId && (
                 <p id={unsavedNoticeId} className="text-center text-xs text-muted-foreground">
-                  Save the document to use these.
+                  Asking saves this document first, so the assistant can work on it.
                 </p>
               )}
             </div>

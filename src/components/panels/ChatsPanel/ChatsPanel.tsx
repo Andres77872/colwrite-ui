@@ -29,7 +29,7 @@ function chatLabel(chat: ChatItem): string {
 }
 
 export function ChatsPanel() {
-  const { documentId } = useEditor();
+  const { documentId, ensureRemoteDocument } = useEditor();
   const { selectedChatId, setSelectedChatId, setSelectedThreadId } = useChatSessions();
   const confirm = useConfirm();
   const { toast } = useToast();
@@ -56,15 +56,19 @@ export function ChatsPanel() {
   }, [items, query]);
 
   const refresh = useCallback(
-    async (targetPage = page) => {
-      if (!documentId) {
+    async (targetPage = page, forDocumentId: string | null = documentId) => {
+      // The id is a parameter because creating the first chat can save the
+      // document on the spot, and this callback still closes over the `null`
+      // it was built with — refreshing against that emptied the list it had
+      // just filled.
+      if (!forDocumentId) {
         setItems([]);
         setCount(0);
         return;
       }
       setLoading(true);
       try {
-        const res = await listChats(documentId, PAGE_SIZE, (targetPage - 1) * PAGE_SIZE);
+        const res = await listChats(forDocumentId, PAGE_SIZE, (targetPage - 1) * PAGE_SIZE);
         setItems(res.chats ?? []);
         setCount(res.count ?? 0);
         setListError(null);
@@ -114,11 +118,22 @@ export function ChatsPanel() {
   };
 
   async function onCreate() {
-    if (!documentId) return;
     setLoading(true);
     try {
-      const res = await createChat(documentId);
-      await refresh(page);
+      // A chat is stored against a document, so an unsaved draft has nothing to
+      // attach to. Saving it here is what makes the conversation belong to the
+      // document the author is looking at rather than to nothing at all.
+      const attachedId = documentId ?? (await ensureRemoteDocument());
+      if (!attachedId) {
+        toast({
+          title: 'Could not save this document',
+          description: 'A conversation is kept with a document, so it has to be saved first.',
+          variant: 'error',
+        });
+        return;
+      }
+      const res = await createChat(attachedId);
+      await refresh(page, attachedId);
       setSelectedChatId(res.chat_id);
       setSelectedThreadId(null);
     } catch (error) {
@@ -189,9 +204,15 @@ export function ChatsPanel() {
     return (
       <EmptyState
         icon={MessageSquare}
-        title="No document yet"
-        description="Save this document to start keeping assistant conversations with it."
+        title="Not saved yet"
+        description="A conversation is kept with a document. Starting one saves this document and attaches the chat to it."
         className="h-full"
+        action={
+          <Button size="sm" onClick={onCreate} disabled={loading}>
+            {loading ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
+            Save and start a chat
+          </Button>
+        }
       />
     );
   }

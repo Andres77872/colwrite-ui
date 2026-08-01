@@ -155,4 +155,28 @@ describe('ReferencesSection', () => {
     expect(rows[0].textContent).not.toContain('[1]');
     expect(rows[1].textContent).toContain('Z. Zed (2020). Later.');
   });
+
+  it('renders a source whose year arrived from the agent as a number', async () => {
+    // `doc_edit` accepts an integer year, and formatting one used to throw and
+    // take the reference list — and the canvas with it — down.
+    await mount([
+      para('p1', [
+        cite('c1', {
+          keys: ['k1'],
+          sources: [
+            {
+              key: 'k1',
+              title: 'Numeric year',
+              authors: 'A. Author',
+              year: 2020 as unknown as string,
+            },
+          ],
+        }),
+      ]),
+    ]);
+
+    expect(screen.getByRole('listitem').textContent).toContain(
+      'A. Author. Numeric year. 2020.',
+    );
+  });
 });

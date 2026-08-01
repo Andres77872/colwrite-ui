@@ -495,3 +495,91 @@ describe('atomic document transitions', () => {
     expect(currentEditor().doc.blocks.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Everything the assistant does is addressed by document id, so a draft that
+ * exists only in this browser has to acquire one before it can be worked on.
+ * The distinction that matters is that acquiring an id is not navigation.
+ */
+describe('attaching a draft to a document id', () => {
+  async function mountLocalDraft() {
+    render(
+      <EditorProvider>
+        <CaptureEditor />
+      </EditorProvider>,
+    );
+    await waitFor(() => expect(listDocuments).toHaveBeenCalled());
+    expect(currentEditor().documentId).toBeNull();
+  }
+
+  it('creates the document once, however many callers ask at the same time', async () => {
+    await mountLocalDraft();
+    createDocument.mockClear();
+
+    let ids: Array<string | null> = [];
+    await act(async () => {
+      ids = await Promise.all([
+        currentEditor().ensureRemoteDocument(),
+        currentEditor().ensureRemoteDocument(),
+      ]);
+    });
+
+    expect(createDocument).toHaveBeenCalledTimes(1);
+    expect(ids).toEqual(['created-doc', 'created-doc']);
+    expect(currentEditor().documentId).toBe('created-doc');
+  });
+
+  it('returns the existing id without creating anything', async () => {
+    await mountRemoteDocument();
+    createDocument.mockClear();
+
+    let id: string | null = null;
+    await act(async () => {
+      id = await currentEditor().ensureRemoteDocument();
+    });
+
+    expect(id).toBe('doc-1');
+    expect(createDocument).not.toHaveBeenCalled();
+  });
+
+  it('reports failure rather than throwing at whatever the author was doing', async () => {
+    await mountLocalDraft();
+    createDocument.mockRejectedValueOnce(new Error('nope'));
+
+    let id: string | null = 'unset';
+    await act(async () => {
+      id = await currentEditor().ensureRemoteDocument();
+    });
+
+    expect(id).toBeNull();
+    expect(currentEditor().documentId).toBeNull();
+    expect(currentEditor().saveError).toMatch(/nope/);
+  });
+
+  it('keeps the document session, because this is the same document', async () => {
+    await mountLocalDraft();
+    const before = currentEditor().documentSessionId;
+
+    await act(async () => {
+      await currentEditor().ensureRemoteDocument();
+    });
+
+    // State that belongs to the open document rather than to its stored
+    // identity — the assistant's transcript, above all — keys on this.
+    expect(currentEditor().documentSessionId).toBe(before);
+  });
+
+  it('starts a new session when the author actually navigates', async () => {
+    await mountRemoteDocument();
+    const before = currentEditor().documentSessionId;
+
+    await act(async () => {
+      await currentEditor().switchTo('doc-2');
+    });
+    expect(currentEditor().documentSessionId).not.toBe(before);
+
+    const afterSwitch = currentEditor().documentSessionId;
+    act(() => currentEditor().newLocal());
+    expect(currentEditor().documentSessionId).not.toBe(afterSwitch);
+  });
+});

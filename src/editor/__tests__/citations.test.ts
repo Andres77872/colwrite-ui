@@ -3,13 +3,17 @@ import type { Block, CitationChild, CitationSource } from '../types';
 import {
   buildBibliography,
   canonicalArxivId,
+  canonicalCitationKey,
   canonicalDoi,
   citationAnchorId,
+  entryForKey,
   citationLabel,
+  citationYear,
   firstAuthorSurname,
   formatReference,
   referenceAnchorId,
   referenceMarker,
+  yearOf,
 } from '../citations';
 
 // ── Fixtures ──
@@ -343,5 +347,202 @@ describe('markers and anchors', () => {
   it('builds fragment ids that are valid in a url', () => {
     expect(referenceAnchorId({ number: 3 })).toBe('ref-3');
     expect(citationAnchorId('a b/c')).toBe('cite-a-b-c');
+  });
+});
+
+describe('canonicalCitationKey', () => {
+  it.each([
+    '10.1234/abc',
+    '10.1234/ABC',
+    '  10.1234/AbC  ',
+    'doi:10.1234/ABC',
+    'DOI: 10.1234/abc',
+    'https://doi.org/10.1234/ABC',
+    'https://dx.doi.org/10.1234/abc',
+    'https://doi.org/10.1234/abc/',
+  ])('reduces the DOI %s to one key', (value) => {
+    expect(canonicalCitationKey(value)).toBe('10.1234/abc');
+  });
+
+  it.each([
+    '2101.00001',
+    '2101.00001v3',
+    'arXiv:2101.00001',
+    'ARXIV:2101.00001V2',
+    'https://arxiv.org/abs/2101.00001',
+    'https://arxiv.org/abs/2101.00001v7',
+    'https://arxiv.org/pdf/2101.00001v2.pdf',
+  ])('reduces the arXiv id %s to one key', (value) => {
+    expect(canonicalCitationKey(value)).toBe('2101.00001');
+  });
+
+  it('handles the pre-2007 arXiv scheme', () => {
+    expect(canonicalCitationKey('hep-th/9901001v2')).toBe('hep-th/9901001');
+    expect(canonicalCitationKey('arXiv:math.GT/0309136')).toBe('math.gt/0309136');
+  });
+
+  it.each(['S2:abc123', 'S2:AbC123', 'Smith2020', 'Smith2020v2', 'my-notes'])(
+    'returns the opaque key %s as written',
+    (value) => {
+      // Lower-casing a key the author typed silently edits their document, and
+      // `Smith2020v2` is why the arXiv version strip has to be gated on the
+      // whole value looking like an arXiv id.
+      expect(canonicalCitationKey(value)).toBe(value);
+    },
+  );
+
+  it('has nothing to say about an empty key', () => {
+    expect(canonicalCitationKey('')).toBe('');
+    expect(canonicalCitationKey('   ')).toBe('');
+    expect(canonicalCitationKey(undefined)).toBe('');
+  });
+
+  it('is idempotent', () => {
+    for (const value of ['https://doi.org/10.1234/ABC', 'arXiv:2101.00001v3', 'S2:AbC']) {
+      const once = canonicalCitationKey(value);
+      expect(canonicalCitationKey(once)).toBe(once);
+    }
+  });
+});
+
+describe('one work cited under two spellings', () => {
+  // Citing the same paper from two search results is the ordinary way to get
+  // here, and it used to print the paper twice with two numbers.
+  const spellings = ['10.1234/ABC', 'https://doi.org/10.1234/abc', '10.1234/abc'];
+
+  it('collapses to a single numbered entry', () => {
+    const bibliography = buildBibliography([
+      para(
+        'b1',
+        spellings.map((key, index) =>
+          cite(`c${index}`, { keys: [key], sources: [source(key, { title: 'One paper' })] }),
+        ),
+      ),
+    ]);
+
+    expect(bibliography.entries).toHaveLength(1);
+    expect(bibliography.entries[0].key).toBe('10.1234/abc');
+    expect(bibliography.entries[0].usages).toHaveLength(3);
+  });
+
+  it('keeps the first spelling for anything the reader sees', () => {
+    const bibliography = buildBibliography([
+      para('b1', [
+        cite('c1', { keys: ['10.1234/ABC'] }),
+        cite('c2', { keys: ['10.1234/abc'] }),
+      ]),
+    ]);
+
+    const [entry] = bibliography.entries;
+    expect(entry.displayKey).toBe('10.1234/ABC');
+    // Nothing was attached, so the row prints the key — as written.
+    expect(formatReference(entry, 'numeric').text).toBe('10.1234/ABC');
+  });
+
+  it('resolves every spelling through byKey', () => {
+    const bibliography = buildBibliography([
+      para('b1', [cite('c1', { keys: ['arXiv:2101.00001v3'] })]),
+    ]);
+
+    for (const alias of ['arXiv:2101.00001v3', '2101.00001', 'https://arxiv.org/abs/2101.00001']) {
+      expect(entryForKey(bibliography, alias)?.number).toBe(1);
+    }
+  });
+
+  it('gives both citations the same number', () => {
+    const first = cite('c1', { keys: ['10.1234/ABC'] });
+    const second = cite('c2', { keys: ['https://doi.org/10.1234/abc'] });
+    const bibliography = buildBibliography([para('b1', [first, second])]);
+
+    expect(citationLabel(first, bibliography)).toBe('[1]');
+    expect(citationLabel(second, bibliography)).toBe('[1]');
+  });
+
+  it('matches a source record whose key is spelled differently again', () => {
+    const bibliography = buildBibliography([
+      para('b1', [
+        cite('c1', {
+          keys: ['10.1234/ABC'],
+          sources: [source('https://doi.org/10.1234/abc', { title: 'Found anyway' })],
+        }),
+      ]),
+    ]);
+
+    expect(bibliography.entries[0].source.title).toBe('Found anyway');
+    expect(bibliography.entries[0].unresolved).toBe(false);
+  });
+
+  it('does not merge two genuinely different keys', () => {
+    const bibliography = buildBibliography([
+      para('b1', [cite('c1', { keys: ['Smith2020', 'Smith2020v2', 'S2:a', 'S2:A'] })]),
+    ]);
+    expect(bibliography.entries).toHaveLength(4);
+  });
+});
+
+describe('citationYear', () => {
+  it.each([
+    [2020, '2020'],
+    ['2020', '2020'],
+    ['  2020 ', '2020'],
+    ['', undefined],
+    ['   ', undefined],
+    [undefined, undefined],
+    [null, undefined],
+    [true, undefined],
+    [Number.NaN, undefined],
+    [Number.POSITIVE_INFINITY, undefined],
+  ])('reads %o as %o', (value, expected) => {
+    expect(citationYear(value)).toBe(expected);
+  });
+
+  it('reads a four-digit year out of a date, whatever type it arrived as', () => {
+    expect(yearOf('2021-03-04')).toBe('2021');
+    expect(yearOf(2021)).toBe('2021');
+    expect(yearOf(undefined)).toBeUndefined();
+  });
+});
+
+describe('a provider-style integer year', () => {
+  // `doc_edit` accepts `year` as an integer, and nothing between the agent and
+  // the canvas used to turn it back into the string the type promises. Every
+  // reader below called a string method on it and took the document down.
+  const numericYear = source('k1', { year: 2020 as unknown as string });
+
+  it.each(['numeric', 'author-year', 'ieee'] as const)(
+    'formats a reference in %s style instead of throwing',
+    (style) => {
+      const bibliography = buildBibliography([
+        para('b1', [cite('c1', { style, sources: [numericYear] })]),
+      ]);
+      expect(formatReference(bibliography.entries[0], style).text).toContain('2020');
+    },
+  );
+
+  it('labels an author–year citation with the coerced year', () => {
+    const child = cite('c1', { style: 'author-year', sources: [numericYear] });
+    const bibliography = buildBibliography([para('b1', [child])]);
+    expect(citationLabel(child, bibliography)).toBe('(Smith, 2020)');
+  });
+
+  it('normalises the year on the merged entry, so readers see the declared type', () => {
+    const bibliography = buildBibliography([
+      para('b1', [cite('c1', { sources: [numericYear] })]),
+    ]);
+    expect(bibliography.entries[0].source.year).toBe('2020');
+  });
+
+  it('still disambiguates two sources sharing an author and year', () => {
+    const bibliography = buildBibliography([
+      para('b1', [
+        cite('c1', { style: 'author-year', keys: ['k1'], sources: [numericYear] }),
+        cite('c2', {
+          style: 'author-year',
+          keys: ['k2'],
+          sources: [source('k2', { year: 2020 as unknown as string })],
+        }),
+      ]),
+    ]);
+    expect(bibliography.entries.map((entry) => entry.yearSuffix)).toEqual(['a', 'b']);
   });
 });

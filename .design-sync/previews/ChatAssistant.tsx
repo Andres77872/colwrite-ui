@@ -32,11 +32,19 @@ const noop = () => {};
 
 const EDITOR = {
   documentId: 'doc-1',
+  // Which document the workspace is on, as opposed to the id it is stored
+  // under. The panel is keyed on it so that saving a draft — which changes
+  // `documentId` — does not read as navigating away and discard the
+  // conversation that asked for the save.
+  documentSessionId: 'session-1',
   doc: { version: 4, name: 'Attention Is All You Need, Revisited', blocks: [] },
   blocks: [],
   applyPatch: () => ({ applied: 0, failed: 0 }),
   markRecentlyChanged: noop,
+  hasPendingEdits: () => false,
+  saveRemote: () => Promise.resolve(),
   createRemote: () => Promise.reject(new Error('not reachable from a preview')),
+  ensureRemoteDocument: () => Promise.reject(new Error('not reachable from a preview')),
   listRemote: () => Promise.resolve({ documents: [], count: 0, page: 1, limit: 20, totalPages: 0, sortBy: 'updated_at', sortOrder: 'desc', status: 'ok', message: '' }),
   switchTo: () => Promise.resolve(),
 };

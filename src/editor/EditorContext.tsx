@@ -135,6 +135,17 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   };
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [documentId, setDocumentId] = useState<string | null>(initialDocumentId);
+  /**
+   * Identity of the document the workspace is *on*, as opposed to the id the
+   * server knows it by.
+   *
+   * The two differ for exactly one transition: saving a local draft gives the
+   * open document an id without changing which document it is. Anything keyed
+   * on `documentId` alone — the assistant's transcript, most of all — would
+   * treat that as navigating away and throw the session out mid-sentence.
+   */
+  const [documentSessionId, setDocumentSessionId] = useState<string>(uid);
+  const startDocumentSession = () => setDocumentSessionId(uid());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -172,12 +183,23 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   // Latest doc/id without waiting for a re-render. Callbacks captured by the
   // chat stream can outlive several renders, and saving from a stale closure
   // is how edits get silently reverted.
+  //
+  // Every writer below goes through `commitDoc`, so this ref is current the
+  // moment a change is made rather than one commit later. `applyPatch` depends
+  // on that: it has to report which blocks it touched to its caller, and it
+  // cannot learn that from inside a `setState` updater React runs whenever it
+  // likes.
   const docRef = useRef(doc);
   const documentIdRef = useRef(documentId);
   useEffect(() => {
     docRef.current = doc;
     documentIdRef.current = documentId;
   }, [doc, documentId]);
+
+  const commitDoc = (next: Doc) => {
+    docRef.current = next;
+    setDoc(next);
+  };
 
   // Which document the in-state `doc` was actually loaded for. Without this a
   // PUT can write one document's body over another's — the id and the body are
@@ -303,7 +325,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const mutateDoc = (updater: (prev: Doc) => Doc) => {
     if (loadingDocumentIdRef.current !== null) return;
     editRevisionRef.current += 1;
-    setDoc(updater);
+    commitDoc(updater(docRef.current));
     setDirtyTick(editRevisionRef.current);
   };
 
@@ -327,7 +349,9 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     if (typeof version !== 'number' || Number.isNaN(version)) return;
     const changed = versionRef.current !== version;
     versionRef.current = version;
-    setDoc(prev => (prev.version === version ? prev : { ...prev, version }));
+    if (docRef.current.version !== version) {
+      commitDoc({ ...docRef.current, version });
+    }
     if (invalidateList && changed) {
       setDocumentListRevision(revision => revision + 1);
     }
@@ -491,8 +515,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const newLocal = () => {
     const requestToken = beginDocumentTransition(null);
     const next = makeDefaultDoc();
-    setDoc(next);
-    docRef.current = next;
+    startDocumentSession();
+    commitDoc(next);
     editRevisionRef.current = 0;
     persistedRevisionRef.current = 0;
     setDirtyTick(0);
@@ -525,13 +549,22 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       loadedForIdRef.current = res.document_id;
       versionRef.current = version;
       persistedRevisionRef.current = revisionAtStart;
-      setDoc(previous => (
-        previous.version === version ? previous : { ...previous, version }
-      ));
+      // Deliberately not a new document session: this is the document that was
+      // already open, now with an id the server recognises.
+      if (docRef.current.version !== version) {
+        commitDoc({ ...docRef.current, version });
+      }
       setSaveError(null);
-      setActiveId(null);
-      setOpenMenuBlockId(null);
-      setOpenMenuType(null);
+      // The caret stays where it is. Clearing the active block unconditionally
+      // made saving a draft mid-edit look like a document switch to `Editable`,
+      // which then rewrote the paragraph's DOM from state — throwing away an AI
+      // suggestion or a streaming widget the author was in the middle of. Only
+      // a caller that replaced the body on screen has invalidated it.
+      if (docOverride !== undefined) {
+        setActiveId(null);
+        setOpenMenuBlockId(null);
+        setOpenMenuType(null);
+      }
     }
     setHasAnyRemoteDocs(true);
     setDocumentListRevision(revision => revision + 1);
@@ -630,6 +663,41 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     await doRemoteSave('manual', docOverride);
   };
 
+  /**
+   * Give the open document a server id, creating it if it does not have one.
+   *
+   * Everything the assistant does is addressed by document id: the agent reads
+   * and edits `document_id`, and a chat session is stored against it. A draft
+   * that exists only in this browser therefore has nothing to talk about — the
+   * old behaviour was to refuse and tell the author to save first, which is a
+   * chore in the middle of a sentence they are asking for help with.
+   *
+   * Concurrent callers share one creation. Returning `null` means the document
+   * could not be created, which the caller reports; it never throws past here
+   * because the writing surface stays usable either way.
+   */
+  const attachInFlightRef = useRef<Promise<string | null> | null>(null);
+  const ensureRemoteDocument = async (): Promise<string | null> => {
+    if (documentIdRef.current) return documentIdRef.current;
+    if (attachInFlightRef.current) return attachInFlightRef.current;
+
+    const request = (async () => {
+      try {
+        return await createRemote();
+      } catch (error) {
+        setSaveError(describeSaveError(error));
+        return null;
+      }
+    })();
+
+    attachInFlightRef.current = request;
+    try {
+      return await request;
+    } finally {
+      if (attachInFlightRef.current === request) attachInFlightRef.current = null;
+    }
+  };
+
   const loadRemoteForRequest = async (
     id: string,
     requestToken: number,
@@ -654,13 +722,13 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     // Self-heal documents saved before html/children were kept in step, so an
     // old orphan does not keep failing the agent's edits forever.
     const loaded: Doc = { ...fetched, blocks: reconcileBlocks(fetched.blocks) };
-    setDoc(loaded);
+    startDocumentSession();
+    commitDoc(loaded);
     editRevisionRef.current = 0;
     persistedRevisionRef.current = 0;
     setDirtyTick(0);
     setDocumentId(id);
     documentIdRef.current = id;
-    docRef.current = loaded;
     loadedForIdRef.current = id;
     versionRef.current = loaded.version ?? 1;
     setSaveError(null);
@@ -817,8 +885,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const adopted = { ...next, version: res.version ?? 1 };
 
     if (requestToken === documentRequestRef.current) {
-      setDoc(adopted);
-      docRef.current = adopted;
+      startDocumentSession();
+      commitDoc(adopted);
       setDocumentId(res.document_id);
       documentIdRef.current = res.document_id;
       loadedForIdRef.current = res.document_id;
@@ -895,22 +963,23 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     if (loadingDocumentIdRef.current !== null) {
       return { blocks: docRef.current.blocks, desynced: ops, touched: [] };
     }
-    let outcome: ApplyPatchResult = { blocks: [], desynced: [], touched: [] };
 
-    const update = (prev: Doc): Doc => {
-      outcome = applyPatchToBlocks(prev.blocks, ops);
+    // Computed against the ref rather than inside a `setState` updater. The
+    // caller needs `touched` to highlight what moved and `desynced` to say the
+    // two copies have diverged, and React runs an updater when it pleases —
+    // both used to come back empty for anything but the first update in a tick.
+    const base = docRef.current;
+    const outcome = applyPatchToBlocks(base.blocks, ops);
 
-      let nextDoc: Doc = { ...prev, blocks: outcome.blocks };
-      for (const op of ops) {
-        if (op.op === 'update_meta' && op.meta?.name) {
-          nextDoc = { ...nextDoc, name: op.meta.name };
-        }
+    let nextDoc: Doc = { ...base, blocks: outcome.blocks };
+    for (const op of ops) {
+      if (op.op === 'update_meta' && op.meta?.name) {
+        nextDoc = { ...nextDoc, name: op.meta.name };
       }
-      return nextDoc;
-    };
+    }
 
-    if (options?.persist) mutateDoc(update);
-    else setDoc(update);
+    if (options?.persist) mutateDoc(() => nextDoc);
+    else commitDoc(nextDoc);
 
     return outcome;
   };
@@ -955,6 +1024,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     refs,
     registerEditable,
     documentId,
+    documentSessionId,
     loadingDocumentId,
     activeId,
     setActive: setActiveId,
@@ -989,6 +1059,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     getExportSnapshot,
     createRemote,
     createAndSwitch,
+    ensureRemoteDocument,
     saveRemote,
     loadRemote,
     switchTo,

@@ -7,6 +7,7 @@ import { AIActionMenu } from './AIActionMenu/AIActionMenu';
 import {
   commitMaterializedCitationSuggestion,
   materializeCitationSuggestionForAction,
+  stripCitationTags,
 } from './citationTags';
 import {
   clearChildPlaceholders,
@@ -48,7 +49,8 @@ const EMPTY_STATE: FormatState = { bold: false, italic: false, underline: false,
  * this toolbar could not appear at all and the AI action menu was unreachable.
  */
 function useFloatingToolbar() {
-  const { exec, refs, updateHtml, addParagraphChild, documentId } = useEditor();
+  const { exec, refs, updateHtml, addParagraphChild, documentId, ensureRemoteDocument } =
+    useEditor();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const [states, setStates] = useState<FormatState>(EMPTY_STATE);
@@ -338,10 +340,20 @@ function useFloatingToolbar() {
         abortRef.current = controller;
 
         try {
+          // The agent addresses the document by id, and an empty one is not a
+          // document the server can find — the rewrite failed with nothing on
+          // screen to explain why. Save the draft first, as sending a chat
+          // message does.
+          const targetDocumentId = documentId ?? (await ensureRemoteDocument());
+          if (!targetDocumentId) {
+            wrapper.setAttribute('data-error', '1');
+            return;
+          }
+
           await dispatchAction({
             selectedText,
             action,
-            documentId: documentId ?? '',
+            documentId: targetDocumentId,
             signal: controller.signal,
             language,
             onToken: (delta) => {
@@ -389,7 +401,17 @@ function useFloatingToolbar() {
         }
 
         const frag = document.createDocumentFragment();
-        frag.append(...Array.from(generated.childNodes));
+        if (action === 'search-for-references') {
+          // Nothing readable came back. The generated nodes are plain text, so
+          // appending them verbatim would put a literal `<citation … />` into
+          // the author's paragraph. Losing the citations is recoverable;
+          // markup in the manuscript is what the author has to clean up by
+          // hand without knowing where it came from.
+          const stripped = stripCitationTags(generated.textContent ?? '').trim();
+          if (stripped) frag.append(document.createTextNode(stripped));
+        } else {
+          frag.append(...Array.from(generated.childNodes));
+        }
         // Accepting an empty generation keeps the original rather than
         // silently deleting the selected text.
         if (!frag.firstChild) frag.append(...Array.from(original.childNodes));
@@ -406,7 +428,7 @@ function useFloatingToolbar() {
 
       await runStream();
     },
-    [addParagraphChild, documentId, findBlockId, updateHtml],
+    [addParagraphChild, documentId, ensureRemoteDocument, findBlockId, updateHtml],
   );
 
   return { visible, pos, states, activeIndex, setActiveIndex, toolbarRef, onFormat, onAi };

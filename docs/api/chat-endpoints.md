@@ -2,7 +2,7 @@
 
 This document specifies the REST endpoints for chat session management and thread storage, including request/response formats and example curl usage.
 
-All endpoints are additive to `/document/aichat/{document_id}`, which streams model output and automatically persists the user/assistant turns when chat headers are provided (or a new chat is created).
+These are the chat CRUD routes. The streaming turn itself is `POST /api/agent/chat`, which persists the user and assistant threads for the chat it was given (creating one when `chat_id` is omitted). Every route here is scoped to a document: a chat belongs to exactly the `document_id` it was created under, and reading or resuming it under any other document is rejected.
 
 ## Models
 
@@ -195,13 +195,18 @@ Example:
 curl -X GET 'http://localhost:8000/document/66b6e0cd2f3e3d2f9a3b1234/chats/c4a6d2ef-1b2a-3c4d-5e6f-7890abcdef12/messages?threadId=11'
 ```
 
-## Relationship to /document/aichat
+## Relationship to /api/agent/chat
 
-- When calling `/document/aichat/{document_id}` without `x-chat-id`, the server creates a new chat and sets `x-chat-id` response header.
-- If `x-chat-id` is provided, the server loads the prior branch (controlled by `x-thread-id` or chat’s `last_thread_id`).
-- The incoming user message is stored as a new `user` thread with `parent_thread_id = pivot` and after streaming the model response is stored as an `assistant` thread with `parent_thread_id = <user thread id>`.
+The streaming endpoint takes `chat_id` and `thread_id` in its JSON body — not as
+headers, which is what the removed `/document/aichat` route used.
 
-## Headers
-
-- Chat session: `x-chat-id`
-- Thread pivot: `x-thread-id`
+- Omitting `chat_id` creates a new chat for `document_id`; the id comes back in
+  the terminal `event: done` payload, alongside `thread_id` and token usage.
+- Supplying `chat_id` resumes that conversation, loading the branch selected by
+  `thread_id` (or the chat's `last_thread_id`). A `chat_id` that belongs to a
+  different document is refused with an `event: error` carrying
+  `error_code: "CHAT_NOT_FOUND"`; an unreachable pivot gives `THREAD_NOT_FOUND`.
+  The client treats both as a dead session, clears the stored ids, and retries
+  once as a new conversation on the document that is open.
+- The incoming user message is stored as a `user` thread parented to the pivot,
+  and the completed reply as an `assistant` thread parented to that user thread.

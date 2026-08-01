@@ -9,8 +9,10 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import {
   canonicalArxivId,
+  canonicalCitationKey,
   canonicalDoi,
   citationLabel,
+  entryForKey,
   formatReference,
   referenceMarker,
   useBibliography,
@@ -168,11 +170,14 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
 
   const label = citationLabel(child, bibliography);
 
+  // Keyed canonically, because a citation's `keys` and its `sources[].key` are
+  // two independently written spellings of the same identifier.
   const byKey = useMemo(() => {
     const map = new Map<string, CitationSource>();
-    for (const source of sources) map.set(source.key, source);
+    for (const source of sources) map.set(canonicalCitationKey(source.key), source);
     return map;
   }, [sources]);
+  const localSource = (key: string) => byKey.get(canonicalCitationKey(key));
 
   /**
    * What this citation stands for, spelled out.
@@ -184,34 +189,43 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
   const description = useMemo(() => {
     if (keys.length === 0) return 'Citation with no source attached';
     const titles = keys.map((key) => {
-      const entry = bibliography.byKey.get(key);
-      return entry?.source.title ?? byKey.get(key)?.title ?? key;
+      const entry = entryForKey(bibliography, key);
+      return entry?.source.title ?? localSource(key)?.title ?? key;
     });
     return `Citation ${label}: ${titles.join('; ')}`;
   }, [bibliography, byKey, keys, label]);
 
   const attach = (result: CitationSearchResult) => {
     // Re-attaching a key that is already there is an upgrade, not a no-op: it
-    // is how a key typed by hand acquires a title.
+    // is how a key typed by hand acquires a title. Matched canonically, so
+    // attaching a DOI upgrades the same paper cited under its arXiv id.
+    const target = canonicalCitationKey(result.key);
+    const present = keys.some((key) => canonicalCitationKey(key) === target);
     patch({
-      keys: keys.includes(result.key) ? keys : [...keys, result.key],
-      sources: [...sources.filter((source) => source.key !== result.key), result.source],
+      keys: present ? keys : [...keys, result.key],
+      sources: [
+        ...sources.filter((source) => canonicalCitationKey(source.key) !== target),
+        result.source,
+      ],
     });
   };
 
   const detach = (key: string) => {
+    const target = canonicalCitationKey(key);
     patch({
-      keys: keys.filter((k) => k !== key),
-      sources: sources.filter((source) => source.key !== key),
+      keys: keys.filter((k) => canonicalCitationKey(k) !== target),
+      sources: sources.filter((source) => canonicalCitationKey(source.key) !== target),
     });
   };
 
   const addManualKey = (raw: string) => {
-    const key = canonicalDoi(raw) ?? raw.trim();
-    if (!key || keys.includes(key)) return;
+    const key = canonicalCitationKey(raw);
+    // Compared canonically: adding `10.1/X` to a citation that already has
+    // `10.1/x` is adding nothing.
+    if (!key || keys.some((existing) => canonicalCitationKey(existing) === key)) return;
     // If the document already cites this key with metadata, adopt it rather
     // than adding a second, blank-looking entry for the same paper.
-    const known = bibliography.byKey.get(key)?.source;
+    const known = entryForKey(bibliography, key)?.source;
     patch({
       keys: [...keys, key],
       sources: [
@@ -366,8 +380,8 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                     <SourceRow
                       key={key}
                       sourceKey={key}
-                      source={byKey.get(key)}
-                      entry={bibliography.byKey.get(key) ?? null}
+                      source={localSource(key)}
+                      entry={entryForKey(bibliography, key)}
                       style={style}
                       onDetach={() => detach(key)}
                       // Reveal first, then dismiss without the usual focus
@@ -464,7 +478,7 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-1">
                             <span className="min-w-0 flex-1 truncate text-xs">{result.title}</span>
-                            {keys.includes(result.key) && (
+                            {localSource(result.key) !== undefined && (
                               <Badge variant="outline" className="h-4 shrink-0 px-1 text-2xs">
                                 Attached
                               </Badge>

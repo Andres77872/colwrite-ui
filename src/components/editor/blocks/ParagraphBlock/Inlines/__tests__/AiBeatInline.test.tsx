@@ -57,7 +57,7 @@ function Harness({
       updateHtml={vi.fn()}
       refs={refs}
       documentId={documentId}
-      createRemote={vi.fn().mockResolvedValue('doc-456')}
+      ensureRemoteDocument={vi.fn().mockResolvedValue('doc-456')}
     />
   );
 }

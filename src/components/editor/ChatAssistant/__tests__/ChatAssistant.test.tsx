@@ -106,6 +106,21 @@ function CaptureChats() {
 async function mount() {
   localStorage.setItem('colwrite:lastDocId', DOC_ID);
 
+  await renderAssistant();
+
+  // The provider probes for remote documents and hydrates from the server.
+  await waitFor(() => expect(listDocuments).toHaveBeenCalled());
+  await waitFor(() => expect(harness.editor.blocks).toHaveLength(2));
+}
+
+/** Renders the assistant against a draft that exists only in this browser. */
+async function mountUnsaved() {
+  await renderAssistant();
+  await waitFor(() => expect(listDocuments).toHaveBeenCalled());
+  expect(harness.editor.documentId).toBeNull();
+}
+
+async function renderAssistant() {
   render(
     <EditorProvider>
       <ProposalsProvider>
@@ -119,10 +134,7 @@ async function mount() {
       </ProposalsProvider>
     </EditorProvider>,
   );
-
-  // The provider probes for remote documents and hydrates from the server.
-  await waitFor(() => expect(listDocuments).toHaveBeenCalled());
-  await waitFor(() => expect(harness.editor.blocks).toHaveLength(2));
+  await act(async () => {});
 }
 
 /** Expand the panel if it is collapsed, and put text in the composer. */
@@ -245,6 +257,10 @@ describe('proposed changes await the author', () => {
 
     expect(harness.editor.blocks[0]).toMatchObject({ id: 'a', html: '<p>edited</p>' });
     expect(harness.review.pendingCount).toBe(0);
+    // An accept from the review bar can land far off screen, so the block it
+    // changed is highlighted. That list is what `applyPatch` reports back, and
+    // reading it out of a `setState` updater left it empty.
+    expect([...harness.editor.recentlyChanged]).toEqual(['a']);
   });
 
   it('discards the change on reject', async () => {
@@ -607,13 +623,235 @@ describe('a document the assistant created', () => {
     await sendWith([
       proposal({
         tool: 'doc_create',
+        // `doc_create` names the document it has just made, never the one on
+        // screen. Matching that against the open document dropped the event,
+        // and creating a document looked to the author like nothing happening.
+        documentId: 'created-doc',
         actions: [{ op: 'create_document', documentId: 'created-doc' }],
       }),
     ]);
 
     await waitFor(() => expect(harness.review.invites).toHaveLength(1));
+    expect(harness.review.invites[0].documentId).toBe('created-doc');
     // Switching documents throws away whatever the author was in the middle of.
     expect(harness.editor.documentId).toBe(DOC_ID);
     expect(loadDocument).not.toHaveBeenCalledWith('created-doc');
+  });
+
+  it('brings none of that document’s edits into this one', async () => {
+    await mount();
+    await sendWith([
+      proposal({
+        tool: 'doc_create',
+        documentId: 'created-doc',
+        actions: [
+          { op: 'create_document', documentId: 'created-doc' },
+          // Operations addressed to the new document. They are about blocks
+          // this document has never heard of, so they belong there, not here.
+          { op: 'delete_block', blockId: 'a' },
+        ],
+      }),
+    ]);
+
+    await waitFor(() => expect(harness.review.invites).toHaveLength(1));
+    expect(harness.review.pendingCount).toBe(0);
+    expect(harness.editor.blocks.map((block) => block.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('a document that has never been saved', () => {
+  it('is saved and attached before the first message goes out', async () => {
+    await mountUnsaved();
+    await sendWith([]);
+
+    await waitFor(() => expect(createDocument).toHaveBeenCalledTimes(1));
+    expect(streamAgentChat).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'do the thing', document_id: 'created-doc' }),
+      expect.anything(),
+      expect.anything(),
+    );
+    await waitFor(() => expect(harness.editor.documentId).toBe('created-doc'));
+  });
+
+  it('keeps the conversation that saved it', async () => {
+    await mountUnsaved();
+    await sendWith([]);
+
+    // Acquiring an id is not navigating away. Keying the panel on the document
+    // id alone remounted it here, throwing away the message the author had
+    // just sent — along with the chat the server created for it.
+    await waitFor(() => expect(harness.chats.selectedChatId).toBe('chat-1'));
+    expect(harness.chats.selectedThreadId).toBe(1);
+    // The empty state is gone, so the transcript survived the attach.
+    expect(screen.queryByText(/Ask about/i)).toBeNull();
+  });
+
+  it('says so rather than greying the suggestions out', async () => {
+    await mountUnsaved();
+    await compose('');
+
+    expect(screen.getByText(/Asking saves this document first/i)).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /Summarise this document/i }).hasAttribute('disabled'),
+    ).toBe(false);
+  });
+});
+
+describe('the document a session is attached to', () => {
+  it('is named in the header, so “nothing happened” can be told from “that happened elsewhere”', async () => {
+    await mount();
+    await compose('');
+
+    expect(screen.getByTitle(/This conversation is kept with “Doc”/)).toBeTruthy();
+    expect(screen.getByText(/Ask about/)).toBeTruthy();
+  });
+
+  it('reaches a screen reader through the region label', async () => {
+    await mount();
+    await compose('');
+
+    // The header line is small, muted and not focusable, so on its own it would
+    // only be found by reading the whole panel.
+    expect(
+      screen.getByRole('complementary', { name: 'Writing assistant for Doc' }),
+    ).toBeTruthy();
+  });
+
+  it('follows a rename, whoever made it', async () => {
+    await mount();
+    await compose('');
+
+    await act(async () => {
+      harness.editor.setDocName('Attention Is All You Need');
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('complementary', { name: 'Writing assistant for Attention Is All You Need' }),
+      ).toBeTruthy(),
+    );
+    expect(screen.getByTitle(/kept with “Attention Is All You Need”/)).toBeTruthy();
+  });
+
+  it('says nothing is attached yet rather than naming a document it cannot act on', async () => {
+    await mountUnsaved();
+    await compose('');
+
+    expect(screen.getByText('Not saved yet')).toBeTruthy();
+    expect(
+      screen.getByRole('complementary', {
+        name: 'Writing assistant for a document that has not been saved yet',
+      }),
+    ).toBeTruthy();
+  });
+
+  it('switches to the document as soon as the first message attaches one', async () => {
+    await mountUnsaved();
+    await compose('');
+    expect(screen.getByText('Not saved yet')).toBeTruthy();
+
+    await sendWith([]);
+
+    await waitFor(() => expect(screen.queryByText('Not saved yet')).toBeNull());
+    expect(
+      screen.getByRole('complementary', { name: 'Writing assistant for Untitled document' }),
+    ).toBeTruthy();
+  });
+});
+
+describe('what the agent reads', () => {
+  it('flushes unsaved edits before asking, so it is the document on screen', async () => {
+    await mount();
+    saveDocument.mockClear();
+
+    await act(async () => {
+      harness.editor.setDocName('Renamed by the author');
+    });
+    expect(harness.editor.hasPendingEdits()).toBe(true);
+
+    await sendWith([]);
+
+    // The agent reads the *stored* document. Autosave is five seconds behind,
+    // which is long enough to ask about a paragraph the server has not seen —
+    // and get back a rewrite of the version already replaced.
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledTimes(1));
+    expect(saveDocument.mock.invocationCallOrder[0]).toBeLessThan(
+      streamAgentChat.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('still asks when that save fails', async () => {
+    await mount();
+    saveDocument.mockClear();
+    saveDocument.mockRejectedValueOnce(new Error('offline'));
+
+    await act(async () => {
+      harness.editor.setDocName('Renamed by the author');
+    });
+    await sendWith([]);
+
+    // The editor reports the save failure itself. Refusing to answer on top of
+    // that helps nobody.
+    await waitFor(() => expect(streamAgentChat).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('a chat id the server no longer has', () => {
+  it('starts a fresh conversation on this document instead of wedging', async () => {
+    await mount();
+
+    await act(async () => {
+      harness.chats.setSelectedChatId('deleted-chat');
+    });
+    await waitFor(() => expect(harness.chats.selectedChatId).toBe('deleted-chat'));
+
+    let attempt = 0;
+    streamAgentChat.mockImplementation(
+      async (_params: unknown, handlers: SSEEventHandlers) => {
+        attempt += 1;
+        if (attempt === 1) {
+          handlers.onError?.('CHAT_NOT_FOUND', 'Chat not found for this document.');
+          return { chatId: null, threadId: null, usage: null };
+        }
+        handlers.onDone?.('fresh-chat', 4, { promptTokens: 0, completionTokens: 0 });
+        return { chatId: 'fresh-chat', threadId: 4, usage: null };
+      },
+    );
+
+    await compose('carry on');
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+
+    await waitFor(() => expect(streamAgentChat).toHaveBeenCalledTimes(2));
+    expect(streamAgentChat.mock.calls[1][0]).toMatchObject({
+      document_id: DOC_ID,
+      chat_id: null,
+      thread_id: null,
+    });
+    await waitFor(() => expect(harness.chats.selectedChatId).toBe('fresh-chat'));
+    // Recovered without ever showing the author an error it had already fixed.
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('reports the failure when the retry fails too', async () => {
+    await mount();
+
+    streamAgentChat.mockImplementation(
+      async (_params: unknown, handlers: SSEEventHandlers) => {
+        handlers.onError?.('CHAT_NOT_FOUND', 'Chat not found for this document.');
+        return { chatId: null, threadId: null, usage: null };
+      },
+    );
+
+    await compose('carry on');
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+
+    await waitFor(() => expect(streamAgentChat).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('Chat not found'),
+    );
   });
 });

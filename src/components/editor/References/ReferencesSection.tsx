@@ -113,7 +113,7 @@ function ReferenceRow({ entry, style }: { entry: BibliographyEntry; style: Citat
  * is this in my bibliography?" — answerable only by reading the whole document.
  */
 function BackLinks({ entry }: { entry: BibliographyEntry }) {
-  const name = entry.source.title ?? entry.key;
+  const name = entry.source.title ?? entry.displayKey;
   const single = entry.usages.length === 1;
 
   return (

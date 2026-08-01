@@ -13,6 +13,16 @@ export type EditorContextValue = {
   refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
   registerEditable: (id: string, element: HTMLDivElement | null) => void;
   documentId: string | null;
+  /**
+   * Which document the workspace is on, independent of whether it has been
+   * saved yet.
+   *
+   * Changes on a genuine navigation — opening another document, starting a new
+   * one — and *not* when a local draft is first saved and acquires an id. State
+   * that belongs to the open document rather than to its stored identity, such
+   * as the assistant's transcript, keys on this.
+   */
+  documentSessionId: string;
   /** The requested document while the committed document remains on screen. */
   loadingDocumentId: string | null;
   activeId: string | null;
@@ -53,6 +63,14 @@ export type EditorContextValue = {
   };
   createRemote: (docOverride?: DocumentInput) => Promise<string>;
   createAndSwitch: (doc: DocumentInput) => Promise<string>;
+  /**
+   * The open document's server id, creating it first if it has none.
+   *
+   * Resolves to `null` when creation failed — the caller says so rather than
+   * the editor throwing at whatever the author was doing. Concurrent callers
+   * share one creation, so the document is never created twice.
+   */
+  ensureRemoteDocument: () => Promise<string | null>;
   saveRemote: (docOverride?: DocumentInput) => Promise<void>;
   loadRemote: (id: string) => Promise<boolean>;
   switchTo: (

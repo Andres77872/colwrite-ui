@@ -1,7 +1,17 @@
+import { citationYear } from './citations';
 import type { Block, ParagraphChild, ToolOperation } from './types';
 
 /** Block types the canvas knows how to render. */
 const BLOCK_TYPES = new Set<Block['type']>(['paragraph', 'heading', 'divider']);
+
+/** Inline widget types the canvas has a component for. */
+const CHILD_TYPES = new Set<ParagraphChild['type']>([
+  'aiBeat',
+  'table',
+  'citation',
+  'equation',
+  'graph',
+]);
 
 const CHILD_ID_RE = /data-child-id="([^"]+)"/g;
 
@@ -10,6 +20,45 @@ export function placeholderIds(html: string): Set<string> {
   const ids = new Set<string>();
   for (const match of html.matchAll(CHILD_ID_RE)) ids.add(match[1]);
   return ids;
+}
+
+/**
+ * Validate inline children arriving from outside the editor.
+ *
+ * Two things get in here that the canvas cannot render. An unknown `type` has
+ * no component in the widget registry, and rendering `undefined` as an element
+ * takes down the whole document rather than the one widget. And a citation
+ * `year` can arrive as a number — the agent's `doc_edit` schema accepts a
+ * provider-style integer — which used to throw the moment the reference list
+ * formatted it.
+ *
+ * Both are dropped or repaired here rather than at each reader, so the rest of
+ * the editor can trust the declared types.
+ */
+export function coerceChildren(raw: unknown): ParagraphChild[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ParagraphChild[] = [];
+  for (const value of raw) {
+    if (!value || typeof value !== 'object') continue;
+    const child = value as Record<string, unknown>;
+    if (typeof child.id !== 'string' || child.id === '') continue;
+    if (!CHILD_TYPES.has(child.type as ParagraphChild['type'])) continue;
+
+    if (child.type !== 'citation' || !Array.isArray(child.sources)) {
+      out.push(child as unknown as ParagraphChild);
+      continue;
+    }
+    out.push({
+      ...child,
+      sources: child.sources.map((source) => {
+        if (!source || typeof source !== 'object') return source;
+        const year = citationYear((source as Record<string, unknown>).year);
+        const { year: _dropped, ...rest } = source as Record<string, unknown>;
+        return year ? { ...rest, year } : rest;
+      }),
+    } as unknown as ParagraphChild);
+  }
+  return out;
 }
 
 /**
@@ -32,11 +81,26 @@ export function withoutOrphanChildren(block: Block): Block {
   return { ...block, children: kept };
 }
 
-/** Repair every paragraph in a document. Used when adopting foreign state. */
+/**
+ * Repair every paragraph in a document. Used when adopting foreign state.
+ *
+ * This is the load path as well as the adopt path, so it has to survive
+ * whatever is already stored: documents written before the child contract was
+ * enforced can hold an unrenderable widget or a numeric year, and neither
+ * should cost the author their document.
+ */
 export function reconcileBlocks(blocks: Block[]): Block[] {
   let changed = false;
   const out = blocks.map((block) => {
-    const next = withoutOrphanChildren(block);
+    let next = block;
+    if (block.type === 'paragraph' && Array.isArray(block.children)) {
+      const children = coerceChildren(block.children);
+      if (children.length !== block.children.length) next = { ...block, children };
+      else if (children.some((child, index) => child !== block.children![index])) {
+        next = { ...block, children };
+      }
+    }
+    next = withoutOrphanChildren(next);
     if (next !== block) changed = true;
     return next;
   });
@@ -74,11 +138,7 @@ export function coerceBlock(raw: unknown): Block | null {
   const columns = Number.isFinite(rawColumns)
     ? Math.max(1, Math.min(6, Math.floor(rawColumns)))
     : 1;
-  const children = Array.isArray(candidate.children)
-    ? (candidate.children as ParagraphChild[]).filter(
-        (child) => child && typeof child === 'object' && typeof child.id === 'string',
-      )
-    : [];
+  const children = coerceChildren(candidate.children);
 
   return withoutOrphanChildren({
     ...candidate,
@@ -134,7 +194,15 @@ export function applyPatchToBlocks(
           break;
         }
         // A partial merge, mirroring the server: unspecified fields are kept.
-        next[idx] = withoutOrphanChildren({ ...next[idx], ...op.block } as Block);
+        // Coerced rather than cast, because the merged result is as much
+        // agent-authored as an inserted block is — a bad child here would
+        // otherwise reach the canvas by the one path that never validated.
+        const merged = coerceBlock({ ...next[idx], ...op.block });
+        if (!merged) {
+          desynced.push(op);
+          break;
+        }
+        next[idx] = merged;
         touched.push(op.blockId);
         break;
       }

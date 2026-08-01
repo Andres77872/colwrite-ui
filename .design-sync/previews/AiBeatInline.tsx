@@ -6,10 +6,11 @@ import { AiBeatInline } from 'colwrite-ui';
 // span of the document that is machine-written and re-runnable.
 //
 // It takes AiBeatWidgetProps — the six shared InlineWidgetProps fields plus
-// `documentId` and `createRemote`, which it needs to be able to generate into a
-// document that does not exist yet. `createRemote` is never called in a static
-// card; it is wired to a rejected promise rather than a no-op so that an
-// accidental call would surface rather than hang.
+// `documentId` and `ensureRemoteDocument`, which it needs because the agent
+// addresses the document by id and a draft that has never been saved has none.
+// `ensureRemoteDocument` is never called in a static card; it is wired to a
+// rejected promise rather than a no-op so that an accidental call would surface
+// rather than hang.
 //
 // `output` is the only field the widget also keeps locally, because it arrives
 // token by token while generating. These cells pin it, so they show settled
@@ -25,7 +26,7 @@ const wiring = {
   updateHtml: noop,
   refs,
   documentId: 'doc-1',
-  createRemote: () => Promise.reject(new Error('not reachable from a preview')),
+  ensureRemoteDocument: () => Promise.reject(new Error('not reachable from a preview')),
 };
 
 export function Generated() {

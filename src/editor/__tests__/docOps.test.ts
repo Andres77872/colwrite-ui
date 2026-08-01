@@ -43,6 +43,37 @@ describe('applyPatchToBlocks', () => {
     expect(result[1].type).toBe('paragraph');
   });
 
+  it('validates the merged block, not just the inserted ones', () => {
+    // `replace_block` used to spread the agent's payload over the current
+    // block and cast the result, so it was the one write path that could put
+    // an unrenderable child on the canvas.
+    const result = blocksOf(initialBlocks, [
+      {
+        op: 'replace_block',
+        blockId: 'b',
+        block: {
+          html: '<span data-child-id="c1"></span><span data-child-id="c2"></span>',
+          children: [
+            { id: 'c1', type: 'footnote' },
+            { id: 'c2', type: 'citation', keys: ['k'], sources: [{ key: 'k', year: 2020 }] },
+          ],
+        },
+      },
+    ]);
+
+    expect((result[1] as ParagraphBlock).children).toEqual([
+      { id: 'c2', type: 'citation', keys: ['k'], sources: [{ key: 'k', year: '2020' }] },
+    ]);
+  });
+
+  it('reports a replace_block that would destroy the block as desynced', () => {
+    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
+      { op: 'replace_block', blockId: 'b', block: { type: 'sidebar' } },
+    ]);
+    expect(blocks).toEqual(initialBlocks);
+    expect(desynced).toHaveLength(1);
+  });
+
   it('reports replace_block against a missing id as desynced', () => {
     const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
       { op: 'replace_block', blockId: 'nonexistent', block: { html: '<p>X</p>' } },
@@ -185,6 +216,78 @@ describe('coerceBlock', () => {
 
   it('keeps a divider without inventing content fields', () => {
     expect(coerceBlock({ id: 'd', type: 'divider' })).toEqual({ id: 'd', type: 'divider' });
+  });
+});
+
+// ── inline children arriving from outside the editor ──
+
+const withChildren = (children: unknown[]) => ({
+  id: 'p',
+  type: 'paragraph',
+  html:
+    '<span data-child-id="c1"></span><span data-child-id="c2"></span>' +
+    '<span data-child-id="c3"></span>',
+  children,
+});
+
+describe('coerceChildren', () => {
+  it('drops a child the canvas has no widget for', () => {
+    // The registry lookup is by `type`; an unknown one used to resolve to
+    // `undefined` and unmount the whole document rather than the one widget.
+    const block = coerceBlock(
+      withChildren([
+        { id: 'c1', type: 'citation', keys: ['k'] },
+        { id: 'c2', type: 'footnote' },
+        { id: 'c3', type: 'equation', latex: 'x' },
+      ]),
+    ) as ParagraphBlock;
+
+    expect(block.children?.map((child) => child.id)).toEqual(['c1', 'c3']);
+  });
+
+  it('drops a child with no usable id', () => {
+    const block = coerceBlock(
+      withChildren([{ type: 'citation', keys: ['k'] }, { id: '', type: 'citation' }, null]),
+    ) as ParagraphBlock;
+
+    expect(block.children).toEqual([]);
+  });
+
+  it('turns a provider-style integer year into the text the editor expects', () => {
+    const block = coerceBlock(
+      withChildren([
+        {
+          id: 'c1',
+          type: 'citation',
+          keys: ['k'],
+          sources: [{ key: 'k', title: 'T', year: 2020 }],
+        },
+      ]),
+    ) as ParagraphBlock;
+
+    expect(block.children?.[0]).toMatchObject({
+      sources: [{ key: 'k', title: 'T', year: '2020' }],
+    });
+  });
+
+  it('sanitises a document loaded from storage, not just one from the wire', () => {
+    // `reconcileBlocks` is the load path. A bad child already in the database
+    // would otherwise crash the canvas before any tool call happens.
+    const [block] = reconcileBlocks([
+      withChildren([
+        { id: 'c1', type: 'footnote' },
+        { id: 'c2', type: 'citation', keys: ['k'], sources: [{ key: 'k', year: 1999 }] },
+      ]) as unknown as Block,
+    ]);
+
+    expect((block as ParagraphBlock).children).toEqual([
+      { id: 'c2', type: 'citation', keys: ['k'], sources: [{ key: 'k', year: '1999' }] },
+    ]);
+  });
+
+  it('leaves a clean document identical', () => {
+    const blocks = [makeBlock('a'), makeBlock('b')];
+    expect(reconcileBlocks(blocks)).toBe(blocks);
   });
 });
 

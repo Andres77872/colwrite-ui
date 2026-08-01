@@ -25,7 +25,7 @@ export function AiBeatInline({ child, ...rest }: AiBeatWidgetProps) {
 }
 
 function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
-  const { blockId, child, updateHtml, refs, documentId, createRemote } = props;
+  const { blockId, child, updateHtml, refs, documentId, ensureRemoteDocument } = props;
   const { patch, remove } = useInlineChild(props);
 
   // Only the streamed output is local: it arrives token by token, and writing
@@ -57,7 +57,13 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
 
     let text = '';
     try {
-      const docId = documentId ?? (await createRemote());
+      // Shared with the assistant and the selection toolbar, so a draft that
+      // several of them reach for at once is created exactly once.
+      const docId = documentId ?? (await ensureRemoteDocument());
+      if (!docId) {
+        setError('This document could not be saved, so nothing could be generated for it.');
+        return;
+      }
       await streamAgentChat(
         {
           message: `Use this prompt: ${prompt}\n\nGenerate response for: ${message}`,

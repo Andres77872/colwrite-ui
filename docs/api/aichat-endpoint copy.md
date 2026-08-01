@@ -1,5 +1,12 @@
 # API: /document/aichat/{document_id}
 
+> **Removed. Kept for history only — do not implement against this.**
+>
+> See the banner in [`docs/aichat-endpoint.md`](../aichat-endpoint.md). Agent
+> interaction now goes through `POST /api/agent/chat`; the chat and thread ids
+> this document passes as `x-chat-id` / `x-thread-id` headers are fields of that
+> request body instead.
+
 This endpoint streams an AI assistant conversation tailored for scientific writing. It detects user intent (ask, edit, create) and answers in a clear academic tone, while simultaneously emitting a machine-usable JSON payload that instructs a document editor how to apply changes.
 
 The server streams two parallel channels over SSE:

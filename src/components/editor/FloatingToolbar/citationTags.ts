@@ -1,5 +1,5 @@
 import type { CitationChild, CitationSource } from '@/editor/types';
-import { canonicalDoi } from '@/editor/citations';
+import { canonicalCitationKey, canonicalDoi } from '@/editor/citations';
 import type { AiAction } from '@/config/aiActions';
 import { uid } from '@/lib/uid';
 
@@ -18,7 +18,8 @@ type CitationPart = {
 export type CitationSuggestionPart = TextPart | CitationPart;
 
 const CITATION_TAG = /<citation\b([^<>]*?)\/>/gi;
-const CITATION_MARKER = /<\/?citation\b/i;
+/** Any citation-shaped markup, well-formed or not. What must never reach text. */
+const CITATION_MARKUP = /<\/?citation\b[^<>]*>?/gi;
 const ATTRIBUTE = /([A-Za-z_][\w:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 const ALLOWED_ATTRIBUTES = new Set([
   'title',
@@ -116,13 +117,20 @@ function citationPart(rawAttributes: string): CitationPart | null {
   const semanticScholarId =
     attributes.paper_id || semanticScholarIdFromUrl(parsedUrl);
   const explicitId = attributes.id?.trim();
-  const key =
+  // DOI, then arXiv, then the Semantic Scholar id — the order the backend
+  // pipeline, the research route and the citation popover all use. This path
+  // used to prefer `S2:` over arXiv, so a paper carrying both was keyed one
+  // way by the server and another way here, and the reference list showed it
+  // twice.
+  const key = canonicalCitationKey(
     doi ??
-    (semanticScholarId ? `S2:${semanticScholarId}` : undefined) ??
-    explicitKey ??
-    explicitId ??
-    arxivId ??
-    parsedUrl?.toString();
+      arxivId ??
+      (semanticScholarId ? `S2:${semanticScholarId}` : undefined) ??
+      explicitKey ??
+      explicitId ??
+      parsedUrl?.toString() ??
+      '',
+  );
   if (!key) return null;
 
   const provider: CitationSource['provider'] = arxivId
@@ -168,39 +176,79 @@ function citationPart(rawAttributes: string): CitationPart | null {
 }
 
 /**
+ * Remove every citation tag, well-formed or not.
+ *
+ * The safety net for text that is about to become document content. The
+ * rewriter is a model emitting free-form markup, so "this does not parse" is a
+ * routine outcome, and the one result that is never acceptable is the author's
+ * paragraph acquiring a literal `<citation title="…" />`.
+ */
+export function stripCitationTags(text: string): string {
+  return text.replace(CITATION_MARKUP, '');
+}
+
+function citationMarkupCount(text: string): number {
+  return text.match(CITATION_MARKUP)?.length ?? 0;
+}
+
+export type CitationSuggestion = {
+  parts: CitationSuggestionPart[];
+  /** Tags that could not be read and were dropped rather than shown. */
+  degraded: number;
+};
+
+/**
  * Parse the citation tag format produced by the backend citation rewriter.
  *
- * A malformed/unknown citation tag invalidates the structured transform and
- * returns `null`; callers then retain the original response as plain text.
- * Non-citation text is never parsed as HTML.
+ * Degradation is per tag. It used to be all-or-nothing: one attribute outside
+ * the allowlist discarded every citation in the response, and the caller's
+ * fallback then pasted the raw markup into the document. A tag that cannot be
+ * read is now dropped on its own and counted in `degraded`, so a rewrite that
+ * found six sources and mangled one still delivers five.
+ *
+ * `null` means nothing readable was found at all. Non-citation text is never
+ * parsed as HTML.
  */
-export function parseCitationSuggestion(text: string): CitationSuggestionPart[] | null {
+export function parseCitationSuggestion(text: string): CitationSuggestion | null {
   const parts: CitationSuggestionPart[] = [];
   let cursor = 0;
   let citations = 0;
-  CITATION_TAG.lastIndex = 0;
+  let degraded = 0;
 
+  // Stray markup is stripped rather than kept, and adjacent text is merged so
+  // removing a tag does not leave two parts where the author sees one run.
+  const pushText = (value: string) => {
+    degraded += citationMarkupCount(value);
+    const cleaned = stripCitationTags(value);
+    if (!cleaned) return;
+    const last = parts.at(-1);
+    if (last?.type === 'text') last.text += cleaned;
+    else parts.push({ type: 'text', text: cleaned });
+  };
+
+  CITATION_TAG.lastIndex = 0;
   for (let match = CITATION_TAG.exec(text); match; match = CITATION_TAG.exec(text)) {
-    const before = text.slice(cursor, match.index);
-    if (CITATION_MARKER.test(before)) return null;
-    if (before) parts.push({ type: 'text', text: before });
+    pushText(text.slice(cursor, match.index));
 
     const citation = citationPart(match[1]);
-    if (!citation) return null;
-    parts.push(citation);
-    citations += 1;
+    if (citation) {
+      parts.push(citation);
+      citations += 1;
+    } else {
+      degraded += 1;
+    }
     cursor = CITATION_TAG.lastIndex;
   }
 
-  const tail = text.slice(cursor);
-  if (CITATION_MARKER.test(tail)) return null;
-  if (tail) parts.push({ type: 'text', text: tail });
-  return citations > 0 ? parts : null;
+  pushText(text.slice(cursor));
+  return citations > 0 ? { parts, degraded } : null;
 }
 
 export type MaterializedCitationSuggestion = {
   fragment: DocumentFragment;
   children: CitationChild[];
+  /** Tags that could not be read and were dropped rather than shown. */
+  degraded: number;
 };
 
 /**
@@ -226,12 +274,12 @@ export function materializeCitationSuggestion(
   text: string,
   idFactory: () => string = uid,
 ): MaterializedCitationSuggestion | null {
-  const parts = parseCitationSuggestion(text);
-  if (!parts) return null;
+  const parsed = parseCitationSuggestion(text);
+  if (!parsed) return null;
 
   const fragment = document.createDocumentFragment();
   const children: CitationChild[] = [];
-  for (const part of parts) {
+  for (const part of parsed.parts) {
     if (part.type === 'text') {
       fragment.append(document.createTextNode(part.text));
       continue;
@@ -251,7 +299,7 @@ export function materializeCitationSuggestion(
       ...(part.locator ? { locator: part.locator } : {}),
     });
   }
-  return { fragment, children };
+  return { fragment, children, degraded: parsed.degraded };
 }
 
 /** The structured transform is intentionally unavailable to every other AI action. */

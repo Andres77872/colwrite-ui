@@ -35,7 +35,7 @@ const EDITOR = {
   removeParagraphChild: noop,
   updateHtml: noop,
   documentId: 'doc-1',
-  createRemote: () => Promise.reject(new Error('not reachable from a preview')),
+  ensureRemoteDocument: () => Promise.reject(new Error('not reachable from a preview')),
 };
 
 function Frame({ children }: { children: React.ReactNode }) {

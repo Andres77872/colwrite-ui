@@ -58,6 +58,44 @@ Do not add npm peer overrides for this bridge.
 
 Document model details are in [docs/document-json.md](./docs/document-json.md).
 
+## The assistant and the document
+
+Every agent interaction goes through one endpoint, `POST /api/agent/chat`, and
+every one of them is addressed by document id. A conversation therefore belongs
+to a document, not to the app: the server stores the chat against
+`document_id`, refuses a `chat_id` that belongs to a different document, and
+binds the agent's `doc_edit` tool to the document the request named. The client
+holds up its half of that contract in three places.
+
+**Attachment.** A draft that has only ever existed in this browser has no id to
+address, so sending the first message — or creating the first chat from the
+Chats panel — saves it and attaches the conversation to the document that
+results. The selection toolbar's AI actions and the inline AI Beat widget take
+the same path, through `ensureRemoteDocument()`, which several callers can await
+concurrently without creating the document twice. Acquiring an id is *not*
+navigation: `documentSessionId` is what changes when the author actually opens
+another document, and it is what the assistant panel is keyed on, so saving a
+draft mid-sentence no longer discards the conversation that asked for it.
+
+**Freshness.** Local edits reach the server on a five-second autosave. Sending a
+message flushes them first, because the agent reads the stored document and
+would otherwise answer about a paragraph the author had already replaced.
+
+**Scope.** A `tool_action` names the document it was produced against, and the
+review layer scopes its two halves separately. Block operations are staged only
+when that id is the open document. `doc_create` is the exception that used to
+look like the assistant doing nothing at all: it names the document it has just
+made, which is never the one on screen, so it contributes an invitation in the
+review bar — "the assistant created a new document", open it or stay — and never
+an edit to the document being read.
+
+Nothing the agent proposes is written behind the author's back. Under the
+server's default `apply_mode`, `doc_edit` stages operations rather than saving
+them; they arrive as `status: "proposed"` and render as accept/reject cards on
+the blocks they affect. Only an accept enters editor state and the autosave
+path. A server running in `auto` mode sends `status: "applied"` instead, which
+the client replays as an already-committed change and adopts the version from.
+
 ## Profile and usage dashboard
 
 The account menu in the topbar opens a second full-page surface: the profile

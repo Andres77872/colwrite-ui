@@ -4,6 +4,7 @@ import {
   materializeCitationSuggestion,
   materializeCitationSuggestionForAction,
   parseCitationSuggestion,
+  stripCitationTags,
 } from './citationTags';
 
 describe('citation suggestion tags', () => {
@@ -12,7 +13,8 @@ describe('citation suggestion tags', () => {
       'Claim one <citation title="Paper &amp; Proof" authors="Smith (2024)" page="12" url="https://arxiv.org/abs/2401.00001" /> then more.',
     );
 
-    expect(parsed).toEqual([
+    expect(parsed?.degraded).toBe(0);
+    expect(parsed?.parts).toEqual([
       { type: 'text', text: 'Claim one ' },
       {
         type: 'citation',
@@ -39,12 +41,12 @@ describe('citation suggestion tags', () => {
       "<citation title='S2 paper' paper_id='abc123' url='https://www.semanticscholar.org/paper/abc123' />",
     );
 
-    expect(doi?.[0]).toMatchObject({
+    expect(doi?.parts[0]).toMatchObject({
       type: 'citation',
       key: '10.1000/abc',
       source: { doi: '10.1000/abc' },
     });
-    expect(semantic?.[0]).toMatchObject({
+    expect(semantic?.parts[0]).toMatchObject({
       type: 'citation',
       key: 'S2:abc123',
       source: {
@@ -54,6 +56,25 @@ describe('citation suggestion tags', () => {
     });
   });
 
+  it('prefers an arXiv id over a Semantic Scholar id, as the backend does', () => {
+    // This path used to rank `S2:` above arXiv while every backend stage
+    // ranked it below, so a paper carrying both was keyed one way by the
+    // server and another way here — and printed twice in the reference list.
+    const parsed = parseCitationSuggestion(
+      '<citation title="Both ids" paper_id="s2id" url="https://arxiv.org/abs/2401.00003v2" />',
+    );
+
+    expect(parsed?.parts[0]).toMatchObject({ type: 'citation', key: '2401.00003' });
+  });
+
+  it('canonicalizes the key it mints', () => {
+    const parsed = parseCitationSuggestion(
+      '<citation title="Versioned" key="arXiv:2401.00004v9" url="https://example.test/p" />',
+    );
+
+    expect(parsed?.parts[0]).toMatchObject({ key: '2401.00004' });
+  });
+
   it('honors the backend DOI key before Semantic Scholar URL identity', () => {
     const parsed = parseCitationSuggestion(
       '<citation key="DOI:10.1000/Backend.Key." title="Backend paper" ' +
@@ -61,7 +82,7 @@ describe('citation suggestion tags', () => {
         'url="https://www.semanticscholar.org/paper/backend-paper" />',
     );
 
-    expect(parsed?.[0]).toMatchObject({
+    expect(parsed?.parts[0]).toMatchObject({
       type: 'citation',
       key: '10.1000/backend.key',
       source: {
@@ -83,6 +104,9 @@ describe('citation suggestion tags', () => {
   ])('falls back when a citation tag is malformed: %s', (value) => {
     expect(parseCitationSuggestion(value)).toBeNull();
     expect(materializeCitationSuggestion(value, () => 'unused')).toBeNull();
+    // Whatever the caller does with the fallback text, no citation markup
+    // survives to become document content.
+    expect(stripCitationTags(value)).not.toContain('citation');
   });
 
   it('creates text nodes and empty placeholders without injecting raw HTML', () => {
@@ -106,12 +130,32 @@ describe('citation suggestion tags', () => {
     ]);
   });
 
-  it('rejects the whole structured transform when one of several tags is malformed', () => {
-    expect(
-      parseCitationSuggestion(
-        'Good <citation title="A" key="a" url="https://example.test/a" /> bad <citation title="B">',
-      ),
-    ).toBeNull();
+  it('keeps the readable citations when one of several tags is malformed', () => {
+    const parsed = parseCitationSuggestion(
+      'Good <citation title="A" key="a" url="https://example.test/a" /> bad <citation title="B">',
+    );
+
+    expect(parsed?.degraded).toBe(1);
+    expect(parsed?.parts).toEqual([
+      { type: 'text', text: 'Good ' },
+      expect.objectContaining({ type: 'citation', key: 'a' }),
+      { type: 'text', text: ' bad ' },
+    ]);
+  });
+
+  it('never lets citation markup reach the document as text', () => {
+    const materialized = materializeCitationSuggestion(
+      'Kept <citation title="A" key="a" url="https://example.test/a" /> then ' +
+        '<citation title="unreadable" onclick="x" /> and <citation title="B">',
+      () => 'citation-1',
+    );
+    const host = document.createElement('div');
+    if (materialized) host.append(materialized.fragment);
+
+    expect(materialized?.degraded).toBe(2);
+    expect(materialized?.children).toHaveLength(1);
+    expect(host.textContent).not.toContain('<citation');
+    expect(host.textContent).toBe('Kept  then  and ');
   });
 
   it('only materializes citation tags for the search-for-references action', () => {

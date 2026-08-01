@@ -22,7 +22,7 @@ const INLINE_WIDGETS: Record<ParagraphChild['type'], ComponentType<AiBeatWidgetP
 };
 
 export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P }) {
-  const { refs, updateParagraphChild, removeParagraphChild, updateHtml, documentId, createRemote } = useEditor();
+  const { refs, updateParagraphChild, removeParagraphChild, updateHtml, documentId, ensureRemoteDocument } = useEditor();
   const [mounts, setMounts] = useState<Array<{ id: string; el: HTMLElement }>>([]);
 
   // Mount child components referenced inside HTML placeholders.
@@ -83,6 +83,10 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
         const child = (block.children || []).find(c => c.id === id);
         if (!child) return null;
         const Widget = INLINE_WIDGETS[child.type];
+        // A child type with no component renders as `undefined`, which throws
+        // and unmounts the whole canvas rather than the one widget. Documents
+        // written before the child contract was enforced still hold these.
+        if (!Widget) return null;
         return createPortal(
           <Widget
             blockId={block.id}
@@ -92,7 +96,7 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
             updateHtml={updateHtml}
             refs={refs}
             documentId={documentId}
-            createRemote={createRemote}
+            ensureRemoteDocument={ensureRemoteDocument}
           />,
           el,
           id,

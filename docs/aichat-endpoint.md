@@ -1,5 +1,17 @@
 # API: /document/aichat/{document_id}
 
+> **Removed. Kept for history only — do not implement against this.**
+>
+> The backend no longer serves this route, and the `<EXTRAS_JSON>` protocol
+> below no longer exists. All agent interaction goes through
+> `POST /api/agent/chat`, which streams typed SSE events (`status`, `token`,
+> `tool_call_start`, `tool_call_end`, `tool_action`, `error`, `done`) rather
+> than prose with an embedded JSON envelope, and stages document operations for
+> review instead of returning patches to apply. The client contract lives in
+> `src/services/agentChat.ts` and `src/services/streamParser.ts`; how it reaches
+> the document is described under "The assistant and the document" in the
+> [README](../README.md).
+
 This endpoint streams an AI assistant conversation tailored for scientific writing. It detects user intent (ask, edit, create) and answers in a clear academic tone, while simultaneously emitting a machine-usable JSON payload that instructs a document editor how to apply changes.
 
 The server streams two parallel channels over SSE:

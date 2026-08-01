@@ -223,6 +223,10 @@ describe('FloatingToolbar structured citation acceptance', () => {
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Search references' }));
 
+    // An unsaved draft is saved before the agent is asked anything — it
+    // addresses the document by id. Only once the suggestion has actually
+    // streamed in is there something to accept.
+    await waitFor(() => expect(actionMocks.dispatch).toHaveBeenCalled());
     const accept = await screen.findByRole('button', { name: 'Accept suggestion' });
     // `click`, not `mouseDown` — the control has to answer the event that Enter
     // and Space produce, or the suggestion cannot be accepted without a mouse.
