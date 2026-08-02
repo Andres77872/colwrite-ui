@@ -1,4 +1,4 @@
-import { BookOpen, FileCode, MessageSquare, Network, ScanSearch, Search } from 'lucide-react';
+import { BookOpen, FileCode, History, MessageSquare, Network, ScanSearch, Search } from 'lucide-react';
 import type { ElementType } from 'react';
 import type { ToolId } from './panelsContextState';
 
@@ -58,6 +58,12 @@ export const TOOLS: readonly ToolMeta[] = [
     label: 'Chats',
     description: 'Assistant conversations about this document.',
     icon: MessageSquare,
+  },
+  {
+    id: 'history',
+    label: 'History',
+    description: 'Saved versions of this document — see what changed and restore.',
+    icon: History,
   },
 ] as const;
 

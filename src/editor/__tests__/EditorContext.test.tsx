@@ -33,12 +33,22 @@ const listDocuments = vi.fn(async () => ({
   message: '',
 }));
 
+const fetchReferenceReadiness = vi.fn(async (_id: string) => ({
+  ready: true,
+  readinessStatus: 'ready',
+  expectedHeadSeq: 4,
+  appliedHeadSeq: 4,
+  retryable: false,
+  retryAfterSeconds: 0,
+}));
+
 vi.mock('@/services', () => ({
   createDocument: (document: unknown) => createDocument(document),
   saveDocument: (id: string, document: unknown) => saveDocument(id, document),
   loadDocument: (id: string, init?: { signal?: AbortSignal }) => loadDocument(id, init),
   deleteDocument: (id: string) => deleteDocument(id),
   listDocuments: () => listDocuments(),
+  fetchReferenceReadiness: (id: string) => fetchReferenceReadiness(id),
 }));
 
 const { EditorProvider, useEditor } = await import('@/editor');
@@ -112,6 +122,14 @@ beforeEach(() => {
     sortOrder: 'desc',
     status: 'ok',
     message: '',
+  });
+  fetchReferenceReadiness.mockReset().mockResolvedValue({
+    ready: true,
+    readinessStatus: 'ready',
+    expectedHeadSeq: 4,
+    appliedHeadSeq: 4,
+    retryable: false,
+    retryAfterSeconds: 0,
   });
 });
 
@@ -581,5 +599,108 @@ describe('attaching a draft to a document id', () => {
     const afterSwitch = currentEditor().documentSessionId;
     act(() => currentEditor().newLocal());
     expect(currentEditor().documentSessionId).not.toBe(afterSwitch);
+  });
+});
+
+describe('waitForReady', () => {
+  it('flushes pending edits first and reports ready from the probe', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockClear();
+
+    act(() => currentEditor().setDocName('Edited before asking'));
+    expect(currentEditor().hasPendingEdits()).toBe(true);
+
+    let result: { ready: boolean; status: string } | undefined;
+    await act(async () => {
+      result = await currentEditor().waitForReady();
+    });
+
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(fetchReferenceReadiness).toHaveBeenCalledWith('doc-1');
+    expect(result).toEqual({ ready: true, status: 'ready' });
+    // The save adopted the server's returned version as the new head seq.
+    expect(currentEditor().savedHeadSeq()).toBe(4);
+  });
+
+  it('memoizes readiness per head seq and skips the probe next time', async () => {
+    await mountRemoteDocument();
+
+    await act(async () => {
+      await currentEditor().waitForReady();
+    });
+    fetchReferenceReadiness.mockClear();
+
+    let result: { ready: boolean; status: string } | undefined;
+    await act(async () => {
+      result = await currentEditor().waitForReady();
+    });
+
+    expect(fetchReferenceReadiness).not.toHaveBeenCalled();
+    expect(result).toEqual({ ready: true, status: 'ready' });
+  });
+
+  it('stops immediately on a terminal projection status', async () => {
+    await mountRemoteDocument();
+    fetchReferenceReadiness.mockResolvedValue({
+      ready: false,
+      readinessStatus: 'deleted',
+      expectedHeadSeq: 3,
+      appliedHeadSeq: null,
+      retryable: false,
+      retryAfterSeconds: 0,
+    });
+
+    let result: { ready: boolean; status: string } | undefined;
+    await act(async () => {
+      result = await currentEditor().waitForReady();
+    });
+
+    expect(fetchReferenceReadiness).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ ready: false, status: 'deleted' });
+  });
+
+  it('degrades to not-ready instead of throwing when the probe fails', async () => {
+    await mountRemoteDocument();
+    fetchReferenceReadiness.mockRejectedValue(new Error('network down'));
+
+    let result: { ready: boolean; status: string } | undefined;
+    await act(async () => {
+      result = await currentEditor().waitForReady();
+    });
+
+    expect(result).toEqual({ ready: false, status: 'unavailable' });
+  });
+
+  it('reports save_failed instead of probing when the flush fails', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockRejectedValueOnce(new Error('offline'));
+
+    act(() => currentEditor().setDocName('Edited before asking'));
+
+    let result: { ready: boolean; status: string } | undefined;
+    await act(async () => {
+      result = await currentEditor().waitForReady();
+    });
+
+    expect(result).toEqual({ ready: false, status: 'save_failed' });
+    expect(fetchReferenceReadiness).not.toHaveBeenCalled();
+  });
+
+  it('answers no_document for a draft that has never been saved', async () => {
+    localStorage.setItem('colwrite:hasRemoteDocs', 'false');
+    render(
+      <EditorProvider>
+        <CaptureEditor />
+      </EditorProvider>,
+    );
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+
+    let result: { ready: boolean; status: string } | undefined;
+    await act(async () => {
+      result = await currentEditor().waitForReady({ save: false });
+    });
+
+    expect(result).toEqual({ ready: false, status: 'no_document' });
+    expect(fetchReferenceReadiness).not.toHaveBeenCalled();
   });
 });

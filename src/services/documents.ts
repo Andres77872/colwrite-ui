@@ -1,4 +1,4 @@
-import { get, post, put, del, type ApiRequestInit } from './api';
+import { get, getWithHeaders, post, put, del, type ApiRequestInit } from './api';
 import type { Block, Doc } from '../editor/types';
 import { coerceBlock } from '../editor/docOps';
 import {
@@ -12,14 +12,15 @@ import {
   isUnknownRecord,
 } from './contracts';
 
-// The backend expects { document: { ... } } where document is an object, not a raw array.
-// Convert our internal Doc or a blocks array to an object with a blocks property while
-// preserving any extra metadata like name/title if provided by callers.
-type BackendDocument = UnknownRecord & {
+// The backend expects { document: { ... } } where document is an object, not
+// a raw array. Canonical document content forbids unknown fields, so only the
+// fields the server models are ever sent — the legacy `title` alias and any
+// caller-supplied extras used to fail every save of a named document.
+type BackendDocument = {
   version: number;
   blocks: Block[];
   name?: string;
-  title?: string;
+  tags?: string[];
 };
 
 function normalizeBlocks(value: unknown): Block[] {
@@ -52,15 +53,19 @@ function normalizeBlock(value: unknown): Block | null {
 function toBackendDocument(input: unknown): BackendDocument {
   if (Array.isArray(input)) return { version: 1, blocks: input };
   if (isUnknownRecord(input)) {
-    const { version: rawVersion, blocks: rawBlocks, ...rest } = input;
-    const version = typeof rawVersion === 'number' ? rawVersion : 1;
-    const blocks = normalizeBlocks(rawBlocks);
-    const name = typeof rest.name === 'string' ? rest.name : undefined;
-    const title = typeof rest.title === 'string' ? rest.title : name;
-    // Ensure both name and title are present when possible for backend compatibility
-    const out: BackendDocument = { ...rest, version, blocks };
+    const version = typeof input.version === 'number' ? input.version : 1;
+    const blocks = normalizeBlocks(input.blocks);
+    // `title` is accepted from callers as an alias, but only `name` is sent.
+    const name =
+      (typeof input.name === 'string' && input.name)
+      || (typeof input.title === 'string' && input.title)
+      || undefined;
+    const tags = Array.isArray(input.tags)
+      ? input.tags.filter((tag): tag is string => typeof tag === 'string')
+      : undefined;
+    const out: BackendDocument = { version, blocks };
     if (name !== undefined) out.name = name;
-    if (title !== undefined) out.title = title;
+    if (tags !== undefined) out.tags = tags;
     return out;
   }
   return { version: 1, blocks: [] };
@@ -250,9 +255,29 @@ export async function listDocuments(
   };
 }
 
-// Delete a document by ID
-export async function deleteDocument(documentId: string): Promise<{ status: string; message: string }> {
-  return del<{ status: string; message: string }>(`/document/delete/${encodeURIComponent(documentId)}`);
+/**
+ * Delete a document by ID.
+ *
+ * Deletes must state which head they believe they are deleting — the server
+ * rejects an unconditioned delete. Callers that hold the document's version
+ * (the open editor) pass it; for anyone else (a list row) the current strong
+ * ETag is fetched and presented, which means "delete whatever is current".
+ */
+export async function deleteDocument(
+  documentId: string,
+  options: { version?: number } = {},
+): Promise<{ status: string; message: string }> {
+  const id = encodeURIComponent(documentId);
+  const { version } = options;
+  if (typeof version === 'number' && Number.isInteger(version) && version >= 1) {
+    return del<{ status: string; message: string }>(`/document/delete/${id}?version=${version}`);
+  }
+  const { headers } = await getWithHeaders<unknown>(`/v2/documents/${id}`);
+  const etag = headers.get('ETag');
+  if (!etag) throw new Error('The server did not provide a concurrency token.');
+  return del<{ status: string; message: string }>(`/document/delete/${id}`, {
+    headers: { 'If-Match': etag },
+  });
 }
 
 // Utility helpers to transform shapes if needed externally

@@ -31,23 +31,43 @@ const markRecentlyChanged = vi.fn();
 function editorValue(documentId: string): EditorContextValue {
   return {
     documentId,
+    blocks: [],
     applyPatch,
     adoptServerVersion,
     markRecentlyChanged,
   } as unknown as EditorContextValue;
 }
 
+/** A staged batch: one reviewable change, plus a document the agent created. */
 function proposal(documentId: string): ToolAction {
   return {
     tool: 'doc_edit',
     toolCallId: `call-${documentId}`,
     documentId,
     version: 1,
-    status: 'error',
-    message: 'Review failed',
+    status: 'proposed',
     actions: [
       { op: 'create_document', documentId: `${documentId}-created` },
       { op: 'append_block', block: { id: `${documentId}-block`, type: 'divider' } },
+    ],
+  };
+}
+
+/**
+ * A batch the server did not carry out.
+ *
+ * Its operations are deliberately not staged: an Accept button for work that
+ * failed would write the agent's abandoned draft into the document. Only the
+ * message reaches the author.
+ */
+function failedProposal(documentId: string): ToolAction {
+  return {
+    ...proposal(documentId),
+    toolCallId: `call-${documentId}-failed`,
+    status: 'error',
+    message: 'Review failed',
+    actions: [
+      { op: 'append_block', block: { id: `${documentId}-failed`, type: 'divider' } },
     ],
   };
 }
@@ -107,10 +127,13 @@ describe('document-scoped providers', () => {
 
     act(() => {
       currentReview().receive(proposal('doc-a'));
+      currentReview().receive(failedProposal('doc-a'));
       currentChats().setSelectedChatId('chat-a');
       currentChats().setSelectedThreadId(7);
     });
 
+    // Two batches arrived; only the one the server actually staged is
+    // reviewable. The failed one contributes its message and nothing else.
     expect(currentReview().pendingCount).toBe(1);
     expect(currentReview().invites).toHaveLength(1);
     expect(currentReview().focusedChangeId).not.toBeNull();

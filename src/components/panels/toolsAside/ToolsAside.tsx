@@ -9,6 +9,7 @@ import { SemanticScholarPanel } from '../SemanticScholarPanel';
 import { ColpaliPanel } from '../ColpaliPanel';
 import { LibraryPanel } from '../LibraryPanel';
 import { ChatsPanel } from '../ChatsPanel';
+import { HistoryPanel } from '../HistoryPanel';
 import { useAgentTools } from '@/components/preferences';
 import { PanelRight, X } from 'lucide-react';
 
@@ -19,6 +20,7 @@ const PANEL_BY_TOOL = {
   colpali: ColpaliPanel,
   library: LibraryPanel,
   chats: ChatsPanel,
+  history: HistoryPanel,
 } as const;
 
 /**

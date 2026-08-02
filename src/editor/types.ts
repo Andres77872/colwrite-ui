@@ -112,6 +112,13 @@ export type ToolOperation =
   | { op: 'update_meta'; meta: { name?: string } }
   | { op: 'create_document'; documentId: string };
 
+/** Outcome of a single operation inside a `doc_edit` call. */
+export type ToolOperationResult = {
+  op: string;
+  status: 'applied' | 'skipped' | 'error';
+  message?: string;
+};
+
 export type ToolAction = {
   tool: string;
   toolCallId: string;
@@ -126,4 +133,19 @@ export type ToolAction = {
    */
   status: 'proposed' | 'applied' | 'skipped' | 'error';
   message?: string;
+  /**
+   * Per-operation outcomes from the server. A batch can succeed overall while
+   * individual operations are skipped or fail; without these the assistant
+   * reported such a batch as a clean success.
+   */
+  operationResults?: ToolOperationResult[];
+  /**
+   * Durable review workflow: the server persisted this proposal as a change
+   * set and redacted the operations out of the stream. The authoritative
+   * operations must be fetched by this id, and accept/reject must be decided
+   * against the server — the change set is the record of the decision.
+   */
+  changeSetId?: string | null;
+  /** Operation count from the redacted proposal preview, for reporting. */
+  proposalOperationCount?: number;
 };

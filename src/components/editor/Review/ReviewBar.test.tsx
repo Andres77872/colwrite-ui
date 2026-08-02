@@ -8,6 +8,7 @@ const editorState = {
   loadingDocumentId: null as string | null,
 };
 const reviewState = {
+  sets: [],
   pending: [],
   pendingCount: 0,
   acceptAll: vi.fn(),

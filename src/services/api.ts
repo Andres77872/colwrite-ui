@@ -93,12 +93,32 @@ export function ensureRefreshed(): Promise<boolean> {
   return refreshInFlight;
 }
 
+/**
+ * A parsed response body plus its headers.
+ *
+ * Most endpoints put their whole contract in the body, but the v2 document
+ * endpoints carry the concurrency token in a strong `ETag` header that every
+ * subsequent write must echo back as `If-Match` — dropping headers there
+ * makes writes impossible, not just lossy.
+ */
+export type ApiResponse<T> = { data: T; headers: Headers };
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
   init?: ApiRequestInit,
 ): Promise<T> {
+  const { data } = await requestWithHeaders<T>(method, path, body, init);
+  return data;
+}
+
+async function requestWithHeaders<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  init?: ApiRequestInit,
+): Promise<ApiResponse<T>> {
   const { suppressAuthEvent, headers: initHeaders, ...rest } = init ?? {};
 
   // A multipart body carries its own generated boundary in the Content-Type
@@ -140,7 +160,7 @@ async function request<T>(
   } catch {
     data = null;
   }
-  if (res.ok) return data as T;
+  if (res.ok) return { data: data as T, headers: res.headers };
 
   if ((res.status === 401 || res.status === 403) && !suppressAuthEvent && !isSelfReporting(path)) {
     emitRequireLogin(res.status === 403 ? 'forbidden' : 'expired');
@@ -162,6 +182,21 @@ export async function put<T>(path: string, body?: unknown, init?: ApiRequestInit
 
 export async function del<T>(path: string, init?: ApiRequestInit): Promise<T> {
   return request<T>('DELETE', path, undefined, init);
+}
+
+export async function getWithHeaders<T>(
+  path: string,
+  init?: ApiRequestInit,
+): Promise<ApiResponse<T>> {
+  return requestWithHeaders<T>('GET', path, undefined, init);
+}
+
+export async function postWithHeaders<T>(
+  path: string,
+  body?: unknown,
+  init?: ApiRequestInit,
+): Promise<ApiResponse<T>> {
+  return requestWithHeaders<T>('POST', path, body, init);
 }
 
 export { ApiError } from './contracts';

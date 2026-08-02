@@ -185,7 +185,12 @@ describe('dispatchAction — replacement-text contract', () => {
 
   beforeEach(() => {
     mockStreamAgentChat.mockClear();
-    mockStreamAgentChat.mockResolvedValue({ chatId: null, threadId: null, usage: null });
+    mockStreamAgentChat.mockResolvedValue({
+      chatId: null,
+      threadId: null,
+      usage: null,
+      terminal: 'done',
+    });
   });
 
   it('runs in rewrite mode so the agent cannot edit the document', async () => {

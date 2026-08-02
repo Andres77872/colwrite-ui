@@ -22,7 +22,7 @@ const INLINE_WIDGETS: Record<ParagraphChild['type'], ComponentType<AiBeatWidgetP
 };
 
 export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P }) {
-  const { refs, updateParagraphChild, removeParagraphChild, updateHtml, documentId, ensureRemoteDocument } = useEditor();
+  const { refs, updateParagraphChild, removeParagraphChild, updateHtml, documentId, ensureRemoteDocument, waitForReady } = useEditor();
   const [mounts, setMounts] = useState<Array<{ id: string; el: HTMLElement }>>([]);
 
   // Mount child components referenced inside HTML placeholders.
@@ -97,6 +97,7 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
             refs={refs}
             documentId={documentId}
             ensureRemoteDocument={ensureRemoteDocument}
+            waitForReady={waitForReady}
           />,
           el,
           id,

@@ -3,13 +3,11 @@ import type { Block, ToolAction } from '../types';
 import {
   blockText,
   buildChangeSet,
-  changesForBlock,
   describeChange,
   documentChanges,
-  edgeChanges,
+  projectDocument,
   isReady,
   mergedBlock,
-  orphanChanges,
   pendingCount,
   proposedBlock,
 } from '../proposals';
@@ -71,8 +69,11 @@ describe('buildChangeSet', () => {
       }),
     );
 
-    expect(edgeChanges([set], 'start')).toHaveLength(1);
-    expect(edgeChanges([set], 'end')).toHaveLength(1);
+    expect(set.changes.map((change) => change.placement)).toEqual(['start', 'end']);
+    // One lands above the document, the other below it.
+    const rows = projectDocument(blocks, [set]).rows;
+    expect(rows[0]).toMatchObject({ kind: 'insert' });
+    expect(rows[rows.length - 1]).toMatchObject({ kind: 'insert' });
   });
 
   it('records a dependency when one operation targets another’s new block', () => {
@@ -169,9 +170,13 @@ describe('querying', () => {
     expect(pendingCount([half])).toBe(1);
   });
 
-  it('finds the changes anchored to a block', () => {
-    expect(changesForBlock([set], 'p')).toHaveLength(1);
-    expect(changesForBlock([set], 'h')).toHaveLength(0);
+  it('attaches the changes about a block to that block\u2019s row', () => {
+    const rows = projectDocument(blocks, [set]).rows;
+    const rowFor = (id: string) =>
+      rows.find((row) => row.kind === 'block' && row.block.id === id);
+
+    expect(rowFor('p')).toMatchObject({ changes: [expect.objectContaining({ anchorBlockId: 'p' })] });
+    expect(rowFor('h')).toMatchObject({ changes: [] });
   });
 
   it('separates document-level changes from block ones', () => {
@@ -182,12 +187,13 @@ describe('querying', () => {
   it('surfaces changes whose block has been deleted', () => {
     // Otherwise the review bar counts a suggestion that renders nowhere, and
     // the author cannot reach it to dismiss it.
-    expect(orphanChanges([set], blocks)).toHaveLength(0);
-    expect(orphanChanges([set], [blocks[0]])).toHaveLength(1);
+    expect(projectDocument(blocks, [set]).orphans).toHaveLength(0);
+    expect(projectDocument([blocks[0]], [set]).orphans).toHaveLength(1);
   });
 
   it('does not treat a document-level change as orphaned', () => {
-    expect(orphanChanges([set], []).map((c) => c.kind)).not.toContain('rename');
+    // A rename has no block to be homeless from; the header reviews it.
+    expect(projectDocument([], [set]).orphans.map((c) => c.kind)).not.toContain('rename');
   });
 });
 
@@ -245,10 +251,12 @@ describe('rendering helpers', () => {
       }),
     );
 
+    // The text is quoted so two same-kind changes in a long batch read as
+    // two different changes, not as a duplicate row.
     expect(set.changes.map((c) => describeChange(c, blocks))).toEqual([
-      'Rewrite heading',
-      'Delete paragraph',
-      'Add heading',
+      'Rewrite heading “Title”',
+      'Delete paragraph “Body text”',
+      'Add heading “x”',
       'Rename document',
     ]);
   });

@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirmContext';
 import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
-import { describeChange } from '@/editor/proposals';
+import { describeChange, pendingInDocumentOrder } from '@/editor/proposals';
 import { AlertCircle, Check, ChevronDown, ChevronUp, FileText, Sparkles, X } from 'lucide-react';
 import { useState } from 'react';
 import { Spinner } from '@/components/ui/spinner';
@@ -18,7 +18,7 @@ import { Spinner } from '@/components/ui/spinner';
 export function ReviewBar() {
   const { blocks, loadingDocumentId, switchTo } = useEditor();
   const {
-    pending,
+    sets,
     pendingCount,
     acceptAll,
     rejectAll,
@@ -34,6 +34,9 @@ export function ReviewBar() {
 
   const hasInvites = invites.length > 0;
   if (pendingCount === 0 && !hasInvites && !error) return null;
+
+  // Reading order, so Next always means "further down the page".
+  const pending = pendingInDocumentOrder(blocks, sets);
 
   const step = (delta: 1 | -1) => {
     if (pending.length === 0) return;
@@ -54,6 +57,33 @@ export function ReviewBar() {
       confirmLabel: 'Accept all',
     });
     if (ok) acceptAll();
+  };
+
+  /**
+   * Open the document the assistant just created.
+   *
+   * Review state belongs to the document that is open, so leaving this one
+   * discards every suggestion still on it. That used to happen on one click
+   * with nothing said — the author came back to a document that had quietly
+   * dropped the batch they were halfway through.
+   */
+  const openInvited = async (targetDocumentId: string, inviteId: string) => {
+    if (pendingCount > 0) {
+      const ok = await confirm({
+        title: `Leave ${plural} unreviewed?`,
+        description:
+          'Opening the new document discards the suggestions waiting on this one. This cannot be undone.',
+        confirmLabel: 'Open it anyway',
+        destructive: true,
+      });
+      if (!ok) return;
+    }
+    try {
+      const committed = await switchTo(targetDocumentId);
+      if (committed) dismissInvite(inviteId);
+    } catch {
+      // Reported by the editor's own document-load notice.
+    }
   };
 
   const onRejectAll = async () => {
@@ -102,11 +132,7 @@ export function ReviewBar() {
             className="h-7 px-2 text-xs"
             onClick={() => {
               if (opening) return;
-              void switchTo(invite.documentId)
-                .then((committed) => {
-                  if (committed) dismissInvite(invite.id);
-                })
-                .catch(() => undefined);
+              void openInvited(invite.documentId, invite.id);
             }}
           >
             {opening && <Spinner />}

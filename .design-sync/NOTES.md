@@ -51,6 +51,22 @@ that is imported through the alias.
 If the export work later moves behind a real lazy boundary, or stops embedding
 fonts at module scope, revisit — the stub can then go.
 
+**Fourth-sync amendment: `parse5` is back in the bundle, and it must stay.**
+`src/export/` is no longer export-only. `ChangeCard` now renders
+`ProposedBlockView`, which imports `sanitizeInlineFragment` from
+`@/export/sanitize`, which imports `parse5` — so the sanitiser is genuine DS
+surface reached through a synced component, not a leak. That is what moved the
+bundle from 1426 KB to **1825 KB** (`parse5` + its `entities` dependency; the
+`react-dom/server` half of the old stub is still successfully excluded).
+
+**Do not stub `@/export/sanitize` to win the size back.** It is what scrubs
+agent-authored HTML before a proposed change is painted into the document; a
+stub would make `ChangeCard` render unsanitised markup and the card would be
+showing a lie about a security-relevant behaviour. If the size ever has to come
+down, the fix is upstream — move `sanitize.ts` out of `src/export/` (it is no
+longer an export concern) and, if it matters, swap `parse5` for a smaller
+fragment parser. Neither is a sync-side change.
+
 **5. KaTeX's stylesheet must be appended to `ds.css`, not left to the bundler.**
 esbuild *does* extract `import 'katex/dist/katex.min.css'` into a CSS output,
 but the converter's `_ds_bundle.css` is a copy of `cfg.cssEntry` (`ds-pkg/ds.css`),
@@ -118,6 +134,37 @@ That distinction is load-bearing: `extraEntries` **is** part of the global
 grade slice, `BUNDLE_ONLY` is not, so editing `preview-providers.ts` costs
 nothing in carried-forward grades. Only the four edited previews re-graded.
 
+## Fourth sync: a new context under a byte-identical preview (again)
+
+Same shape as the third sync's `AgentToolsContext` break, and it will keep
+recurring — this is the standing failure mode of syncing an app that is still
+moving. Read this before diagnosing a "renders but looks slightly wrong" card.
+
+The citation rework (`c97d583`, `427f72d`) introduced **`BibliographyContext`**:
+a citation's printed label is now derived from the document's reference list via
+`useBibliography()`, not from the child's own `sources` array. `CitationInline`'s
+preview was updated for it; **`ParagraphBlock`'s was not**, and its
+`WithACitation` cell silently rendered the raw bibtex key `(hoffmann2022)`
+instead of `(Hoffmann, 2022)`.
+
+**Nothing mechanical caught it.** The render check passed 103/103 — the widget
+mounted, the root was non-empty, the PNG was not blank, no page errors. It was
+only visible by *reading the cell against what the cell claims to be*. The
+lesson from the third sync generalises: a clean render check is evidence the
+card is not broken, never evidence it is right.
+
+Fixed by giving `ParagraphBlock`'s `Frame` the same wiring `CitationInline`
+already had — take the blocks it wraps, put them on the editor context, and
+derive `BibliographyContext` from them with `buildBibliography`. The citation
+block is declared once and handed to both the frame and the component, so the
+bibliography is built from the same object the paragraph renders.
+
+**Rule for any future preview that mounts an inline citation:** it needs
+`EditorContext` + `AgentToolsContext` + `BibliographyContext`, and the
+bibliography must be built from the blocks being rendered. Two of the three
+throw loudly when missing; the bibliography one does not — it degrades to the
+raw key.
+
 ## Re-sync risks — what can silently go stale
 
 Read this first on the next sync; each item is something that will not announce
@@ -134,6 +181,8 @@ itself.
    *Third sync: all six re-checked. Five held; `ExtractionBadge.error` had
    drifted (source `string | null`, config `string`) and was corrected. This
    check earns its keep — run it every time.*
+   *Fourth sync: all six re-checked against source, all six held — including the
+   `ExtractionStatus` union, still the same five members.*
 9. **`agentToolsAllEnabled` in `preview-providers.ts` is an inlined fixture.**
    It claims every agent capability is on and casts away the rest of
    `AgentToolsContextValue`. If a component starts reading `settings`,
@@ -161,6 +210,23 @@ itself.
    error state (the API is unreachable in a static capture), and hover, drag,
    focus-transition and enter/exit-animation states are not gradeable from
    screenshots anywhere in the set.
+10. **Context degradation is the risk this repo keeps re-learning.** Three syncs
+   running, the break has been "a component started reading a new context".
+   `AgentToolsContext` and `EditorContext` throw when absent, so they announce
+   themselves; **`BibliographyContext` does not** — it silently downgrades a
+   citation to its raw key. Assume the next one is also silent. When a preview's
+   cell name promises something ("MultipleKeys", "WithACitation"), check the
+   pixels actually deliver it; the render check cannot.
+11. **`src/export/` is now load-bearing for the DS bundle** via
+   `ChangeCard → ProposedBlockView → @/export/sanitize`. The stub list in
+   `build-ds-pkg.mjs` was written when `src/export/` was entirely out of scope;
+   that assumption is dead. Before adding any new stub pin there, check whether
+   a synced component reaches the module first.
+12. **The bundle is 1825 KB and every rendered design loads it.** It grew ~370 KB
+   this sync (`parse5` + `entities`). Nothing is wrong with it, but it is worth
+   watching: another accidental bridge from a synced component into a heavy
+   dependency would not announce itself either. The build log's
+   `inlined npm packages: N` count is the cheap tripwire — it went 49 → 51 here.
 
 ## Shape: this is an app, not a library
 
@@ -344,8 +410,16 @@ single-word language until the source is fixed. Re-check this note if
 - Synced surface: `src/components/ui` (61 exports) + `src/components/common`
   (BrandMark, BrandLockup, Editable, ErrorBoundary, ExtractionBadge) +
   `src/components/layout` (AppShell, Sidebar, Topbar, ShortcutsDialog) +
-  **the editor surface** (added in the second sync) = **102 components**. Set in
+  **the editor surface** (added in the second sync) = **103 components**. Set in
   `DS_BARRELS` in the generator.
+- **`ReferencesSection` joined in the fourth sync** (`Editor blocks` group), via
+  the `../src/components/editor/References` barrel. It takes no props — the list
+  is derived from the document's blocks on every render — so its card is three
+  cells over the same component: author-year, numbered, and one unresolved key.
+- `ProposedBlockView` / `ProposedRewriteView` are deliberately **not** synced:
+  `Review/index.ts` exports only `ChangeCard` and `ReviewBar`, and these two are
+  internals of the change card. They are still *in* the bundle (ChangeCard
+  renders them) — just without a card, doc or `.d.ts` of their own.
 - The editor surface is 32 components across five new groups: `Editor`
   (Canvas, DocumentHeader, DocumentFooter, BlockControls, FloatingToolbar,
   SlashMenu, AIActionMenu, DocumentsMenu), `Editor blocks` (Paragraph, Heading,
@@ -400,6 +474,16 @@ about the sidebar chrome.
 class and token name in it was grepped against the compiled `ds-pkg/ds.css`
 before commit — **re-run that check on every sync** (a name that stops resolving
 makes the agent ship silently unstyled output).
+
+The check is scripted: **`node .design-sync/validate-conventions.mjs`**, run
+after the build so `ds-pkg/ds.css` and `ds-bundle/` are fresh. It exits non-zero
+and names anything that no longer resolves. *(It lived in the gitignored
+`.cache/` until the fourth sync, which meant a fresh clone silently lost it —
+it is now part of the committed durable set. If you add vocabulary to
+`conventions.md`, add it to the corresponding list in that script too, or the
+new names go unchecked.)*
+*Fourth sync: PASS — all 16 class families, 13 custom properties, 14 component
+folders and 5 bundle-only exports still verify.*
 
 Two families are only reachable as Tailwind *arbitrary* values, because `--z-*`
 and `--transition-*` are not v4 namespaces and generate no utilities:
@@ -522,14 +606,14 @@ app frame with an 800px canvas plus a 280px sidebar and a 320px tools panel need
 - **Not exported by `dropdown-menu.tsx`**: `DropdownMenuRadioItem`,
   `DropdownMenuCheckboxItem`, `DropdownMenuShortcut`. Docs use the honest
   fallback (`DropdownMenuItem inset` + a positioned `Check`; `Kbd` + `ml-auto`).
-- **`CitationInline` numeric style shows one bracket, whatever the key count.**
-  `[${number}]` is built from the citation's document position
-  (`CitationInline.tsx:240`); only `author-year` maps over `keys` and joins with
-  `'; '`. So `MultipleKeys` with `style: 'numeric'` renders `[1]`, which is
-  truthful but makes that cell name promise more than the render can show. If
-  the cell is ever reworked, switch it to `author-year` to actually demonstrate
-  multiple keys — and keep a numeric cell somewhere, since that would otherwise
-  leave the style uncarded.
+- ~~**`CitationInline` numeric style shows one bracket, whatever the key
+  count.**~~ **Fixed upstream in the fourth sync** (commit `c97d583`, "update
+  numbering logic"). `citationLabel` now renders multi-key numeric labels and
+  collapses runs into ranges: `[1, 2]`, `[1–3]`, `[1, 3]`, plus a new `ieee`
+  style that repeats the brackets (`[1], [3]`). The contract is pinned by
+  `src/editor/__tests__/citations.test.ts` — read that file rather than the
+  component when you need to know what a label will look like. The
+  `MultipleKeys` cell now genuinely shows `[1, 2]` and needs no rework.
 - **Handler props are stripped from every emitted `.d.ts`** alongside native DOM
   props: `onOpenChange`, `onSelect`, `onValueChange`, `onEscapeKeyDown`,
   `onInteractOutside` are all absent from `<Name>Props` but do exist. Every
@@ -627,12 +711,19 @@ reported 102/102 rendering, `bad` on only `DividerBlock` and `InlineSettings`,
 both floor-card artefacts now fixed by real previews. Authoring also cleared the
 `[RENDER_THIN]` on `InlineFigureShell` and `SettingsRow`.
 
-**Third sync — this is the baseline.** After the `AgentToolsContext` fix above,
-validate reported **102/102 rendering, `bad` 0, `thin` 0, `variantsIdentical`
-0, `fallbackCard` 0** — no `[RENDER]`, `[RENDER_BLANK]`, `[RENDER_THIN]`,
-`[GRID_OVERFLOW]`, `[FONT_MISSING]` or `[CSS_*]` lines, and every one of the
+**Third sync.** After the `AgentToolsContext` fix above, validate reported
+**102/102 rendering, `bad` 0, `thin` 0, `variantsIdentical` 0, `fallbackCard`
+0** — no `[RENDER]`, `[RENDER_BLANK]`, `[RENDER_THIN]`, `[GRID_OVERFLOW]`,
+`[FONT_MISSING]` or `[CSS_*]` lines, and every one of the seven contact sheets
+eyeballed clean.
+
+**Fourth sync — this is the baseline.** Same clean result at the new size:
+**103/103 rendering, `bad` 0, `thin` 0, `variantsIdentical` 0, `fallbackCard`
+0**, zero page errors across the whole set, no warn lines of any kind, and all
 seven contact sheets eyeballed clean. Treat this as the reference: any warn on
-a later run is new.
+a later run is new. Note this run needed **no `[GRID_OVERFLOW]` remedies** —
+`ReferencesSection` fits a grid cell at the default card mode, so it carries no
+`cfg.overrides` entry.
 
 One informational line is expected and fine: `tokens: 251 defined, 165
 referenced (1 missing, below threshold)`. (It read 248/163 through the second

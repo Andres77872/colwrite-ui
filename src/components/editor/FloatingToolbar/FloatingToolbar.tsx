@@ -49,7 +49,7 @@ const EMPTY_STATE: FormatState = { bold: false, italic: false, underline: false,
  * this toolbar could not appear at all and the AI action menu was unreachable.
  */
 function useFloatingToolbar() {
-  const { exec, refs, updateHtml, addParagraphChild, documentId, ensureRemoteDocument } =
+  const { exec, refs, updateHtml, addParagraphChild, documentId, ensureRemoteDocument, waitForReady } =
     useEditor();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -350,6 +350,18 @@ function useFloatingToolbar() {
             return;
           }
 
+          // The rewrite run is keyed on the server-side chat reference of the
+          // save above; a terminal projection state cannot be retried away.
+          const readiness = await waitForReady({ signal: controller.signal });
+          if (stopped || controller.signal.aborted) return;
+          if (
+            !readiness.ready
+            && (readiness.status === 'deleted' || readiness.status === 'failed')
+          ) {
+            wrapper.setAttribute('data-error', '1');
+            return;
+          }
+
           await dispatchAction({
             selectedText,
             action,
@@ -428,7 +440,7 @@ function useFloatingToolbar() {
 
       await runStream();
     },
-    [addParagraphChild, documentId, ensureRemoteDocument, findBlockId, updateHtml],
+    [addParagraphChild, documentId, ensureRemoteDocument, findBlockId, updateHtml, waitForReady],
   );
 
   return { visible, pos, states, activeIndex, setActiveIndex, toolbarRef, onFormat, onAi };

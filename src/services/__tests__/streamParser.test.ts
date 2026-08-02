@@ -52,7 +52,7 @@ describe('parseSSEStream', () => {
     const result = await parseSSEStream(response, { onToken });
     expect(onToken).toHaveBeenCalledTimes(1);
     expect(onToken).toHaveBeenCalledWith('Hello');
-    expect(result).toEqual({ chatId: null, threadId: null });
+    expect(result).toEqual({ chatId: null, threadId: null, terminal: null });
   });
 
   // ── 2. Multiple consecutive token events ──
@@ -94,27 +94,72 @@ describe('parseSSEStream', () => {
   });
 
   // ── 5. Tool call end event ──
-  it('5. calls onToolCallEnd with tool, call ID, and duration_ms', async () => {
+  it('5. calls onToolCallEnd with the full outcome payload', async () => {
     const onToolCallEnd = vi.fn();
     const response = createMockResponse(
       'event: tool_call_end\ndata: {"tool":"add_details","tool_call_id":"call_abc","duration_ms":1500}\n\n',
     );
     await parseSSEStream(response, { onToolCallEnd });
     expect(onToolCallEnd).toHaveBeenCalledTimes(1);
-    expect(onToolCallEnd).toHaveBeenCalledWith('add_details', 'call_abc', 1500, false);
+    expect(onToolCallEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: 'add_details',
+        toolCallId: 'call_abc',
+        durationMs: 1500,
+        isError: false,
+        error: null,
+        errorType: null,
+      }),
+    );
   });
 
-  it('marks a failed tool completion without exposing its result body', async () => {
+  it('forwards the failure cause and bounded previews of a failed call', async () => {
     const onToolCallEnd = vi.fn();
     const response = createMockResponse(
-      'event: tool_call_end\ndata: {"tool":"semantic_scholar_search","tool_call_id":"call_s2","duration_ms":75,"is_error":true,"result":"must not be forwarded"}\n\n',
+      'event: tool_call_end\ndata: {"tool":"semantic_scholar_search","tool_call_id":"call_s2",'
+      + '"duration_ms":75,"is_error":true,'
+      + '"error":"Tool \'semantic_scholar_search\' timed out after 90.0s","error_type":"TimeoutError",'
+      + '"output_preview":null,"output_chars":0,"output_truncated":false,'
+      + '"arguments":{"query":"transformers"},"arguments_preview":"{\\"query\\": \\"transformers\\"}"}\n\n',
     );
     await parseSSEStream(response, { onToolCallEnd });
     expect(onToolCallEnd).toHaveBeenCalledWith(
-      'semantic_scholar_search',
-      'call_s2',
-      75,
-      true,
+      expect.objectContaining({
+        tool: 'semantic_scholar_search',
+        toolCallId: 'call_s2',
+        durationMs: 75,
+        isError: true,
+        error: "Tool 'semantic_scholar_search' timed out after 90.0s",
+        errorType: 'TimeoutError',
+        arguments: { query: 'transformers' },
+      }),
+    );
+  });
+
+  it('calls onToolCallArgs with the complete parsed arguments', async () => {
+    const onToolCallArgs = vi.fn();
+    const response = createMockResponse(
+      'event: tool_call_args\ndata: {"tool":"doc_edit","tool_call_id":"call_1",'
+      + '"arguments":{"ops":[{"op":"replace_block"}]},"arguments_preview":"{\\"ops\\": []}"}\n\n',
+    );
+    await parseSSEStream(response, { onToolCallArgs });
+    expect(onToolCallArgs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: 'doc_edit',
+        toolCallId: 'call_1',
+        arguments: { ops: [{ op: 'replace_block' }] },
+      }),
+    );
+  });
+
+  it('treats an empty error string as absent rather than a blank cause', async () => {
+    const onToolCallEnd = vi.fn();
+    const response = createMockResponse(
+      'event: tool_call_end\ndata: {"tool":"aibeat","tool_call_id":"c","duration_ms":10,"is_error":true,"error":"","error_type":""}\n\n',
+    );
+    await parseSSEStream(response, { onToolCallEnd });
+    expect(onToolCallEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ isError: true, error: null, errorType: null }),
     );
   });
 
@@ -135,10 +180,10 @@ describe('parseSSEStream', () => {
       onDone,
     });
     expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith('TOOL_TIMEOUT', 'Tool timed out');
+    expect(onError).toHaveBeenCalledWith('TOOL_TIMEOUT', 'Tool timed out', undefined);
     expect(onToken).toHaveBeenCalledWith('I encountered an error');
     expect(onDone).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ chatId: 'x', threadId: null });
+    expect(result).toEqual({ chatId: 'x', threadId: null, terminal: 'done' });
   });
 
   // ── 7. Done event terminates stream ──
@@ -154,7 +199,7 @@ describe('parseSSEStream', () => {
       42,
       { promptTokens: 250, completionTokens: 500 },
     );
-    expect(result).toEqual({ chatId: 'abc-123', threadId: 42 });
+    expect(result).toEqual({ chatId: 'abc-123', threadId: 42, terminal: 'done' });
   });
 
   // ── 8. Bare data: line after event: inherits last event type ──
@@ -183,7 +228,7 @@ describe('parseSSEStream', () => {
     expect(onToken).toHaveBeenCalledTimes(1);
     expect(onToken).toHaveBeenCalledWith('After bad JSON');
     expect(onDone).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ chatId: 'y', threadId: 1 });
+    expect(result).toEqual({ chatId: 'y', threadId: 1, terminal: 'done' });
   });
 
   // ── 10. Empty data: line skipped ──
@@ -237,8 +282,8 @@ describe('parseSSEStream', () => {
     // At minimum, "Before abort" must have been processed
     // "After abort" may or may not have been processed depending on timing
     expect(onToken.mock.calls.length).toBeGreaterThanOrEqual(1);
-    // No exception should have been thrown
-    expect(result).toEqual({ chatId: null, threadId: null });
+    // No exception should have been thrown; an aborted stream has no terminal
+    expect(result).toEqual({ chatId: null, threadId: null, terminal: null });
   });
 
   // ── 12. \n\n split across chunk boundaries ──
@@ -298,11 +343,18 @@ describe('parseSSEStream', () => {
     expect(onToolCallStart).toHaveBeenCalledWith(
       'add_details', 'call_1', { text: 'more' },
     );
-    expect(onToolCallEnd).toHaveBeenCalledWith('add_details', 'call_1', 500, false);
+    expect(onToolCallEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: 'add_details',
+        toolCallId: 'call_1',
+        durationMs: 500,
+        isError: false,
+      }),
+    );
     expect(onDone).toHaveBeenCalledWith(
       'abc', 1, { promptTokens: 10, completionTokens: 20 },
     );
-    expect(result).toEqual({ chatId: 'abc', threadId: 1 });
+    expect(result).toEqual({ chatId: 'abc', threadId: 1, terminal: 'done' });
   });
 
   // ── 15. Bare data line without event: → emitted as onToken ──
@@ -325,7 +377,7 @@ describe('parseSSEStream', () => {
     );
     const result = await parseSSEStream(response, {} as SSEEventHandlers);
     // Must return captured values even without onDone handler
-    expect(result).toEqual({ chatId: 'z', threadId: 3 });
+    expect(result).toEqual({ chatId: 'z', threadId: 3, terminal: 'done' });
   });
 
   // ── Extra: null body response ──
@@ -334,7 +386,7 @@ describe('parseSSEStream', () => {
     const onToken = vi.fn();
     const result = await parseSSEStream(response, { onToken });
     expect(onToken).not.toHaveBeenCalled();
-    expect(result).toEqual({ chatId: null, threadId: null });
+    expect(result).toEqual({ chatId: null, threadId: null, terminal: null });
   });
 
   // ── Extra: unknown event type is silently skipped ──
@@ -368,7 +420,7 @@ describe('parseSSEStream', () => {
       'event: done\ndata: {"chat_id":"c","thread_id":null,"usage":{"prompt_tokens":0,"completion_tokens":0}}\n\n',
     );
     const result = await parseSSEStream(response, { onDone });
-    expect(result).toEqual({ chatId: 'c', threadId: null });
+    expect(result).toEqual({ chatId: 'c', threadId: null, terminal: 'done' });
   });
 
   // ── Extra: done event with no chat_id ──
@@ -378,7 +430,7 @@ describe('parseSSEStream', () => {
       'event: done\ndata: {"chat_id":null,"thread_id":5,"usage":{"prompt_tokens":0,"completion_tokens":0}}\n\n',
     );
     const result = await parseSSEStream(response, { onDone });
-    expect(result).toEqual({ chatId: null, threadId: 5 });
+    expect(result).toEqual({ chatId: null, threadId: 5, terminal: 'done' });
   });
 
   // ── Tool Action: snake_case → camelCase mapping ──
@@ -413,8 +465,31 @@ describe('parseSSEStream', () => {
     expect(action.actions).toEqual([]);
     expect(action.documentId).toBe('');
     expect(action.version).toBe(0);
-    expect(action.status).toBe('applied');
+    // The safe default is the one that cannot edit the document unseen. This
+    // defaulted to `applied`, so a payload that omitted `status` was replayed
+    // into the author's document with no review and no way back.
+    expect(action.status).toBe('proposed');
     expect(action.message).toBeUndefined();
+  });
+
+  it('treats an unrecognised status as needing review', async () => {
+    const onToolAction = vi.fn();
+    const response = createMockResponse(
+      'event: tool_action\ndata: {"status": "committed", "document_id": "doc-1"}\n\n',
+    );
+    await parseSSEStream(response, { onToolAction });
+    expect(onToolAction.mock.calls[0][0].status).toBe('proposed');
+  });
+
+  it('does not turn a missing document id into the string "undefined"', async () => {
+    const onToolAction = vi.fn();
+    const response = createMockResponse(
+      'event: tool_action\ndata: {"document_id": null, "tool_call_id": null}\n\n',
+    );
+    await parseSSEStream(response, { onToolAction });
+    const action = onToolAction.mock.calls[0][0];
+    expect(action.documentId).toBe('');
+    expect(action.toolCallId).toBe('');
   });
 
   // ── Tool Action: extra fields are dropped (whitelist semantics) ──
@@ -426,13 +501,92 @@ describe('parseSSEStream', () => {
     await parseSSEStream(response, { onToolAction });
     expect(onToolAction).toHaveBeenCalledTimes(1);
     const action = onToolAction.mock.calls[0][0];
-    // operationResults and extra must not appear
-    expect(action).not.toHaveProperty('operationResults');
     expect(action).not.toHaveProperty('extra');
+    // operationResults IS a known field now, but entries without a valid
+    // per-op status are not results — this malformed one maps to nothing.
+    expect(action.operationResults).toBeUndefined();
     // Known fields must be correct
     expect(action.toolCallId).toBe('call_abc');
     expect(action.documentId).toBe('doc-123');
     expect(action.version).toBe(2);
+  });
+
+  // ── Tool Action: per-operation outcomes are preserved ──
+  it('maps operationResults entries with valid statuses', async () => {
+    const onToolAction = vi.fn();
+    const response = createMockResponse(
+      'event: tool_action\ndata: {"tool":"doc_edit","tool_call_id":"call_abc","actions":[],'
+      + '"document_id":"doc-123","version":2,"status":"proposed",'
+      + '"operationResults":[{"op":"replace_block","status":"applied"},'
+      + '{"op":"delete_block","status":"error","message":"block not found"}]}\n\n',
+    );
+    await parseSSEStream(response, { onToolAction });
+    const action = onToolAction.mock.calls[0][0];
+    expect(action.operationResults).toEqual([
+      { op: 'replace_block', status: 'applied', message: undefined },
+      { op: 'delete_block', status: 'error', message: 'block not found' },
+    ]);
+  });
+
+  // ── Keepalive comments and CRLF framing ──
+  it('ignores SSE comment lines and tolerates CRLF framing', async () => {
+    const onToken = vi.fn();
+    const onDone = vi.fn();
+    const response = createMockResponse(
+      ': keepalive\n\n'
+      + 'event: token\r\ndata: {"content":"Hello"}\r\n\r\n'
+      + ': keepalive\n\n'
+      + 'event: done\ndata: {"chat_id":"k","thread_id":null,"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n',
+    );
+    const result = await parseSSEStream(response, { onToken, onDone });
+    expect(onToken).toHaveBeenCalledWith('Hello');
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(result.terminal).toBe('done');
+  });
+
+  // ── Terminal detection ──
+  it('reports terminal error when the stream ends with an error event', async () => {
+    const onError = vi.fn();
+    const response = createMockResponse(
+      'event: token\ndata: {"content":"partial"}\n\n'
+      + 'event: error\ndata: {"error_code":"STREAM_ERROR","message":"boom"}\n\n',
+    );
+    const result = await parseSSEStream(response, { onError });
+    expect(result.terminal).toBe('error');
+  });
+
+  it('surfaces readiness diagnostics from an enriched error event', async () => {
+    const onError = vi.fn();
+    const response = createMockResponse(
+      'event: error\ndata: {"error_code":"PROJECTION_PENDING","message":"still preparing",'
+      + '"readiness_status":"pending","retry_after":2,"applied_head_seq":3,"expected_head_seq":4}\n\n',
+    );
+    await parseSSEStream(response, { onError });
+    expect(onError).toHaveBeenCalledWith('PROJECTION_PENDING', 'still preparing', {
+      readinessStatus: 'pending',
+      retryAfterSeconds: 2,
+      appliedHeadSeq: 3,
+      expectedHeadSeq: 4,
+    });
+  });
+
+  it('reports null terminal for a stream that just stops', async () => {
+    const response = createMockResponse(
+      'event: token\ndata: {"content":"cut off mid-"}\n\n',
+    );
+    const result = await parseSSEStream(response, {});
+    expect(result.terminal).toBeNull();
+  });
+
+  // ── Trailing unterminated block is flushed at stream end ──
+  it('processes a final block missing its trailing blank line', async () => {
+    const onDone = vi.fn();
+    const response = createMockResponse(
+      'event: done\ndata: {"chat_id":"t","thread_id":null,"usage":{"prompt_tokens":1,"completion_tokens":1}}',
+    );
+    const result = await parseSSEStream(response, { onDone });
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(result.terminal).toBe('done');
   });
 
   // ── Tool Action: null message → undefined ──

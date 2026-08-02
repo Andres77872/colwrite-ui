@@ -1,4 +1,11 @@
-import { AgentToolsContext, EditorContext, ParagraphBlock, agentToolsAllEnabled } from 'colwrite-ui';
+import {
+  AgentToolsContext,
+  BibliographyContext,
+  EditorContext,
+  ParagraphBlock,
+  agentToolsAllEnabled,
+  buildBibliography,
+} from 'colwrite-ui';
 
 // ParagraphBlock is the workhorse block: contenteditable prose in `html`, plus
 // an optional `children` array of inline widgets (citation, equation, graph,
@@ -12,6 +19,13 @@ import { AgentToolsContext, EditorContext, ParagraphBlock, agentToolsAllEnabled 
 // frame supplies that literal too — without it the paragraph still renders but
 // throws on the widget, and the citation never appears.
 //
+// CitationInline also reads useBibliography(): a citation's printed label is
+// derived from the document's reference list, not from the child alone. With no
+// BibliographyContext above it the lookup misses and the widget falls back to
+// printing the raw bibtex key — "(hoffmann2022)" instead of "(Hoffmann, 2022)".
+// So the frame takes the blocks it wraps and derives the bibliography with the
+// same `buildBibliography` the editor uses.
+//
 // `columns` is the layout axis: a paragraph can be set to render its prose in
 // two columns, which is the one thing about this block that is not inherited
 // from the document measure.
@@ -21,10 +35,11 @@ type Ctx = React.ContextType<typeof EditorContext>;
 const refs = { current: {} as Record<string, HTMLDivElement | null> };
 const noop = () => {};
 
-const EDITOR = {
+const editorValue = (blocks: unknown[]) => ({
   refs,
-  // CitationInline walks the document to resolve keys, and iterates this.
-  blocks: [],
+  // The reference list is derived from the blocks on every render, so the
+  // document a citation belongs to has to be visible here.
+  blocks,
   // Must actually populate `refs`, not just exist: the effect that mounts inline
   // children looks the host up as refs.current[block.id], so a no-op here leaves
   // every [data-child-id] placeholder empty and the widgets never appear.
@@ -36,14 +51,16 @@ const EDITOR = {
   updateHtml: noop,
   documentId: 'doc-1',
   ensureRemoteDocument: () => Promise.reject(new Error('not reachable from a preview')),
-};
+});
 
-function Frame({ children }: { children: React.ReactNode }) {
+function Frame({ children, blocks = [] }: { children: React.ReactNode; blocks?: unknown[] }) {
   return (
-    <EditorContext.Provider value={EDITOR as unknown as Ctx}>
-      <AgentToolsContext.Provider value={agentToolsAllEnabled}>
-        <div className="mx-auto w-full max-w-[var(--doc-measure)] px-6">{children}</div>
-      </AgentToolsContext.Provider>
+    <EditorContext.Provider value={editorValue(blocks) as unknown as Ctx}>
+      <BibliographyContext.Provider value={buildBibliography(blocks as never)}>
+        <AgentToolsContext.Provider value={agentToolsAllEnabled}>
+          <div className="mx-auto w-full max-w-[var(--doc-measure)] px-6">{children}</div>
+        </AgentToolsContext.Provider>
+      </BibliographyContext.Provider>
     </EditorContext.Provider>
   );
 }
@@ -76,34 +93,37 @@ export function WithInlineMarkup() {
   );
 }
 
+// Declared once and handed to both the frame and the block: the bibliography is
+// built from the same object the paragraph renders, which is what makes the
+// printed label agree with the reference list.
+const citationBlock = {
+  id: 'p3',
+  type: 'paragraph',
+  // A child is mounted into a [data-child-id] placeholder in the html —
+  // the array alone is not enough, the paragraph has to say where it goes.
+  html: 'The exponent holds within error at every budget <span data-child-id="c1"></span> once the schedule is fixed.',
+  children: [
+    {
+      id: 'c1',
+      type: 'citation',
+      keys: ['hoffmann2022'],
+      style: 'author-year',
+      sources: [
+        {
+          key: 'hoffmann2022',
+          title: 'Training Compute-Optimal Large Language Models',
+          authors: 'Hoffmann, J., Borgeaud, S., Mensch, A.',
+          year: '2022',
+        },
+      ],
+    },
+  ],
+};
+
 export function WithACitation() {
   return (
-    <Frame>
-      <ParagraphBlock
-        block={{
-          id: 'p3',
-          type: 'paragraph',
-          // A child is mounted into a [data-child-id] placeholder in the html —
-          // the array alone is not enough, the paragraph has to say where it goes.
-          html: 'The exponent holds within error at every budget <span data-child-id="c1"></span> once the schedule is fixed.',
-          children: [
-            {
-              id: 'c1',
-              type: 'citation',
-              keys: ['hoffmann2022'],
-              style: 'author-year',
-              sources: [
-                {
-                  key: 'hoffmann2022',
-                  title: 'Training Compute-Optimal Large Language Models',
-                  authors: 'Hoffmann, J., Borgeaud, S., Mensch, A.',
-                  year: '2022',
-                },
-              ],
-            },
-          ],
-        }}
-      />
+    <Frame blocks={[citationBlock]}>
+      <ParagraphBlock block={citationBlock as never} />
     </Frame>
   );
 }

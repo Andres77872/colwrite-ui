@@ -22,7 +22,7 @@ import { DividerBlock } from '../blocks/DividerBlock';
 import { ChangeCard, ReviewBar } from '../Review';
 import { ReferencesSection } from '../References';
 import { useProposals } from '@/editor/proposalsContextState';
-import { changesForBlock, documentChanges, edgeChanges, orphanChanges } from '@/editor/proposals';
+import { documentChanges, projectDocument } from '@/editor/proposals';
 import { ChevronRight, FileText, Plus, Sparkles } from 'lucide-react';
 
 const BLOCK_DRAG_TYPE = 'application/x-block-id';
@@ -162,13 +162,24 @@ export function Canvas() {
   const { sets } = useProposals();
   const { toast } = useToast();
 
-  // Changes render where they would land, so the author judges a rewrite
-  // against the paragraph it replaces rather than against a chat summary.
+  // The document with every pending change folded into it at the position it
+  // would take. One projection drives the whole canvas, so what the author
+  // reads top to bottom is what `Accept all` produces — including chained
+  // inserts, which used to pile up at the bottom of the page claiming their
+  // block had been deleted.
   const docLevelChanges = documentChanges(sets);
-  const leadingChanges = edgeChanges(sets, 'start');
-  // Changes whose block is gone still have to be reachable, or the review bar
-  // counts a suggestion the author cannot get to in order to dismiss it.
-  const trailingChanges = [...edgeChanges(sets, 'end'), ...orphanChanges(sets, blocks)];
+  const { rows, orphans } = projectDocument(blocks, sets);
+  // Drag-and-drop measures `.block-row` elements, which proposals are not, so
+  // the drop indicator keeps indexing the real block list.
+  const blockIndex = new Map(blocks.map((block, index) => [block.id, index]));
+  // Blocks an addition is attached to. Without this a stack of proposed
+  // paragraphs has no visible relationship to the paragraph it was written
+  // against, which is the last place the review still read as a separate layer.
+  const anchoring = new Set(
+    rows.flatMap((row) =>
+      row.kind === 'insert' && row.change.anchorBlockId ? [row.change.anchorBlockId] : [],
+    ),
+  );
 
   // A single insertion index drives every drop indicator. The previous version
   // also tracked `overId`/`overPos` and rendered a second indicator from them,
@@ -368,10 +379,6 @@ export function Canvas() {
           <ChangeCard key={change.id} change={change} />
         ))}
 
-        {leadingChanges.map((change) => (
-          <ChangeCard key={change.id} change={change} />
-        ))}
-
         {isEmpty ? (
           <EmptyState
             size="page"
@@ -404,22 +411,26 @@ export function Canvas() {
         ) : (
           <>
             <div className="blocks-container space-y-0.5 py-4">
-              {blocks.map((block, index) => {
+              {rows.map((row) => {
+                // Inserts are rows of their own, already sitting where the
+                // block would land.
+                if (row.kind === 'insert') {
+                  return <ChangeCard key={row.change.id} change={row.change} />;
+                }
+
+                const block = row.block;
+                const index = blockIndex.get(block.id) ?? 0;
                 const isCollapsed = block.collapsed === true;
                 const isAiHidden = block.aiHidden === true;
                 const isLocked = block.locked === true;
-                const blockChanges = changesForBlock(sets, block.id);
-                const before = blockChanges.filter((c) => c.placement === 'before');
-                const after = blockChanges.filter((c) => c.placement === 'after');
                 // Rewrites, deletions and moves are about this block, so they
                 // read below it, next to the text they would change.
-                const onBlock = blockChanges.filter((c) => c.placement === null);
+                const onBlock = row.changes;
+                const pendingDelete = onBlock.some((change) => change.kind === 'delete');
+                const pendingRewrite = onBlock.some((change) => change.kind === 'replace');
 
                 return (
                   <Fragment key={block.id}>
-                    {before.map((change) => (
-                      <ChangeCard key={change.id} change={change} />
-                    ))}
                     {insertIndex === index && (
                       <div
                         aria-hidden="true"
@@ -445,7 +456,14 @@ export function Canvas() {
                         // A block with an open suggestion, and one an accepted
                         // change just landed on, both need to be findable
                         // without scrolling the whole document.
-                        onBlock.length > 0 && 'bg-primary/5 ring-1 ring-primary/25',
+                        (onBlock.length > 0 || anchoring.has(block.id))
+                          && 'bg-primary/5 ring-1 ring-primary/25',
+                        // The proposal is shown on the block itself rather than
+                        // as a second copy underneath it: a deletion strikes
+                        // the real text through, and a rewrite steps back so
+                        // the replacement below reads as the new version.
+                        pendingDelete && 'bg-diff-remove/20 ring-diff-remove-border/40 line-through decoration-diff-remove-border/70',
+                        pendingRewrite && !pendingDelete && 'opacity-60',
                         recentlyChanged.has(block.id) && 'bg-diff-add',
                       )}
                       style={{ paddingLeft: 'var(--doc-gutter)' }}
@@ -483,9 +501,6 @@ export function Canvas() {
                     {onBlock.map((change) => (
                       <ChangeCard key={change.id} change={change} />
                     ))}
-                    {after.map((change) => (
-                      <ChangeCard key={change.id} change={change} />
-                    ))}
                   </Fragment>
                 );
               })}
@@ -507,9 +522,24 @@ export function Canvas() {
           </>
         )}
 
-        {trailingChanges.map((change) => (
-          <ChangeCard key={change.id} change={change} />
-        ))}
+        {/* Only genuine orphans reach here — a change whose block is in neither
+            the document nor the batch. They are labelled, because a suggestion
+            appearing under the last paragraph with no explanation is exactly
+            what made the review look unsorted. */}
+        {orphans.length > 0 && (
+          <section
+            aria-label="Suggestions with no place in the document"
+            className="mt-6 border-t border-border/60 pt-3"
+          >
+            <p className="mb-1 text-xs text-muted-foreground" style={{ paddingLeft: 'var(--doc-gutter)' }}>
+              {orphans.length === 1 ? 'This suggestion refers' : 'These suggestions refer'} to a block
+              that is no longer in the document.
+            </p>
+            {orphans.map((change) => (
+              <ChangeCard key={change.id} change={change} />
+            ))}
+          </section>
+        )}
 
         {/* Below the last block and the add-block affordance, where a paper's
             bibliography sits. It renders nothing until something is cited. */}

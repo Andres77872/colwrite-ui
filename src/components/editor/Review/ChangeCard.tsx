@@ -1,7 +1,5 @@
-import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { diffWords } from '@/lib/diff';
 import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
 import {
@@ -11,222 +9,247 @@ import {
   proposedBlock,
   type ProposedChange,
 } from '@/editor/proposals';
-import { Check, CornerDownRight, Lock, Plus, Trash2, X } from 'lucide-react';
+import { ProposedBlockView, ProposedRewriteView } from './ProposedBlockView';
+import { ArrowDownUp, Check, Lock, Pencil, Plus, TextCursorInput, Trash2, X } from 'lucide-react';
 
-const KIND_STYLES: Record<
+/**
+ * One proposed change, rendered in the document at the position it would take.
+ *
+ * This used to be a bordered card in panel typography, indented by its own
+ * margin, showing the block as stripped plain text. It read as a notification
+ * that had landed on the page rather than as a change to the page — and
+ * because the accept path applied the operation literally, the position it
+ * showed was not reliably the position the block would end up in.
+ *
+ * Now the row lines up with `.block-row`: same gutter, same measure, same
+ * prose size, so the proposed paragraph sits in the column of text it is
+ * joining. The only chrome is a coloured rail and one line of controls.
+ */
+
+const KIND: Record<
   ProposedChange['kind'],
-  { accent: string; badge: string; label: string }
+  { label: string; rail: string; tint: string; badge: string; icon: typeof Plus }
 > = {
   insert: {
-    accent: 'border-l-diff-add-border',
-    badge: 'bg-diff-add text-diff-add-fg',
     label: 'Addition',
+    rail: 'border-l-diff-add-border',
+    tint: 'bg-diff-add/30',
+    badge: 'text-diff-add-fg',
+    icon: Plus,
   },
   replace: {
-    accent: 'border-l-primary',
-    badge: 'bg-primary/15 text-primary',
     label: 'Rewrite',
+    rail: 'border-l-primary',
+    tint: 'bg-primary/5',
+    badge: 'text-primary',
+    icon: Pencil,
   },
   delete: {
-    accent: 'border-l-diff-remove-border',
-    badge: 'bg-diff-remove text-diff-remove-fg',
     label: 'Deletion',
+    rail: 'border-l-diff-remove-border',
+    tint: 'bg-diff-remove/25',
+    badge: 'text-diff-remove-fg',
+    icon: Trash2,
   },
   reorder: {
-    accent: 'border-l-primary',
-    badge: 'bg-primary/15 text-primary',
     label: 'Move',
+    rail: 'border-l-primary',
+    tint: 'bg-primary/5',
+    badge: 'text-primary',
+    icon: ArrowDownUp,
   },
   rename: {
-    accent: 'border-l-primary',
-    badge: 'bg-primary/15 text-primary',
     label: 'Title',
+    rail: 'border-l-primary',
+    tint: 'bg-primary/5',
+    badge: 'text-primary',
+    icon: TextCursorInput,
   },
 };
 
-/** Inline word diff, so the author reads only what actually moved. */
-function WordDiff({ before, after }: { before: string; after: string }) {
-  const segments = useMemo(() => diffWords(before, after), [before, after]);
-
-  return (
-    <p className="whitespace-pre-wrap text-sm leading-relaxed">
-      {segments.map((segment, index) => {
-        if (segment.type === 'equal') {
-          return (
-            <span key={index} className="text-muted-foreground">
-              {segment.value}
-            </span>
-          );
-        }
-        return (
-          <span
-            key={index}
-            className={cn(
-              'rounded-sm',
-              segment.type === 'insert'
-                ? 'bg-diff-add text-diff-add-fg'
-                : 'bg-diff-remove text-diff-remove-fg line-through decoration-1',
-            )}
-          >
-            {segment.value}
-          </span>
-        );
-      })}
-    </p>
-  );
+/** One-line preview of a block, for naming a move's destination. */
+function shortText(text: string, max = 42): string {
+  const trimmed = text.trim();
+  if (!trimmed) return 'an empty block';
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
 }
 
-/** What the change does, rendered as content rather than as a description. */
 function ChangeBody({ change }: { change: ProposedChange }) {
   const { blocks } = useEditor();
 
   if (change.kind === 'rename') {
-    const next = change.op.op === 'update_meta' ? change.op.meta?.name : undefined;
-    return (
-      <p className="flex flex-wrap items-center gap-2 text-sm">
-        <CornerDownRight aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="font-medium">{next || 'Untitled document'}</span>
-      </p>
-    );
+    const next = change.op.op === 'update_meta' ? change.op.meta?.name?.trim() : undefined;
+    if (!next) {
+      return (
+        <p className="text-sm text-muted-foreground">
+          The assistant proposed a title with no text, so there is nothing to apply.
+        </p>
+      );
+    }
+    return <p className="text-xl font-semibold">{next}</p>;
   }
 
   if (change.kind === 'reorder') {
-    const position = change.op.op === 'reorder_block' ? change.op.toIndex + 1 : 0;
+    // Naming the neighbour survives other changes being accepted first; a raw
+    // index goes stale the moment anything above it moves.
+    const toIndex = change.op.op === 'reorder_block' ? change.op.toIndex : 0;
+    const others = blocks.filter((block) => block.id !== change.anchorBlockId);
+    const above = others[toIndex - 1];
     return (
       <p className="text-sm text-muted-foreground">
-        Move to position {position} in the document.
+        {above
+          ? <>Move below “{shortText(blockText(above))}”.</>
+          : 'Move to the top of the document.'}
       </p>
     );
   }
 
-  const current = blocks.find((b) => b.id === change.anchorBlockId);
+  const current = blocks.find((block) => block.id === change.anchorBlockId);
 
-  // The agent read the document a moment before the author deleted the very
-  // block it was working on. Say so, rather than rendering an empty diff the
-  // author cannot make sense of.
   if (!current && change.anchorBlockId) {
     return (
       <p className="text-sm text-muted-foreground">
-        The block this change was written for is no longer in the document, so it cannot be
-        applied.
+        The block this was written for is no longer in the document, so it cannot be applied.
       </p>
     );
   }
 
   if (change.kind === 'delete') {
-    const text = blockText(current);
+    // The block itself is struck through in place, so repeating its text here
+    // would be the second copy of something the author is already looking at.
     return (
-      <p className="whitespace-pre-wrap text-sm leading-relaxed text-diff-remove-fg line-through decoration-1">
-        {text || 'Empty block'}
+      <p className="text-sm text-muted-foreground">
+        Remove this block from the document.
       </p>
     );
   }
 
   if (change.kind === 'insert') {
-    const block = proposedBlock(change);
-    if (block?.type === 'divider') {
-      return (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="h-px flex-1 bg-border" />
-          divider
-          <span className="h-px flex-1 bg-border" />
-        </div>
-      );
-    }
-    const text = blockText(block);
-    return (
-      <p
-        className={cn(
-          'whitespace-pre-wrap text-sm leading-relaxed text-diff-add-fg',
-          block?.type === 'heading' && 'font-semibold',
-        )}
-      >
-        {text || 'Empty block'}
-      </p>
-    );
+    return <ProposedBlockView block={proposedBlock(change)} />;
   }
 
-  const before = blockText(current);
-  const after = blockText(mergedBlock(change, current));
-  return <WordDiff before={before} after={after} />;
+  const merged = mergedBlock(change, current);
+  return (
+    <ProposedRewriteView
+      before={blockText(current)}
+      after={blockText(merged)}
+      block={merged}
+    />
+  );
 }
 
-/**
- * One proposed change, rendered where it would land in the document.
- *
- * The accept and reject controls live here rather than in the chat panel on
- * purpose: an author cannot judge a rewrite from a summary, only from seeing
- * it against the surrounding paragraph.
- */
 export function ChangeCard({ change }: { change: ProposedChange }) {
   const { blocks } = useEditor();
   const { accept, reject, ready, focusedChangeId } = useProposals();
 
-  const style = KIND_STYLES[change.kind];
+  const style = KIND[change.kind];
   const isReady = ready(change);
   const isFocused = focusedChangeId === change.id;
+  const Icon = style.icon;
+  const summary = describeChange(change, blocks);
 
-  const Icon = change.kind === 'delete' ? Trash2 : change.kind === 'insert' ? Plus : CornerDownRight;
+  /**
+   * Why Accept is not offered.
+   *
+   * A lock with no explanation is worse than no lock: the author cannot tell
+   * whether the app is broken, whether they are meant to wait, or whether the
+   * change is dead. Each of the three reasons has a different answer.
+   */
+  const blockedReason = (() => {
+    if (change.dependsOn.length > 0) {
+      return 'This continues the addition above — accept that one first.';
+    }
+    if (change.anchorBlockId && !blocks.some((block) => block.id === change.anchorBlockId)) {
+      return 'The block this was written for is no longer in the document.';
+    }
+    return 'Decide the change above it first — the two would not combine cleanly.';
+  })();
 
   return (
     <div
       data-change-id={change.id}
+      // Deliberately not `.block-row`: the canvas measures those to place the
+      // drag indicator, and a proposal is not a drop target.
       className={cn(
-        'my-2 rounded-lg border border-l-2 border-border bg-card/80 shadow-sm transition-all',
-        style.accent,
-        isFocused && 'ring-2 ring-primary/40',
+        'review-change group/change relative my-1 rounded-r-md border-l-2 py-1.5 pr-3 transition-colors',
+        style.rail,
+        style.tint,
+        isFocused && 'ring-1 ring-primary/50',
       )}
-      style={{ marginLeft: 'var(--doc-gutter)' }}
+      style={{ paddingLeft: 'var(--doc-gutter)' }}
+      // Read as one thing rather than as loose text followed by two buttons.
+      role="group"
+      aria-label={summary}
     >
-      <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-1.5">
+      {/* Every kind shares this header: what the change is, what it touches,
+          and — when this card can be decided on its own — the decision.
+          Naming the kind in text is the difference between reviewing and
+          decoding: the old gutter column showed three unlabeled glyphs
+          (kind, accept, reject) stacked in 14px, and with 48 cards on screen
+          the author could not tell what any of them meant. */}
+      <div className="mb-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <span
           className={cn(
-            'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
+            'inline-flex shrink-0 items-center gap-1 text-2xs font-semibold uppercase tracking-wide',
             style.badge,
           )}
         >
           <Icon aria-hidden="true" className="h-3 w-3" />
           {style.label}
         </span>
-        <span className="text-xs text-muted-foreground">{describeChange(change, blocks)}</span>
 
-        <div className="ml-auto flex items-center gap-1">
-          {isReady ? (
-            <>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 gap-1 px-2 text-xs text-diff-add-fg hover:bg-diff-add"
-                onClick={() => accept(change.id)}
-              >
-                <Check className="h-3.5 w-3.5" />
-                Accept
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
-                onClick={() => reject(change.id)}
-              >
-                <X className="h-3.5 w-3.5" />
-                Reject
-              </Button>
-            </>
-          ) : (
-            <span
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground"
-              title="Accept the change this one builds on first."
-            >
-              <Lock aria-hidden="true" className="h-3 w-3" />
-              Needs the change above
-            </span>
+        <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">
+          {summary}
+        </span>
+
+        {/* Immediately after the label, on the left half of the measure —
+            `ml-auto` put them at the right edge of the prose column, which is
+            exactly where the floating assistant rests, so the panel covered
+            the buttons it was telling the author to press. Dimmed rather than
+            hover-only, which would be unreachable on touch. */}
+        <span
+          className={cn(
+            'flex shrink-0 items-center gap-1 transition-opacity',
+            'focus-within:opacity-100 group-hover/change:opacity-100',
+            isFocused ? 'opacity-100' : 'opacity-80',
           )}
-        </div>
+        >
+          {isReady && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 gap-1 px-1.5 text-xs text-diff-add-fg hover:bg-diff-add"
+              onClick={() => accept(change.id)}
+              aria-label={`Accept: ${summary}`}
+            >
+              <Check className="h-3 w-3" />
+              Accept
+            </Button>
+          )}
+          {/* Always available. A blocked change previously offered neither
+              button, so a batch whose first change the author did not want
+              could not be cleared from the document at all. */}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 gap-1 px-1.5 text-xs text-muted-foreground hover:text-destructive"
+            onClick={() => reject(change.id)}
+            aria-label={`Reject: ${summary}`}
+          >
+            <X className="h-3 w-3" />
+            Reject
+          </Button>
+        </span>
       </div>
 
-      <div className="px-3 py-2">
-        <ChangeBody change={change} />
-      </div>
+      {!isReady && (
+        <p className="mb-0.5 flex items-center gap-1 text-2xs text-muted-foreground">
+          <Lock aria-hidden="true" className="h-3 w-3 shrink-0" />
+          {blockedReason}
+        </p>
+      )}
+
+      <ChangeBody change={change} />
     </div>
   );
 }

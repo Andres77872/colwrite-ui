@@ -54,6 +54,24 @@ export function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback
 }
 
+/**
+ * Machine-readable `code` from an `application/problem+json` error body kept
+ * on an {@link ApiError}. Null for plain errors or bodies without a code.
+ */
+export function problemCode(error: unknown): string | null {
+  const data = (error as { data?: unknown } | null)?.data
+  if (!isUnknownRecord(data)) return null
+  return typeof data.code === 'string' ? data.code : null
+}
+
+/** Server retry hint in seconds from a problem body, if present and positive. */
+export function problemRetryAfter(error: unknown): number | null {
+  const data = (error as { data?: unknown } | null)?.data
+  if (!isUnknownRecord(data)) return null
+  const value = data.retry_after
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
 /** HTTP error with the parsed response body retained for callers and tests. */
 export class ApiError extends Error {
   readonly status: number

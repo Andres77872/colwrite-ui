@@ -34,6 +34,14 @@ const loadDocument = vi.fn(async (id: string) =>
 );
 const saveDocument = vi.fn(async () => ({ status: 'ok', message: '', version: 2 }));
 const createDocument = vi.fn(async () => ({ document_id: 'created-doc', version: 1 }));
+const fetchReferenceReadiness = vi.fn(async () => ({
+  ready: true,
+  readinessStatus: 'ready',
+  expectedHeadSeq: 2,
+  appliedHeadSeq: 2,
+  retryable: false,
+  retryAfterSeconds: 0,
+}));
 
 vi.mock('@/services/agentChat', () => ({
   streamAgentChat: (...args: unknown[]) => streamAgentChat(...args),
@@ -50,6 +58,7 @@ vi.mock('@/services', async () => ({
   loadDocument: (id: string) => loadDocument(id),
   deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
   listDocuments: () => listDocuments(),
+  fetchReferenceReadiness: (...args: unknown[]) => fetchReferenceReadiness(...(args as [])),
 }));
 
 const { EditorProvider, useEditor } = await import('@/editor');
@@ -780,7 +789,7 @@ describe('what the agent reads', () => {
     );
   });
 
-  it('still asks when that save fails', async () => {
+  it('does not ask when that save fails, and says why', async () => {
     await mount();
     saveDocument.mockClear();
     saveDocument.mockRejectedValueOnce(new Error('offline'));
@@ -790,9 +799,28 @@ describe('what the agent reads', () => {
     });
     await sendWith([]);
 
-    // The editor reports the save failure itself. Refusing to answer on top of
-    // that helps nobody.
+    // Sending anyway meant the assistant answered about a version the author
+    // had already replaced — and its edits then proposed against stale blocks.
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('could not be saved'),
+    );
+    expect(streamAgentChat).not.toHaveBeenCalled();
+  });
+
+  it('waits for the server-side chat reference before streaming', async () => {
+    await mount();
+    fetchReferenceReadiness.mockClear();
+
+    await act(async () => {
+      harness.editor.setDocName('Renamed by the author');
+    });
+    await sendWith([]);
+
     await waitFor(() => expect(streamAgentChat).toHaveBeenCalledTimes(1));
+    expect(fetchReferenceReadiness).toHaveBeenCalled();
+    expect(fetchReferenceReadiness.mock.invocationCallOrder[0]).toBeLessThan(
+      streamAgentChat.mock.invocationCallOrder[0],
+    );
   });
 });
 

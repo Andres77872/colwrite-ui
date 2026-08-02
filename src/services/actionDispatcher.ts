@@ -1,5 +1,5 @@
 import { AI_ACTION_REGISTRY, type AiAction } from '../config/aiActions';
-import { streamAgentChat } from './agentChat';
+import { streamAgentChat, type AgentChatRetryOptions } from './agentChat';
 import type { SSEEventHandlers } from './streamParser';
 
 // ── Types ──
@@ -14,6 +14,8 @@ export type DispatchActionParams = {
   onError?: (errorCode: string, message: string) => void;
   /** Only used for the translate action — defaults to 'es-MX' */
   language?: string;
+  /** Forwarded to `streamAgentChat`; the default bounded retry applies. */
+  retry?: AgentChatRetryOptions;
 };
 
 // ── Dispatcher ──
@@ -78,6 +80,6 @@ export async function dispatchAction(
     // did not actually reject anything.
     { message, document_id: documentId, mode: 'rewrite' },
     handlers,
-    { signal },
+    { signal, retry: params.retry },
   );
 }

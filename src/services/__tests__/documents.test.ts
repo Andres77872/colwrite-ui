@@ -1,6 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { documentTransforms } from '../documents';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { deleteDocument, documentTransforms } from '../documents';
 import type { Block, Doc } from '../../editor/types';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const { toBackendDocument, toEditorDoc } = documentTransforms;
 
@@ -31,19 +35,21 @@ describe('toBackendDocument', () => {
     expect(result.blocks).toEqual(sampleBlocks);
   });
 
-  // 3. Doc input with name → carries name AND title
-  it('3. includes name and title from Doc input', () => {
+  // 3. Doc input with name → carries name only. Canonical content forbids
+  // unknown fields, so the legacy `title` alias must never be sent — it used
+  // to fail every save of a named document with a 422.
+  it('3. includes name and never the legacy title alias', () => {
     const result = toBackendDocument(sampleDoc);
     expect(result.name).toBe('My Doc');
-    expect(result.title).toBe('My Doc');
+    expect('title' in result).toBe(false);
   });
 
-  // 4. Doc input with explicit name different from title → both preserved
-  it('4. preserves explicit name and title when both provided', () => {
+  // 4. When both are given, name wins and title is dropped
+  it('4. prefers explicit name and drops title', () => {
     const doc = { version: 2, blocks: sampleBlocks, name: 'Paper', title: 'Research Paper' };
     const result = toBackendDocument(doc);
     expect(result.name).toBe('Paper');
-    expect(result.title).toBe('Research Paper');
+    expect('title' in result).toBe(false);
   });
 
   // 5. Empty object fallback → { version: 1, blocks: [] }
@@ -74,12 +80,13 @@ describe('toBackendDocument', () => {
     expect(result.version).toBe(0);
   });
 
-  // 9. Doc with extra metadata fields — preserved via rest spread
-  it('9. includes extra metadata fields from input', () => {
+  // 9. Only fields the server models survive: tags pass, unknown extras
+  // are dropped rather than tripping the canonical extra=forbid validation.
+  it('9. keeps tags and drops unknown extra fields', () => {
     const doc = { version: 3, blocks: sampleBlocks, extraField: 'value', tags: ['a', 'b'] };
     const result = toBackendDocument(doc);
     expect(result.version).toBe(3);
-    expect(result.extraField).toBe('value');
+    expect('extraField' in result).toBe(false);
     expect(result.tags).toEqual(['a', 'b']);
   });
 
@@ -90,12 +97,12 @@ describe('toBackendDocument', () => {
     expect(result.blocks).toEqual([]);
   });
 
-  // 11. Backend payload with title but no name → title is present, name stays undefined
-  it('11. title-only input carries title but does not set name', () => {
+  // 11. Title-only input → the alias becomes the name
+  it('11. title-only input is sent as the name', () => {
     const doc = { version: 2, blocks: sampleBlocks, title: 'The Title' };
     const result = toBackendDocument(doc);
-    expect(result.title).toBe('The Title');
-    expect(result.name).toBeUndefined();
+    expect(result.name).toBe('The Title');
+    expect('title' in result).toBe(false);
   });
 });
 
@@ -225,5 +232,43 @@ describe('malformed document normalization', () => {
       ],
       name: undefined,
     });
+  });
+});
+
+// ── deleteDocument ──
+
+describe('deleteDocument preconditions', () => {
+  // The server rejects an unconditioned delete: it must be told which head
+  // the caller believes it is deleting.
+  it('sends the known version as a query parameter', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ status: 'ok', message: '' }), { status: 200 }),
+    );
+
+    await deleteDocument('doc-1', { version: 7 });
+
+    expect(String(fetchSpy.mock.calls[0][0])).toBe('/api/document/delete/doc-1?version=7');
+  });
+
+  it('fetches the current ETag and presents If-Match when no version is known', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      calls.push({ url: String(input), init });
+      if (String(input).includes('/v2/documents/')) {
+        return new Response(JSON.stringify({ document_id: 'doc-1' }), {
+          status: 200,
+          headers: { ETag: 'cw:v1:1:7:abc' },
+        });
+      }
+      return new Response(JSON.stringify({ status: 'ok', message: '' }), { status: 200 });
+    });
+
+    await deleteDocument('doc-1');
+
+    expect(calls.map((call) => call.url)).toEqual([
+      '/api/v2/documents/doc-1',
+      '/api/document/delete/doc-1',
+    ]);
+    expect((calls[1].init?.headers as Record<string, string>)['If-Match']).toBe('cw:v1:1:7:abc');
   });
 });

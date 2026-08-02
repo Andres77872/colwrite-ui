@@ -1,4 +1,5 @@
 export * from './documents';
+export * from './documentHistory';
 export * from './auth';
 export * from './userProfile';
 export * from './resources';

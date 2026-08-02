@@ -20,13 +20,18 @@ From `src/routes/document_actions.py`:
 - PUT `/document/save/{document_id}` → body: `{ "document": { ... } }`
 - GET `/document/load/{document_id}`
 - POST `/document/list` → body: `{ "page": 1, "limit": 10, "query": null }`
-- DELETE `/document/delete/{document_id}`
+- DELETE `/document/delete/{document_id}?version=N` (or `If-Match` header — one of the two is required)
 - GET `/document/exists/{document_id}`
 - POST `/document/aichat/{document_id}` (SSE stream) → body: `{ "messages": [ {"role":"user","content":"..."} ] }`
 
 Notes:
 - `document_id` is a MongoDB ObjectId string.
 - `list` supports an optional `query` that filters documents by `name` (case-insensitive).
+- The document object accepts only `{ version, blocks, name?, tags? }`. Unknown
+  fields are rejected by canonical validation; the legacy `title` alias is
+  tolerated server-side as a `name` fallback but should no longer be sent.
+- Every save/create/delete also writes a revision to the versioned history —
+  see `docs/api/document-history.md` for the `/v2/documents` timeline API.
 
 ## Python client (async)
 

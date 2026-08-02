@@ -17,7 +17,12 @@ import {
   SearchCheck,
 } from 'lucide-react';
 
-export type ToolRunState = 'running' | 'done' | 'error';
+/**
+ * `interrupted` — the stream ended (stopped, dropped, or errored) before this
+ * call reported a result. Not a success and not the tool's failure; rendering
+ * it as either lied about what happened.
+ */
+export type ToolRunState = 'running' | 'done' | 'error' | 'interrupted';
 
 export type ToolRun = {
   id: string;
@@ -26,6 +31,20 @@ export type ToolRun = {
   durationMs?: number;
   /** One line about what the call actually did, once it is known. */
   detail?: string;
+  /** Why the call failed, in the server's words. Set when state is 'error'. */
+  error?: string;
+  /** The failure's class, e.g. 'TimeoutError' or 'ContentTruncated'. */
+  errorType?: string;
+  /** The complete parsed input, when it fit the wire budget. */
+  args?: Record<string, unknown>;
+  /** Capped JSON rendering of the input — always present once known. */
+  argsPreview?: string;
+  /** Bounded slice of what the tool returned. */
+  outputPreview?: string;
+  /** Full size of the tool's output before any bounding. */
+  outputChars?: number;
+  /** The server cut the output at its size limit before the model saw it. */
+  outputTruncated?: boolean;
 };
 
 /**
@@ -116,4 +135,29 @@ export function metaFor(tool: string) {
 export function formatDuration(ms?: number): string | null {
   if (!ms || ms < 50) return null;
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+/**
+ * What kind of failure this was, in words a writer recognises. The server's
+ * own message follows it verbatim — this is the lead, not a replacement.
+ */
+export function failureLead(errorType?: string): string {
+  switch (errorType) {
+    case 'TimeoutError':
+      return 'Took too long and was stopped';
+    case 'ContentTruncated':
+      return 'Returned more than the assistant could take in';
+    case 'MalformedArgumentsError':
+      return 'The assistant wrote an invalid request';
+    case 'UnknownToolError':
+      return 'This tool is not available';
+    default:
+      return 'Failed';
+  }
+}
+
+/** "12.4k" for token counts — precise below a thousand, compact above. */
+export function formatTokens(count: number): string {
+  if (count < 1000) return String(count);
+  return `${(count / 1000).toFixed(1)}k`;
 }

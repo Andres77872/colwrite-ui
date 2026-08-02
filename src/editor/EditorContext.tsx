@@ -10,7 +10,7 @@ import {
   withoutOrphanChildren,
   type ApplyPatchResult,
 } from './docOps';
-import { createDocument as apiCreateDocument, saveDocument as apiSaveDocument, loadDocument as apiLoadDocument, deleteDocument as apiDeleteDocument, listDocuments as apiListDocuments } from '../services';
+import { createDocument as apiCreateDocument, saveDocument as apiSaveDocument, loadDocument as apiLoadDocument, deleteDocument as apiDeleteDocument, listDocuments as apiListDocuments, fetchReferenceReadiness } from '../services';
 import type {
   DocumentInput,
   DocumentListOptions,
@@ -359,6 +359,34 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
   const adoptServerVersion = (version: number | undefined | null) => {
     applyServerVersion(version, true);
+  };
+
+  /**
+   * Adopt a server-side restore of the open document.
+   *
+   * A restore is written by the server outside the editor's save path, so the
+   * restored content and version become the new persisted baseline. That is
+   * neither an edit (autosave must not re-save what the server just wrote)
+   * nor a navigation (the document session — and with it the assistant
+   * transcript — must survive), so neither path can be reused here.
+   */
+  const adoptRestoredDocument = (next: Doc, serverVersion: number) => {
+    if (autoSaveTimerRef.current !== null) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    commitDoc({
+      ...next,
+      version: serverVersion,
+      blocks: reconcileBlocks(next.blocks),
+    });
+    editRevisionRef.current = 0;
+    persistedRevisionRef.current = 0;
+    setDirtyTick(0);
+    versionRef.current = serverVersion;
+    setSaveError(null);
+    // The restore changed `updated_at` server-side, so list order can change.
+    setDocumentListRevision(revision => revision + 1);
   };
 
   const addBlockAtStart = (type: Block['type']): string => {
@@ -911,7 +939,12 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const requestToken = deletingActiveDocument
       ? beginDocumentTransition(null)
       : documentRequestRef.current;
-    await apiDeleteDocument(id);
+    // The open document's adopted version says exactly which state is being
+    // deleted; for any other document the service presents the current ETag.
+    await apiDeleteDocument(
+      id,
+      deletingActiveDocument ? { version: versionRef.current } : {},
+    );
     if (
       deletingActiveDocument
       && requestToken === documentRequestRef.current
@@ -1014,6 +1047,91 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     setLastSavedAt(Date.now());
   };
 
+  const hasPendingEditsNow = () => (
+    editRevisionRef.current > persistedRevisionRef.current
+    || autoSaveTimerRef.current !== null
+    || isAutoSavingRef.current
+  );
+
+  /**
+   * Highest head seq the chat-reference projection has been observed to cover,
+   * keyed by document so a switch can never satisfy the wrong document.
+   */
+  const readyHeadSeqRef = useRef<{ documentId: string; headSeq: number } | null>(null);
+  const readinessInFlightRef = useRef<Promise<{ ready: boolean; status: string }> | null>(null);
+
+  /** Projection states that no amount of waiting will fix. */
+  const TERMINAL_READINESS = new Set([
+    'deleted', 'deleting', 'failed', 'scope_mismatch', 'conflicting',
+  ]);
+
+  const waitForReady: EditorContextValue['waitForReady'] = async (options) => {
+    // Flush first: readiness is only meaningful for the state the server has.
+    if (options?.save !== false && hasPendingEditsNow()) {
+      try {
+        await doRemoteSave('manual');
+      } catch {
+        return { ready: false, status: 'save_failed' };
+      }
+    }
+
+    const targetId = documentIdRef.current;
+    if (!targetId) return { ready: false, status: 'no_document' };
+    const expectedHeadSeq = versionRef.current;
+
+    const memo = readyHeadSeqRef.current;
+    if (memo && memo.documentId === targetId && memo.headSeq >= expectedHeadSeq) {
+      return { ready: true, status: 'ready' };
+    }
+
+    if (readinessInFlightRef.current) return readinessInFlightRef.current;
+
+    const request = (async () => {
+      const timeoutMs = options?.timeoutMs ?? 6000;
+      const delays = [250, 500, 1000, 1500];
+      const startedAt = Date.now();
+      let lastStatus: string | undefined;
+      for (let poll = 0; ; poll += 1) {
+        if (options?.signal?.aborted) return { ready: false, status: 'aborted' };
+        try {
+          const readiness = await fetchReferenceReadiness(targetId, {
+            signal: options?.signal,
+          });
+          lastStatus = readiness.readinessStatus;
+          if (readiness.ready) {
+            const covered = Math.max(
+              readiness.appliedHeadSeq ?? 0,
+              readiness.expectedHeadSeq ?? 0,
+              expectedHeadSeq,
+            );
+            readyHeadSeqRef.current = { documentId: targetId, headSeq: covered };
+            return { ready: true, status: 'ready' };
+          }
+          if (TERMINAL_READINESS.has(readiness.readinessStatus)) {
+            return { ready: false, status: readiness.readinessStatus };
+          }
+        } catch {
+          // The probe is advisory — a network hiccup or an older backend
+          // without the endpoint must not block chat; the server keeps its
+          // own typed rejection as the source of truth.
+          return { ready: false, status: 'unavailable' };
+        }
+        const delay = delays[Math.min(poll, delays.length - 1)];
+        if (Date.now() - startedAt + delay > timeoutMs) {
+          return { ready: false, status: lastStatus || 'timeout' };
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      }
+    })();
+
+    readinessInFlightRef.current = request;
+    try {
+      return await request;
+    } finally {
+      if (readinessInFlightRef.current === request) readinessInFlightRef.current = null;
+    }
+  };
+
   // Numbering, ordering and back-links are all derived from the same scan, so
   // it happens once here rather than inside each citation widget.
   const bibliography = useMemo(() => buildBibliography(blocks), [blocks]);
@@ -1068,17 +1186,16 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     documentListRevision,
     lastSavedAt,
     isAutoSaving,
-    hasPendingEdits: () => (
-      editRevisionRef.current > persistedRevisionRef.current
-      || autoSaveTimerRef.current !== null
-      || isAutoSavingRef.current
-    ),
+    hasPendingEdits: hasPendingEditsNow,
+    savedHeadSeq: () => (documentIdRef.current ? versionRef.current : null),
+    waitForReady,
     lastSaveSource,
     saveError,
     clearSaveError: () => setSaveError(null),
     documentLoadNotice,
     clearDocumentLoadNotice: () => setDocumentLoadNotice(null),
     adoptServerVersion,
+    adoptRestoredDocument,
     hasAnyRemoteDocs,
     applyPatch,
     recentlyChanged,

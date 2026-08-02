@@ -25,7 +25,7 @@ export function AiBeatInline({ child, ...rest }: AiBeatWidgetProps) {
 }
 
 function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
-  const { blockId, child, updateHtml, refs, documentId, ensureRemoteDocument } = props;
+  const { blockId, child, updateHtml, refs, documentId, ensureRemoteDocument, waitForReady } = props;
   const { patch, remove } = useInlineChild(props);
 
   // Only the streamed output is local: it arrives token by token, and writing
@@ -62,6 +62,14 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
       const docId = documentId ?? (await ensureRemoteDocument());
       if (!docId) {
         setError('This document could not be saved, so nothing could be generated for it.');
+        return;
+      }
+      // The run is keyed on the server-side chat reference of the save above;
+      // a terminal projection state means no retry will make it exist.
+      const readiness = await waitForReady({ signal: controller.signal });
+      if (controller.signal.aborted) return;
+      if (!readiness.ready && (readiness.status === 'deleted' || readiness.status === 'failed')) {
+        setError('This document is no longer available on the server.');
         return;
       }
       await streamAgentChat(

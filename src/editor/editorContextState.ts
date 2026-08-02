@@ -104,7 +104,30 @@ export type EditorContextValue = {
   } | null;
   clearDocumentLoadNotice: () => void;
   adoptServerVersion: (version: number | undefined | null) => void;
+  /**
+   * Take a server-side restore's content and version as the new persisted
+   * baseline of the open document — without arming autosave and without
+   * starting a new document session.
+   */
+  adoptRestoredDocument: (doc: Doc, serverVersion: number) => void;
   hasAnyRemoteDocs: boolean | null;
+  /** Last server-confirmed head sequence, or null before the first save. */
+  savedHeadSeq: () => number | null;
+  /**
+   * Wait until the server's chat reference has caught up with the last save,
+   * saving pending edits first unless `save: false`.
+   *
+   * Never throws. `ready: false` comes with a status the caller can act on:
+   * `save_failed` (the flush failed — surface it), a terminal projection
+   * status such as `deleted` or `failed` (retrying is pointless), or
+   * `pending`/`unavailable`/`timeout` (proceeding is allowed; the server will
+   * re-check and reject with its own typed error if still not ready).
+   */
+  waitForReady: (options?: {
+    timeoutMs?: number;
+    save?: boolean;
+    signal?: AbortSignal;
+  }) => Promise<{ ready: boolean; status: string }>;
   applyPatch: (ops: ToolOperation[], options?: { persist?: boolean }) => ApplyPatchResult;
   recentlyChanged: ReadonlySet<string>;
   markRecentlyChanged: (ids: string[]) => void;

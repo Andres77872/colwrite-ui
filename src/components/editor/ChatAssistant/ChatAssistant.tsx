@@ -16,8 +16,8 @@ import { usePanels } from '@/components/panels/panelsContextState';
 import { useIsDesktop } from '@/hooks/useMediaQuery';
 import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
-import { streamAgentChat } from '@/services/agentChat';
-import type { SSEEventHandlers } from '@/services/streamParser';
+import { streamAgentChat, type AgentChatResult } from '@/services/agentChat';
+import type { SSEErrorDetails, SSEEventHandlers } from '@/services/streamParser';
 import type { ToolAction } from '@/editor/types';
 import { useChatSessions } from '../../chat/chatSessionsState';
 import { listMessages, listThreads } from '@/services/chats';
@@ -53,9 +53,82 @@ type ChatMessage = {
   content: string;
   /** Tools the agent ran while producing this reply, in order. */
   runs: ToolRun[];
-  /** How many changes this reply put up for review in the document. */
-  proposed: number;
+  /**
+   * The changes this reply put up for review, by id.
+   *
+   * Ids rather than a count, because the button under the reply jumps to them:
+   * it used to jump to `pending[0]`, so with two replies open for review the
+   * second one sent the author to the first one's paragraph.
+   */
+  proposedIds: string[];
+  /** Changes a server in auto-apply mode had already written when this ran. */
+  applied: number;
+  /** Token usage the server reported for this reply, once it completed. */
+  usage?: { promptTokens: number; completionTokens: number };
 };
+
+/**
+ * What the author reads when something breaks, split from what a bug report
+ * needs. `message` is always writeable prose; `detail` carries the technical
+ * cause (code, raw body) in a quieter voice; `retryable` gates the
+ * "Try again" button to failures where resending the same message can help.
+ */
+type ChatError = {
+  message: string;
+  detail?: string;
+  retryable?: boolean;
+  /**
+   * Cooldown before "Try again" re-enables. Set for "server not caught up yet"
+   * errors, where an instant retry is exactly what just failed.
+   */
+  cooldownMs?: number;
+};
+
+/** The transcript rows a failed turn owns, so retry removes exactly those. */
+type LastExchange = {
+  text: string;
+  userMessageId: string;
+  assistantMessageId: string;
+};
+
+function friendlyStreamError(
+  code: string,
+  message: string,
+  details?: SSEErrorDetails,
+): ChatError {
+  switch (code) {
+    case 'PROJECTION_PENDING':
+    case 'DOCUMENT_REFERENCE_NOT_READY':
+      return {
+        message:
+          'The document is still being prepared on the server — try again in a moment.',
+        detail: message || code,
+        retryable: true,
+        cooldownMs: (details?.retryAfterSeconds ?? 3) * 1000,
+      };
+    case 'AGENT_BUDGET_EXCEEDED':
+      return {
+        message:
+          'The assistant hit its work limit for this reply and stopped early. What it produced so far is above — ask again to continue.',
+        detail: message || code,
+        retryable: true,
+      };
+    case 'DOCUMENT_NOT_FOUND':
+      return {
+        message: 'The assistant could not find this document on the server.',
+        detail: message || code,
+        retryable: false,
+      };
+    default:
+      return {
+        // The server writes these messages for people now; an empty one is a
+        // dropped payload, not a sentence to show.
+        message: message || 'The assistant hit an unexpected error while replying.',
+        detail: code || undefined,
+        retryable: true,
+      };
+  }
+}
 
 /** How close to the bottom counts as "following along" for auto-scroll. */
 const AUTOSCROLL_THRESHOLD_PX = 64;
@@ -70,7 +143,7 @@ const SUGGESTIONS = [
 ];
 
 function emptyMessage(role: string, content = ''): ChatMessage {
-  return { id: uid(), role, content, runs: [], proposed: 0 };
+  return { id: uid(), role, content, runs: [], proposedIds: [], applied: 0 };
 }
 
 function boundedArgument(value: unknown, limit = 120): string | null {
@@ -126,8 +199,14 @@ export function ChatAssistant() {
 
 function DocumentChatAssistant() {
   const editor = useEditor();
-  const { documentId, loadingDocumentId, ensureRemoteDocument, hasPendingEdits, saveRemote } =
-    editor;
+  const {
+    documentId,
+    loadingDocumentId,
+    ensureRemoteDocument,
+    hasPendingEdits,
+    saveRemote,
+    waitForReady,
+  } = editor;
   const proposals = useProposals();
   const { selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId } =
     useChatSessions();
@@ -140,7 +219,10 @@ function DocumentChatAssistant() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<ChatError | null>(null);
+  /** Epoch ms before which "Try again" stays disabled; 0 means no cooldown. */
+  const [retryCooldownUntil, setRetryCooldownUntil] = useState(0);
+  const [cooldownNow, setCooldownNow] = useState(() => Date.now());
   const [agentStatus, setAgentStatus] = useState<{ status: string; detail: string } | null>(null);
   const [atBottom, setAtBottom] = useState(true);
 
@@ -191,8 +273,9 @@ function DocumentChatAssistant() {
   // without scanning for "the last assistant message" on every token.
   const activeMessageIdRef = useRef<string | null>(null);
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
-  // What was sent last, so a failed turn can be retried without retyping.
-  const [lastSent, setLastSent] = useState<string | null>(null);
+  // The last exchange sent, so a failed turn can be retried without retyping —
+  // and so retry removes that turn's rows, not whatever happens to be last.
+  const [lastExchange, setLastExchange] = useState<LastExchange | null>(null);
   const unsavedNoticeId = useId();
   const composerHintId = useId();
 
@@ -285,7 +368,7 @@ function DocumentChatAssistant() {
     abortRef.current = null;
     setIsStreaming(false);
     setAgentStatus(null);
-    setError('');
+    setError(null);
     setInput('');
     activeMessageIdRef.current = null;
     setActiveMessageId(null);
@@ -328,14 +411,21 @@ function DocumentChatAssistant() {
       if (processedToolCallIds.current.has(dedupKey)) return;
       processedToolCallIds.current.add(dedupKey);
 
-      const { changes } = proposals.receive(action);
+      const { changeIds, applied } = proposals.receive(action);
 
       if (action.status === 'error') {
-        setError(action.message || 'The assistant could not complete that edit.');
+        setError({
+          message: action.message || 'The assistant could not complete that edit.',
+          retryable: false,
+        });
       }
 
-      if (changes > 0) {
-        patchActive((message) => ({ ...message, proposed: message.proposed + changes }));
+      if (changeIds.length > 0 || applied > 0) {
+        patchActive((message) => ({
+          ...message,
+          proposedIds: [...message.proposedIds, ...changeIds],
+          applied: message.applied + applied,
+        }));
       }
     },
     [patchActive, proposals],
@@ -414,8 +504,14 @@ function DocumentChatAssistant() {
         // author can see: that reads as the transcript being thrown away.
         setMessages((prev) => (history.length === 0 && prev.length > 0 ? prev : history));
         if (typeof res.pivotThreadId === 'number') setSelectedThreadId(res.pivotThreadId);
-      } catch {
-        if (!cancelled) setError('Could not load this conversation.');
+      } catch (e) {
+        if (!cancelled) {
+          setError({
+            message: 'Could not load this conversation.',
+            detail: e instanceof Error ? e.message : undefined,
+            retryable: false,
+          });
+        }
       }
     })();
 
@@ -433,22 +529,48 @@ function DocumentChatAssistant() {
     requestAnimationFrame(() => inputHostRef.current?.focus());
   };
 
+  /** Show an error and start its retry cooldown, if it declares one. */
+  const reportError = (next: ChatError) => {
+    setError(next);
+    setRetryCooldownUntil(next.cooldownMs ? Date.now() + next.cooldownMs : 0);
+  };
+
+  // Ticks the disabled "Try again" label down while a cooldown is active.
+  useEffect(() => {
+    if (!error?.retryable || retryCooldownUntil <= Date.now()) return;
+    const timer = window.setInterval(() => {
+      setCooldownNow(Date.now());
+      if (Date.now() >= retryCooldownUntil) window.clearInterval(timer);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [error, retryCooldownUntil]);
+
+  const retryCooldownRemainingMs = error?.retryable
+    ? Math.max(0, retryCooldownUntil - cooldownNow)
+    : 0;
+
   const send = async (text: string) => {
     if (!text || isStreaming || loadingDocumentId) return;
 
-    setError('');
+    setError(null);
+    setRetryCooldownUntil(0);
     setInput('');
     setAgentStatus(null);
     pinnedToBottom.current = true;
     setAtBottom(true);
-    setLastSent(text);
     // Tool-call ids are only unique within a run for some providers.
     processedToolCallIds.current = new Set();
 
+    const userMessage = emptyMessage('user', text);
     const assistantMessage = emptyMessage('assistant');
+    setLastExchange({
+      text,
+      userMessageId: userMessage.id,
+      assistantMessageId: assistantMessage.id,
+    });
     activeMessageIdRef.current = assistantMessage.id;
     setActiveMessageId(assistantMessage.id);
-    setMessages((prev) => [...prev, emptyMessage('user', text), assistantMessage]);
+    setMessages((prev) => [...prev, userMessage, assistantMessage]);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -478,9 +600,11 @@ function DocumentChatAssistant() {
         turnDocumentId = await ensureRemoteDocument();
         if (!streamIsLive()) return;
         if (!turnDocumentId) {
-          setError(
-            'This document could not be saved, so there is nothing for the assistant to work on yet.',
-          );
+          setError({
+            message:
+              'This document could not be saved, so there is nothing for the assistant to work on yet.',
+            retryable: true,
+          });
           return;
         }
         setAgentStatus(null);
@@ -493,12 +617,38 @@ function DocumentChatAssistant() {
         try {
           await saveRemote();
         } catch {
-          // Reported by the editor's own save notice. Asking about a document
-          // one revision behind still beats refusing to answer at all.
+          if (!streamIsLive()) return;
+          setError({
+            message:
+              'Your latest edits could not be saved, so the assistant would answer about an older version of this document.',
+            retryable: true,
+          });
+          return;
         }
         if (!streamIsLive()) return;
         setAgentStatus(null);
       }
+
+      // The chat reference the server keys this run on is projected
+      // asynchronously from the save above; asking before it lands is what
+      // used to come back as PROJECTION_PENDING.
+      setAgentStatus({
+        status: 'preparing',
+        detail: 'Preparing this document for the assistant…',
+      });
+      const readiness = await waitForReady({ timeoutMs: 6000, save: false, signal: controller.signal });
+      if (!streamIsLive()) return;
+      setAgentStatus(null);
+      if (!readiness.ready && (readiness.status === 'deleted' || readiness.status === 'failed')) {
+        setError({
+          message: 'This document is no longer available to the assistant on the server.',
+          detail: readiness.status,
+          retryable: false,
+        });
+        return;
+      }
+      // Any other not-ready outcome falls through: the stream request retries
+      // with backoff, and the server's typed rejection stays authoritative.
 
       // Captured for the whole turn. A conversation belongs to the document it
       // was started on; nothing below may silently move it to another one.
@@ -541,19 +691,67 @@ function DocumentChatAssistant() {
             ],
           }));
         },
-        onToolCallEnd: (tool, toolCallId, durationMs, isError) => {
+        onToolCallArgs: (event) => {
           if (!streamIsLive()) return;
+          // The start event fires before the model has finished writing its
+          // arguments, so this is usually the first time the input is known.
           patchActive((message) => {
-            const index = message.runs.findIndex(
-              (run) =>
-                run.state === 'running' && (toolCallId ? run.id === toolCallId : run.tool === tool),
+            const index = message.runs.findIndex((run) =>
+              run.state === 'running'
+              && (event.toolCallId ? run.id === event.toolCallId : run.tool === event.tool),
             );
             if (index === -1) return message;
             const runs = message.runs.slice();
+            const existing = runs[index];
             runs[index] = {
-              ...runs[index],
-              state: isError ? 'error' : 'done',
-              durationMs,
+              ...existing,
+              args: event.arguments ?? existing.args,
+              argsPreview: event.argumentsPreview || existing.argsPreview,
+              detail:
+                existing.detail
+                ?? (event.arguments ? toolRunDetail(event.tool, event.arguments) : undefined),
+            };
+            return { ...message, runs };
+          });
+        },
+        onToolCallEnd: (event) => {
+          if (!streamIsLive()) return;
+          patchActive((message) => {
+            // Matched on the call id whenever the provider sends one. Without
+            // it there is nothing to pair on but the name, so two concurrent
+            // calls of the same tool are resolved oldest-first and their
+            // durations can cross. That is a limit of the payload, not a
+            // choice — which is why an unmatched end is left alone below
+            // rather than applied to some other run.
+            let index = message.runs.findIndex((run) =>
+              run.state === 'running'
+              && (event.toolCallId ? run.id === event.toolCallId : run.tool === event.tool),
+            );
+            // The stream can end a call twice: a synthetic zero-duration end
+            // when content resumes, then the authoritative one from the tool
+            // runtime. The correction used to be dropped here, leaving a
+            // failed call rendered as a success — take it when it carries an
+            // outcome the provisional end did not.
+            if (index === -1 && event.toolCallId && (event.isError || event.outputPreview !== null)) {
+              index = message.runs.findIndex((run) => run.id === event.toolCallId);
+            }
+            if (index === -1) return message;
+            const runs = message.runs.slice();
+            const existing = runs[index];
+            runs[index] = {
+              ...existing,
+              state: event.isError ? 'error' : 'done',
+              durationMs: event.durationMs || existing.durationMs,
+              error: event.error ?? existing.error,
+              errorType: event.errorType ?? existing.errorType,
+              args: event.arguments ?? existing.args,
+              argsPreview: event.argumentsPreview || existing.argsPreview,
+              outputPreview: event.outputPreview ?? existing.outputPreview,
+              outputChars: event.outputChars || existing.outputChars,
+              outputTruncated: event.outputTruncated || existing.outputTruncated,
+              detail:
+                existing.detail
+                ?? (event.arguments ? toolRunDetail(event.tool, event.arguments) : undefined),
             };
             return { ...message, runs };
           });
@@ -562,7 +760,7 @@ function DocumentChatAssistant() {
           if (!streamIsLive()) return;
           onToolAction(action);
         },
-        onError: (code, message) => {
+        onError: (code, message, details) => {
           if (!streamIsLive()) return;
           if (!alreadyRecovered && (code === 'CHAT_NOT_FOUND' || code === 'THREAD_NOT_FOUND')) {
             // Reported by the retry below if that fails too, so the author is
@@ -570,13 +768,16 @@ function DocumentChatAssistant() {
             recover = code === 'CHAT_NOT_FOUND' ? 'chat' : 'thread';
             return;
           }
+          // The stream died around these calls; the tools themselves did not
+          // report failure. 'interrupted', because painting them as errors
+          // sent authors chasing the wrong culprit.
           patchActive((active) => ({
             ...active,
             runs: active.runs.map((run) =>
-              run.state === 'running' ? { ...run, state: 'error' as const } : run,
+              run.state === 'running' ? { ...run, state: 'interrupted' as const } : run,
             ),
           }));
-          setError(message);
+          reportError(friendlyStreamError(code, message, details));
         },
         onDone: (chatId, threadId) => {
           if (!streamIsLive()) return;
@@ -602,9 +803,10 @@ function DocumentChatAssistant() {
         },
       };
 
+      let result: AgentChatResult | null = null;
       for (;;) {
         recover = null;
-        await streamAgentChat(
+        result = await streamAgentChat(
           {
             message: text,
             document_id: turnDocumentId,
@@ -613,7 +815,12 @@ function DocumentChatAssistant() {
             mode: 'assistant',
           },
           handlers,
-          { signal: controller.signal },
+          {
+            signal: controller.signal,
+            // The recovered pass already carries its own 401 replay; stacking
+            // a fresh pending backoff on top would multiply requests again.
+            retry: alreadyRecovered ? { maxAttempts: 1 } : undefined,
+          },
         );
 
         if (!recover || !streamIsLive()) break;
@@ -630,10 +837,31 @@ function DocumentChatAssistant() {
         // must not block the retry's own staging.
         processedToolCallIds.current = new Set();
       }
+
+      if (result && streamIsLive()) {
+        if (result.terminal === 'done' && result.usage) {
+          const usage = result.usage;
+          patchActive((message) => ({ ...message, usage }));
+        } else if (result.terminal === null) {
+          // The connection closed without `done` or `error`. This used to
+          // render as a finished reply — with every pending tool stamped as
+          // a success — when the truth is the server was cut off mid-turn.
+          setError({
+            message:
+              'The connection dropped before the assistant finished. The reply above may be incomplete.',
+            retryable: true,
+          });
+        }
+      }
     } catch (e) {
       // An aborted stream is a deliberate stop, not a failure to report.
       if (streamIsLive()) {
-        setError(e instanceof Error ? e.message : 'Something went wrong');
+        const raw = e instanceof Error ? e.message : '';
+        setError({
+          message: 'The assistant request failed before a reply could start.',
+          detail: raw || undefined,
+          retryable: true,
+        });
       }
     } finally {
       // A newer send owns the UI now, or this document's assistant has
@@ -645,11 +873,13 @@ function DocumentChatAssistant() {
         setIsStreaming(false);
         if (abortRef.current === controller) abortRef.current = null;
         setAgentStatus(null);
-        // A tool that never reported completion would otherwise spin forever.
+        // A call that never reported completion is unresolved, not done —
+        // stamping it 'done' here painted stopped and dropped turns as
+        // successes.
         patchActive((message) => ({
           ...message,
           runs: message.runs.map((run) =>
-            run.state === 'running' ? { ...run, state: 'done' as const } : run,
+            run.state === 'running' ? { ...run, state: 'interrupted' as const } : run,
           ),
         }));
         activeMessageIdRef.current = null;
@@ -666,12 +896,19 @@ function DocumentChatAssistant() {
   };
 
   const onRetry = () => {
-    const text = lastSent;
-    if (!text) return;
-    // Drop the failed exchange so the transcript does not accumulate dead ends.
-    setMessages((prev) => prev.slice(0, -2));
-    setError('');
-    send(text);
+    const exchange = lastExchange;
+    if (!exchange) return;
+    if (retryCooldownUntil > Date.now()) return;
+    // Drop exactly the failed exchange's rows. Slicing the last two removed
+    // whatever happened to be at the end — including replies from turns that
+    // had nothing to do with the error.
+    setMessages((prev) =>
+      prev.filter(
+        (m) => m.id !== exchange.userMessageId && m.id !== exchange.assistantMessageId,
+      ),
+    );
+    setError(null);
+    send(exchange.text);
   };
 
   const onStop = () => {
@@ -949,10 +1186,11 @@ function DocumentChatAssistant() {
               key={message.id}
               message={message}
               live={isStreaming && message.id === activeMessageId}
-              onFocusChange={() => {
-                const first = proposals.pending[0];
-                if (first) proposals.focusChange(first.id);
-              }}
+              // This reply's own changes, minus the ones already decided on.
+              openChangeIds={message.proposedIds.filter((id) =>
+                proposals.pending.some((change) => change.id === id),
+              )}
+              onFocusChange={(id) => proposals.focusChange(id)}
             />
           ))}
 
@@ -979,17 +1217,25 @@ function DocumentChatAssistant() {
             >
               <p className="flex items-start gap-1.5 text-xs text-destructive">
                 <AlertCircle aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 break-words">{error}</span>
+                <span className="min-w-0 break-words">{error.message}</span>
               </p>
-              {lastSent && !isStreaming && (
+              {error.detail && error.detail !== error.message && (
+                <p className="pl-5 text-2xs text-muted-foreground break-words">
+                  {error.detail}
+                </p>
+              )}
+              {error.retryable && lastExchange && !isStreaming && (
                 <Button
                   size="sm"
                   variant="ghost"
                   className="h-6 gap-1 px-1.5 text-xs"
                   onClick={onRetry}
+                  disabled={retryCooldownRemainingMs > 0}
                 >
                   <RotateCcw className="h-3 w-3" />
-                  Try again
+                  {retryCooldownRemainingMs > 0
+                    ? `Try again in ${Math.ceil(retryCooldownRemainingMs / 1000)}s`
+                    : 'Try again'}
                 </Button>
               )}
             </div>
@@ -1163,11 +1409,13 @@ function ResizeHandles({
 function MessageRow({
   message,
   live,
+  openChangeIds,
   onFocusChange,
 }: {
   message: ChatMessage;
   live: boolean;
-  onFocusChange: () => void;
+  openChangeIds: string[];
+  onFocusChange: (changeId: string) => void;
 }) {
   const isUser = message.role === 'user';
   const isStreamingTail = live && !isUser && !message.content && message.runs.length === 0;
@@ -1184,7 +1432,9 @@ function MessageRow({
 
   return (
     <div className="group/message space-y-2">
-      {message.runs.length > 0 && <AgentActivity runs={message.runs} live={live} />}
+      {message.runs.length > 0 && (
+        <AgentActivity runs={message.runs} live={live} usage={message.usage} />
+      )}
 
       {isStreamingTail ? (
         <span className="inline-flex gap-1 px-1 py-2" aria-label="Assistant is typing">
@@ -1204,19 +1454,32 @@ function MessageRow({
         )
       )}
 
-      {message.proposed > 0 && (
+      {openChangeIds.length > 0 && (
         <button
           type="button"
-          onClick={onFocusChange}
+          onClick={() => onFocusChange(openChangeIds[0])}
           className="flex w-full items-center gap-1.5 rounded-md border border-primary/40 bg-primary/10 px-2 py-1.5 text-left text-xs transition-colors hover:bg-primary/15"
         >
           <Sparkles aria-hidden="true" className="h-3 w-3 shrink-0 text-primary" />
           <span className="min-w-0 flex-1">
-            Suggested {message.proposed} {message.proposed === 1 ? 'change' : 'changes'} — review in
-            the document
+            Suggested {openChangeIds.length}{' '}
+            {openChangeIds.length === 1 ? 'change' : 'changes'} — review in the document
           </span>
           <CornerDownLeft aria-hidden="true" className="h-3 w-3 shrink-0 text-primary" />
         </button>
+      )}
+
+      {/* A server in auto-apply mode writes to the document during the turn.
+          The transcript said nothing at all about it, so the only evidence was
+          a highlight that faded after four seconds. */}
+      {message.applied > 0 && (
+        <p className="flex items-center gap-1.5 rounded-md border border-border bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
+          <FileText aria-hidden="true" className="h-3 w-3 shrink-0" />
+          <span className="min-w-0 flex-1">
+            Applied {message.applied} {message.applied === 1 ? 'change' : 'changes'} to the
+            document.
+          </span>
+        </p>
       )}
 
       {message.content && !live && <CopyReply text={message.content} />}
