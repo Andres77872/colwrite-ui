@@ -272,7 +272,10 @@ describe('streamAgentChat pending retries', () => {
       .spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify({ code: 'projection_pending', retry_after: 2 }),
+          // `retryable` as the server actually sends it: the shared gate wants
+          // the flag *and* a code it knows, so a future retryable problem is
+          // never replayed on a guess.
+          JSON.stringify({ code: 'projection_pending', retryable: true, retry_after: 2 }),
           { status: 503, headers: { 'Content-Type': 'application/problem+json' } },
         ),
       )

@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useEditor } from '@/editor';
 import type { Block, Doc } from '@/editor';
 import { blockText } from '@/editor/proposals';
 import { formatDateTime } from '@/lib/text';
-import { describeApiError } from '@/services/contracts';
-import { isRetryableProblem } from '@/services/retry';
+import { describeApiError, describeReadiness } from '@/services/contracts';
+import { isRetryableProblem, isTerminalReadiness } from '@/services/retry';
 import {
   type DocumentHead,
   type RevisionChange,
@@ -55,8 +55,17 @@ import { RAIL_ROW_HEIGHT, VersionGraphRail, VersionGraphTail } from './VersionGr
 
 const PAGE_SIZE = 30;
 
-/** Auto-refreshes while the server prepares history, before "Check again". */
-const MAX_PREPARING_POLLS = 5;
+/**
+ * Readiness verdicts that say nothing about the projection — a dropped probe,
+ * or a backend without the endpoint. Reading anyway is right: the server keeps
+ * its own typed rejection as the source of truth.
+ */
+const INCONCLUSIVE_READINESS = new Set([
+  'unavailable',
+  'aborted',
+  'no_document',
+  'save_failed',
+]);
 
 const KIND_LABELS: Record<string, string> = {
   create: 'Created',
@@ -141,10 +150,16 @@ export function HistoryPanel() {
   const [revealingCurrent, setRevealingCurrent] = useState(false);
   // Bumped when the panel itself learns the server moved on (failed restore).
   const [refreshTick, setRefreshTick] = useState(0);
-  // Bounded retries while the server says the history is still being prepared,
-  // so the author does not have to press "Check again" while a backfill runs.
-  const pollAttemptRef = useRef(0);
-  const pollTimerRef = useRef<number | null>(null);
+  /**
+   * The editor context value is rebuilt unmemoized every render, so
+   * `waitForReady` cannot go in a dep array without looping forever.
+   */
+  const waitForReadyRef = useRef(waitForReady);
+  // Synced in a layout effect, not during render: a render React discards must
+  // not be the one that decides which probe the next load uses.
+  useLayoutEffect(() => {
+    waitForReadyRef.current = waitForReady;
+  });
   // Which document the timeline rows belong to: a refresh of the same
   // document merges pages, a navigation starts over.
   const timelineDocRef = useRef<string | null>(null);
@@ -158,10 +173,6 @@ export function HistoryPanel() {
     || revisions.some((revision) => revision.revisionId === head.currentRevisionId);
 
   useEffect(() => {
-    pollAttemptRef.current = 0;
-  }, [documentId]);
-
-  useEffect(() => {
     const controller = new AbortController();
     (async () => {
       if (!documentId) {
@@ -173,12 +184,27 @@ export function HistoryPanel() {
       setLoading(true);
       setError(null);
       try {
+        // Ask whether the server can answer before asking it to — the probe
+        // returns 200 either way, where these two endpoints log a failure per
+        // attempt. `save: false` is load-bearing: saving here would advance
+        // the head being waited on, so the wait could never end.
+        const readiness = await waitForReadyRef.current({ timeoutMs: 3000, save: false });
+        if (controller.signal.aborted) return;
+        if (!readiness.ready && !INCONCLUSIVE_READINESS.has(readiness.status)) {
+          setError({
+            message: isTerminalReadiness(readiness.status)
+              ? describeReadiness(readiness.status)
+              : 'The history for this document is still being prepared.',
+            retryable: !isTerminalReadiness(readiness.status),
+          });
+          return;
+        }
+
         const [headValue, page] = await Promise.all([
           fetchDocumentHead(documentId, { signal: controller.signal }),
           listRevisions(documentId, { limit: PAGE_SIZE, signal: controller.signal }),
         ]);
         if (controller.signal.aborted) return;
-        pollAttemptRef.current = 0;
         setHead(headValue);
         const fresh: Timeline = {
           revisions: page.revisions,
@@ -192,9 +218,9 @@ export function HistoryPanel() {
         timelineDocRef.current = documentId;
       } catch (cause) {
         if (controller.signal.aborted) return;
-        // The server tells us which failures are worth waiting on; the request
-        // layer has already ridden out a short one, so anything arriving here
-        // needs the panel's own slower poll.
+        // The readiness probe absorbed the routine wait; anything landing here
+        // has already outlasted it, so it goes to the author with "Check
+        // again" rather than starting another timer behind their back.
         const preparing = isRetryableProblem(cause);
         setError({
           // Whichever projection is behind, what the author is waiting for
@@ -204,23 +230,12 @@ export function HistoryPanel() {
             : describeApiError(cause, 'Could not load the document history.'),
           retryable: preparing,
         });
-        if (preparing && pollAttemptRef.current < MAX_PREPARING_POLLS) {
-          pollAttemptRef.current += 1;
-          pollTimerRef.current = window.setTimeout(() => {
-            pollTimerRef.current = null;
-            setRefreshTick((tick) => tick + 1);
-          }, pollAttemptRef.current * 1000);
-        }
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
     })();
     return () => {
       controller.abort();
-      if (pollTimerRef.current !== null) {
-        window.clearTimeout(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
     };
   }, [documentId, documentListRevision, refreshTick]);
 

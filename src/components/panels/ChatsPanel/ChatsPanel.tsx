@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '@/editor';
 import { createChat, deleteChat, listChats, updateChatTitle, type ChatItem } from '@/services/chats';
-import { describeApiError, problemRetryAfter } from '@/services/contracts';
-import { isRetryableProblem } from '@/services/retry';
+import { describeApiError, describeReadiness } from '@/services/contracts';
+import { isRetryableProblem, isTerminalReadiness } from '@/services/retry';
 import { useChatSessions } from '@/components/chat/chatSessionsState';
 import { cn } from '@/lib/utils';
 import { formatDateTime } from '@/lib/text';
@@ -16,6 +16,7 @@ import {
   AlertCircle,
   ChevronLeft,
   ChevronRight,
+  Clock,
   MessageSquare,
   Pencil,
   Plus,
@@ -26,8 +27,18 @@ import {
 
 const PAGE_SIZE = 10;
 
-/** Reloads of the list while the server's document projection catches up. */
-const MAX_PREPARING_POLLS = 4;
+/**
+ * Readiness verdicts that say nothing about the projection — a dropped probe,
+ * or a backend without the endpoint. Reading anyway is right: the server keeps
+ * its own typed rejection as the source of truth, and a probe we could not
+ * trust must not wall off a read that would have worked.
+ */
+const INCONCLUSIVE_READINESS = new Set([
+  'unavailable',
+  'aborted',
+  'no_document',
+  'save_failed',
+]);
 
 function chatLabel(chat: ChatItem): string {
   return chat.title?.trim() || `Untitled chat · ${chat.chat_id.slice(0, 8)}`;
@@ -41,7 +52,7 @@ function chatLabel(chat: ChatItem): string {
 type ListError = { message: string; preparing: boolean };
 
 export function ChatsPanel() {
-  const { documentId, ensureRemoteDocument } = useEditor();
+  const { documentId, ensureRemoteDocument, waitForReady } = useEditor();
   const { selectedChatId, setSelectedChatId, setSelectedThreadId } = useChatSessions();
   const confirm = useConfirm();
   const { toast } = useToast();
@@ -56,46 +67,20 @@ export function ChatsPanel() {
   const [count, setCount] = useState(0);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
-  /** Bumped to re-run the load effect while the projection catches up. */
+  /** Bumped to re-run the load effect — the single way the list is fetched. */
   const [refreshTick, setRefreshTick] = useState(0);
-  const preparingPollsRef = useRef(0);
-  const pollTimerRef = useRef<number | null>(null);
-
-  const clearPoll = useCallback(() => {
-    if (pollTimerRef.current !== null) {
-      window.clearTimeout(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
-  }, []);
-
-  /** Report a failed load, and keep asking while the server is still catching up. */
-  const reportListFailure = useCallback(
-    (cause: unknown) => {
-      const preparing = isRetryableProblem(cause);
-      setListError({
-        message: describeApiError(cause, 'Request failed'),
-        preparing,
-      });
-      if (preparing && preparingPollsRef.current < MAX_PREPARING_POLLS) {
-        preparingPollsRef.current += 1;
-        clearPoll();
-        pollTimerRef.current = window.setTimeout(
-          () => {
-            pollTimerRef.current = null;
-            setRefreshTick((tick) => tick + 1);
-          },
-          (problemRetryAfter(cause) ?? 1) * 1000 * preparingPollsRef.current,
-        );
-      }
-    },
-    [clearPoll],
-  );
-
-  useEffect(() => {
-    preparingPollsRef.current = 0;
-  }, [documentId]);
-
-  useEffect(() => clearPoll, [clearPoll]);
+  const reload = useCallback(() => setRefreshTick((tick) => tick + 1), []);
+  /**
+   * The editor context value is rebuilt unmemoized on every render, so
+   * `waitForReady` is a fresh closure each time and putting it in a dep array
+   * would re-run the load forever.
+   */
+  const waitForReadyRef = useRef(waitForReady);
+  // Synced in a layout effect, not during render: a render React discards must
+  // not be the one that decides which probe the next load uses.
+  useLayoutEffect(() => {
+    waitForReadyRef.current = waitForReady;
+  });
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(count / PAGE_SIZE)), [count]);
 
@@ -107,37 +92,13 @@ export function ChatsPanel() {
     );
   }, [items, query]);
 
-  const refresh = useCallback(
-    async (targetPage = page, forDocumentId: string | null = documentId) => {
-      // The id is a parameter because creating the first chat can save the
-      // document on the spot, and this callback still closes over the `null`
-      // it was built with — refreshing against that emptied the list it had
-      // just filled.
-      if (!forDocumentId) {
-        setItems([]);
-        setCount(0);
-        return;
-      }
-      setLoading(true);
-      try {
-        const res = await listChats(forDocumentId, PAGE_SIZE, (targetPage - 1) * PAGE_SIZE);
-        setItems(res.chats ?? []);
-        setCount(res.count ?? 0);
-        setListError(null);
-        preparingPollsRef.current = 0;
-      } catch (error) {
-        reportListFailure(error);
-        setItems([]);
-        setCount(0);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [documentId, page, reportListFailure],
-  );
-
+  // One loader. There used to be a second, callable copy for the action
+  // buttons; it shared no cancellation with this one, so the two could race
+  // and the earlier `finally` would clear the later request's loading state.
+  // Everything now goes through `reload()`.
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+
     (async () => {
       if (!documentId) {
         setItems([]);
@@ -146,25 +107,58 @@ export function ChatsPanel() {
       }
       setLoading(true);
       try {
-        const res = await listChats(documentId, PAGE_SIZE, (page - 1) * PAGE_SIZE);
-        if (cancelled) return;
+        // Ask whether the server can answer before asking it to. The probe is
+        // a 200 either way, so waiting here costs nothing in the console,
+        // where the chats endpoint would have logged a 503 per attempt.
+        //
+        // `save: false` is load-bearing, not a default: flushing pending edits
+        // would advance the very head this read is waiting for, and the wait
+        // could never end. No signal either — the probe is shared between the
+        // panels, and aborting it would settle it for everyone awaiting it.
+        const readiness = await waitForReadyRef.current({ timeoutMs: 3000, save: false });
+        if (controller.signal.aborted) return;
+
+        const inconclusive = INCONCLUSIVE_READINESS.has(readiness.status);
+        if (!readiness.ready && !inconclusive) {
+          setListError({
+            message: describeReadiness(readiness.status),
+            preparing: !isTerminalReadiness(readiness.status),
+          });
+          setItems([]);
+          setCount(0);
+          return;
+        }
+
+        const res = await listChats(documentId, PAGE_SIZE, (page - 1) * PAGE_SIZE, {
+          signal: controller.signal,
+          // A verdict we could not trust must not wall off a read that may
+          // well work — but cap it at one attempt so a stale backend costs one
+          // console line rather than three.
+          ...(inconclusive ? { retry: { maxAttempts: 1 } } : {}),
+        });
+        if (controller.signal.aborted) return;
         setItems(res.chats ?? []);
         setCount(res.count ?? 0);
         setListError(null);
-        preparingPollsRef.current = 0;
       } catch (error) {
-        if (cancelled) return;
-        reportListFailure(error);
+        if (controller.signal.aborted) return;
+        setListError({
+          message: describeApiError(error, 'Request failed'),
+          preparing: isRetryableProblem(error),
+        });
         setItems([]);
         setCount(0);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     })();
+
     return () => {
-      cancelled = true;
+      // Also aborts the api layer's backoff sleep, which used to run on past
+      // a document switch with nothing left to receive it.
+      controller.abort();
     };
-  }, [documentId, page, refreshTick, reportListFailure]);
+  }, [documentId, page, refreshTick]);
 
   const selectChat = (chat: ChatItem) => {
     setSelectedChatId(chat.chat_id);
@@ -187,7 +181,9 @@ export function ChatsPanel() {
         return;
       }
       const res = await createChat(attachedId);
-      await refresh(page, attachedId);
+      // The effect reads the current `documentId`, which `ensureRemoteDocument`
+      // has just set, so the id no longer has to be threaded through by hand.
+      reload();
       setSelectedChatId(res.chat_id);
       setSelectedThreadId(null);
     } catch (error) {
@@ -220,7 +216,7 @@ export function ChatsPanel() {
       }
       const nextPage = Math.min(page, Math.max(1, Math.ceil(Math.max(0, count - 1) / PAGE_SIZE)));
       setPage(nextPage);
-      await refresh(nextPage);
+      reload();
     } catch (error) {
       toast({
         title: 'Could not delete chat',
@@ -239,7 +235,7 @@ export function ChatsPanel() {
     setRenameValue('');
     try {
       await updateChatTitle(documentId, chatId, nextTitle);
-      await refresh(page);
+      reload();
     } catch (error) {
       toast({
         title: 'Could not rename chat',
@@ -287,7 +283,7 @@ export function ChatsPanel() {
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={() => refresh(page)}
+          onClick={reload}
           disabled={loading}
           aria-label="Refresh chat list"
           title="Refresh"
@@ -434,15 +430,17 @@ export function ChatsPanel() {
                 listError.preparing ? 'text-foreground' : 'text-destructive',
               )}
             >
+              {/* A spinner here used to advertise a background poll. Nothing
+                  is running now — this state waits for the author. */}
               {listError.preparing ? (
-                <Spinner />
+                <Clock aria-hidden="true" className="h-3.5 w-3.5" />
               ) : (
                 <AlertCircle aria-hidden="true" className="h-3.5 w-3.5" />
               )}
               {listError.preparing ? 'Getting your chats ready' : 'Could not load chats'}
             </p>
             <p className="mt-1 break-words text-xs text-muted-foreground">{listError.message}</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => refresh(page)}>
+            <Button variant="outline" size="sm" className="mt-2" onClick={reload}>
               Retry
             </Button>
           </div>

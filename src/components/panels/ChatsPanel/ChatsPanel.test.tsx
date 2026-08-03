@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ChatsPanel } from './ChatsPanel';
 import { EditorContext, type EditorContextValue } from '@/editor/editorContextState';
 import { ConfirmContext, type ConfirmOptions } from '@/components/ui/confirmContext';
@@ -26,18 +27,33 @@ const mocked = vi.mocked(chatsService);
 
 const DOC_ID = 'doc-1';
 
+/** The verdict the shared readiness probe returns for the next load. */
+let readiness: { ready: boolean; status: string };
+const waitForReady = vi.fn(async () => readiness);
+
 function editorValue(): EditorContextValue {
   return {
     documentId: DOC_ID,
     ensureRemoteDocument: async () => DOC_ID,
+    waitForReady,
   } as unknown as EditorContextValue;
 }
 
 const confirm = vi.fn(async (_options: ConfirmOptions) => true);
 const toast = vi.fn(() => 'toast-1');
 
-function renderPanel() {
-  return render(
+const CHAT = {
+  chat_id: 'chat-1',
+  document_id: DOC_ID,
+  user_id: null,
+  title: 'Outline review',
+  last_thread_id: 7,
+  created_at: null,
+  updated_at: null,
+};
+
+function renderPanel({ strict = false }: { strict?: boolean } = {}) {
+  const tree = (
     <EditorContext.Provider value={editorValue()}>
       <ChatSessionsContext.Provider
         value={{
@@ -53,8 +69,9 @@ function renderPanel() {
           </ToastContext.Provider>
         </ConfirmContext.Provider>
       </ChatSessionsContext.Provider>
-    </EditorContext.Provider>,
+    </EditorContext.Provider>
   );
+  return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
 function projectionPending(): ApiError {
@@ -71,6 +88,8 @@ function projectionPending(): ApiError {
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   mocked.listChats.mockReset();
+  waitForReady.mockClear();
+  readiness = { ready: true, status: 'ready' };
 });
 
 afterEach(() => {
@@ -79,42 +98,62 @@ afterEach(() => {
 });
 
 describe('ChatsPanel while the server catches up', () => {
-  it('reads as a wait, not a failure, and loads once the projection lands', async () => {
-    mocked.listChats
-      .mockRejectedValueOnce(projectionPending())
-      .mockResolvedValueOnce({
-        chats: [
-          {
-            chat_id: 'chat-1',
-            document_id: DOC_ID,
-            user_id: null,
-            title: 'Outline review',
-            last_thread_id: 7,
-            created_at: null,
-            updated_at: null,
-          },
-        ],
-        count: 1,
-        status: 'ok',
-        message: '',
-      });
+  it('never asks for the list while the projection is behind', async () => {
+    readiness = { ready: false, status: 'stale' };
 
     renderPanel();
 
-    await waitFor(() =>
-      expect(screen.getByText('This document is still syncing on the server.')).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText('Getting your chats ready')).toBeTruthy());
+    expect(screen.getByText('This document is still syncing on the server.')).toBeTruthy();
     // The machinery's own words never reach the author.
     expect(screen.queryByText('Could not load chats')).toBeNull();
-    expect(screen.getByText('Getting your chats ready')).toBeTruthy();
 
-    await vi.advanceTimersByTimeAsync(1000);
+    // The whole point of the gate: the endpoint that would have logged a 503
+    // per attempt is never called at all, so the console stays clean.
+    expect(mocked.listChats).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    // And nothing is polling behind the author's back either.
+    expect(mocked.listChats).not.toHaveBeenCalled();
+  });
+
+  it('opens the list when the author retries and the projection has landed', async () => {
+    readiness = { ready: false, status: 'stale' };
+    mocked.listChats.mockResolvedValue({
+      chats: [CHAT],
+      count: 1,
+      status: 'ok',
+      message: '',
+    });
+
+    renderPanel();
+    await waitFor(() => expect(screen.getByText('Getting your chats ready')).toBeTruthy());
+
+    readiness = { ready: true, status: 'ready' };
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     await waitFor(() => expect(screen.getByText('Outline review')).toBeTruthy());
     expect(screen.queryByText('Getting your chats ready')).toBeNull();
   });
 
-  it('stops polling and reports a failure the server does not call retryable', async () => {
+  it('still reads, exactly once, when the probe itself is inconclusive', async () => {
+    // A probe we could not trust must not wall off a read that may well work —
+    // but it is capped at one attempt so a stale backend costs one line.
+    readiness = { ready: false, status: 'unavailable' };
+    mocked.listChats.mockRejectedValue(projectionPending());
+
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText('Getting your chats ready')).toBeTruthy());
+    expect(mocked.listChats).toHaveBeenCalledTimes(1);
+    expect(mocked.listChats.mock.calls[0][3]).toMatchObject({
+      retry: { maxAttempts: 1 },
+    });
+  });
+
+  it('reports a failure the server does not call retryable', async () => {
     mocked.listChats.mockRejectedValue(new ApiError('Document not found', 404, {
       code: 'document_not_found',
       retryable: false,
@@ -125,28 +164,23 @@ describe('ChatsPanel while the server catches up', () => {
     await waitFor(() => expect(screen.getByText('Could not load chats')).toBeTruthy());
     expect(screen.getByText('Document not found')).toBeTruthy();
 
-    await vi.advanceTimersByTimeAsync(5000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
     expect(mocked.listChats).toHaveBeenCalledTimes(1);
   });
 
-  it('gives up after a bounded number of reloads', async () => {
-    mocked.listChats.mockRejectedValue(projectionPending());
+  it('issues one request under a StrictMode double mount', async () => {
+    // Setup/cleanup/setup used to produce two real requests here, each
+    // amplified by the transport's own retry ladder.
+    mocked.listChats.mockResolvedValue({ chats: [], count: 0, status: 'ok', message: '' });
 
-    renderPanel();
-    await waitFor(() => expect(screen.getByText('Getting your chats ready')).toBeTruthy());
+    renderPanel({ strict: true });
 
-    // Reload delays grow 1s, 2s, 3s, 4s. Step the clock a second at a time,
-    // each step its own `act`, so every reload commits and schedules its
-    // successor before the clock moves past it.
-    for (let second = 0; second < 20; second += 1) {
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1000);
-      });
-    }
-
-    // The first load plus MAX_PREPARING_POLLS reloads, and no more: a stalled
-    // projection must not turn into an endless background poll.
-    expect(mocked.listChats).toHaveBeenCalledTimes(5);
-    expect(screen.getByText('Getting your chats ready')).toBeTruthy();
+    await waitFor(() => expect(mocked.listChats).toHaveBeenCalled());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(mocked.listChats).toHaveBeenCalledTimes(1);
   });
 });

@@ -126,6 +126,23 @@ export function describeApiError(error: unknown, fallback: string): string {
   return (code && RETRYABLE_PROBLEM_MESSAGES[code]) || errorMessage(error, fallback)
 }
 
+/**
+ * The same words, for a readiness verdict that never became an `ApiError`.
+ *
+ * Gating a read on the readiness probe means the common "not ready yet" case
+ * arrives as a status string rather than a rejected request, and it should not
+ * read differently to the author for having taken the quieter path.
+ */
+export function describeReadiness(status: string | null | undefined): string {
+  if (status === 'deleted' || status === 'deleting') {
+    return 'This document has been deleted.'
+  }
+  if (status === 'scope_mismatch' || status === 'conflicting' || status === 'failed') {
+    return 'This document could not be prepared on the server.'
+  }
+  return RETRYABLE_PROBLEM_MESSAGES.projection_pending
+}
+
 /** HTTP error with the parsed response body retained for callers and tests. */
 export class ApiError extends Error {
   readonly status: number

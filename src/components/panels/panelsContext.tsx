@@ -2,20 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isBoolean, isNumber, usePersistentState } from '@/hooks/usePersistentState';
 import { useIsDesktop } from '@/hooks/useMediaQuery';
 import { PANEL_CONFIG } from './panelConfig';
+import { TOOLS } from './toolsConfig';
 import {
   PanelsContext,
   type ToolId,
 } from './panelsContextState';
 export type { ToolId } from './panelsContextState';
 
-const TOOL_IDS: readonly ToolId[] = [
-  'json',
-  'arxiv',
-  'semantic-scholar',
-  'colpali',
-  'library',
-  'chats',
-];
+// Derived, not restated: this list drifted from the tool registry and lost
+// `history`, so a persisted `activeTool: 'history'` failed the guard below and
+// silently reverted to `json` on every reload.
+const TOOL_IDS: readonly ToolId[] = TOOLS.map((tool) => tool.id);
 
 const isToolId = (value: unknown): value is ToolId | null =>
   value === null || (typeof value === 'string' && (TOOL_IDS as readonly string[]).includes(value));

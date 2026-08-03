@@ -19,7 +19,7 @@ import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
 import { streamAgentChat, type AgentChatResult } from '@/services/agentChat';
 import { isRetryableProblem, isTerminalReadiness } from '@/services/retry';
-import { describeApiError, problemRetryAfter } from '@/services/contracts';
+import { describeApiError, describeReadiness } from '@/services/contracts';
 import type { SSEErrorDetails, SSEEventHandlers } from '@/services/streamParser';
 import type { ToolAction } from '@/editor/types';
 import { useChatSessions } from '../../chat/chatSessionsState';
@@ -136,8 +136,23 @@ function friendlyStreamError(
 /** How close to the bottom counts as "following along" for auto-scroll. */
 const AUTOSCROLL_THRESHOLD_PX = 64;
 
-/** Attempts to reopen a conversation while the server projection catches up. */
-const MAX_CONVERSATION_RELOADS = 3;
+/**
+ * Readiness verdicts that say nothing about the projection — a dropped probe,
+ * or a backend without the endpoint. Reading anyway is right: the server keeps
+ * its own typed rejection as the source of truth.
+ */
+const INCONCLUSIVE_READINESS = new Set([
+  'unavailable',
+  'aborted',
+  'no_document',
+  'save_failed',
+]);
+
+/**
+ * Why a conversation is not on screen. Kept apart from {@link ChatError}: this
+ * one is about opening the transcript, and its action is to try that again.
+ */
+type ConversationNotice = { message: string; preparing: boolean };
 
 /** The composer refuses more than this, and warns as it approaches. */
 const MAX_MESSAGE_LENGTH = 2000;
@@ -482,14 +497,24 @@ function DocumentChatAssistant() {
    * proposed, so both vanished from the reply a second after arriving.
    */
   const loadedConversation = useRef<string | null>(null);
-  /** Bounded self-recovery while the server catches up; see the catch below. */
+  /** Bumped by the notice's Retry button. There is no automatic ladder. */
   const [conversationReloadTick, setConversationReloadTick] = useState(0);
-  const conversationRetriesRef = useRef(0);
-  const conversationRetryTimerRef = useRef<number | null>(null);
+  const [conversationNotice, setConversationNotice] = useState<ConversationNotice | null>(null);
+  /**
+   * The editor context value is rebuilt unmemoized every render, so
+   * `waitForReady` cannot go in a dep array without looping forever.
+   */
+  const waitForReadyRef = useRef(waitForReady);
+  // Synced in a layout effect, not during render: a render React discards must
+  // not be the one that decides which probe the next load uses.
+  useLayoutEffect(() => {
+    waitForReadyRef.current = waitForReady;
+  });
 
-  useEffect(() => {
-    conversationRetriesRef.current = 0;
-  }, [documentId, selectedChatId]);
+  const reloadConversation = useCallback(() => {
+    loadedConversation.current = null;
+    setConversationReloadTick((tick) => tick + 1);
+  }, []);
 
   useEffect(() => {
     if (!documentId || !selectedChatId) return;
@@ -498,7 +523,17 @@ function DocumentChatAssistant() {
     if (loadedConversation.current === key) return;
     loadedConversation.current = key;
 
-    let cancelled = false;
+    const controller = new AbortController();
+    /**
+     * The key above is a claim on loading this conversation. A run torn down
+     * before it delivers has to hand the claim back, or the next run sees the
+     * key already taken and returns — which under StrictMode's
+     * setup/cleanup/setup left the transcript permanently empty. An explicit
+     * flag rather than comparing keys: when `selectedThreadId` is already a
+     * number the key written on success is byte-identical to this one, so it
+     * cannot tell "loaded" from "claimed and abandoned".
+     */
+    let settled = false;
 
     (async () => {
       abortRef.current?.abort();
@@ -507,25 +542,52 @@ function DocumentChatAssistant() {
       setAgentStatus(null);
 
       try {
+        // Ask whether the projection can answer before asking it to: the probe
+        // is a 200 either way, where these endpoints log a 503 per attempt.
+        // `save: false` is load-bearing — saving would advance the very head
+        // being waited on. No signal: the probe is shared with the other
+        // panels, and aborting it would settle it for them too.
+        const readiness = await waitForReadyRef.current({ timeoutMs: 3000, save: false });
+        if (controller.signal.aborted) return;
+
+        const inconclusive = INCONCLUSIVE_READINESS.has(readiness.status);
+        if (!readiness.ready && !inconclusive) {
+          settled = true;
+          setConversationNotice({
+            message: describeReadiness(readiness.status),
+            preparing: !isTerminalReadiness(readiness.status),
+          });
+          return;
+        }
+        const transport = {
+          signal: controller.signal,
+          // An untrustworthy verdict must not wall off a read that may work,
+          // but cap it so a stale backend costs one console line, not three.
+          ...(inconclusive ? { retry: { maxAttempts: 1 } } : {}),
+        };
+
         let pivot = typeof selectedThreadId === 'number' ? selectedThreadId : undefined;
         if (pivot === undefined) {
-          const threads = await listThreads(documentId, selectedChatId, 100, 0);
+          const threads = await listThreads(documentId, selectedChatId, 100, 0, transport);
           const ids = (threads.threads ?? [])
             .map((t) => t.id)
             .filter((n): n is number => typeof n === 'number');
           if (ids.length) pivot = Math.max(...ids);
         }
-        if (pivot === undefined || cancelled) return;
+        if (controller.signal.aborted) return;
+        if (pivot === undefined) {
+          // A chat with nothing in it yet loaded fine; it is simply empty.
+          settled = true;
+          setConversationNotice(null);
+          return;
+        }
 
-        const res = await listMessages(documentId, selectedChatId, pivot);
-        if (cancelled) return;
+        const res = await listMessages(documentId, selectedChatId, pivot, transport);
+        if (controller.signal.aborted) return;
 
         loadedConversation.current = `${documentId}:${selectedChatId}:${pivot}`;
-        // Only clear what a reload of this conversation put there.
-        if (conversationRetriesRef.current > 0) {
-          conversationRetriesRef.current = 0;
-          setError(null);
-        }
+        settled = true;
+        setConversationNotice(null);
 
         const history = (res.messages ?? []).map((m) =>
           emptyMessage(
@@ -539,41 +601,20 @@ function DocumentChatAssistant() {
         setMessages((prev) => (history.length === 0 && prev.length > 0 ? prev : history));
         if (typeof res.pivotThreadId === 'number') setSelectedThreadId(res.pivotThreadId);
       } catch (e) {
-        if (cancelled) return;
-        // A conversation is stored against the document's projected identity,
-        // so opening one moments after a save can arrive before that
-        // projection does. The request layer already waited that out once;
-        // keep asking here rather than leaving the author on an error for a
-        // transcript that is about to exist. "Try again" stays off — it
-        // resends the last message, which is not what failed.
-        const preparing = isRetryableProblem(e);
-        if (preparing && conversationRetriesRef.current < MAX_CONVERSATION_RELOADS) {
-          conversationRetriesRef.current += 1;
-          loadedConversation.current = null;
-          conversationRetryTimerRef.current = window.setTimeout(
-            () => {
-              conversationRetryTimerRef.current = null;
-              setConversationReloadTick((tick) => tick + 1);
-            },
-            (problemRetryAfter(e) ?? 1) * 1000 * conversationRetriesRef.current,
-          );
-        }
-        setError({
-          message: preparing
-            ? `${describeApiError(e, '')} This conversation opens as soon as it has.`
-            : 'Could not load this conversation.',
-          detail: e instanceof Error ? e.message : undefined,
-          retryable: false,
+        if (controller.signal.aborted) return;
+        settled = true;
+        // Its own notice rather than `setError`: that alert's button resends
+        // the last message, which is not what failed here.
+        setConversationNotice({
+          message: describeApiError(e, 'Could not load this conversation.'),
+          preparing: isRetryableProblem(e),
         });
       }
     })();
 
     return () => {
-      cancelled = true;
-      if (conversationRetryTimerRef.current !== null) {
-        window.clearTimeout(conversationRetryTimerRef.current);
-        conversationRetryTimerRef.current = null;
-      }
+      controller.abort();
+      if (!settled && loadedConversation.current === key) loadedConversation.current = null;
     };
   }, [
     documentId,
@@ -1210,6 +1251,39 @@ function DocumentChatAssistant() {
           {/* Capped and centred: maximised, the window is as wide as the
               canvas, and a line of prose that long is unreadable. */}
           <div className="mx-auto w-full max-w-[44rem] space-y-3">
+          {conversationNotice && (
+            <div
+              role={conversationNotice.preparing ? 'status' : 'alert'}
+              className={cn(
+                'rounded-lg border p-3 text-center',
+                conversationNotice.preparing
+                  ? 'border-border bg-muted/40'
+                  : 'border-destructive/40 bg-destructive/10',
+              )}
+            >
+              <p
+                className={cn(
+                  'text-sm font-medium',
+                  conversationNotice.preparing ? 'text-foreground' : 'text-destructive',
+                )}
+              >
+                {conversationNotice.preparing
+                  ? 'Getting this conversation ready'
+                  : 'Could not open this conversation'}
+              </p>
+              <p className="mt-1 break-words text-xs text-muted-foreground">
+                {conversationNotice.message}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2"
+                onClick={reloadConversation}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
           {visibleMessages.length === 0 && (
             <div className="space-y-4 py-4">
               <div className="space-y-1.5 text-center">

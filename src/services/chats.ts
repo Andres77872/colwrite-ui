@@ -22,16 +22,38 @@ export type ThreadItem = {
   created_at: string | null;
 };
 
-export async function createChat(documentId: string): Promise<{ chat_id: string; status: string; message: string }> {
-  return post(`/document/${encodeURIComponent(documentId)}/chats`);
+/**
+ * Per-call transport controls.
+ *
+ * Chat reads fire from mount effects, so they outlive the component that
+ * wanted them: without a signal, a document switch left the previous
+ * document's request running — and the api layer's backoff sleep waiting —
+ * with nothing to receive it. `retry` is here so a caller that has already
+ * established readiness some other way can decline the ladder rather than
+ * multiply one failure into three.
+ */
+export type ChatsRequestOptions = {
+  signal?: AbortSignal;
+  retry?: { maxAttempts?: number; baseDelayMs?: number };
+};
+
+export async function createChat(
+  documentId: string,
+  options?: ChatsRequestOptions,
+): Promise<{ chat_id: string; status: string; message: string }> {
+  return post(`/document/${encodeURIComponent(documentId)}/chats`, undefined, options);
 }
 
 export async function listChats(
   documentId: string,
   limit = 10,
   offset = 0,
+  options?: ChatsRequestOptions,
 ): Promise<{ chats: ChatItem[]; count: number; status: string; message: string }> {
-  return get(`/document/${encodeURIComponent(documentId)}/chats?limit=${limit}&offset=${offset}`);
+  return get(
+    `/document/${encodeURIComponent(documentId)}/chats?limit=${limit}&offset=${offset}`,
+    options,
+  );
 }
 
 export async function deleteChat(documentId: string, chatId: string): Promise<{ status: string; message: string }> {
@@ -51,8 +73,12 @@ export async function listThreads(
   chatId: string,
   limit = 100,
   offset = 0,
+  options?: ChatsRequestOptions,
 ): Promise<{ threads: ThreadItem[]; count: number; status: string; message: string }> {
-  return get(`/document/${encodeURIComponent(documentId)}/chats/${encodeURIComponent(chatId)}/threads?limit=${limit}&offset=${offset}`);
+  return get(
+    `/document/${encodeURIComponent(documentId)}/chats/${encodeURIComponent(chatId)}/threads?limit=${limit}&offset=${offset}`,
+    options,
+  );
 }
 
 export async function appendThread(
@@ -73,6 +99,10 @@ export async function listMessages(
   documentId: string,
   chatId: string,
   threadId: number,
+  options?: ChatsRequestOptions,
 ): Promise<{ messages: Array<{ role: 'user' | 'assistant'; content: string }>; pivotThreadId: number; status: string; message: string }> {
-  return get(`/document/${encodeURIComponent(documentId)}/chats/${encodeURIComponent(chatId)}/messages?threadId=${threadId}`);
+  return get(
+    `/document/${encodeURIComponent(documentId)}/chats/${encodeURIComponent(chatId)}/messages?threadId=${threadId}`,
+    options,
+  );
 }

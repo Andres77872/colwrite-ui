@@ -1,7 +1,8 @@
 import { buildUrl, ensureRefreshed } from './api';
-import { ApiError, problemCode, problemRetryAfter } from './contracts';
+import { ApiError, problemRetryAfter } from './contracts';
 import {
   abortableSleep,
+  isRetryableProblem,
   isTerminalReadiness,
   RETRYABLE_STREAM_CODES,
   retryDelayMs,
@@ -150,12 +151,11 @@ export async function streamAgentChat(
 
     if (!res.ok) {
       const error = await apiErrorFromResponse(res);
-      if (
-        res.status === 503
-        && problemCode(error) === 'projection_pending'
-        && attempt < maxAttempts
-        && !producedOutput
-      ) {
+      // The shared gate rather than a hardcoded status/code pair: it also
+      // covers the other retryable problems, and — the part that was missing
+      // here — vetoes a terminal readiness status, which the in-stream error
+      // path below already respects.
+      if (isRetryableProblem(error) && attempt < maxAttempts && !producedOutput) {
         await abortableSleep(
           retryDelayMs(attempt, baseDelayMs, problemRetryAfter(error)),
           opts?.signal,

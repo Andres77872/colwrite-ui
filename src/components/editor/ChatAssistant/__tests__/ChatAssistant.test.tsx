@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { createRef, useImperativeHandle } from 'react';
+import { createRef, StrictMode, useImperativeHandle } from 'react';
 import type { SSEEventHandlers } from '@/services/streamParser';
 import type { ToolAction } from '@/editor/types';
-import { ApiError } from '@/services/contracts';
 
 /**
  * Integration tests for the real ChatAssistant, EditorProvider and
@@ -117,10 +116,10 @@ function CaptureChats() {
 }
 
 /** Renders the assistant against a document that is already saved remotely. */
-async function mount() {
+async function mount({ strict = false }: { strict?: boolean } = {}) {
   localStorage.setItem('colwrite:lastDocId', DOC_ID);
 
-  await renderAssistant();
+  await renderAssistant({ strict });
 
   // The provider probes for remote documents and hydrates from the server.
   await waitFor(() => expect(listDocuments).toHaveBeenCalled());
@@ -134,8 +133,8 @@ async function mountUnsaved() {
   expect(harness.editor.documentId).toBeNull();
 }
 
-async function renderAssistant() {
-  render(
+async function renderAssistant({ strict = false }: { strict?: boolean } = {}) {
+  const tree = (
     <EditorProvider>
       <ProposalsProvider>
         <Capture />
@@ -146,8 +145,9 @@ async function renderAssistant() {
           </PanelsProvider>
         </ChatSessionsProvider>
       </ProposalsProvider>
-    </EditorProvider>,
+    </EditorProvider>
   );
+  render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   await act(async () => {});
 }
 
@@ -541,7 +541,33 @@ describe('the transcript after a turn', () => {
     });
 
     await waitFor(() =>
-      expect(listMessages).toHaveBeenCalledWith(DOC_ID, 'another-chat', 7),
+      // The trailing transport carries the signal that cancels this read on a
+      // document switch, and the api layer's backoff sleep with it.
+      expect(listMessages).toHaveBeenCalledWith(
+        DOC_ID,
+        'another-chat',
+        7,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
+  });
+
+  it('loads the transcript under a StrictMode double mount', async () => {
+    // The keyed guard used to be claimed before the first await and never
+    // released, so setup/cleanup/setup left this permanently empty.
+    listThreads.mockResolvedValue({ threads: [{ id: 4 }] });
+    listMessages.mockResolvedValue({
+      messages: [{ role: 'user', content: 'Survives the double mount' }],
+      pivotThreadId: 4,
+    });
+
+    await mount({ strict: true });
+    await act(async () => {
+      harness.chats.setSelectedChatId('strict-chat');
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText('Survives the double mount')).toBeTruthy(),
     );
   });
 });
@@ -908,54 +934,91 @@ describe('a conversation opened before the server has caught up', () => {
       .mockImplementation(async () => ({ messages: [], pivotThreadId: null }));
   });
 
-  function projectionPending(): ApiError {
-    return new ApiError('Document reference projection is not ready', 503, {
-      code: 'projection_pending',
+  /** Every probe inside the wait budget answers "behind". */
+  function stayBehind() {
+    fetchReferenceReadiness.mockResolvedValue({
+      ready: false,
+      readinessStatus: 'stale',
+      expectedHeadSeq: 8,
+      appliedHeadSeq: 3,
       retryable: true,
-      readiness_status: 'ready',
-      expected_head_seq: 8,
-      applied_head_seq: 3,
-      retry_after: 1,
+      retryAfterSeconds: 1,
     });
   }
 
-  it('says so, then opens it once the projection lands', async () => {
+  /** Run out the readiness wait budget so the gate settles on a verdict. */
+  async function exhaustReadinessWait() {
+    for (let step = 0; step < 8; step += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+    }
+  }
+
+  it('says so without touching the chat endpoints at all', async () => {
     await mount();
-    listThreads.mockRejectedValueOnce(projectionPending());
-    listThreads.mockResolvedValueOnce({ threads: [{ id: 12 }] });
-    listMessages.mockResolvedValueOnce({
-      messages: [{ role: 'user', content: 'Earlier question' }],
-      pivotThreadId: 12,
-    });
+    stayBehind();
 
     await act(async () => {
       harness.chats.setSelectedChatId('lagging-chat');
     });
+    await exhaustReadinessWait();
 
     await waitFor(() =>
-      expect(screen.getByRole('alert').textContent).toContain(
-        'This document is still syncing on the server.',
-      ),
+      expect(screen.getByText('Getting this conversation ready')).toBeTruthy(),
     );
+    expect(screen.getByText('This document is still syncing on the server.')).toBeTruthy();
+    // The endpoints that would have logged a 503 per attempt are never called.
+    expect(listThreads).not.toHaveBeenCalled();
+    expect(listMessages).not.toHaveBeenCalled();
     // "Try again" resends the last message, which is not what failed here.
     expect(screen.queryByRole('button', { name: /try again/i })).toBeNull();
+  });
+
+  it('opens the conversation when the author retries and it has landed', async () => {
+    await mount();
+    stayBehind();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
+      harness.chats.setSelectedChatId('lagging-chat');
+    });
+    await exhaustReadinessWait();
+    await waitFor(() =>
+      expect(screen.getByText('Getting this conversation ready')).toBeTruthy(),
+    );
+
+    listThreads.mockResolvedValue({ threads: [{ id: 12 }] });
+    listMessages.mockResolvedValue({
+      messages: [{ role: 'user', content: 'Earlier question' }],
+      pivotThreadId: 12,
+    });
+    fetchReferenceReadiness.mockResolvedValue({
+      ready: true,
+      readinessStatus: 'ready',
+      expectedHeadSeq: 8,
+      appliedHeadSeq: 8,
+      retryable: false,
+      retryAfterSeconds: 0,
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     });
 
     await waitFor(() => expect(screen.getByText('Earlier question')).toBeTruthy());
-    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('does not reopen forever when the projection stays behind', async () => {
     await mount();
-    listThreads.mockRejectedValue(projectionPending());
+    stayBehind();
 
     await act(async () => {
       harness.chats.setSelectedChatId('stuck-chat');
     });
-    await waitFor(() => expect(listThreads).toHaveBeenCalledTimes(1));
+    await exhaustReadinessWait();
+    await waitFor(() =>
+      expect(screen.getByText('Getting this conversation ready')).toBeTruthy(),
+    );
 
     for (let second = 0; second < 15; second += 1) {
       await act(async () => {
@@ -963,7 +1026,7 @@ describe('a conversation opened before the server has caught up', () => {
       });
     }
 
-    // The first attempt plus MAX_CONVERSATION_RELOADS, and no more.
-    expect(listThreads).toHaveBeenCalledTimes(4);
+    // A stalled projection waits for the author, not for a timer.
+    expect(listThreads).not.toHaveBeenCalled();
   });
 });

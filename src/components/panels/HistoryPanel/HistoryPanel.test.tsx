@@ -8,7 +8,6 @@ import { ConfirmContext, type ConfirmOptions } from '@/components/ui/confirmCont
 import { ToastContext } from '@/components/ui/toastContext';
 import type { Doc } from '@/editor/types';
 import * as historyService from '@/services/documentHistory';
-import { ApiError } from '@/services/contracts';
 
 /**
  * The panel is the author's window into the server-side version tree. These
@@ -119,6 +118,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   pendingEdits = false;
   confirmAnswer = true;
+  // `clearAllMocks` drops recorded calls but keeps implementations, so a test
+  // that makes the projection lag would leak that into every later one.
+  waitForReady.mockResolvedValue({ ready: true, status: 'ready' });
   mocked.fetchDocumentHead.mockResolvedValue(head());
   mocked.listRevisions.mockResolvedValue({
     revisions: [
@@ -454,20 +456,23 @@ describe('HistoryPanel', () => {
     await waitFor(() => expect(mocked.restoreRevision).toHaveBeenCalled());
 
     expect(waitForReady).toHaveBeenCalledWith({ save: false, timeoutMs: 4000 });
-    expect(waitForReady.mock.invocationCallOrder[0]).toBeLessThan(
+    // Call [0] is now the load gate, so find the restore's own probe rather
+    // than assuming it is the first one this panel made.
+    const restoreProbe = waitForReady.mock.calls.findIndex(
+      (call) => (call as unknown as [{ timeoutMs?: number }])[0]?.timeoutMs === 4000,
+    );
+    expect(restoreProbe).toBeGreaterThanOrEqual(0);
+    expect(waitForReady.mock.invocationCallOrder[restoreProbe]).toBeLessThan(
       mocked.restoreRevision.mock.invocationCallOrder[0],
     );
   });
 
-  it('auto-polls a bounded number of times while history is being prepared', async () => {
+  it('does not read the timeline at all while history is being prepared', async () => {
     vi.useFakeTimers();
     try {
-      mocked.fetchDocumentHead.mockRejectedValue(
-        new ApiError('pending', 503, { code: 'projection_pending', retryable: true }),
-      );
-      mocked.listRevisions.mockRejectedValue(
-        new ApiError('pending', 503, { code: 'projection_pending', retryable: true }),
-      );
+      // The readiness probe answers before either endpoint is asked, so the
+      // pair that used to log a failure per attempt is never called.
+      waitForReady.mockResolvedValue({ ready: false, status: 'stale' });
 
       renderPanel();
       await vi.waitFor(() =>
@@ -476,22 +481,13 @@ describe('HistoryPanel', () => {
         ).toBeTruthy(),
       );
       expect(screen.getByRole('button', { name: 'Check again' })).toBeTruthy();
-      const callsAfterFirstLoad = mocked.fetchDocumentHead.mock.calls.length;
+      expect(mocked.fetchDocumentHead).not.toHaveBeenCalled();
+      expect(mocked.listRevisions).not.toHaveBeenCalled();
 
-      // The panel retries by itself while the server prepares the timeline…
-      await vi.advanceTimersByTimeAsync(1000);
-      await vi.waitFor(() =>
-        expect(mocked.fetchDocumentHead.mock.calls.length).toBeGreaterThan(
-          callsAfterFirstLoad,
-        ),
-      );
-
-      // …and stops adding attempts once the budget is spent.
-      await vi.advanceTimersByTimeAsync(60_000);
-      const settled = mocked.fetchDocumentHead.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(mocked.fetchDocumentHead.mock.calls.length).toBe(settled);
-      expect(settled).toBeLessThanOrEqual(1 + 5);
+      // And nothing keeps asking behind the author's back.
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(mocked.fetchDocumentHead).not.toHaveBeenCalled();
+      expect(mocked.listRevisions).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
