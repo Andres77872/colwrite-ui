@@ -5,18 +5,17 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
-  type RefObject,
 } from 'react';
 import { usePersistentState } from '@/hooks/usePersistentState';
 
 /**
  * Geometry for the floating assistant, in pixels, measured from the
- * bottom-right corner of the canvas it lives in.
+ * bottom-right corner of the viewport.
  *
  * Anchoring to the bottom-right rather than the top-left is what keeps the
- * panel where the author put it when the sidebar or tools panel is resized:
- * the canvas loses width on the left, and a top-left anchored window would
- * drift across the page every time.
+ * panel where the author put it relative to their working corner — the corner
+ * it returns to after a window resize — rather than drifting across the page
+ * from the top-left every time the browser window changes size.
  */
 export type ChatRect = { right: number; bottom: number; width: number; height: number };
 
@@ -27,7 +26,7 @@ export type DragMode = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw
 export const CHAT_MIN_WIDTH = 300;
 export const CHAT_MIN_HEIGHT = 260;
 
-/** Clearance kept from the canvas edges, so the window never fouls its corners. */
+/** Clearance kept from the viewport edges, so the window never fouls its corners. */
 export const CHAT_MARGIN = 12;
 
 /** Pixels per arrow-key press when moving or resizing from the keyboard. */
@@ -51,68 +50,67 @@ function clamp(value: number, min: number, max: number): number {
 /**
  * Apply a pointer or keyboard delta to the window.
  *
- * Works in canvas coordinates (the four edges) rather than in the stored
+ * Works in viewport coordinates (the four edges) rather than in the stored
  * right/bottom insets, because that is the frame the constraints are actually
  * expressed in: an edge may not cross the opposite edge's minimum, and none of
- * them may leave the canvas.
+ * them may leave the viewport.
  */
 export function applyDrag(
   rect: ChatRect,
   mode: DragMode,
   dx: number,
   dy: number,
-  canvasWidth: number,
-  canvasHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
 ): ChatRect {
-  // No measured canvas (first paint, or jsdom) — moving blind would throw the
+  // No measured viewport (first paint, or jsdom) — moving blind would throw the
   // window somewhere the author did not ask for.
-  if (canvasWidth <= 0 || canvasHeight <= 0) return rect;
+  if (viewportWidth <= 0 || viewportHeight <= 0) return rect;
 
-  let left = canvasWidth - rect.right - rect.width;
-  let top = canvasHeight - rect.bottom - rect.height;
-  let right = canvasWidth - rect.right;
-  let bottom = canvasHeight - rect.bottom;
+  let left = viewportWidth - rect.right - rect.width;
+  let top = viewportHeight - rect.bottom - rect.height;
+  let right = viewportWidth - rect.right;
+  let bottom = viewportHeight - rect.bottom;
 
   if (mode === 'move') {
-    left = clamp(left + dx, CHAT_MARGIN, canvasWidth - rect.width - CHAT_MARGIN);
-    top = clamp(top + dy, CHAT_MARGIN, canvasHeight - rect.height - CHAT_MARGIN);
+    left = clamp(left + dx, CHAT_MARGIN, viewportWidth - rect.width - CHAT_MARGIN);
+    top = clamp(top + dy, CHAT_MARGIN, viewportHeight - rect.height - CHAT_MARGIN);
     right = left + rect.width;
     bottom = top + rect.height;
   } else {
     if (mode.includes('w')) left = clamp(left + dx, CHAT_MARGIN, right - CHAT_MIN_WIDTH);
-    if (mode.includes('e')) right = clamp(right + dx, left + CHAT_MIN_WIDTH, canvasWidth - CHAT_MARGIN);
+    if (mode.includes('e')) right = clamp(right + dx, left + CHAT_MIN_WIDTH, viewportWidth - CHAT_MARGIN);
     if (mode.includes('n')) top = clamp(top + dy, CHAT_MARGIN, bottom - CHAT_MIN_HEIGHT);
-    if (mode.includes('s')) bottom = clamp(bottom + dy, top + CHAT_MIN_HEIGHT, canvasHeight - CHAT_MARGIN);
+    if (mode.includes('s')) bottom = clamp(bottom + dy, top + CHAT_MIN_HEIGHT, viewportHeight - CHAT_MARGIN);
   }
 
   return {
-    right: canvasWidth - right,
-    bottom: canvasHeight - bottom,
+    right: viewportWidth - right,
+    bottom: viewportHeight - bottom,
     width: right - left,
     height: bottom - top,
   };
 }
 
 /**
- * Pull a stored window back inside a canvas that has since changed size.
+ * Pull a stored window back inside a viewport that has since changed size.
  *
- * Collapsing the sidebar, opening the tools panel or simply making the browser
- * smaller can all leave a remembered window half outside the canvas — or, on a
- * narrow laptop, larger than the canvas itself.
+ * Making the browser smaller can leave a remembered window half outside the
+ * viewport — or, on a narrow laptop, larger than the viewport itself.
  */
-export function clampRect(rect: ChatRect, canvasWidth: number, canvasHeight: number): ChatRect {
-  if (canvasWidth <= 0 || canvasHeight <= 0) return rect;
+export function clampRect(rect: ChatRect, viewportWidth: number, viewportHeight: number): ChatRect {
+  if (viewportWidth <= 0 || viewportHeight <= 0) return rect;
 
-  const maxWidth = Math.max(canvasWidth - CHAT_MARGIN * 2, 0);
-  const maxHeight = Math.max(canvasHeight - CHAT_MARGIN * 2, 0);
+  const maxWidth = Math.max(viewportWidth - CHAT_MARGIN * 2, 0);
+  const maxHeight = Math.max(viewportHeight - CHAT_MARGIN * 2, 0);
   const width = clamp(rect.width, Math.min(CHAT_MIN_WIDTH, maxWidth), maxWidth);
   const height = clamp(rect.height, Math.min(CHAT_MIN_HEIGHT, maxHeight), maxHeight);
 
   return {
     width,
     height,
-    right: clamp(rect.right, CHAT_MARGIN, canvasWidth - width - CHAT_MARGIN),
-    bottom: clamp(rect.bottom, CHAT_MARGIN, canvasHeight - height - CHAT_MARGIN),
+    right: clamp(rect.right, CHAT_MARGIN, viewportWidth - width - CHAT_MARGIN),
+    bottom: clamp(rect.bottom, CHAT_MARGIN, viewportHeight - height - CHAT_MARGIN),
   };
 }
 
@@ -139,10 +137,7 @@ type ChatWindow = {
  * part of the document — exactly the part an author wants to see while asking
  * about it.
  */
-export function useChatWindow(
-  panelRef: RefObject<HTMLElement | null>,
-  { enabled }: { enabled: boolean },
-): ChatWindow {
+export function useChatWindow({ enabled }: { enabled: boolean }): ChatWindow {
   const [rect, setRect] = usePersistentState<ChatRect>('chat.rect', DEFAULT_CHAT_RECT, isChatRect);
   const [dragging, setDragging] = useState(false);
 
@@ -153,12 +148,19 @@ export function useChatWindow(
     rectRef.current = rect;
   }, [rect]);
 
-  /** The canvas the window is positioned against — `main`, via `offsetParent`. */
-  const canvas = useCallback((): { width: number; height: number } => {
-    const parent = panelRef.current?.offsetParent as HTMLElement | null;
-    if (!parent) return { width: 0, height: 0 };
-    return { width: parent.clientWidth, height: parent.clientHeight };
-  }, [panelRef]);
+  /**
+   * The bounds the window travels in: the whole viewport, not the canvas.
+   * The panel is fixed-positioned (portaled out of `main`, whose
+   * `overflow-hidden` would otherwise clip it), so it can be dragged over the
+   * sidebar, the tools panel and the topbar alike.
+   */
+  const bounds = useCallback(
+    (): { width: number; height: number } => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    }),
+    [],
+  );
 
   const beginDrag = useCallback(
     (event: ReactPointerEvent, mode: DragMode) => {
@@ -177,7 +179,7 @@ export function useChatWindow(
       const startX = event.clientX;
       const startY = event.clientY;
       const startRect = rectRef.current;
-      const { width, height } = canvas();
+      const { width, height } = bounds();
 
       const onMove = (move: PointerEvent) => {
         setRect(applyDrag(startRect, mode, move.clientX - startX, move.clientY - startY, width, height));
@@ -194,7 +196,7 @@ export function useChatWindow(
       handle.addEventListener('pointerup', onEnd);
       handle.addEventListener('pointercancel', onEnd);
     },
-    [canvas, enabled, setRect],
+    [bounds, enabled, setRect],
   );
 
   const nudge = useCallback(
@@ -210,35 +212,29 @@ export function useChatWindow(
       const move = delta[event.key];
       if (!move) return false;
 
-      const { width, height } = canvas();
+      const { width, height } = bounds();
       setRect((prev) => applyDrag(prev, mode, move[0], move[1], width, height));
       return true;
     },
-    [canvas, enabled, setRect],
+    [bounds, enabled, setRect],
   );
 
   const reset = useCallback(() => setRect(DEFAULT_CHAT_RECT), [setRect]);
 
-  // Keep the window inside a canvas that changed size under it.
+  // Keep the window inside a viewport that changed size under it.
   useEffect(() => {
     if (!enabled) return;
-    const parent = panelRef.current?.offsetParent as HTMLElement | null;
-    if (!parent) return;
 
     const fit = () => {
-      const next = clampRect(rectRef.current, parent.clientWidth, parent.clientHeight);
+      const { width, height } = bounds();
+      const next = clampRect(rectRef.current, width, height);
       if (!sameRect(next, rectRef.current)) setRect(next);
     };
 
     fit();
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', fit);
-      return () => window.removeEventListener('resize', fit);
-    }
-    const observer = new ResizeObserver(fit);
-    observer.observe(parent);
-    return () => observer.disconnect();
-  }, [enabled, panelRef, setRect]);
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, [bounds, enabled, setRect]);
 
   return { rect, dragging, beginDrag, nudge, reset };
 }

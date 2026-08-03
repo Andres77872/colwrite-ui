@@ -8,6 +8,7 @@ import {
   useState,
   type CSSProperties,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
@@ -268,7 +269,6 @@ function DocumentChatAssistant() {
 
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
-  const panelRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const inputHostRef = useRef<ChatTaggedInputHandle | null>(null);
   const refPickerRef = useRef<ChatRefPickerHandle | null>(null);
@@ -326,7 +326,7 @@ function DocumentChatAssistant() {
   // dragging it anywhere would only push it off screen.
   const isDesktop = useIsDesktop();
   const floating = isDesktop && !maximized;
-  const { rect, dragging, beginDrag, nudge, reset } = useChatWindow(panelRef, {
+  const { rect, dragging, beginDrag, nudge, reset } = useChatWindow({
     enabled: floating,
   });
 
@@ -1034,14 +1034,15 @@ function DocumentChatAssistant() {
 
   const geometry: CSSProperties = floating
     ? { right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height }
-    : { inset: CHAT_MARGIN };
+    : // Maximised on desktop fills the whole window (`fixed` against the
+      // viewport); on mobile it fills the canvas (`absolute` inside `main`).
+      { inset: CHAT_MARGIN };
 
   const overLimit = input.length > MAX_MESSAGE_LENGTH;
   const nearLimit = input.length > MAX_MESSAGE_LENGTH * 0.8;
 
-  return (
+  const panel = (
     <div
-      ref={panelRef}
       role="complementary"
       // Naming the document in the region label is how this reaches a screen
       // reader: the line in the header is small, muted, and not focusable, so
@@ -1050,7 +1051,12 @@ function DocumentChatAssistant() {
       onKeyDown={onPanelKeyDown}
       style={geometry}
       className={cn(
-        'absolute z-[var(--z-floating)] flex flex-col overflow-hidden rounded-xl',
+        // Fixed on desktop: portaled to <body> below, so the window can travel
+        // over the sidebar, tools panel and topbar. Inside `main` it stayed
+        // `absolute`, and `main`'s rounded, overflow-hidden frame clipped it
+        // at the canvas edge — the old "can't drag past the canvas" behaviour.
+        isDesktop ? 'fixed' : 'absolute',
+        'z-[var(--z-floating)] flex flex-col overflow-hidden rounded-xl',
         'border border-border bg-card shadow-xl',
         'animate-in fade-in-0 zoom-in-95',
         // A drag that selects the header text as it goes looks broken.
@@ -1389,6 +1395,11 @@ function DocumentChatAssistant() {
       </div>
     </div>
   );
+
+  // Out of `main` and into <body>: the canvas frame clips its absolutely
+  // positioned children, which is what used to keep the window inside the
+  // canvas. Contexts survive the portal, so nothing below the shell notices.
+  return isDesktop ? createPortal(panel, document.body) : panel;
 }
 
 /* ----------------------------------------
