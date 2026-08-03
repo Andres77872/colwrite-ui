@@ -44,22 +44,30 @@ function Capture() {
 }
 
 function mount(documentId: string | null = 'doc-1') {
-  const value = {
-    documentId,
-    blocks,
-    applyPatch,
-    adoptServerVersion,
-    adoptRestoredDocument,
-    markRecentlyChanged,
-  } as unknown as EditorContextValue;
-
-  return render(
-    <EditorContext.Provider value={value}>
-      <ProposalsProvider>
-        <Capture />
-      </ProposalsProvider>
-    </EditorContext.Provider>,
-  );
+  const tree = (restoreEpoch: number) => {
+    const value = {
+      documentId,
+      blocks,
+      applyPatch,
+      adoptServerVersion,
+      adoptRestoredDocument,
+      markRecentlyChanged,
+      restoreEpoch,
+    } as unknown as EditorContextValue;
+    return (
+      <EditorContext.Provider value={value}>
+        <ProposalsProvider>
+          <Capture />
+        </ProposalsProvider>
+      </EditorContext.Provider>
+    );
+  };
+  const result = render(tree(0));
+  return {
+    ...result,
+    /** Simulate a restore moving the document to another tree version. */
+    setRestoreEpoch: (epoch: number) => result.rerender(tree(epoch)),
+  };
 }
 
 function review(): ProposalsContextValue {
@@ -344,6 +352,47 @@ describe('durable change sets', () => {
     expect(second.changes).toBe(0);
     expect(getChangeSet).toHaveBeenCalledTimes(1);
     expect(review().pendingCount).toBe(2);
+  });
+
+  it('a restore discards the staged review and retires the record as superseded', async () => {
+    getChangeSet.mockResolvedValue(fetchedSet());
+    const { setRestoreEpoch } = mount();
+
+    act(() => void review().receive(durableAction()));
+    await act(async () => {});
+    expect(review().pendingCount).toBe(2);
+
+    act(() => setRestoreEpoch(1));
+
+    // The staged changes describe a version the document no longer sits on.
+    expect(review().pendingCount).toBe(0);
+    expect(review().sets).toEqual([]);
+    // Left pending server-side, the batch would re-stage on the next load.
+    await act(async () => {});
+    expect(rejectChangeSet).toHaveBeenCalledWith(
+      'doc-1',
+      'cs-1',
+      'Superseded: the document was restored to another version',
+    );
+  });
+
+  it('a batch fetched across a restore is not staged onto the new version', async () => {
+    let resolveFetch!: (value: unknown) => void;
+    getChangeSet.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    const { setRestoreEpoch } = mount();
+
+    act(() => void review().receive(durableAction()));
+    act(() => setRestoreEpoch(1));
+    await act(async () => {
+      resolveFetch(fetchedSet());
+    });
+
+    expect(review().pendingCount).toBe(0);
+    expect(review().sets).toEqual([]);
   });
 
   it('accepts one specific change locally, like any other batch', async () => {

@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Spinner } from '@/components/ui/spinner';
 import { streamAgentChat } from '@/services/agentChat';
+import { isTerminalReadiness } from '@/services/retry';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import { stopEditorEvents, useInlineChild } from '../shared';
 import { AlertCircle, ChevronDown, ChevronRight, Sparkles, Square, Trash2 } from 'lucide-react';
@@ -68,7 +69,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
       // a terminal projection state means no retry will make it exist.
       const readiness = await waitForReady({ signal: controller.signal });
       if (controller.signal.aborted) return;
-      if (!readiness.ready && (readiness.status === 'deleted' || readiness.status === 'failed')) {
+      if (!readiness.ready && isTerminalReadiness(readiness.status)) {
         setError('This document is no longer available on the server.');
         return;
       }

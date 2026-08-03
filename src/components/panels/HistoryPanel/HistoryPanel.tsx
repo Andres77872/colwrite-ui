@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useEditor } from '@/editor';
 import type { Block, Doc } from '@/editor';
 import { blockText } from '@/editor/proposals';
 import { formatDateTime } from '@/lib/text';
-import { errorMessage } from '@/services/contracts';
+import { describeApiError } from '@/services/contracts';
+import { isRetryableProblem } from '@/services/retry';
 import {
   type DocumentHead,
   type RevisionChange,
@@ -12,7 +13,6 @@ import {
   diffRevision,
   fetchDocumentHead,
   getRevision,
-  historyErrorCode,
   isStaleHead,
   listRevisions,
   restoreRevision,
@@ -31,18 +31,26 @@ import {
   AlertCircle,
   ArrowDownUp,
   Bot,
+  GitBranch,
   History,
   RotateCcw,
   Trash2,
 } from 'lucide-react';
+import { buildVersionGraph, type VersionGraphRow } from './versionGraph';
+import { RAIL_ROW_HEIGHT, VersionGraphRail, VersionGraphTail } from './VersionGraphRail';
 
 /**
- * HistoryPanel — the document's saved versions.
+ * HistoryPanel — the document's version tree.
  *
- * Every accepted save is an immutable server-side snapshot; this panel lists
- * them newest first, shows what each one changed (or how it differs from the
- * current state), and restores. Restore is append-only on the server: the
- * current state stays in the timeline, so nothing here can lose work.
+ * Every accepted save is an immutable server-side snapshot that records the
+ * version it grew out of, so history is a tree rather than a line. The panel
+ * lists revisions newest first with a graph rail showing that lineage, marks
+ * the version the document currently sits on, shows what each one changed (or
+ * how it differs from the current state), and switches between them.
+ *
+ * Restoring moves the document's current-version pointer; it writes no
+ * revision and removes nothing, so the list does not grow. The next save
+ * writes a revision whose parent is the restored one — a new branch.
  */
 
 const PAGE_SIZE = 30;
@@ -83,6 +91,33 @@ function entityLabel(change: RevisionChange): string {
 
 type Timeline = { revisions: RevisionSummary[]; nextCursor: string | null };
 
+/** Stable identity for the memo when nothing is loaded yet. */
+const NO_REVISIONS: RevisionSummary[] = [];
+
+/** Bound on auto-paging toward the current version — a hint, not a crawl. */
+const MAX_REVEAL_PAGES = 10;
+
+/**
+ * Fold a refreshed first page into the pages already on screen. A refresh
+ * (after a restore or an outside save) must not throw away rows the author
+ * paged in: under pointer semantics the "Current" marker can sit on any of
+ * them, not just on page one.
+ */
+function mergeRevisionPages(current: Timeline, page: Timeline): Timeline {
+  const fresh = new Set(page.revisions.map((revision) => revision.revisionId));
+  const kept = current.revisions.filter(
+    (revision) => !fresh.has(revision.revisionId),
+  );
+  return {
+    revisions: [...page.revisions, ...kept].sort(
+      (a, b) => b.revisionNo - a.revisionNo,
+    ),
+    // If the accumulated list reaches deeper than the fresh page, keep paging
+    // from where the author already was.
+    nextCursor: kept.length > 0 ? current.nextCursor : page.nextCursor,
+  };
+}
+
 export function HistoryPanel() {
   const {
     documentId,
@@ -103,12 +138,24 @@ export function HistoryPanel() {
   const [error, setError] = useState<{ message: string; retryable: boolean } | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [revealingCurrent, setRevealingCurrent] = useState(false);
   // Bumped when the panel itself learns the server moved on (failed restore).
   const [refreshTick, setRefreshTick] = useState(0);
   // Bounded retries while the server says the history is still being prepared,
   // so the author does not have to press "Check again" while a backfill runs.
   const pollAttemptRef = useRef(0);
   const pollTimerRef = useRef<number | null>(null);
+  // Which document the timeline rows belong to: a refresh of the same
+  // document merges pages, a navigation starts over.
+  const timelineDocRef = useRef<string | null>(null);
+
+  const revisions = timeline?.revisions ?? NO_REVISIONS;
+  const graph = useMemo(() => buildVersionGraph(revisions), [revisions]);
+  // The version the document sits on can be deeper than the loaded pages —
+  // the panel must say so rather than showing a list with no marker at all.
+  const currentPointerLoaded =
+    !head?.currentRevisionId
+    || revisions.some((revision) => revision.revisionId === head.currentRevisionId);
 
   useEffect(() => {
     pollAttemptRef.current = 0;
@@ -133,17 +180,28 @@ export function HistoryPanel() {
         if (controller.signal.aborted) return;
         pollAttemptRef.current = 0;
         setHead(headValue);
-        setTimeline({ revisions: page.revisions, nextCursor: page.nextCursor });
+        const fresh: Timeline = {
+          revisions: page.revisions,
+          nextCursor: page.nextCursor,
+        };
+        setTimeline((current) =>
+          current && timelineDocRef.current === documentId
+            ? mergeRevisionPages(current, fresh)
+            : fresh,
+        );
+        timelineDocRef.current = documentId;
       } catch (cause) {
         if (controller.signal.aborted) return;
-        // `history_not_ready` and `projection_pending` are the failures the
-        // server itself calls retryable — the timeline is still being prepared.
-        const code = historyErrorCode(cause);
-        const preparing = code === 'history_not_ready' || code === 'projection_pending';
+        // The server tells us which failures are worth waiting on; the request
+        // layer has already ridden out a short one, so anything arriving here
+        // needs the panel's own slower poll.
+        const preparing = isRetryableProblem(cause);
         setError({
+          // Whichever projection is behind, what the author is waiting for
+          // here is the timeline — say that rather than name the machinery.
           message: preparing
             ? 'The history for this document is still being prepared.'
-            : errorMessage(cause, 'Could not load the document history.'),
+            : describeApiError(cause, 'Could not load the document history.'),
           retryable: preparing,
         });
         if (preparing && pollAttemptRef.current < MAX_PREPARING_POLLS) {
@@ -189,7 +247,7 @@ export function HistoryPanel() {
     } catch (cause) {
       toast({
         title: 'Could not load older versions',
-        description: errorMessage(cause, 'The request failed.'),
+        description: describeApiError(cause, 'The request failed.'),
         variant: 'error',
       });
     } finally {
@@ -197,13 +255,49 @@ export function HistoryPanel() {
     }
   };
 
+  /** Page toward the current version until its row is on screen (bounded). */
+  const revealCurrent = async () => {
+    const pointer = head?.currentRevisionId;
+    if (!documentId || !pointer || !timeline) return;
+    setRevealingCurrent(true);
+    try {
+      let merged = timeline.revisions;
+      let cursor = timeline.nextCursor;
+      let pages = 0;
+      const loaded = () =>
+        merged.some((revision) => revision.revisionId === pointer);
+      while (cursor && !loaded() && pages < MAX_REVEAL_PAGES) {
+        const page = await listRevisions(documentId, {
+          limit: PAGE_SIZE,
+          cursor,
+        });
+        const seen = new Set(merged.map((revision) => revision.revisionId));
+        merged = [
+          ...merged,
+          ...page.revisions.filter((revision) => !seen.has(revision.revisionId)),
+        ];
+        cursor = page.nextCursor;
+        pages += 1;
+      }
+      setTimeline({ revisions: merged, nextCursor: cursor });
+    } catch (cause) {
+      toast({
+        title: 'Could not load the current version',
+        description: describeApiError(cause, 'The request failed.'),
+        variant: 'error',
+      });
+    } finally {
+      setRevealingCurrent(false);
+    }
+  };
+
   const handleRestore = async (revision: RevisionSummary) => {
     if (!documentId) return;
     const confirmed = await confirm({
-      title: `Restore version ${revision.revisionNo}?`,
+      title: `Switch to version ${revision.revisionNo}?`,
       description: hasPendingEdits()
-        ? 'Your unsaved edits are saved as their own version first, then the document returns to this one. The history keeps both, so nothing is lost.'
-        : 'The document returns to this version. The current state stays in the history, so nothing is lost.',
+        ? 'Your unsaved edits are saved as their own version first, then the document switches to this one. Switching does not create a new version and the history is untouched — your next save starts a new branch from here.'
+        : 'The document goes back to this version. Switching does not create a new version and the history is untouched — your next save starts a new branch from here.',
       confirmLabel: 'Restore',
     });
     if (!confirmed) return;
@@ -218,13 +312,22 @@ export function HistoryPanel() {
       });
       adoptRestoredDocument(restored.content, restored.headSeq);
       setExpandedId(null);
-      toast({ title: `Version ${revision.revisionNo} restored`, variant: 'success' });
+      // No revision was written — only the current-version pointer moved. The
+      // returned head already carries it; refetching keeps the marker honest
+      // if a save landed in between, and picks up any new rows that save left.
+      setHead(restored);
+      setRefreshTick((tick) => tick + 1);
+      toast({
+        title: `Now on version ${revision.revisionNo}`,
+        description: 'Saving from here starts a new branch.',
+        variant: 'success',
+      });
     } catch (cause) {
       toast({
         title: 'Could not restore this version',
         description: isStaleHead(cause)
           ? 'The document changed while restoring. The timeline has been refreshed — try again.'
-          : errorMessage(cause, 'The request failed.'),
+          : describeApiError(cause, 'The request failed.'),
         variant: 'error',
       });
       setRefreshTick((tick) => tick + 1);
@@ -276,40 +379,73 @@ export function HistoryPanel() {
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <ol className="flex flex-col gap-1.5">
-        {timeline.revisions.map((revision) => {
-          const isCurrent = head?.revisionId === revision.revisionId;
+    // No gap: the graph rail runs down the whole list, so rows are separated
+    // by their own padding instead of a break in the lanes.
+    <div className="flex flex-col">
+      {!currentPointerLoaded && (
+        <div className="mb-1.5 flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
+          <p className="text-xs text-muted-foreground">
+            The document is on an older version that isn&apos;t shown yet.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={revealCurrent}
+            disabled={revealingCurrent}
+          >
+            {revealingCurrent ? <Spinner /> : 'Show current version'}
+          </Button>
+        </div>
+      )}
+      <ol className="flex flex-col">
+        {timeline.revisions.map((revision, index) => {
+          // The pointer, not the newest revision: after a restore the document
+          // sits on an older node until the next save branches from it.
+          const isCurrent = head?.currentRevisionId === revision.revisionId;
           const isExpanded = expandedId === revision.revisionId;
+          const node = graph.rows[index];
           return (
-            <li key={revision.revisionId}>
-              <RevisionRow
-                revision={revision}
-                isCurrent={isCurrent}
-                isExpanded={isExpanded}
-                onToggle={() =>
-                  setExpandedId(isExpanded ? null : revision.revisionId)
-                }
-              />
-              {isExpanded && (
-                <RevisionInspector
-                  documentId={documentId}
-                  revision={revision}
-                  currentDoc={doc}
+            <li key={revision.revisionId} className="flex gap-1.5">
+              {node && (
+                <VersionGraphRail
+                  row={node}
+                  laneCount={graph.laneCount}
                   isCurrent={isCurrent}
-                  restoring={restoringId === revision.revisionId}
-                  onRestore={() => handleRestore(revision)}
                 />
               )}
+              <div className="min-w-0 flex-1 pb-1.5">
+                <RevisionRow
+                  revision={revision}
+                  node={node}
+                  isCurrent={isCurrent}
+                  isExpanded={isExpanded}
+                  onToggle={() =>
+                    setExpandedId(isExpanded ? null : revision.revisionId)
+                  }
+                />
+                {isExpanded && (
+                  <RevisionInspector
+                    documentId={documentId}
+                    revision={revision}
+                    currentDoc={doc}
+                    isCurrent={isCurrent}
+                    restoring={restoringId === revision.revisionId}
+                    onRestore={() => handleRestore(revision)}
+                  />
+                )}
+              </div>
             </li>
           );
         })}
       </ol>
+      {/* Lineage that continues past the loaded pages leaves the list here. */}
+      <VersionGraphTail lanes={graph.danglingLanes} laneCount={graph.laneCount} />
       {timeline.nextCursor && (
         <Button
           variant="ghost"
           size="sm"
-          className="self-center"
+          className="mt-1 self-center"
           onClick={loadMore}
           disabled={loadingMore}
         >
@@ -322,11 +458,13 @@ export function HistoryPanel() {
 
 function RevisionRow({
   revision,
+  node,
   isCurrent,
   isExpanded,
   onToggle,
 }: {
   revision: RevisionSummary;
+  node: VersionGraphRow | undefined;
   isCurrent: boolean;
   isExpanded: boolean;
   onToggle: () => void;
@@ -336,6 +474,9 @@ function RevisionRow({
       type="button"
       onClick={onToggle}
       aria-expanded={isExpanded}
+      // Pinned to the rail's row height so the node dots line up with the
+      // rows they belong to.
+      style={{ minHeight: RAIL_ROW_HEIGHT }}
       className={cn(
         'w-full rounded-md border px-2.5 py-2 text-left transition-colors hover:bg-muted/60',
         isExpanded ? 'border-border bg-muted/40' : 'border-transparent',
@@ -365,6 +506,15 @@ function RevisionRow({
       </div>
       <div className="mt-0.5 flex items-baseline gap-2 text-xs text-muted-foreground">
         <time dateTime={revision.createdAt}>{formatDateTime(revision.createdAt)}</time>
+        {node?.isFork && (
+          <span
+            className="flex shrink-0 items-center gap-0.5 self-center text-2xs"
+            title="Later versions branch away from this one."
+          >
+            <GitBranch aria-hidden="true" className="h-3 w-3" />
+            {node.childCount} branches
+          </span>
+        )}
         {revision.summary && (
           <span className="min-w-0 truncate italic">{revision.summary}</span>
         )}
@@ -469,7 +619,7 @@ function RevisionInspector({
         if (!signal.aborted) setData(value);
       } catch (cause) {
         if (!signal.aborted) {
-          setFailure(errorMessage(cause, 'Could not load this comparison.'));
+          setFailure(describeApiError(cause, 'Could not load this comparison.'));
         }
       } finally {
         if (!signal.aborted) setPending(false);
@@ -505,17 +655,25 @@ function RevisionInspector({
             Vs. current
           </Button>
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-6 px-2 text-xs"
-          onClick={onRestore}
-          disabled={isCurrent || restoring}
-          title={isCurrent ? 'This is already the current version' : undefined}
-        >
-          {restoring ? <Spinner /> : <RotateCcw aria-hidden="true" className="h-3 w-3" />}
-          Restore
-        </Button>
+        {isCurrent ? (
+          // Restoring the node the document already sits on is a server-side
+          // no-op; say so instead of offering a button that does nothing.
+          <span className="text-2xs text-muted-foreground">
+            The document is on this version
+          </span>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 px-2 text-xs"
+            onClick={onRestore}
+            disabled={restoring}
+            title="Switch the document to this version"
+          >
+            {restoring ? <Spinner /> : <RotateCcw aria-hidden="true" className="h-3 w-3" />}
+            Restore
+          </Button>
+        )}
       </div>
 
       <div className="mt-2">

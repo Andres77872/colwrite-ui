@@ -110,6 +110,13 @@ export type EditorContextValue = {
    * starting a new document session.
    */
   adoptRestoredDocument: (doc: Doc, serverVersion: number) => void;
+  /**
+   * Increments every time a restore moves the document onto another version
+   * of its tree. State computed against the pre-restore content — staged
+   * assistant proposals, in-flight agent streams — keys on this to know it
+   * no longer describes the document on screen.
+   */
+  restoreEpoch: number;
   hasAnyRemoteDocs: boolean | null;
   /** Last server-confirmed head sequence, or null before the first save. */
   savedHeadSeq: () => number | null;

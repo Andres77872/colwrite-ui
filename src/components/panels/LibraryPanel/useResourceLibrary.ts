@@ -14,7 +14,7 @@ import {
   type ResourceLibraryLocation,
   type SmartResourceScope,
 } from '@/services/resources';
-import { errorMessage } from '@/services/contracts';
+import { describeApiError } from '@/services/contracts';
 import { createPollSchedule } from '@/lib/pollSchedule';
 
 export const RESOURCE_PAGE_SIZE = 50;
@@ -229,7 +229,7 @@ export function useResourceLibrary(
           loading: false,
           loadingMore: false,
           refreshing: false,
-          error: errorMessage(error, 'Could not load your library'),
+          error: describeApiError(error, 'Could not load your library'),
         }));
       }
     },
@@ -304,7 +304,7 @@ export function useResourceLibrary(
       setState((previous) => ({
         ...previous,
         loadingMore: false,
-        error: errorMessage(error, 'Could not load more resources'),
+        error: describeApiError(error, 'Could not load more resources'),
       }));
     }
   }, [locationKey, resourceScope, scopedCollectionId, scopedDocumentId]);
@@ -401,7 +401,7 @@ export function useResourceLibrary(
       ) {
         setState((previous) => ({
           ...previous,
-          error: errorMessage(error, 'Could not load that resource'),
+          error: describeApiError(error, 'Could not load that resource'),
         }));
       }
       throw error;
@@ -444,7 +444,7 @@ export function useResourceLibrary(
             try {
               stored.push(await uploadResource(file, target));
             } catch (error) {
-              failures.push(`${file.name}: ${errorMessage(error, 'Upload failed')}`);
+              failures.push(`${file.name}: ${describeApiError(error, 'Upload failed')}`);
             }
           }
           if (mountedRef.current) {

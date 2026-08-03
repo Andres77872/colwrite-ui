@@ -30,8 +30,10 @@ Notes:
 - The document object accepts only `{ version, blocks, name?, tags? }`. Unknown
   fields are rejected by canonical validation; the legacy `title` alias is
   tolerated server-side as a `name` fallback but should no longer be sent.
-- Every save/create/delete also writes a revision to the versioned history —
-  see `docs/api/document-history.md` for the `/v2/documents` timeline API.
+- Every save/create/delete also writes a revision to the versioned history,
+  parented on whichever revision the document currently sits on (restore is a
+  pointer move that writes none) — see `docs/api/document-history.md` for the
+  `/v2/documents` version-tree API.
 
 ## Python client (async)
 

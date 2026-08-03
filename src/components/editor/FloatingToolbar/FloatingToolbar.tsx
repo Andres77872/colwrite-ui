@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useEditor } from '@/editor';
 import { dispatchAction } from '@/services/actionDispatcher';
+import { isTerminalReadiness } from '@/services/retry';
 import type { AiAction } from '@/config/aiActions';
 import { AIActionMenu } from './AIActionMenu/AIActionMenu';
 import {
@@ -354,10 +355,7 @@ function useFloatingToolbar() {
           // save above; a terminal projection state cannot be retried away.
           const readiness = await waitForReady({ signal: controller.signal });
           if (stopped || controller.signal.aborted) return;
-          if (
-            !readiness.ready
-            && (readiness.status === 'deleted' || readiness.status === 'failed')
-          ) {
+          if (!readiness.ready && isTerminalReadiness(readiness.status)) {
             wrapper.setAttribute('data-error', '1');
             return;
           }

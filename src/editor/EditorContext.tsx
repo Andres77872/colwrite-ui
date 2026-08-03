@@ -16,11 +16,18 @@ import type {
   DocumentListOptions,
   DocumentListResult,
 } from '../services';
+import { isTerminalReadiness } from '../services/retry';
 import { uid } from '../lib/uid';
 import { EditorContext, type EditorContextValue } from './editorContextState';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import { emitDocumentTransitionStart } from './documentTransition';
 export type { EditorContextValue } from './editorContextState';
+
+/** How the readiness probe paces itself while the projection catches up. */
+const READINESS_POLL_DELAYS = [250, 500, 1000, 1500];
+const MAX_READINESS_POLL_DELAY_MS = READINESS_POLL_DELAYS[READINESS_POLL_DELAYS.length - 1];
+/** Consecutive probe failures before the probe reports itself unavailable. */
+const MAX_READINESS_PROBE_FAILURES = 2;
 
 function makeDefaultDoc(): Doc {
   return {
@@ -174,6 +181,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const persistedRevisionRef = useRef(0);
   const saveInFlightRef = useRef<Promise<void> | null>(null);
   const [documentListRevision, setDocumentListRevision] = useState(0);
+  const [restoreEpoch, setRestoreEpoch] = useState(0);
   const autoSaveTimerRef = useRef<number | null>(null);
   // Mirrors `isAutoSaving` for readers that run outside React's render cycle —
   // specifically the beforeunload guard, which has to answer "is there
@@ -385,6 +393,10 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     setDirtyTick(0);
     versionRef.current = serverVersion;
     setSaveError(null);
+    // The document is now a different version of its tree: anything staged
+    // against the pre-restore content (pending proposals, in-flight agent
+    // streams) must not apply to it.
+    setRestoreEpoch(epoch => epoch + 1);
     // The restore changed `updated_at` server-side, so list order can change.
     setDocumentListRevision(revision => revision + 1);
   };
@@ -1058,12 +1070,18 @@ export function EditorProvider({ children }: { children: ReactNode }) {
    * keyed by document so a switch can never satisfy the wrong document.
    */
   const readyHeadSeqRef = useRef<{ documentId: string; headSeq: number } | null>(null);
-  const readinessInFlightRef = useRef<Promise<{ ready: boolean; status: string }> | null>(null);
-
-  /** Projection states that no amount of waiting will fix. */
-  const TERMINAL_READINESS = new Set([
-    'deleted', 'deleting', 'failed', 'scope_mismatch', 'conflicting',
-  ]);
+  /**
+   * The probe currently running, tagged with what it is a verdict *about*.
+   * Sharing it across callers avoids a burst of probes when the toolbar, the
+   * chat panel and an inline passage all ask at once — but only when they are
+   * asking the same question. An untagged share handed a caller who had just
+   * saved the verdict for the head before that save.
+   */
+  const readinessInFlightRef = useRef<{
+    documentId: string;
+    headSeq: number;
+    promise: Promise<{ ready: boolean; status: string }>;
+  } | null>(null);
 
   const waitForReady: EditorContextValue['waitForReady'] = async (options) => {
     // Flush first: readiness is only meaningful for the state the server has.
@@ -1084,20 +1102,27 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       return { ready: true, status: 'ready' };
     }
 
-    if (readinessInFlightRef.current) return readinessInFlightRef.current;
+    const shared = readinessInFlightRef.current;
+    if (shared && shared.documentId === targetId && shared.headSeq === expectedHeadSeq) {
+      return shared.promise;
+    }
 
     const request = (async () => {
       const timeoutMs = options?.timeoutMs ?? 6000;
-      const delays = [250, 500, 1000, 1500];
       const startedAt = Date.now();
       let lastStatus: string | undefined;
+      let probeFailures = 0;
       for (let poll = 0; ; poll += 1) {
         if (options?.signal?.aborted) return { ready: false, status: 'aborted' };
+        // The server's own pacing hint from the last successful probe.
+        let retryAfterMs = 0;
         try {
           const readiness = await fetchReferenceReadiness(targetId, {
             signal: options?.signal,
           });
+          probeFailures = 0;
           lastStatus = readiness.readinessStatus;
+          retryAfterMs = readiness.retryAfterSeconds * 1000;
           if (readiness.ready) {
             const covered = Math.max(
               readiness.appliedHeadSeq ?? 0,
@@ -1107,16 +1132,28 @@ export function EditorProvider({ children }: { children: ReactNode }) {
             readyHeadSeqRef.current = { documentId: targetId, headSeq: covered };
             return { ready: true, status: 'ready' };
           }
-          if (TERMINAL_READINESS.has(readiness.readinessStatus)) {
+          if (isTerminalReadiness(readiness.readinessStatus)) {
             return { ready: false, status: readiness.readinessStatus };
           }
         } catch {
-          // The probe is advisory — a network hiccup or an older backend
-          // without the endpoint must not block chat; the server keeps its
-          // own typed rejection as the source of truth.
-          return { ready: false, status: 'unavailable' };
+          // The probe is advisory — the server keeps its own typed rejection
+          // as the source of truth — so a hiccup must not block chat. But one
+          // dropped request is not an answer either; give it a second chance
+          // before reporting the probe unavailable, which is also how an older
+          // backend without this endpoint still fails fast.
+          probeFailures += 1;
+          if (probeFailures >= MAX_READINESS_PROBE_FAILURES) {
+            return { ready: false, status: 'unavailable' };
+          }
         }
-        const delay = delays[Math.min(poll, delays.length - 1)];
+        // Our ladder already paces faster than the server's routine one-second
+        // hint, and the probe is a single indexed read. Defer to the hint only
+        // when it asks for longer than we would wait anyway — `disabled` and
+        // `unavailable` do.
+        const laddered = READINESS_POLL_DELAYS[
+          Math.min(poll, READINESS_POLL_DELAYS.length - 1)
+        ];
+        const delay = retryAfterMs > MAX_READINESS_POLL_DELAY_MS ? retryAfterMs : laddered;
         if (Date.now() - startedAt + delay > timeoutMs) {
           return { ready: false, status: lastStatus || 'timeout' };
         }
@@ -1124,11 +1161,12 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       }
     })();
 
-    readinessInFlightRef.current = request;
+    const entry = { documentId: targetId, headSeq: expectedHeadSeq, promise: request };
+    readinessInFlightRef.current = entry;
     try {
       return await request;
     } finally {
-      if (readinessInFlightRef.current === request) readinessInFlightRef.current = null;
+      if (readinessInFlightRef.current === entry) readinessInFlightRef.current = null;
     }
   };
 
@@ -1196,6 +1234,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     clearDocumentLoadNotice: () => setDocumentLoadNotice(null),
     adoptServerVersion,
     adoptRestoredDocument,
+    restoreEpoch,
     hasAnyRemoteDocs,
     applyPatch,
     recentlyChanged,

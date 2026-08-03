@@ -55,21 +55,75 @@ export function errorMessage(error: unknown, fallback: string): string {
 }
 
 /**
+ * The machine-readable half of an `application/problem+json` body.
+ *
+ * `readinessStatus` is a lifecycle flag, not a freshness one: once a document
+ * has been projected the server reports `ready` for the rest of its life, even
+ * while `appliedHeadSeq` trails `expectedHeadSeq`. Anything deciding whether to
+ * retry must read `code` and `retryable` — never that string.
+ */
+export interface ProblemDetails {
+  code: string | null
+  retryable: boolean
+  /** Positive seconds only; null when the server gave no hint. */
+  retryAfterSeconds: number | null
+  readinessStatus: string | null
+  expectedHeadSeq: number | null
+  appliedHeadSeq: number | null
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * Read the problem body carried on an {@link ApiError}. Null for plain errors
+ * and for bodies that are not problem documents.
+ */
+export function problemDetails(error: unknown): ProblemDetails | null {
+  const data = (error as { data?: unknown } | null)?.data
+  if (!isUnknownRecord(data)) return null
+  const retryAfter = finiteNumber(data.retry_after)
+  return {
+    code: typeof data.code === 'string' ? data.code : null,
+    retryable: data.retryable === true,
+    retryAfterSeconds: retryAfter !== null && retryAfter > 0 ? retryAfter : null,
+    readinessStatus: typeof data.readiness_status === 'string' ? data.readiness_status : null,
+    expectedHeadSeq: finiteNumber(data.expected_head_seq),
+    appliedHeadSeq: finiteNumber(data.applied_head_seq),
+  }
+}
+
+/**
  * Machine-readable `code` from an `application/problem+json` error body kept
  * on an {@link ApiError}. Null for plain errors or bodies without a code.
  */
 export function problemCode(error: unknown): string | null {
-  const data = (error as { data?: unknown } | null)?.data
-  if (!isUnknownRecord(data)) return null
-  return typeof data.code === 'string' ? data.code : null
+  return problemDetails(error)?.code ?? null
 }
 
 /** Server retry hint in seconds from a problem body, if present and positive. */
 export function problemRetryAfter(error: unknown): number | null {
-  const data = (error as { data?: unknown } | null)?.data
-  if (!isUnknownRecord(data)) return null
-  const value = data.retry_after
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+  return problemDetails(error)?.retryAfterSeconds ?? null
+}
+
+/**
+ * Our own words for the problems the server calls retryable.
+ *
+ * Their `detail` strings describe the machinery — "Document reference
+ * projection is not ready" — which tells the person writing the document
+ * nothing they can act on.
+ */
+const RETRYABLE_PROBLEM_MESSAGES: Record<string, string> = {
+  projection_pending: 'This document is still syncing on the server.',
+  history_not_ready: 'The history for this document is still being prepared.',
+  document_rate_limit_exceeded: 'Too many requests just now — wait a moment and try again.',
+}
+
+/** {@link errorMessage}, but preferring our copy for a known problem code. */
+export function describeApiError(error: unknown, fallback: string): string {
+  const code = problemCode(error)
+  return (code && RETRYABLE_PROBLEM_MESSAGES[code]) || errorMessage(error, fallback)
 }
 
 /** HTTP error with the parsed response body retained for callers and tests. */

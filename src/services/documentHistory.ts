@@ -61,7 +61,14 @@ export interface DocumentHead {
   documentId: string;
   headSeq: number;
   revisionNo: number;
+  /** Newest revision ever created (the top of the timeline). */
   revisionId: string;
+  /**
+   * The tree node the working document sits on. After a restore this points
+   * at the restored revision — not the newest one — and the next save
+   * branches from it.
+   */
+  currentRevisionId: string;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
@@ -139,11 +146,16 @@ function normalizeHead(payload: unknown, etag: string | null): DocumentHead {
   if (!isUnknownRecord(payload) || typeof payload.document_id !== 'string') {
     throw new Error('The server returned an invalid document state.');
   }
+  const revisionId = typeof payload.revision_id === 'string' ? payload.revision_id : '';
   return {
     documentId: payload.document_id,
     headSeq: numberField(payload.head_seq),
     revisionNo: numberField(payload.revision_no),
-    revisionId: typeof payload.revision_id === 'string' ? payload.revision_id : '',
+    revisionId,
+    currentRevisionId:
+      typeof payload.current_revision_id === 'string' && payload.current_revision_id
+        ? payload.current_revision_id
+        : revisionId,
     createdAt: typeof payload.created_at === 'string' ? payload.created_at : '',
     updatedAt: typeof payload.updated_at === 'string' ? payload.updated_at : '',
     deletedAt: stringOrNull(payload.deleted_at),
@@ -329,7 +341,10 @@ export interface RestoreRevisionOptions {
    * that is a genuine concurrent write, not staleness of the panel.
    */
   etag?: string;
-  /** Note stored on the restore revision (max 500 chars server-side). */
+  /**
+   * Note recorded on the restore's audit event (max 500 chars server-side).
+   * A restore writes no revision, so this never appears in the timeline.
+   */
   summary?: string;
 }
 
@@ -489,10 +504,13 @@ export async function listPendingChangeSets(
 }
 
 /**
- * Restore is append-only: the server writes a NEW revision whose content is
- * the old snapshot. Nothing is rewound, and the restored-from revision stays
- * in the timeline. The returned head is the post-restore state; the caller
- * must adopt it (or reload) so autosave doesn't fight the restore.
+ * Restore moves the document's current-version pointer to an existing
+ * revision — it does NOT create a revision. The head's working content
+ * becomes the restored snapshot (with a fresh `headSeq`/ETag, since the
+ * concurrency position stays monotonic), and the next save writes a revision
+ * whose parent is the restored node, starting a new branch in the version
+ * tree. The returned head is the post-restore state; the caller must adopt
+ * it (or reload) so autosave doesn't fight the restore.
  */
 export async function restoreRevision(
   documentId: string,

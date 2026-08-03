@@ -36,8 +36,8 @@ const listDocuments = vi.fn(async () => ({
 const fetchReferenceReadiness = vi.fn(async (_id: string) => ({
   ready: true,
   readinessStatus: 'ready',
-  expectedHeadSeq: 4,
-  appliedHeadSeq: 4,
+  expectedHeadSeq: 4 as number | null,
+  appliedHeadSeq: 4 as number | null,
   retryable: false,
   retryAfterSeconds: 0,
 }));
@@ -685,6 +685,102 @@ describe('waitForReady', () => {
     expect(result).toEqual({ ready: false, status: 'save_failed' });
     expect(fetchReferenceReadiness).not.toHaveBeenCalled();
   });
+
+  it('shares one probe between callers asking about the same head', async () => {
+    await mountRemoteDocument();
+    const pending = deferred<Awaited<ReturnType<typeof fetchReferenceReadiness>>>();
+    fetchReferenceReadiness.mockReturnValueOnce(pending.promise);
+
+    let both: Array<{ ready: boolean; status: string }> | undefined;
+    await act(async () => {
+      const first = currentEditor().waitForReady({ save: false });
+      const second = currentEditor().waitForReady({ save: false });
+      pending.resolve({
+        ready: true,
+        readinessStatus: 'ready',
+        expectedHeadSeq: 3,
+        appliedHeadSeq: 3,
+        retryable: false,
+        retryAfterSeconds: 0,
+      });
+      both = await Promise.all([first, second]);
+    });
+
+    expect(fetchReferenceReadiness).toHaveBeenCalledTimes(1);
+    expect(both).toEqual([
+      { ready: true, status: 'ready' },
+      { ready: true, status: 'ready' },
+    ]);
+  });
+
+  it('does not answer a caller past a newer save with the older head verdict', async () => {
+    await mountRemoteDocument();
+    const stale = deferred<Awaited<ReturnType<typeof fetchReferenceReadiness>>>();
+    fetchReferenceReadiness.mockReturnValueOnce(stale.promise);
+
+    await act(async () => {
+      // In flight for head 3, and deliberately left unresolved.
+      void currentEditor().waitForReady({ save: false });
+      // A save lands; the next caller is asking about head 5, not head 3.
+      currentEditor().adoptServerVersion(5);
+      await currentEditor().waitForReady({ save: false });
+    });
+
+    expect(fetchReferenceReadiness).toHaveBeenCalledTimes(2);
+    stale.resolve({
+      ready: true,
+      readinessStatus: 'ready',
+      expectedHeadSeq: 3,
+      appliedHeadSeq: 3,
+      retryable: false,
+      retryAfterSeconds: 0,
+    });
+  });
+
+  it('rides out a single probe hiccup rather than reporting it as an answer', async () => {
+    await mountRemoteDocument();
+    fetchReferenceReadiness
+      .mockRejectedValueOnce(new Error('network blip'))
+      .mockResolvedValueOnce({
+        ready: true,
+        readinessStatus: 'ready',
+        expectedHeadSeq: 3,
+        appliedHeadSeq: 3,
+        retryable: false,
+        retryAfterSeconds: 0,
+      });
+
+    let result: { ready: boolean; status: string } | undefined;
+    await act(async () => {
+      result = await currentEditor().waitForReady({ save: false });
+    });
+
+    expect(fetchReferenceReadiness).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ ready: true, status: 'ready' });
+  });
+
+  it.each(['deleting', 'scope_mismatch', 'conflicting'])(
+    'stops on the %s projection status too',
+    async (readinessStatus) => {
+      await mountRemoteDocument();
+      fetchReferenceReadiness.mockResolvedValue({
+        ready: false,
+        readinessStatus,
+        expectedHeadSeq: 3,
+        appliedHeadSeq: null,
+        retryable: false,
+        retryAfterSeconds: 0,
+      });
+
+      let result: { ready: boolean; status: string } | undefined;
+      await act(async () => {
+        result = await currentEditor().waitForReady({ save: false });
+      });
+
+      expect(fetchReferenceReadiness).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ ready: false, status: readinessStatus });
+    },
+  );
 
   it('answers no_document for a draft that has never been saved', async () => {
     localStorage.setItem('colwrite:hasRemoteDocs', 'false');

@@ -10,7 +10,7 @@ import { PDF_ACCEPT, partitionPdfs, skippedNonPdfMessage } from '@/lib/fileDrop'
 import { createPollSchedule } from '@/lib/pollSchedule';
 import { useFileDropZone } from '@/hooks/useFileDropZone';
 import { usePagedList } from '@/hooks/usePagedList';
-import { errorMessage } from '@/services/contracts';
+import { describeApiError } from '@/services/contracts';
 import {
   deleteResource,
   extractResource,
@@ -139,7 +139,7 @@ export function UploadsSection({
         try {
           stored.push(await uploadResource(file, {}));
         } catch (error) {
-          failures.push(`${file.name}: ${errorMessage(error, 'Upload failed')}`);
+          failures.push(`${file.name}: ${describeApiError(error, 'Upload failed')}`);
         }
       }
 
@@ -186,7 +186,7 @@ export function UploadsSection({
     } catch (error) {
       toast({
         title: 'Could not delete the file',
-        description: errorMessage(error, 'Request failed'),
+        description: describeApiError(error, 'Request failed'),
         variant: 'error',
       });
     }
@@ -218,7 +218,7 @@ export function UploadsSection({
     } catch (error) {
       toast({
         title: 'Could not convert this file',
-        description: errorMessage(error, 'Request failed'),
+        description: describeApiError(error, 'Request failed'),
         variant: 'error',
       });
     } finally {
@@ -240,7 +240,7 @@ export function UploadsSection({
     } catch (error) {
       toast({
         title: 'Could not load more files',
-        description: errorMessage(error, 'Request failed'),
+        description: describeApiError(error, 'Request failed'),
         variant: 'error',
       });
     } finally {

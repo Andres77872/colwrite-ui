@@ -1,5 +1,11 @@
 import { buildUrl, ensureRefreshed } from './api';
-import { ApiError, problemCode } from './contracts';
+import { ApiError, problemCode, problemRetryAfter } from './contracts';
+import {
+  abortableSleep,
+  isTerminalReadiness,
+  RETRYABLE_STREAM_CODES,
+  retryDelayMs,
+} from './retry';
 import { emitRequireLogin } from './session';
 import { parseSSEStream, type SSEErrorDetails, type SSEEventHandlers } from './streamParser';
 
@@ -60,49 +66,6 @@ export type AgentChatOptions = {
    */
   retry?: AgentChatRetryOptions;
 };
-
-/** SSE error codes that mean "the save is still propagating — ask again". */
-const RETRYABLE_STREAM_CODES = new Set([
-  'PROJECTION_PENDING',
-  'DOCUMENT_REFERENCE_NOT_READY',
-]);
-
-const MIN_RETRY_DELAY_MS = 500;
-const MAX_RETRY_DELAY_MS = 5000;
-
-function retryDelayMs(
-  attempt: number,
-  baseDelayMs: number,
-  retryAfterSeconds: number | null,
-): number {
-  if (retryAfterSeconds !== null) {
-    return Math.min(
-      MAX_RETRY_DELAY_MS,
-      Math.max(MIN_RETRY_DELAY_MS, retryAfterSeconds * 1000),
-    );
-  }
-  const backoff = baseDelayMs * 3 ** (attempt - 1);
-  const jitter = 1 + (Math.random() - 0.5) * 0.5;
-  return Math.min(MAX_RETRY_DELAY_MS, Math.max(MIN_RETRY_DELAY_MS, backoff * jitter));
-}
-
-function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new DOMException('Aborted', 'AbortError'));
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new DOMException('Aborted', 'AbortError'));
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
-}
 
 async function apiErrorFromResponse(res: Response): Promise<ApiError> {
   const text = await res.text().catch(() => '');
@@ -193,13 +156,8 @@ export async function streamAgentChat(
         && attempt < maxAttempts
         && !producedOutput
       ) {
-        const retryAfter = (error.data as { retry_after?: unknown } | null)?.retry_after;
         await abortableSleep(
-          retryDelayMs(
-            attempt,
-            baseDelayMs,
-            typeof retryAfter === 'number' && retryAfter > 0 ? retryAfter : null,
-          ),
+          retryDelayMs(attempt, baseDelayMs, problemRetryAfter(error)),
           opts?.signal,
         );
         continue;
@@ -239,6 +197,9 @@ export async function streamAgentChat(
       onError: (errorCode: string, message: string, details?: SSEErrorDetails) => {
         if (
           RETRYABLE_STREAM_CODES.has(errorCode)
+          // A projection that is deleted or broken never catches up, so the
+          // author should hear that now rather than after three more waits.
+          && !isTerminalReadiness(details?.readinessStatus)
           && attempt < maxAttempts
           && !producedOutput
         ) {

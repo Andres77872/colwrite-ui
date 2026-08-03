@@ -1,5 +1,6 @@
 import { emitRequireLogin } from './session';
-import { ApiError, isUnknownRecord } from './contracts';
+import { ApiError, isUnknownRecord, problemRetryAfter } from './contracts';
+import { abortableSleep, isRetryableProblem, retryWaitMs } from './retry';
 
 // Prefer relative base during development to avoid browser CORS via Vite proxy
 export const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
@@ -11,6 +12,11 @@ export type ApiRequestInit = RequestInit & {
    * outcome and resolves it itself.
    */
   suppressAuthEvent?: boolean;
+  /**
+   * Backoff policy for the server's typed "not ready yet" problems. Applied by
+   * default; pass `{ maxAttempts: 1 }` to see the first rejection immediately.
+   */
+  retry?: { maxAttempts?: number; baseDelayMs?: number };
 };
 
 /**
@@ -103,6 +109,18 @@ export function ensureRefreshed(): Promise<boolean> {
  */
 export type ApiResponse<T> = { data: T; headers: Headers };
 
+/** Total attempts, including the first, for a problem the server calls retryable. */
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_RETRY_BASE_DELAY_MS = 500;
+
+/** `Retry-After` in seconds. This API never sends the HTTP-date form. */
+function retryAfterHeader(headers: Headers): number | null {
+  const raw = headers.get('Retry-After');
+  if (!raw) return null;
+  const seconds = Number.parseInt(raw, 10);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -119,7 +137,7 @@ async function requestWithHeaders<T>(
   body?: unknown,
   init?: ApiRequestInit,
 ): Promise<ApiResponse<T>> {
-  const { suppressAuthEvent, headers: initHeaders, ...rest } = init ?? {};
+  const { suppressAuthEvent, headers: initHeaders, retry, ...rest } = init ?? {};
 
   // A multipart body carries its own generated boundary in the Content-Type
   // header, so it has to go through untouched — JSON-encoding it would send
@@ -144,28 +162,52 @@ async function requestWithHeaders<T>(
   };
 
   const url = buildUrl(path);
-  let res = await fetch(url, requestInit);
+  const maxAttempts = Math.max(1, retry?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
+  const baseDelayMs = retry?.baseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
 
-  // The access cookie's lifetime tracks the short access-token TTL, so an
-  // expired session mid-visit is routine. Rotate once and replay before
-  // treating it as a real sign-out.
-  if (res.status === 401 && !isSelfReporting(path) && (await ensureRefreshed())) {
-    res = await fetch(url, requestInit);
-  }
+  for (let attempt = 1; ; attempt += 1) {
+    let res = await fetch(url, requestInit);
 
-  const text = await res.text();
-  let data: unknown;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = null;
-  }
-  if (res.ok) return { data: data as T, headers: res.headers };
+    // The access cookie's lifetime tracks the short access-token TTL, so an
+    // expired session mid-visit is routine. Rotate once and replay before
+    // treating it as a real sign-out.
+    if (res.status === 401 && !isSelfReporting(path) && (await ensureRefreshed())) {
+      res = await fetch(url, requestInit);
+    }
 
-  if ((res.status === 401 || res.status === 403) && !suppressAuthEvent && !isSelfReporting(path)) {
-    emitRequireLogin(res.status === 403 ? 'forbidden' : 'expired');
+    const text = await res.text();
+    let data: unknown;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+    if (res.ok) return { data: data as T, headers: res.headers };
+
+    const error = apiError(res, data);
+
+    // A document's numeric identity is resolved before the handler does any
+    // work, so a "not ready yet" rejection means nothing was written and any
+    // verb is safe to replay. An `Idempotency-Key` the caller minted rides
+    // along in `requestInit` and stays the same across attempts, so a write
+    // that did land somehow still cannot be applied twice.
+    if (attempt < maxAttempts && isRetryableProblem(error)) {
+      const wait = retryWaitMs(
+        attempt,
+        baseDelayMs,
+        retryAfterHeader(res.headers) ?? problemRetryAfter(error),
+      );
+      if (wait !== null) {
+        await abortableSleep(wait, rest.signal ?? undefined);
+        continue;
+      }
+    }
+
+    if ((res.status === 401 || res.status === 403) && !suppressAuthEvent && !isSelfReporting(path)) {
+      emitRequireLogin(res.status === 403 ? 'forbidden' : 'expired');
+    }
+    throw error;
   }
-  throw apiError(res, data);
 }
 
 export async function get<T>(path: string, init?: ApiRequestInit): Promise<T> {

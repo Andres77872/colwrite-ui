@@ -2,18 +2,21 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { HistoryPanel } from './HistoryPanel';
+import { buildVersionGraph } from './versionGraph';
 import { EditorContext, type EditorContextValue } from '@/editor/editorContextState';
-import { ConfirmContext } from '@/components/ui/confirmContext';
+import { ConfirmContext, type ConfirmOptions } from '@/components/ui/confirmContext';
 import { ToastContext } from '@/components/ui/toastContext';
 import type { Doc } from '@/editor/types';
 import * as historyService from '@/services/documentHistory';
 import { ApiError } from '@/services/contracts';
 
 /**
- * The panel is the author's window into the server-side timeline. These tests
- * pin its contract: rows describe who saved what and when, restore asks first
- * and then adopts exactly what the server returned, and a stale timeline
- * refreshes itself instead of stranding the author on old data.
+ * The panel is the author's window into the server-side version tree. These
+ * tests pin its contract: rows describe who saved what and when, the current
+ * marker follows the head's pointer rather than the newest revision, restore
+ * asks first and then adopts exactly what the server returned without adding a
+ * row, and a stale timeline refreshes itself instead of stranding the author
+ * on old data.
  */
 
 vi.mock('@/services/documentHistory', async () => {
@@ -58,7 +61,7 @@ function editorValue(documentId: string | null): EditorContextValue {
 
 const toast = vi.fn(() => 'toast-1');
 let confirmAnswer = true;
-const confirm = vi.fn(async () => confirmAnswer);
+const confirm = vi.fn(async (_options: ConfirmOptions) => confirmAnswer);
 
 function renderPanel(documentId: string | null = DOC_ID) {
   return render(
@@ -95,6 +98,7 @@ function head(over: Partial<historyService.DocumentHead> = {}): historyService.D
     headSeq: 3,
     revisionNo: 3,
     revisionId: 'rev-3',
+    currentRevisionId: 'rev-3',
     createdAt: '2026-07-01T09:00:00Z',
     updatedAt: '2026-08-01T12:00:00Z',
     deletedAt: null,
@@ -102,6 +106,13 @@ function head(over: Partial<historyService.DocumentHead> = {}): historyService.D
     etag: 'cw:3',
     ...over,
   };
+}
+
+/** The `vN` label of the row carrying the "Current" badge. */
+function currentRowLabel(): string {
+  const row = screen.getByText('Current').closest('button');
+  if (!row) throw new Error('The current badge is not inside a revision row.');
+  return row.textContent ?? '';
 }
 
 beforeEach(() => {
@@ -137,10 +148,108 @@ describe('HistoryPanel', () => {
     expect(mocked.listRevisions).toHaveBeenCalledWith(DOC_ID, expect.objectContaining({ limit: 30 }));
   });
 
+  it('marks the version the head points at, not the newest one', async () => {
+    // After a restore the pointer sits on an older node while the newest
+    // revision keeps its place at the top of the list.
+    mocked.fetchDocumentHead.mockResolvedValue(
+      head({ headSeq: 4, revisionId: 'rev-3', currentRevisionId: 'rev-2' }),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByText('v3')).toBeTruthy();
+    expect(currentRowLabel()).toContain('v2');
+    expect(currentRowLabel()).not.toContain('v3');
+  });
+
   it('shows the empty state without a saved document and calls nothing', () => {
     renderPanel(null);
     expect(screen.getByText('No saved versions yet')).toBeTruthy();
     expect(mocked.listRevisions).not.toHaveBeenCalled();
+  });
+
+  it('says so and pages toward the pointer when the current version is off-page', async () => {
+    // The document sits on rev-1, which is beyond the first loaded page.
+    mocked.fetchDocumentHead.mockResolvedValue(
+      head({ headSeq: 7, revisionId: 'rev-6', currentRevisionId: 'rev-1' }),
+    );
+    mocked.listRevisions.mockImplementation(async (_docId, options) =>
+      options?.cursor === 'older'
+        ? {
+            revisions: [
+              revision({ revisionId: 'rev-2', revisionNo: 2, parentRevisionId: 'rev-1' }),
+              revision({ revisionId: 'rev-1', revisionNo: 1, parentRevisionId: null, kind: 'create' }),
+            ],
+            nextCursor: null,
+          }
+        : {
+            revisions: [
+              revision({ revisionId: 'rev-6', revisionNo: 6, parentRevisionId: 'rev-5' }),
+              revision({ revisionId: 'rev-5', revisionNo: 5, parentRevisionId: 'rev-4' }),
+            ],
+            nextCursor: 'older',
+          },
+    );
+
+    renderPanel();
+
+    // Nothing on screen is current, and the panel must say why.
+    expect(await screen.findByText(/older version that isn't shown yet/)).toBeTruthy();
+    expect(screen.queryByText('Current')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show current version' }));
+
+    expect(await screen.findByText('v1')).toBeTruthy();
+    expect(currentRowLabel()).toContain('v1');
+    expect(screen.queryByText(/older version that isn't shown yet/)).toBeNull();
+  });
+
+  it('keeps paged-in rows across the refresh a restore triggers', async () => {
+    mocked.listRevisions.mockImplementation(async (_docId, options) =>
+      options?.cursor === 'older'
+        ? {
+            revisions: [
+              revision({ revisionId: 'rev-1', revisionNo: 1, parentRevisionId: null, kind: 'create' }),
+            ],
+            nextCursor: null,
+          }
+        : {
+            revisions: [
+              revision(),
+              revision({ revisionId: 'rev-2', revisionNo: 2, parentRevisionId: 'rev-1' }),
+            ],
+            nextCursor: 'older',
+          },
+    );
+    mocked.getRevision.mockResolvedValue({ ...revision(), content: currentDoc });
+    mocked.diffRevision.mockResolvedValue({
+      baseRevisionId: 'rev-3',
+      targetRevisionId: 'rev-1',
+      targetHeadSeq: null,
+      changes: [],
+    });
+    mocked.restoreRevision.mockImplementation(async () => {
+      // The server has moved the pointer; the refresh must observe that.
+      mocked.fetchDocumentHead.mockResolvedValue(
+        head({ headSeq: 4, currentRevisionId: 'rev-1' }),
+      );
+      return head({ headSeq: 4, currentRevisionId: 'rev-1' });
+    });
+
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Show older versions' }));
+    fireEvent.click(await screen.findByText('v1'));
+    fireEvent.click(await screen.findByRole('button', { name: /Restore/ }));
+
+    await waitFor(() => {
+      expect(mocked.restoreRevision).toHaveBeenCalled();
+    });
+    // The refreshed first page must merge into — not replace — the loaded
+    // rows: the restored-to row stays visible and carries the marker.
+    expect(await screen.findByText('v1')).toBeTruthy();
+    await waitFor(() => {
+      expect(currentRowLabel()).toContain('v1');
+    });
   });
 
   it('expands a revision and loads what that save changed against its parent', async () => {
@@ -202,7 +311,9 @@ describe('HistoryPanel', () => {
     });
     mocked.getRevision.mockResolvedValue({ ...revision(), content: currentDoc });
     const restoredDoc: Doc = { version: 1, name: 'Findings', blocks: [] };
-    mocked.restoreRevision.mockResolvedValue(head({ headSeq: 4, revisionId: 'rev-4', content: restoredDoc }));
+    mocked.restoreRevision.mockResolvedValue(
+      head({ headSeq: 4, currentRevisionId: 'rev-2', content: restoredDoc }),
+    );
 
     renderPanel();
     fireEvent.click(await screen.findByText('v2'));
@@ -218,6 +329,72 @@ describe('HistoryPanel', () => {
     expect(toast).toHaveBeenCalledWith(
       expect.objectContaining({ variant: 'success' }),
     );
+  });
+
+  it('explains that switching versions writes nothing and branches on save', async () => {
+    mocked.diffRevision.mockResolvedValue({
+      baseRevisionId: 'rev-1',
+      targetRevisionId: 'rev-2',
+      targetHeadSeq: null,
+      changes: [],
+    });
+    mocked.getRevision.mockResolvedValue({ ...revision(), content: currentDoc });
+    mocked.restoreRevision.mockResolvedValue(head({ headSeq: 4, currentRevisionId: 'rev-2' }));
+
+    renderPanel();
+    fireEvent.click(await screen.findByText('v2'));
+    fireEvent.click(await screen.findByRole('button', { name: /Restore/ }));
+
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    const description = String(confirm.mock.calls[0][0].description);
+    expect(description).toContain('does not create a new version');
+    expect(description).toContain('new branch');
+  });
+
+  it('moves the current marker on restore without adding a revision row', async () => {
+    mocked.diffRevision.mockResolvedValue({
+      baseRevisionId: 'rev-1',
+      targetRevisionId: 'rev-2',
+      targetHeadSeq: null,
+      changes: [],
+    });
+    mocked.getRevision.mockResolvedValue({ ...revision(), content: currentDoc });
+    // Restore is a pointer move: same revisions, new head_seq, pointer on the
+    // restored node. The panel refetches the head to pick that up.
+    mocked.restoreRevision.mockResolvedValue(head({ headSeq: 4, currentRevisionId: 'rev-2' }));
+
+    renderPanel();
+    expect(await screen.findByText('v3')).toBeTruthy();
+    expect(currentRowLabel()).toContain('v3');
+    const headReadsBefore = mocked.fetchDocumentHead.mock.calls.length;
+    mocked.fetchDocumentHead.mockResolvedValue(
+      head({ headSeq: 4, currentRevisionId: 'rev-2' }),
+    );
+
+    fireEvent.click(screen.getByText('v2'));
+    fireEvent.click(await screen.findByRole('button', { name: /Restore/ }));
+
+    await waitFor(() => expect(currentRowLabel()).toContain('v2'));
+    // The head is re-read rather than inferred from a row the restore did not write.
+    expect(mocked.fetchDocumentHead.mock.calls.length).toBeGreaterThan(headReadsBefore);
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.queryByText('v4')).toBeNull();
+  });
+
+  it('offers no restore on the version the document is already on', async () => {
+    mocked.diffRevision.mockResolvedValue({
+      baseRevisionId: 'rev-2',
+      targetRevisionId: 'rev-3',
+      targetHeadSeq: null,
+      changes: [],
+    });
+    mocked.getRevision.mockResolvedValue({ ...revision(), content: currentDoc });
+
+    renderPanel();
+    fireEvent.click(await screen.findByText('v3'));
+
+    expect(await screen.findByText('The document is on this version')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Restore/ })).toBeNull();
   });
 
   it('saves pending edits before restoring so nothing is lost', async () => {
@@ -320,6 +497,23 @@ describe('HistoryPanel', () => {
     }
   });
 
+  it('flags a fork point where two loaded versions share a parent', async () => {
+    mocked.listRevisions.mockResolvedValue({
+      revisions: [
+        revision({ revisionId: 'rev-3', revisionNo: 3, parentRevisionId: 'rev-1' }),
+        revision({ revisionId: 'rev-2', revisionNo: 2, parentRevisionId: 'rev-1' }),
+        revision({ revisionId: 'rev-1', revisionNo: 1, parentRevisionId: null, kind: 'create' }),
+      ],
+      nextCursor: null,
+    });
+
+    renderPanel();
+
+    expect(await screen.findByText('2 branches')).toBeTruthy();
+    const forkRow = screen.getByText('2 branches').closest('button');
+    expect(forkRow?.textContent).toContain('v1');
+  });
+
   it('surfaces a failed load with a retry action', async () => {
     mocked.fetchDocumentHead.mockRejectedValue(new Error('boom'));
     mocked.listRevisions.mockRejectedValue(new Error('boom'));
@@ -331,5 +525,92 @@ describe('HistoryPanel', () => {
     mocked.listRevisions.mockResolvedValue({ revisions: [revision()], nextCursor: null });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('v3')).toBeTruthy();
+  });
+});
+
+/**
+ * The rail is decoration, but its lane math is what makes a branch legible.
+ * These cover the two shapes the flat list cannot express on its own: a fork,
+ * and a parent that lives on a page nobody has loaded yet.
+ */
+describe('buildVersionGraph', () => {
+  it('keeps a straight line of saves in a single lane', () => {
+    const graph = buildVersionGraph([
+      { revisionId: 'c', parentRevisionId: 'b' },
+      { revisionId: 'b', parentRevisionId: 'a' },
+      { revisionId: 'a', parentRevisionId: null },
+    ]);
+
+    expect(graph.laneCount).toBe(1);
+    expect(graph.rows.map((row) => row.lane)).toEqual([0, 0, 0]);
+    expect(graph.rows.map((row) => row.parentLane)).toEqual([0, 0, null]);
+    expect(graph.rows.map((row) => row.hasChildAbove)).toEqual([false, true, true]);
+    expect(graph.rows.every((row) => !row.isFork)).toBe(true);
+    expect(graph.rows.every((row) => !row.parentDangling)).toBe(true);
+    // The oldest row is a root: nothing continues past the list.
+    expect(graph.danglingLanes).toEqual([]);
+  });
+
+  it('gives the second child of a fork its own lane and curves it into the parent', () => {
+    // `root` was restored, then saved again: two children, newest first.
+    const graph = buildVersionGraph([
+      { revisionId: 'branch-b', parentRevisionId: 'root' },
+      { revisionId: 'branch-a', parentRevisionId: 'root' },
+      { revisionId: 'root', parentRevisionId: null },
+    ]);
+    const [newest, sibling, root] = graph.rows;
+
+    expect(graph.laneCount).toBe(2);
+    // The newest child holds the lane the parent will inherit.
+    expect(newest.lane).toBe(0);
+    expect(newest.parentLane).toBe(0);
+    // The older sibling opens a lane of its own and bends back into lane 0.
+    expect(sibling.lane).toBe(1);
+    expect(sibling.parentLane).toBe(0);
+    expect(sibling.through).toEqual([{ lane: 0, dangling: false }]);
+    // The fork point is the parent, and it keeps the inherited lane.
+    expect(root.lane).toBe(0);
+    expect(root.childCount).toBe(2);
+    expect(root.isFork).toBe(true);
+    expect(root.hasChildAbove).toBe(true);
+    expect(root.parentLane).toBeNull();
+    expect(root.through).toEqual([]);
+  });
+
+  it('marks an edge dangling when the parent is not on a loaded page', () => {
+    const graph = buildVersionGraph([
+      { revisionId: 'newest', parentRevisionId: 'older-page' },
+      { revisionId: 'orphan-branch', parentRevisionId: 'older-page' },
+    ]);
+    const [newest, sibling] = graph.rows;
+
+    expect(newest.parentLane).toBe(0);
+    expect(newest.parentDangling).toBe(true);
+    expect(newest.isFork).toBe(false);
+    // Sharing an unloaded parent still shares its lane, and the whole edge
+    // fades toward "Show older versions".
+    expect(sibling.lane).toBe(1);
+    expect(sibling.parentLane).toBe(0);
+    expect(sibling.parentDangling).toBe(true);
+    expect(sibling.through).toEqual([{ lane: 0, dangling: true }]);
+    // Only lane 0 leaves the bottom of the list — lane 1 folded into it.
+    expect(graph.danglingLanes).toEqual([0]);
+  });
+
+  it('never reports a parent listed above the child as resolved', () => {
+    // Defensive: pages arrive newest-first, so a parent above its child is
+    // corrupt input, not a lineage the rail can draw.
+    const graph = buildVersionGraph([
+      { revisionId: 'parent', parentRevisionId: null },
+      { revisionId: 'child', parentRevisionId: 'parent' },
+    ]);
+
+    expect(graph.rows[0].isFork).toBe(false);
+    expect(graph.rows[0].childCount).toBe(0);
+    expect(graph.rows[1].parentDangling).toBe(true);
+  });
+
+  it('returns nothing to draw for an empty timeline', () => {
+    expect(buildVersionGraph([])).toEqual({ rows: [], laneCount: 0, danglingLanes: [] });
   });
 });

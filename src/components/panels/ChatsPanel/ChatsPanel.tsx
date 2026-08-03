@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '@/editor';
 import { createChat, deleteChat, listChats, updateChatTitle, type ChatItem } from '@/services/chats';
+import { describeApiError, problemRetryAfter } from '@/services/contracts';
+import { isRetryableProblem } from '@/services/retry';
 import { useChatSessions } from '@/components/chat/chatSessionsState';
 import { cn } from '@/lib/utils';
 import { formatDateTime } from '@/lib/text';
@@ -24,9 +26,19 @@ import {
 
 const PAGE_SIZE = 10;
 
+/** Reloads of the list while the server's document projection catches up. */
+const MAX_PREPARING_POLLS = 4;
+
 function chatLabel(chat: ChatItem): string {
   return chat.title?.trim() || `Untitled chat · ${chat.chat_id.slice(0, 8)}`;
 }
+
+/**
+ * A conversation is stored against the document's projected numeric identity,
+ * which lands shortly after the save that created it. Until it does the list
+ * cannot be read — a wait, not a failure, and worth saying so.
+ */
+type ListError = { message: string; preparing: boolean };
 
 export function ChatsPanel() {
   const { documentId, ensureRemoteDocument } = useEditor();
@@ -38,12 +50,52 @@ export function ChatsPanel() {
   const [loading, setLoading] = useState(false);
   // Background list loads report in place; toasts are reserved for actions the
   // user actually initiated (create, delete, rename).
-  const [listError, setListError] = useState<string | null>(null);
+  const [listError, setListError] = useState<ListError | null>(null);
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
   const [count, setCount] = useState(0);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  /** Bumped to re-run the load effect while the projection catches up. */
+  const [refreshTick, setRefreshTick] = useState(0);
+  const preparingPollsRef = useRef(0);
+  const pollTimerRef = useRef<number | null>(null);
+
+  const clearPoll = useCallback(() => {
+    if (pollTimerRef.current !== null) {
+      window.clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  /** Report a failed load, and keep asking while the server is still catching up. */
+  const reportListFailure = useCallback(
+    (cause: unknown) => {
+      const preparing = isRetryableProblem(cause);
+      setListError({
+        message: describeApiError(cause, 'Request failed'),
+        preparing,
+      });
+      if (preparing && preparingPollsRef.current < MAX_PREPARING_POLLS) {
+        preparingPollsRef.current += 1;
+        clearPoll();
+        pollTimerRef.current = window.setTimeout(
+          () => {
+            pollTimerRef.current = null;
+            setRefreshTick((tick) => tick + 1);
+          },
+          (problemRetryAfter(cause) ?? 1) * 1000 * preparingPollsRef.current,
+        );
+      }
+    },
+    [clearPoll],
+  );
+
+  useEffect(() => {
+    preparingPollsRef.current = 0;
+  }, [documentId]);
+
+  useEffect(() => clearPoll, [clearPoll]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(count / PAGE_SIZE)), [count]);
 
@@ -72,15 +124,16 @@ export function ChatsPanel() {
         setItems(res.chats ?? []);
         setCount(res.count ?? 0);
         setListError(null);
+        preparingPollsRef.current = 0;
       } catch (error) {
-        setListError(error instanceof Error ? error.message : 'Request failed');
+        reportListFailure(error);
         setItems([]);
         setCount(0);
       } finally {
         setLoading(false);
       }
     },
-    [documentId, page],
+    [documentId, page, reportListFailure],
   );
 
   useEffect(() => {
@@ -98,9 +151,10 @@ export function ChatsPanel() {
         setItems(res.chats ?? []);
         setCount(res.count ?? 0);
         setListError(null);
+        preparingPollsRef.current = 0;
       } catch (error) {
         if (cancelled) return;
-        setListError(error instanceof Error ? error.message : 'Request failed');
+        reportListFailure(error);
         setItems([]);
         setCount(0);
       } finally {
@@ -110,7 +164,7 @@ export function ChatsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [documentId, page]);
+  }, [documentId, page, refreshTick, reportListFailure]);
 
   const selectChat = (chat: ChatItem) => {
     setSelectedChatId(chat.chat_id);
@@ -366,14 +420,28 @@ export function ChatsPanel() {
 
         {!loading && listError && (
           <div
-            role="alert"
-            className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-center"
+            role={listError.preparing ? 'status' : 'alert'}
+            className={cn(
+              'rounded-lg border p-3 text-center',
+              listError.preparing
+                ? 'border-border bg-muted/40'
+                : 'border-destructive/40 bg-destructive/10',
+            )}
           >
-            <p className="flex items-center justify-center gap-1.5 text-sm font-medium text-destructive">
-              <AlertCircle aria-hidden="true" className="h-3.5 w-3.5" />
-              Could not load chats
+            <p
+              className={cn(
+                'flex items-center justify-center gap-1.5 text-sm font-medium',
+                listError.preparing ? 'text-foreground' : 'text-destructive',
+              )}
+            >
+              {listError.preparing ? (
+                <Spinner />
+              ) : (
+                <AlertCircle aria-hidden="true" className="h-3.5 w-3.5" />
+              )}
+              {listError.preparing ? 'Getting your chats ready' : 'Could not load chats'}
             </p>
-            <p className="mt-1 break-words text-xs text-muted-foreground">{listError}</p>
+            <p className="mt-1 break-words text-xs text-muted-foreground">{listError.message}</p>
             <Button variant="outline" size="sm" className="mt-2" onClick={() => refresh(page)}>
               Retry
             </Button>

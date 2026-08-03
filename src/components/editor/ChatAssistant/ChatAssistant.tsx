@@ -17,6 +17,8 @@ import { useIsDesktop } from '@/hooks/useMediaQuery';
 import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
 import { streamAgentChat, type AgentChatResult } from '@/services/agentChat';
+import { isRetryableProblem, isTerminalReadiness } from '@/services/retry';
+import { describeApiError, problemRetryAfter } from '@/services/contracts';
 import type { SSEErrorDetails, SSEEventHandlers } from '@/services/streamParser';
 import type { ToolAction } from '@/editor/types';
 import { useChatSessions } from '../../chat/chatSessionsState';
@@ -133,6 +135,9 @@ function friendlyStreamError(
 /** How close to the bottom counts as "following along" for auto-scroll. */
 const AUTOSCROLL_THRESHOLD_PX = 64;
 
+/** Attempts to reopen a conversation while the server projection catches up. */
+const MAX_CONVERSATION_RELOADS = 3;
+
 /** The composer refuses more than this, and warns as it approaches. */
 const MAX_MESSAGE_LENGTH = 2000;
 
@@ -206,6 +211,7 @@ function DocumentChatAssistant() {
     hasPendingEdits,
     saveRemote,
     waitForReady,
+    restoreEpoch,
   } = editor;
   const proposals = useProposals();
   const { selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId } =
@@ -288,6 +294,20 @@ function DocumentChatAssistant() {
     abortRef.current = null;
     refPickerRef.current?.close();
   }, [loadingDocumentId]);
+
+  // A restore keeps the document id but moves it onto another version of its
+  // tree. A turn that started against the pre-restore version is answering
+  // about content that is no longer on screen, and its late tool events would
+  // pass the document-id gate — stop the stream at the version boundary. The
+  // transcript itself survives: the next turn simply runs against the
+  // document's current version.
+  const restoreEpochRef = useRef(restoreEpoch);
+  useEffect(() => {
+    if (restoreEpochRef.current === restoreEpoch) return;
+    restoreEpochRef.current = restoreEpoch;
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, [restoreEpoch]);
 
   // The document-keyed assistant intentionally remounts on navigation so its
   // transcript is scoped to one document. Stop the old network stream as part
@@ -462,6 +482,15 @@ function DocumentChatAssistant() {
    * proposed, so both vanished from the reply a second after arriving.
    */
   const loadedConversation = useRef<string | null>(null);
+  /** Bounded self-recovery while the server catches up; see the catch below. */
+  const [conversationReloadTick, setConversationReloadTick] = useState(0);
+  const conversationRetriesRef = useRef(0);
+  const conversationRetryTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    conversationRetriesRef.current = 0;
+  }, [documentId, selectedChatId]);
+
   useEffect(() => {
     if (!documentId || !selectedChatId) return;
 
@@ -492,6 +521,11 @@ function DocumentChatAssistant() {
         if (cancelled) return;
 
         loadedConversation.current = `${documentId}:${selectedChatId}:${pivot}`;
+        // Only clear what a reload of this conversation put there.
+        if (conversationRetriesRef.current > 0) {
+          conversationRetriesRef.current = 0;
+          setError(null);
+        }
 
         const history = (res.messages ?? []).map((m) =>
           emptyMessage(
@@ -505,20 +539,49 @@ function DocumentChatAssistant() {
         setMessages((prev) => (history.length === 0 && prev.length > 0 ? prev : history));
         if (typeof res.pivotThreadId === 'number') setSelectedThreadId(res.pivotThreadId);
       } catch (e) {
-        if (!cancelled) {
-          setError({
-            message: 'Could not load this conversation.',
-            detail: e instanceof Error ? e.message : undefined,
-            retryable: false,
-          });
+        if (cancelled) return;
+        // A conversation is stored against the document's projected identity,
+        // so opening one moments after a save can arrive before that
+        // projection does. The request layer already waited that out once;
+        // keep asking here rather than leaving the author on an error for a
+        // transcript that is about to exist. "Try again" stays off — it
+        // resends the last message, which is not what failed.
+        const preparing = isRetryableProblem(e);
+        if (preparing && conversationRetriesRef.current < MAX_CONVERSATION_RELOADS) {
+          conversationRetriesRef.current += 1;
+          loadedConversation.current = null;
+          conversationRetryTimerRef.current = window.setTimeout(
+            () => {
+              conversationRetryTimerRef.current = null;
+              setConversationReloadTick((tick) => tick + 1);
+            },
+            (problemRetryAfter(e) ?? 1) * 1000 * conversationRetriesRef.current,
+          );
         }
+        setError({
+          message: preparing
+            ? `${describeApiError(e, '')} This conversation opens as soon as it has.`
+            : 'Could not load this conversation.',
+          detail: e instanceof Error ? e.message : undefined,
+          retryable: false,
+        });
       }
     })();
 
     return () => {
       cancelled = true;
+      if (conversationRetryTimerRef.current !== null) {
+        window.clearTimeout(conversationRetryTimerRef.current);
+        conversationRetryTimerRef.current = null;
+      }
     };
-  }, [documentId, selectedChatId, selectedThreadId, setSelectedThreadId]);
+  }, [
+    documentId,
+    selectedChatId,
+    selectedThreadId,
+    setSelectedThreadId,
+    conversationReloadTick,
+  ]);
 
   const onNewChat = () => {
     resetChatUI(true);
@@ -639,7 +702,7 @@ function DocumentChatAssistant() {
       const readiness = await waitForReady({ timeoutMs: 6000, save: false, signal: controller.signal });
       if (!streamIsLive()) return;
       setAgentStatus(null);
-      if (!readiness.ready && (readiness.status === 'deleted' || readiness.status === 'failed')) {
+      if (!readiness.ready && isTerminalReadiness(readiness.status)) {
         setError({
           message: 'This document is no longer available to the assistant on the server.',
           detail: readiness.status,

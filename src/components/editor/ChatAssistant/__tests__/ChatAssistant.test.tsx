@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { createRef, useImperativeHandle } from 'react';
 import type { SSEEventHandlers } from '@/services/streamParser';
 import type { ToolAction } from '@/editor/types';
+import { ApiError } from '@/services/contracts';
 
 /**
  * Integration tests for the real ChatAssistant, EditorProvider and
@@ -46,8 +47,12 @@ const fetchReferenceReadiness = vi.fn(async () => ({
 vi.mock('@/services/agentChat', () => ({
   streamAgentChat: (...args: unknown[]) => streamAgentChat(...args),
 }));
-const listMessages = vi.fn(async () => ({ messages: [], pivotThreadId: null }));
-const listThreads = vi.fn(async () => ({ threads: [] }));
+// Widened past what the empty defaults infer, so a test can answer with rows.
+const listMessages = vi.fn(async () => ({
+  messages: [] as Array<{ role: string; content: string }>,
+  pivotThreadId: null as number | null,
+}));
+const listThreads = vi.fn(async () => ({ threads: [] as Array<{ id: number }> }));
 vi.mock('@/services/chats', () => ({
   listMessages: (...args: unknown[]) => listMessages(...(args as [])),
   listThreads: (...args: unknown[]) => listThreads(...(args as [])),
@@ -881,5 +886,84 @@ describe('a chat id the server no longer has', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert').textContent).toContain('Chat not found'),
     );
+  });
+});
+
+/**
+ * A conversation is keyed on the document's projected identity, so opening one
+ * moments after a save can outrun the projection. The request layer waits that
+ * out once; the panel keeps asking rather than leaving the author looking at an
+ * error for a transcript that is about to exist.
+ */
+describe('a conversation opened before the server has caught up', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    listThreads.mockReset().mockImplementation(async () => ({ threads: [] }));
+    listMessages
+      .mockReset()
+      .mockImplementation(async () => ({ messages: [], pivotThreadId: null }));
+  });
+
+  function projectionPending(): ApiError {
+    return new ApiError('Document reference projection is not ready', 503, {
+      code: 'projection_pending',
+      retryable: true,
+      readiness_status: 'ready',
+      expected_head_seq: 8,
+      applied_head_seq: 3,
+      retry_after: 1,
+    });
+  }
+
+  it('says so, then opens it once the projection lands', async () => {
+    await mount();
+    listThreads.mockRejectedValueOnce(projectionPending());
+    listThreads.mockResolvedValueOnce({ threads: [{ id: 12 }] });
+    listMessages.mockResolvedValueOnce({
+      messages: [{ role: 'user', content: 'Earlier question' }],
+      pivotThreadId: 12,
+    });
+
+    await act(async () => {
+      harness.chats.setSelectedChatId('lagging-chat');
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain(
+        'This document is still syncing on the server.',
+      ),
+    );
+    // "Try again" resends the last message, which is not what failed here.
+    expect(screen.queryByRole('button', { name: /try again/i })).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    await waitFor(() => expect(screen.getByText('Earlier question')).toBeTruthy());
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('does not reopen forever when the projection stays behind', async () => {
+    await mount();
+    listThreads.mockRejectedValue(projectionPending());
+
+    await act(async () => {
+      harness.chats.setSelectedChatId('stuck-chat');
+    });
+    await waitFor(() => expect(listThreads).toHaveBeenCalledTimes(1));
+
+    for (let second = 0; second < 15; second += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+    }
+
+    // The first attempt plus MAX_CONVERSATION_RELOADS, and no more.
+    expect(listThreads).toHaveBeenCalledTimes(4);
   });
 });

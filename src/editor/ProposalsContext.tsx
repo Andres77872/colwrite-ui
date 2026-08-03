@@ -10,6 +10,7 @@ import {
 import { useEditor } from './editorContextState';
 import type { ToolAction, ToolOperation } from './types';
 import { getChangeSet, listPendingChangeSets, rejectChangeSet } from '../services';
+import { isRetryableProblem } from '../services/retry';
 import {
   buildChangeSet,
   isReady,
@@ -61,6 +62,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     applyPatch,
     adoptServerVersion,
     markRecentlyChanged,
+    restoreEpoch,
   } = useEditor();
   const ownerDocumentId = documentId;
   const activeDocumentIdRef = useRef(ownerDocumentId);
@@ -90,6 +92,10 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     activeDocumentIdRef.current = ownerDocumentId;
     seenBatchesRef.current = new Set();
   }, [ownerDocumentId]);
+
+  // A restore moved the document onto another version of its tree; the
+  // effect below (after resolveDurableSet exists) discards the review state.
+  const restoreEpochRef = useRef(restoreEpoch);
 
   /**
    * Every public callback captures the document it was created for. A stream,
@@ -122,9 +128,14 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     async (action: ToolAction, changeSetId: string) => {
       const targetDocumentId = action.documentId || ownerDocumentId;
       if (!targetDocumentId) return;
+      // A restore that lands while the fetch is in flight moves the document
+      // to another version; a batch computed against the old one must not be
+      // staged onto it.
+      const epochAtStart = restoreEpochRef.current;
       try {
         const fetched = await getChangeSet(targetDocumentId, changeSetId);
         if (activeDocumentIdRef.current !== ownerDocumentId) return;
+        if (restoreEpochRef.current !== epochAtStart) return;
         // Another tab may have decided it while the stream was still open.
         if (fetched.status !== 'pending') return;
         const set = buildChangeSet({
@@ -139,11 +150,16 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
           sets: [...current.sets, set],
           focusedChangeId: current.focusedChangeId ?? set.changes[0].id,
         }));
-      } catch {
+      } catch (cause) {
+        // The request layer already waited out a server still catching up with
+        // the save this batch was computed against, so reaching here means the
+        // wait was not enough — the batch is safe on the server either way, and
+        // reopening the document re-stages it.
         updateForDocument((current) => ({
           ...current,
-          error:
-            'The assistant prepared changes, but they could not be loaded for review. Reopen the document to try again.',
+          error: isRetryableProblem(cause)
+            ? 'The assistant prepared changes, but the server is still catching up. Reopen the document in a moment to review them.'
+            : 'The assistant prepared changes, but they could not be loaded for review. Reopen the document to try again.',
         }));
       }
     },
@@ -159,10 +175,12 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!ownerDocumentId) return;
     let cancelled = false;
+    const epochAtStart = restoreEpochRef.current;
     void (async () => {
       try {
         const pending = await listPendingChangeSets(ownerDocumentId);
         if (cancelled || activeDocumentIdRef.current !== ownerDocumentId) return;
+        if (restoreEpochRef.current !== epochAtStart) return;
         for (const changeSet of pending) {
           const signature = `change-set:${changeSet.changeSetId}`;
           if (seenBatchesRef.current.has(signature)) continue;
@@ -207,7 +225,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
    * on the next document load and blocks the agent's next proposal.
    */
   const resolveDurableSet = useCallback(
-    async (set: ChangeSet, outcome: 'rejected' | 'decided') => {
+    async (set: ChangeSet, outcome: 'rejected' | 'decided' | 'superseded') => {
       const changeSetId = set.changeSetId;
       if (!changeSetId || !set.documentId) return;
       if (decidingSetsRef.current.has(changeSetId)) return;
@@ -218,7 +236,9 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
           changeSetId,
           outcome === 'rejected'
             ? 'Rejected in the editor'
-            : 'Decided per change in the editor; accepted changes were applied as author edits',
+            : outcome === 'superseded'
+              ? 'Superseded: the document was restored to another version'
+              : 'Decided per change in the editor; accepted changes were applied as author edits',
         );
       } catch {
         // Cleanup only: the author's decisions are already in the document.
@@ -230,6 +250,24 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+
+  // A restore moved the document onto another version of its tree. Every
+  // staged change was computed against the pre-restore content — its anchors
+  // may still exist with entirely different text — so the review state is
+  // discarded the same way a navigation discards it, and the durable records
+  // are retired server-side: left pending, they would re-stage the whole
+  // pre-restore batch on the next document load. (Batch dedup keys are kept:
+  // a late redelivery of a pre-restore batch must stay ignored.)
+  useLayoutEffect(() => {
+    if (restoreEpochRef.current === restoreEpoch) return;
+    restoreEpochRef.current = restoreEpoch;
+    for (const set of state.sets) {
+      if (!set.changeSetId) continue;
+      if (!set.changes.some((change) => change.status === 'pending')) continue;
+      void resolveDurableSet(set, 'superseded');
+    }
+    setStoredState(emptyState(activeDocumentIdRef.current));
+  }, [restoreEpoch, state, resolveDurableSet]);
 
   /**
    * Server records whose local review just concluded with these decisions.
