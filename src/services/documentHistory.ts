@@ -215,48 +215,6 @@ export async function fetchDocumentHead(
   return normalizeHead(data, headers.get('ETag'));
 }
 
-/**
- * Whether the server-side chat reference has caught up with the latest save.
- * Agent chat is rejected until `ready` is true for the current head.
- */
-export interface DocumentReferenceReadiness {
-  ready: boolean;
-  readinessStatus: string;
-  expectedHeadSeq: number | null;
-  appliedHeadSeq: number | null;
-  retryable: boolean;
-  retryAfterSeconds: number;
-}
-
-function normalizeReadiness(payload: unknown): DocumentReferenceReadiness {
-  if (!isUnknownRecord(payload) || typeof payload.ready !== 'boolean') {
-    throw new Error('The server returned an invalid readiness state.');
-  }
-  return {
-    ready: payload.ready,
-    readinessStatus:
-      typeof payload.readiness_status === 'string' ? payload.readiness_status : 'pending',
-    expectedHeadSeq:
-      typeof payload.expected_head_seq === 'number' ? payload.expected_head_seq : null,
-    appliedHeadSeq:
-      typeof payload.applied_head_seq === 'number' ? payload.applied_head_seq : null,
-    retryable: payload.retryable === true,
-    retryAfterSeconds: numberField(payload.retry_after, 1),
-  };
-}
-
-/** Non-blocking probe of the chat-reference projection; 200 even when pending. */
-export async function fetchReferenceReadiness(
-  documentId: string,
-  init?: { signal?: AbortSignal },
-): Promise<DocumentReferenceReadiness> {
-  const payload = await get<unknown>(
-    `/v2/documents/${encodeId(documentId)}/reference-readiness`,
-    init,
-  );
-  return normalizeReadiness(payload);
-}
-
 export interface ListRevisionsOptions {
   limit?: number;
   cursor?: string | null;
@@ -363,6 +321,14 @@ export interface AgentChangeSet {
   documentId: string;
   status: 'pending' | 'accepted' | 'rejected' | 'expired' | 'conflicting' | (string & {});
   operations: ToolOperation[];
+  /**
+   * Names of stored operations with no editor mapping (`move_block`, future
+   * operations, malformed entries). A non-empty list means the review flow
+   * must refuse to stage the set: deciding the mappable subset would retire
+   * the whole server record and silently lose these. A server-side accept
+   * still applies them faithfully.
+   */
+  unmappableOperations: string[];
   baseHeadSeq: number;
   baseEtag: string;
   toolCallId: string | null;
@@ -412,15 +378,28 @@ function normalizeChangeSet(payload: unknown): AgentChangeSet {
   if (!isUnknownRecord(payload) || typeof payload.change_set_id !== 'string') {
     throw new Error('The server returned an invalid change set.');
   }
+  const operations: ToolOperation[] = [];
+  const unmappableOperations: string[] = [];
+  if (Array.isArray(payload.operations)) {
+    for (const value of payload.operations) {
+      const operation = normalizeChangeSetOperation(value);
+      if (operation) {
+        operations.push(operation);
+      } else {
+        // Kept visible rather than dropped: the caller decides whether the
+        // set is still reviewable (it is not — see `unmappableOperations`).
+        unmappableOperations.push(
+          isUnknownRecord(value) && typeof value.op === 'string' ? value.op : 'unknown',
+        );
+      }
+    }
+  }
   return {
     changeSetId: payload.change_set_id,
     documentId: typeof payload.document_id === 'string' ? payload.document_id : '',
     status: typeof payload.status === 'string' ? payload.status : 'pending',
-    operations: Array.isArray(payload.operations)
-      ? payload.operations
-          .map(normalizeChangeSetOperation)
-          .filter((op): op is ToolOperation => op !== null)
-      : [],
+    operations,
+    unmappableOperations,
     baseHeadSeq: numberField(payload.base_head_seq),
     baseEtag: typeof payload.base_etag === 'string' ? payload.base_etag : '',
     toolCallId: stringOrNull(payload.tool_call_id),

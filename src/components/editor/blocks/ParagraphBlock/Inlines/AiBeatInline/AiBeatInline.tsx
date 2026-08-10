@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Spinner } from '@/components/ui/spinner';
 import { streamAgentChat } from '@/services/agentChat';
-import { isTerminalReadiness } from '@/services/retry';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import { stopEditorEvents, useInlineChild } from '../shared';
 import { AlertCircle, ChevronDown, ChevronRight, Sparkles, Square, Trash2 } from 'lucide-react';
@@ -26,7 +25,7 @@ export function AiBeatInline({ child, ...rest }: AiBeatWidgetProps) {
 }
 
 function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
-  const { blockId, child, updateHtml, refs, documentId, ensureRemoteDocument, waitForReady } = props;
+  const { blockId, child, updateHtml, refs, documentId, ensureRemoteDocument } = props;
   const { patch, remove } = useInlineChild(props);
 
   // Only the streamed output is local: it arrives token by token, and writing
@@ -63,14 +62,6 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
       const docId = documentId ?? (await ensureRemoteDocument());
       if (!docId) {
         setError('This document could not be saved, so nothing could be generated for it.');
-        return;
-      }
-      // The run is keyed on the server-side chat reference of the save above;
-      // a terminal projection state means no retry will make it exist.
-      const readiness = await waitForReady({ signal: controller.signal });
-      if (controller.signal.aborted) return;
-      if (!readiness.ready && isTerminalReadiness(readiness.status)) {
-        setError('This document is no longer available on the server.');
         return;
       }
       await streamAgentChat(
@@ -120,7 +111,9 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
    */
   const onAccept = () => {
     const host = refs.current[blockId];
-    const placeholder = host?.querySelector(`[data-child-id="${child.id}"]`);
+    // The id arrives from tool payloads, so it is escaped before it goes into
+    // a selector.
+    const placeholder = host?.querySelector(`[data-child-id="${CSS.escape(child.id)}"]`);
     if (!host || !placeholder) return;
 
     placeholder.replaceWith(document.createTextNode(output));

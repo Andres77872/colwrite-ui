@@ -1,4 +1,4 @@
-import { createContext, useContext, type MutableRefObject } from 'react';
+import { createContext, useContext, useMemo, type MutableRefObject } from 'react';
 import type {
   DocumentInput,
   DocumentListOptions,
@@ -7,11 +7,14 @@ import type {
 import type { ApplyPatchResult } from './docOps';
 import type { Block, Doc, ParagraphChild, ToolOperation } from './types';
 
-export type EditorContextValue = {
+/**
+ * State slices of the editor. A keystroke replaces `doc`/`blocks`, so this
+ * value changes identity on every edit — only consumers that actually render
+ * document state should subscribe to it.
+ */
+export type EditorStateContextValue = {
   doc: Doc;
   blocks: Block[];
-  refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
-  registerEditable: (id: string, element: HTMLDivElement | null) => void;
   documentId: string | null;
   /**
    * Which document the workspace is on, independent of whether it has been
@@ -26,9 +29,40 @@ export type EditorContextValue = {
   /** The requested document while the committed document remains on screen. */
   loadingDocumentId: string | null;
   activeId: string | null;
-  setActive: (id: string | null) => void;
   openMenuBlockId: string | null;
   openMenuType: 'add' | 'options' | null;
+  /** Changes only after a successful mutation that can affect list contents/order. */
+  documentListRevision: number;
+  lastSavedAt: number | null;
+  isAutoSaving: boolean;
+  lastSaveSource: 'auto' | 'manual' | null;
+  saveError: string | null;
+  documentLoadNotice: {
+    id: number;
+    title: string;
+    description: string;
+  } | null;
+  /**
+   * Increments every time a restore moves the document onto another version
+   * of its tree. State computed against the pre-restore content — staged
+   * assistant proposals, in-flight agent streams — keys on this to know it
+   * no longer describes the document on screen.
+   */
+  restoreEpoch: number;
+  hasAnyRemoteDocs: boolean | null;
+  recentlyChanged: ReadonlySet<string>;
+};
+
+/**
+ * Everything the editor can *do*, plus the few containers that never change
+ * identity (`refs`). Every action closes over refs or stable setters, so this
+ * value is referentially stable across document edits: a component that only
+ * needs actions does not re-render per keystroke.
+ */
+export type EditorActionsContextValue = {
+  refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
+  registerEditable: (id: string, element: HTMLDivElement | null) => void;
+  setActive: (id: string | null) => void;
   setBlockMenu: (blockId: string | null, type: 'add' | 'options' | null) => void;
   setDocMeta: (meta: Partial<Doc>) => void;
   setDocName: (name: string) => void;
@@ -40,6 +74,8 @@ export type EditorContextValue = {
   appendBlockExact: (block: Block) => void;
   moveBlock: (id: string, dir: -1 | 1) => void;
   reorderBlock: (id: string, toIndex: number) => void;
+  splitBlock: (id: string, beforeHtml: string, afterHtml: string) => string;
+  mergeWithPrevious: (id: string) => { targetId: string; caretOffset: number } | null;
   removeBlock: (id: string) => void;
   updateHtml: (id: string, html: string) => void;
   setParagraphColumns: (id: string, columns: number) => void;
@@ -51,9 +87,17 @@ export type EditorContextValue = {
   removeParagraphChild: (blockId: string, childId: string) => void;
   setHeadingLevel: (id: string, level: 1 | 2 | 3) => void;
   exec: (cmd: string) => void;
+  /**
+   * Block order at call time, without subscribing to `blocks`. Arrow-key
+   * navigation needs the answer at keydown time; subscribing would re-render
+   * every editable on every keystroke.
+   */
+  getBlockIds: () => string[];
   getJSON: () => string;
   setFromJSON: (json: string) => void;
   save: () => void;
+  undo: () => void;
+  redo: () => void;
   newLocal: () => void;
   getExportSnapshot: () => {
     document: Doc;
@@ -82,10 +126,6 @@ export type EditorContextValue = {
     options?: DocumentListOptions,
     init?: { signal?: AbortSignal },
   ) => Promise<DocumentListResult>;
-  /** Changes only after a successful mutation that can affect list contents/order. */
-  documentListRevision: number;
-  lastSavedAt: number | null;
-  isAutoSaving: boolean;
   /**
    * Whether an edit is queued for autosave or a save is in flight.
    *
@@ -94,14 +134,9 @@ export type EditorContextValue = {
    * re-render the editor twice per debounce for nothing.
    */
   hasPendingEdits: () => boolean;
-  lastSaveSource: 'auto' | 'manual' | null;
-  saveError: string | null;
+  /** Last server-confirmed head sequence, or null before the first save. */
+  savedHeadSeq: () => number | null;
   clearSaveError: () => void;
-  documentLoadNotice: {
-    id: number;
-    title: string;
-    description: string;
-  } | null;
   clearDocumentLoadNotice: () => void;
   adoptServerVersion: (version: number | undefined | null) => void;
   /**
@@ -110,40 +145,54 @@ export type EditorContextValue = {
    * starting a new document session.
    */
   adoptRestoredDocument: (doc: Doc, serverVersion: number) => void;
-  /**
-   * Increments every time a restore moves the document onto another version
-   * of its tree. State computed against the pre-restore content — staged
-   * assistant proposals, in-flight agent streams — keys on this to know it
-   * no longer describes the document on screen.
-   */
-  restoreEpoch: number;
-  hasAnyRemoteDocs: boolean | null;
-  /** Last server-confirmed head sequence, or null before the first save. */
-  savedHeadSeq: () => number | null;
-  /**
-   * Wait until the server's chat reference has caught up with the last save,
-   * saving pending edits first unless `save: false`.
-   *
-   * Never throws. `ready: false` comes with a status the caller can act on:
-   * `save_failed` (the flush failed — surface it), a terminal projection
-   * status such as `deleted` or `failed` (retrying is pointless), or
-   * `pending`/`unavailable`/`timeout` (proceeding is allowed; the server will
-   * re-check and reject with its own typed error if still not ready).
-   */
-  waitForReady: (options?: {
-    timeoutMs?: number;
-    save?: boolean;
-    signal?: AbortSignal;
-  }) => Promise<{ ready: boolean; status: string }>;
-  applyPatch: (ops: ToolOperation[], options?: { persist?: boolean }) => ApplyPatchResult;
-  recentlyChanged: ReadonlySet<string>;
+  applyPatch: (
+    ops: ToolOperation[],
+    options?: { persist?: boolean; base?: Block[] },
+  ) => ApplyPatchResult;
   markRecentlyChanged: (ids: string[]) => void;
 };
 
-export const EditorContext = createContext<EditorContextValue | null>(null);
+export type EditorContextValue = EditorStateContextValue & EditorActionsContextValue;
 
-export function useEditor(): EditorContextValue {
+/**
+ * The one piece of state an editable needs reactively. Focus moves are rare
+ * next to keystrokes, so this lives apart from the full state context, which
+ * changes on every edit.
+ */
+export type EditorActiveBlockContextValue = {
+  activeId: string | null;
+  setActive: (id: string | null) => void;
+};
+
+export const EditorContext = createContext<EditorStateContextValue | null>(null);
+export const EditorActionsContext = createContext<EditorActionsContextValue | null>(null);
+export const EditorActiveBlockContext = createContext<EditorActiveBlockContextValue | null>(null);
+
+export function useEditorState(): EditorStateContextValue {
   const context = useContext(EditorContext);
-  if (!context) throw new Error('useEditor must be used within EditorProvider');
+  if (!context) throw new Error('useEditorState must be used within EditorProvider');
   return context;
+}
+
+export function useEditorActions(): EditorActionsContextValue {
+  const context = useContext(EditorActionsContext);
+  if (!context) throw new Error('useEditorActions must be used within EditorProvider');
+  return context;
+}
+
+export function useActiveBlock(): EditorActiveBlockContextValue {
+  const context = useContext(EditorActiveBlockContext);
+  if (!context) throw new Error('useActiveBlock must be used within EditorProvider');
+  return context;
+}
+
+/**
+ * The merged view kept for consumers that predate the split — and for any
+ * component that genuinely needs both state and actions. Subscribing through
+ * this hook means re-rendering on every state change, exactly as before.
+ */
+export function useEditor(): EditorContextValue {
+  const state = useEditorState();
+  const actions = useEditorActions();
+  return useMemo(() => ({ ...state, ...actions }), [state, actions]);
 }

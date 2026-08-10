@@ -84,7 +84,10 @@ export function canonicalDoi(raw?: string | null): string | undefined {
     // A trailing slash is never part of a DOI, and `doi.org/10.1/x/` is a
     // normal way to write one.
     .replace(/\/+$/, '');
-  return /^10\.\d{4,9}\/\S+$/i.test(normalized) ? normalized.toLocaleLowerCase() : undefined;
+  // Locale-independent casing: this is an identity function, and a DOI that
+  // canonicalises one way in a Turkish locale and another elsewhere breaks
+  // dedup. (Display sorting is the only place locale casing belongs.)
+  return /^10\.\d{4,9}\/\S+$/i.test(normalized) ? normalized.toLowerCase() : undefined;
 }
 
 /** An arXiv id without its host, version suffix or `.pdf` extension. */
@@ -133,7 +136,7 @@ export function canonicalCitationKey(raw?: string | null): string {
     .replace(/^https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\//i, '')
     .replace(/^arxiv:\s*/i, '')
     .replace(/\.pdf$/i, '')
-    .toLocaleLowerCase();
+    .toLowerCase();
 
   // Gated on the whole value looking like an arXiv id: a key of `Smith2020v2`
   // must not lose its suffix to the version strip.
@@ -175,8 +178,10 @@ export function firstAuthorSurname(authors?: string): string | undefined {
   if (words.length === 1) return words[0].replace(/\.$/, '') || undefined;
 
   // "Given Family": walk back over particles so "van der Berg" survives whole.
+  // Locale-independent casing: which words count as particles feeds grouping
+  // and labels, so it must not shift with the user's locale.
   let start = words.length - 1;
-  while (start > 0 && PARTICLES.has(words[start - 1].toLocaleLowerCase())) start -= 1;
+  while (start > 0 && PARTICLES.has(words[start - 1].toLowerCase())) start -= 1;
   return words.slice(start).join(' ') || undefined;
 }
 
@@ -237,7 +242,36 @@ function sortKeyFor(entry: BibliographyEntry): string {
   const title = entry.source.title ?? entry.key;
   // Unattributed entries sort last rather than to the top under the empty
   // string, where a reference list would open with its least useful rows.
-  return `${surname ? `0${surname.toLocaleLowerCase()}` : '1'} ${year} ${title.toLocaleLowerCase()}`;
+  return `${surname ? `0${surname.toLocaleLowerCase()}` : '1'}\u0000${year}\u0000${title.toLocaleLowerCase()}`;
+}
+
+/**
+ * Everything `buildBibliography` reads, folded into one comparable string:
+ * each paragraph's id and, for its citation children, the child's id, style,
+ * keys and sources, in document order.
+ *
+ * The editor rebuilds `blocks` on every keystroke, but a citation only moves
+ * when one of these fields does, so the provider compares fingerprints and
+ * pays for the full bibliography scan — maps, merge, sort — only then. Keep
+ * this in step with whatever `buildBibliography` reads; a field it consumes
+ * that the fingerprint misses would serve a stale reference list.
+ */
+export function citationFingerprint(blocks: readonly Block[]): string {
+  const parts: string[] = [];
+  for (const block of blocks) {
+    if (block.type !== 'paragraph') continue;
+    for (const child of block.children ?? []) {
+      if (child.type !== 'citation') continue;
+      parts.push(
+        block.id,
+        child.id,
+        child.style ?? '',
+        JSON.stringify(child.keys ?? null),
+        JSON.stringify(child.sources ?? null),
+      );
+    }
+  }
+  return parts.join('\u0000');
 }
 
 /**
@@ -373,7 +407,7 @@ function assignYearSuffixes(entries: BibliographyEntry[]): void {
     const surname = firstAuthorSurname(entry.source.authors);
     const year = citationYear(entry.source.year);
     if (!surname || !year) continue;
-    const id = `${surname.toLocaleLowerCase()} ${year}`;
+    const id = `${surname.toLowerCase()}\u0000${year}`;
     const group = groups.get(id);
     if (group) group.push(entry);
     else groups.set(id, [entry]);

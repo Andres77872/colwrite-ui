@@ -1,8 +1,6 @@
 import {
-  useCallback,
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -17,30 +15,21 @@ import { usePanels } from '@/components/panels/panelsContextState';
 import { useIsDesktop } from '@/hooks/useMediaQuery';
 import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
-import { streamAgentChat, type AgentChatResult } from '@/services/agentChat';
-import { isRetryableProblem, isTerminalReadiness } from '@/services/retry';
-import { describeApiError, describeReadiness } from '@/services/contracts';
-import type { SSEErrorDetails, SSEEventHandlers } from '@/services/streamParser';
-import type { ToolAction } from '@/editor/types';
 import { useChatSessions } from '../../chat/chatSessionsState';
-import { listMessages, listThreads } from '@/services/chats';
-import { uid } from '@/lib/uid';
 import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
-import { ChatRefTags } from './ChatRefTags';
 import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
-import { ChatMarkdown } from './ChatMarkdown';
-import { AgentActivity, toolRunningLabel, type ToolRun } from './AgentActivity';
-import { CHAT_MARGIN, useChatWindow, type DragMode } from './useChatWindow';
+import { CHAT_MARGIN, useChatWindow } from './useChatWindow';
+import { useAgentTurn } from './useAgentTurn';
+import { useConversationLoader } from './useConversationLoader';
+import { ResizeHandles } from './ResizeHandles';
+import { MessageRow } from './MessageRow';
 import {
   AlertCircle,
   ArrowDown,
-  Check,
-  Copy,
-  CornerDownLeft,
-  GripVertical,
-  Maximize2,
   FileClock,
   FileText,
+  GripVertical,
+  Maximize2,
   MessageSquarePlus,
   Minimize2,
   RotateCcw,
@@ -50,109 +39,8 @@ import {
   X,
 } from 'lucide-react';
 
-type ChatMessage = {
-  id: string;
-  role: string;
-  content: string;
-  /** Tools the agent ran while producing this reply, in order. */
-  runs: ToolRun[];
-  /**
-   * The changes this reply put up for review, by id.
-   *
-   * Ids rather than a count, because the button under the reply jumps to them:
-   * it used to jump to `pending[0]`, so with two replies open for review the
-   * second one sent the author to the first one's paragraph.
-   */
-  proposedIds: string[];
-  /** Changes a server in auto-apply mode had already written when this ran. */
-  applied: number;
-  /** Token usage the server reported for this reply, once it completed. */
-  usage?: { promptTokens: number; completionTokens: number };
-};
-
-/**
- * What the author reads when something breaks, split from what a bug report
- * needs. `message` is always writeable prose; `detail` carries the technical
- * cause (code, raw body) in a quieter voice; `retryable` gates the
- * "Try again" button to failures where resending the same message can help.
- */
-type ChatError = {
-  message: string;
-  detail?: string;
-  retryable?: boolean;
-  /**
-   * Cooldown before "Try again" re-enables. Set for "server not caught up yet"
-   * errors, where an instant retry is exactly what just failed.
-   */
-  cooldownMs?: number;
-};
-
-/** The transcript rows a failed turn owns, so retry removes exactly those. */
-type LastExchange = {
-  text: string;
-  userMessageId: string;
-  assistantMessageId: string;
-};
-
-function friendlyStreamError(
-  code: string,
-  message: string,
-  details?: SSEErrorDetails,
-): ChatError {
-  switch (code) {
-    case 'PROJECTION_PENDING':
-    case 'DOCUMENT_REFERENCE_NOT_READY':
-      return {
-        message:
-          'The document is still being prepared on the server — try again in a moment.',
-        detail: message || code,
-        retryable: true,
-        cooldownMs: (details?.retryAfterSeconds ?? 3) * 1000,
-      };
-    case 'AGENT_BUDGET_EXCEEDED':
-      return {
-        message:
-          'The assistant hit its work limit for this reply and stopped early. What it produced so far is above — ask again to continue.',
-        detail: message || code,
-        retryable: true,
-      };
-    case 'DOCUMENT_NOT_FOUND':
-      return {
-        message: 'The assistant could not find this document on the server.',
-        detail: message || code,
-        retryable: false,
-      };
-    default:
-      return {
-        // The server writes these messages for people now; an empty one is a
-        // dropped payload, not a sentence to show.
-        message: message || 'The assistant hit an unexpected error while replying.',
-        detail: code || undefined,
-        retryable: true,
-      };
-  }
-}
-
 /** How close to the bottom counts as "following along" for auto-scroll. */
 const AUTOSCROLL_THRESHOLD_PX = 64;
-
-/**
- * Readiness verdicts that say nothing about the projection — a dropped probe,
- * or a backend without the endpoint. Reading anyway is right: the server keeps
- * its own typed rejection as the source of truth.
- */
-const INCONCLUSIVE_READINESS = new Set([
-  'unavailable',
-  'aborted',
-  'no_document',
-  'save_failed',
-]);
-
-/**
- * Why a conversation is not on screen. Kept apart from {@link ChatError}: this
- * one is about opening the transcript, and its action is to try that again.
- */
-type ConversationNotice = { message: string; preparing: boolean };
 
 /** The composer refuses more than this, and warns as it approaches. */
 const MAX_MESSAGE_LENGTH = 2000;
@@ -162,52 +50,6 @@ const SUGGESTIONS = [
   'Tighten the introduction',
   'Suggest a structure for the results section',
 ];
-
-function emptyMessage(role: string, content = ''): ChatMessage {
-  return { id: uid(), role, content, runs: [], proposedIds: [], applied: 0 };
-}
-
-function boundedArgument(value: unknown, limit = 120): string | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim().replace(/\s+/g, ' ');
-  if (!normalized) return null;
-  return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1)}…`;
-}
-
-function toolRunDetail(tool: string, args: Record<string, unknown>): string | undefined {
-  if (tool === 'semantic_scholar_search') {
-    const query = boundedArgument(args.query);
-    return query ? `Query: “${query}”` : undefined;
-  }
-  if (tool === 'semantic_scholar_paper') {
-    const paperId = boundedArgument(args.paper_id);
-    return paperId ? `Paper: ${paperId}` : undefined;
-  }
-  if (tool === 'semantic_scholar_graph') {
-    const paperId = boundedArgument(args.paper_id, 80);
-    const direction = boundedArgument(args.direction, 20);
-    return [direction && `Direction: ${direction}`, paperId && `paper ${paperId}`]
-      .filter(Boolean)
-      .join(' · ') || undefined;
-  }
-  if (tool === 'semantic_scholar_recommendations') {
-    const paperId = boundedArgument(args.paper_id);
-    return paperId ? `Seed paper: ${paperId}` : undefined;
-  }
-  if (tool === 'semantic_scholar_snippets') {
-    const query = boundedArgument(args.query);
-    return query ? `Evidence query: “${query}”` : undefined;
-  }
-  if (tool === 'validate_claim') {
-    const claim = boundedArgument(args.claim);
-    return claim ? `Claim: “${claim}”` : undefined;
-  }
-  if (tool === 'search_citations') {
-    const text = typeof args.text === 'string' ? args.text.trim() : '';
-    return text ? `Checked a ${text.length.toLocaleString()}-character passage` : undefined;
-  }
-  return undefined;
-}
 
 export function ChatAssistant() {
   // Keyed on the document *session*, not on its id. Opening another document
@@ -226,7 +68,6 @@ function DocumentChatAssistant() {
     ensureRemoteDocument,
     hasPendingEdits,
     saveRemote,
-    waitForReady,
     restoreEpoch,
   } = editor;
   const proposals = useProposals();
@@ -239,103 +80,56 @@ function DocumentChatAssistant() {
   const { assistantOpen: expanded, setAssistantOpen: setExpanded } = usePanels();
   const [maximized, setMaximized] = usePersistentState<boolean>('chat.maximized', false, isBoolean);
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [error, setError] = useState<ChatError | null>(null);
-  /** Epoch ms before which "Try again" stays disabled; 0 means no cooldown. */
-  const [retryCooldownUntil, setRetryCooldownUntil] = useState(0);
-  const [cooldownNow, setCooldownNow] = useState(() => Date.now());
-  const [agentStatus, setAgentStatus] = useState<{ status: string; detail: string } | null>(null);
   const [atBottom, setAtBottom] = useState(true);
 
-  /**
-   * The document this session is attached to, and the chat and thread it is
-   * on, as of the last commit.
-   *
-   * A turn outlives several renders, and the first message on an unsaved draft
-   * changes both mid-flight. The session setters in particular are rebuilt
-   * whenever the owning document id changes and refuse writes from a callback
-   * bound to the previous one — a turn that attached the document while it ran
-   * would otherwise finish holding the setters from before the attach, drop the
-   * chat id the server had just created, and start a new conversation with
-   * every following message.
-   *
-   * Synced in a layout effect rather than during render: a render React
-   * discards must not be the one that decides which document a reply belongs
-   * to. Everything that reads these is a network callback or an event handler,
-   * so committed values are current by the time they run.
-   */
-  const documentIdRef = useRef(documentId);
-  const sessionRef = useRef({
-    selectedChatId,
-    selectedThreadId,
-    setSelectedChatId,
-    setSelectedThreadId,
-  });
-  useLayoutEffect(() => {
-    documentIdRef.current = documentId;
-    sessionRef.current = {
-      selectedChatId,
-      selectedThreadId,
-      setSelectedChatId,
-      setSelectedThreadId,
-    };
-  }, [documentId, selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId]);
-
-  const abortRef = useRef<AbortController | null>(null);
-  const mountedRef = useRef(true);
   const listRef = useRef<HTMLDivElement | null>(null);
   const inputHostRef = useRef<ChatTaggedInputHandle | null>(null);
   const refPickerRef = useRef<ChatRefPickerHandle | null>(null);
   const pinnedToBottom = useRef(true);
-  // tool_call_ids already handled, so a redelivered event cannot double-queue.
-  const processedToolCallIds = useRef<Set<string>>(new Set());
-  // The message currently being written into, so stream callbacks can find it
-  // without scanning for "the last assistant message" on every token.
-  const activeMessageIdRef = useRef<string | null>(null);
-  const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
-  // The last exchange sent, so a failed turn can be retried without retyping —
-  // and so retry removes that turn's rows, not whatever happens to be last.
-  const [lastExchange, setLastExchange] = useState<LastExchange | null>(null);
+  /**
+   * The claim on which conversation the transcript on screen is, shared by the
+   * two hooks: the loader claims a key while it fetches, and a finished stream
+   * pre-claims the conversation its `done` ids name so the loader does not
+   * refetch it (see useConversationLoader and useAgentTurn).
+   */
+  const loadedConversationRef = useRef<string | null>(null);
+
   const unsavedNoticeId = useId();
   const composerHintId = useId();
 
-  useEffect(() => {
-    if (!loadingDocumentId) return;
-    // A stream is scoped to the committed document. Stop it before a different
-    // body can commit so late tool events cannot mutate or stage work against
-    // the wrong document.
-    abortRef.current?.abort();
-    abortRef.current = null;
-    refPickerRef.current?.close();
-  }, [loadingDocumentId]);
-
-  // A restore keeps the document id but moves it onto another version of its
-  // tree. A turn that started against the pre-restore version is answering
-  // about content that is no longer on screen, and its late tool events would
-  // pass the document-id gate — stop the stream at the version boundary. The
-  // transcript itself survives: the next turn simply runs against the
-  // document's current version.
-  const restoreEpochRef = useRef(restoreEpoch);
-  useEffect(() => {
-    if (restoreEpochRef.current === restoreEpoch) return;
-    restoreEpochRef.current = restoreEpoch;
-    abortRef.current?.abort();
-    abortRef.current = null;
-  }, [restoreEpoch]);
-
-  // The document-keyed assistant intentionally remounts on navigation so its
-  // transcript is scoped to one document. Stop the old network stream as part
-  // of that boundary; mocks and transports may still invoke retained
-  // callbacks, so every callback below also checks that its controller is live.
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      abortRef.current?.abort();
-      abortRef.current = null;
-    };
-  }, []);
+  const {
+    messages,
+    isStreaming,
+    error,
+    agentStatus,
+    activeMessageId,
+    lastExchange,
+    send,
+    onStop,
+    onRetry,
+    resetChatUI,
+    abortRef,
+    setMessages,
+    setIsStreaming,
+    setAgentStatus,
+  } = useAgentTurn({
+    documentId,
+    loadingDocumentId,
+    restoreEpoch,
+    ensureRemoteDocument,
+    hasPendingEdits,
+    saveRemote,
+    selectedChatId,
+    selectedThreadId,
+    setSelectedChatId,
+    setSelectedThreadId,
+    proposals,
+    setInput,
+    setAtBottom,
+    pinnedToBottom,
+    refPickerRef,
+    loadedConversationRef,
+  });
 
   // Below `md` there is no room to place a window: it fills the canvas, and
   // dragging it anywhere would only push it off screen.
@@ -392,80 +186,6 @@ function DocumentChatAssistant() {
     return '';
   }, [isStreaming, visibleMessages]);
 
-  const patchActive = useCallback((update: (message: ChatMessage) => ChatMessage) => {
-    const id = activeMessageIdRef.current;
-    if (!id) return;
-    setMessages((prev) => prev.map((m) => (m.id === id ? update(m) : m)));
-  }, []);
-
-  const resetChatUI = useCallback((clearMessages = true) => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setIsStreaming(false);
-    setAgentStatus(null);
-    setError(null);
-    setInput('');
-    activeMessageIdRef.current = null;
-    setActiveMessageId(null);
-    if (clearMessages) setMessages([]);
-  }, []);
-
-  /**
-   * Hand a streamed document mutation to the review layer.
-   *
-   * Nothing is applied here. The agent's operations are staged server-side and
-   * the author accepts or rejects each one on the block it affects — a rewrite
-   * cannot be judged from a chat bubble, only against the paragraph it
-   * replaces.
-   */
-  const onToolAction = useCallback(
-    (action: ToolAction) => {
-      if (!mountedRef.current) return;
-
-      // Tool events name the document they were produced against. Never stage
-      // one in a different active document, even if a transport delivers it
-      // after the stream was aborted.
-      //
-      // Creating a document is the exception, and the reason this used to look
-      // like the assistant doing nothing at all: `doc_create` names the
-      // document it has just made, which is never the one on screen. Matching
-      // ids here dropped the event before anything could offer it to the
-      // author. The review layer scopes the two halves properly — operations
-      // to this document, invitations to the one that was created.
-      const announcesNewDocument = action.actions.some(
-        (op) => op.op === 'create_document',
-      );
-      if (action.documentId !== documentIdRef.current && !announcesNewDocument) return;
-
-      // Only a genuine redelivery is a duplicate. The id alone is not enough:
-      // providers that number tool calls per request reuse `call_0`, and some
-      // send none at all. The previous fallback keyed on the document version,
-      // which a proposal deliberately leaves unchanged — so two staged batches
-      // in one run collapsed into one and the second edit vanished.
-      const dedupKey = `${action.toolCallId}:${action.status}:${JSON.stringify(action.actions)}`;
-      if (processedToolCallIds.current.has(dedupKey)) return;
-      processedToolCallIds.current.add(dedupKey);
-
-      const { changeIds, applied } = proposals.receive(action);
-
-      if (action.status === 'error') {
-        setError({
-          message: action.message || 'The assistant could not complete that edit.',
-          retryable: false,
-        });
-      }
-
-      if (changeIds.length > 0 || applied > 0) {
-        patchActive((message) => ({
-          ...message,
-          proposedIds: [...message.proposedIds, ...changeIds],
-          applied: message.applied + applied,
-        }));
-      }
-    },
-    [patchActive, proposals],
-  );
-
   // Follow new output only while the reader is already at the bottom, so
   // scrolling back through history is not yanked away mid-stream.
   useEffect(() => {
@@ -487,509 +207,25 @@ function DocumentChatAssistant() {
     wasExpanded.current = expanded;
   }, [expanded]);
 
-  /**
-   * Load a conversation the author switched to.
-   *
-   * Keyed, because the ids this effect watches are also the ids the panel sets
-   * itself at the end of every turn. Without the key it refetched the
-   * conversation it had just streamed and replaced it with the server's plain
-   * transcript — which carries no tool activity and no record of what was
-   * proposed, so both vanished from the reply a second after arriving.
-   */
-  const loadedConversation = useRef<string | null>(null);
-  /** Bumped by the notice's Retry button. There is no automatic ladder. */
-  const [conversationReloadTick, setConversationReloadTick] = useState(0);
-  const [conversationNotice, setConversationNotice] = useState<ConversationNotice | null>(null);
-  /**
-   * The editor context value is rebuilt unmemoized every render, so
-   * `waitForReady` cannot go in a dep array without looping forever.
-   */
-  const waitForReadyRef = useRef(waitForReady);
-  // Synced in a layout effect, not during render: a render React discards must
-  // not be the one that decides which probe the next load uses.
-  useLayoutEffect(() => {
-    waitForReadyRef.current = waitForReady;
-  });
-
-  const reloadConversation = useCallback(() => {
-    loadedConversation.current = null;
-    setConversationReloadTick((tick) => tick + 1);
-  }, []);
-
-  useEffect(() => {
-    if (!documentId || !selectedChatId) return;
-
-    const key = `${documentId}:${selectedChatId}:${selectedThreadId ?? 'latest'}`;
-    if (loadedConversation.current === key) return;
-    loadedConversation.current = key;
-
-    const controller = new AbortController();
-    /**
-     * The key above is a claim on loading this conversation. A run torn down
-     * before it delivers has to hand the claim back, or the next run sees the
-     * key already taken and returns — which under StrictMode's
-     * setup/cleanup/setup left the transcript permanently empty. An explicit
-     * flag rather than comparing keys: when `selectedThreadId` is already a
-     * number the key written on success is byte-identical to this one, so it
-     * cannot tell "loaded" from "claimed and abandoned".
-     */
-    let settled = false;
-
-    (async () => {
-      abortRef.current?.abort();
-      abortRef.current = null;
-      setIsStreaming(false);
-      setAgentStatus(null);
-
-      try {
-        // Ask whether the projection can answer before asking it to: the probe
-        // is a 200 either way, where these endpoints log a 503 per attempt.
-        // `save: false` is load-bearing — saving would advance the very head
-        // being waited on. No signal: the probe is shared with the other
-        // panels, and aborting it would settle it for them too.
-        const readiness = await waitForReadyRef.current({ timeoutMs: 3000, save: false });
-        if (controller.signal.aborted) return;
-
-        const inconclusive = INCONCLUSIVE_READINESS.has(readiness.status);
-        if (!readiness.ready && !inconclusive) {
-          settled = true;
-          setConversationNotice({
-            message: describeReadiness(readiness.status),
-            preparing: !isTerminalReadiness(readiness.status),
-          });
-          return;
-        }
-        const transport = {
-          signal: controller.signal,
-          // An untrustworthy verdict must not wall off a read that may work,
-          // but cap it so a stale backend costs one console line, not three.
-          ...(inconclusive ? { retry: { maxAttempts: 1 } } : {}),
-        };
-
-        let pivot = typeof selectedThreadId === 'number' ? selectedThreadId : undefined;
-        if (pivot === undefined) {
-          const threads = await listThreads(documentId, selectedChatId, 100, 0, transport);
-          const ids = (threads.threads ?? [])
-            .map((t) => t.id)
-            .filter((n): n is number => typeof n === 'number');
-          if (ids.length) pivot = Math.max(...ids);
-        }
-        if (controller.signal.aborted) return;
-        if (pivot === undefined) {
-          // A chat with nothing in it yet loaded fine; it is simply empty.
-          settled = true;
-          setConversationNotice(null);
-          return;
-        }
-
-        const res = await listMessages(documentId, selectedChatId, pivot, transport);
-        if (controller.signal.aborted) return;
-
-        loadedConversation.current = `${documentId}:${selectedChatId}:${pivot}`;
-        settled = true;
-        setConversationNotice(null);
-
-        const history = (res.messages ?? []).map((m) =>
-          emptyMessage(
-            m.role,
-            // Legacy rows can still carry EXTRAS_JSON envelopes.
-            m.content?.replace(/<EXTRAS_JSON>[\s\S]*?<\/EXTRAS_JSON>/g, '') ?? '',
-          ),
-        );
-        // A conversation the server has nothing for does not overwrite one the
-        // author can see: that reads as the transcript being thrown away.
-        setMessages((prev) => (history.length === 0 && prev.length > 0 ? prev : history));
-        if (typeof res.pivotThreadId === 'number') setSelectedThreadId(res.pivotThreadId);
-      } catch (e) {
-        if (controller.signal.aborted) return;
-        settled = true;
-        // Its own notice rather than `setError`: that alert's button resends
-        // the last message, which is not what failed here.
-        setConversationNotice({
-          message: describeApiError(e, 'Could not load this conversation.'),
-          preparing: isRetryableProblem(e),
-        });
-      }
-    })();
-
-    return () => {
-      controller.abort();
-      if (!settled && loadedConversation.current === key) loadedConversation.current = null;
-    };
-  }, [
+  const { conversationNotice, reloadConversation } = useConversationLoader({
     documentId,
     selectedChatId,
     selectedThreadId,
     setSelectedThreadId,
-    conversationReloadTick,
-  ]);
+    abortRef,
+    loadedConversationRef,
+    setMessages,
+    setIsStreaming,
+    setAgentStatus,
+  });
 
   const onNewChat = () => {
     resetChatUI(true);
     // Reopening the same conversation later has to fetch it again.
-    loadedConversation.current = null;
+    loadedConversationRef.current = null;
     setSelectedChatId(null);
     setSelectedThreadId(null);
     requestAnimationFrame(() => inputHostRef.current?.focus());
-  };
-
-  /** Show an error and start its retry cooldown, if it declares one. */
-  const reportError = (next: ChatError) => {
-    setError(next);
-    setRetryCooldownUntil(next.cooldownMs ? Date.now() + next.cooldownMs : 0);
-  };
-
-  // Ticks the disabled "Try again" label down while a cooldown is active.
-  useEffect(() => {
-    if (!error?.retryable || retryCooldownUntil <= Date.now()) return;
-    const timer = window.setInterval(() => {
-      setCooldownNow(Date.now());
-      if (Date.now() >= retryCooldownUntil) window.clearInterval(timer);
-    }, 250);
-    return () => window.clearInterval(timer);
-  }, [error, retryCooldownUntil]);
-
-  const retryCooldownRemainingMs = error?.retryable
-    ? Math.max(0, retryCooldownUntil - cooldownNow)
-    : 0;
-
-  const send = async (text: string) => {
-    if (!text || isStreaming || loadingDocumentId) return;
-
-    setError(null);
-    setRetryCooldownUntil(0);
-    setInput('');
-    setAgentStatus(null);
-    pinnedToBottom.current = true;
-    setAtBottom(true);
-    // Tool-call ids are only unique within a run for some providers.
-    processedToolCallIds.current = new Set();
-
-    const userMessage = emptyMessage('user', text);
-    const assistantMessage = emptyMessage('assistant');
-    setLastExchange({
-      text,
-      userMessageId: userMessage.id,
-      assistantMessageId: assistantMessage.id,
-    });
-    activeMessageIdRef.current = assistantMessage.id;
-    setActiveMessageId(assistantMessage.id);
-    setMessages((prev) => [...prev, userMessage, assistantMessage]);
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setIsStreaming(true);
-    const streamIsLive = () => (
-      mountedRef.current
-      && abortRef.current === controller
-      && !controller.signal.aborted
-    );
-
-    try {
-      /**
-       * Attach before anything else.
-       *
-       * Everything in a turn is addressed by document id — the agent reads and
-       * edits `document_id`, and the chat session is stored against it — so a
-       * draft that lives only in this browser has nothing for the assistant to
-       * act on. Saving it here is the whole point: the author asked about *this*
-       * document, and from this moment the session belongs to it.
-       */
-      let turnDocumentId = documentIdRef.current;
-      if (!turnDocumentId) {
-        setAgentStatus({
-          status: 'attaching',
-          detail: 'Saving this document so the assistant can work on it…',
-        });
-        turnDocumentId = await ensureRemoteDocument();
-        if (!streamIsLive()) return;
-        if (!turnDocumentId) {
-          setError({
-            message:
-              'This document could not be saved, so there is nothing for the assistant to work on yet.',
-            retryable: true,
-          });
-          return;
-        }
-        setAgentStatus(null);
-      } else if (hasPendingEdits()) {
-        // The agent reads the *stored* document. Edits sit in this browser for
-        // five seconds before autosave takes them, which is long enough to ask
-        // a question about a paragraph the server has never seen — and to get
-        // back a rewrite of the version the author had already replaced.
-        setAgentStatus({ status: 'saving', detail: 'Saving your latest edits…' });
-        try {
-          await saveRemote();
-        } catch {
-          if (!streamIsLive()) return;
-          setError({
-            message:
-              'Your latest edits could not be saved, so the assistant would answer about an older version of this document.',
-            retryable: true,
-          });
-          return;
-        }
-        if (!streamIsLive()) return;
-        setAgentStatus(null);
-      }
-
-      // The chat reference the server keys this run on is projected
-      // asynchronously from the save above; asking before it lands is what
-      // used to come back as PROJECTION_PENDING.
-      setAgentStatus({
-        status: 'preparing',
-        detail: 'Preparing this document for the assistant…',
-      });
-      const readiness = await waitForReady({ timeoutMs: 6000, save: false, signal: controller.signal });
-      if (!streamIsLive()) return;
-      setAgentStatus(null);
-      if (!readiness.ready && isTerminalReadiness(readiness.status)) {
-        setError({
-          message: 'This document is no longer available to the assistant on the server.',
-          detail: readiness.status,
-          retryable: false,
-        });
-        return;
-      }
-      // Any other not-ready outcome falls through: the stream request retries
-      // with backoff, and the server's typed rejection stays authoritative.
-
-      // Captured for the whole turn. A conversation belongs to the document it
-      // was started on; nothing below may silently move it to another one.
-      let turnChatId = sessionRef.current.selectedChatId;
-      let turnThreadId = sessionRef.current.selectedThreadId;
-
-      // A chat id can outlive the chat it names — deleted from the chats panel
-      // in another tab, or left behind in this browser after the document it
-      // belonged to was removed. The server answers `CHAT_NOT_FOUND` and the
-      // session used to stay wedged on that dead id for good. Recover once, as
-      // a new conversation on the document that is actually open.
-      let recover: 'chat' | 'thread' | null = null;
-      let alreadyRecovered = false;
-
-      const handlers: SSEEventHandlers = {
-        onToken: (content) => {
-          if (!streamIsLive()) return;
-          setAgentStatus(null);
-          patchActive((message) => ({ ...message, content: message.content + content }));
-        },
-        onStatus: (status, detail) => {
-          if (!streamIsLive()) return;
-          setAgentStatus({ status, detail });
-        },
-        onToolCallStart: (tool, toolCallId, args) => {
-          if (!streamIsLive()) return;
-          // The activity list below spells this out step by step; the status
-          // line is only there so something moves before the first token.
-          setAgentStatus({ status: 'executing_tool', detail: `${toolRunningLabel(tool)}…` });
-          patchActive((message) => ({
-            ...message,
-            runs: [
-              ...message.runs,
-              {
-                id: toolCallId || `${tool}:${message.runs.length}`,
-                tool,
-                state: 'running',
-                detail: toolRunDetail(tool, args),
-              },
-            ],
-          }));
-        },
-        onToolCallArgs: (event) => {
-          if (!streamIsLive()) return;
-          // The start event fires before the model has finished writing its
-          // arguments, so this is usually the first time the input is known.
-          patchActive((message) => {
-            const index = message.runs.findIndex((run) =>
-              run.state === 'running'
-              && (event.toolCallId ? run.id === event.toolCallId : run.tool === event.tool),
-            );
-            if (index === -1) return message;
-            const runs = message.runs.slice();
-            const existing = runs[index];
-            runs[index] = {
-              ...existing,
-              args: event.arguments ?? existing.args,
-              argsPreview: event.argumentsPreview || existing.argsPreview,
-              detail:
-                existing.detail
-                ?? (event.arguments ? toolRunDetail(event.tool, event.arguments) : undefined),
-            };
-            return { ...message, runs };
-          });
-        },
-        onToolCallEnd: (event) => {
-          if (!streamIsLive()) return;
-          patchActive((message) => {
-            // Matched on the call id whenever the provider sends one. Without
-            // it there is nothing to pair on but the name, so two concurrent
-            // calls of the same tool are resolved oldest-first and their
-            // durations can cross. That is a limit of the payload, not a
-            // choice — which is why an unmatched end is left alone below
-            // rather than applied to some other run.
-            let index = message.runs.findIndex((run) =>
-              run.state === 'running'
-              && (event.toolCallId ? run.id === event.toolCallId : run.tool === event.tool),
-            );
-            // The stream can end a call twice: a synthetic zero-duration end
-            // when content resumes, then the authoritative one from the tool
-            // runtime. The correction used to be dropped here, leaving a
-            // failed call rendered as a success — take it when it carries an
-            // outcome the provisional end did not.
-            if (index === -1 && event.toolCallId && (event.isError || event.outputPreview !== null)) {
-              index = message.runs.findIndex((run) => run.id === event.toolCallId);
-            }
-            if (index === -1) return message;
-            const runs = message.runs.slice();
-            const existing = runs[index];
-            runs[index] = {
-              ...existing,
-              state: event.isError ? 'error' : 'done',
-              durationMs: event.durationMs || existing.durationMs,
-              error: event.error ?? existing.error,
-              errorType: event.errorType ?? existing.errorType,
-              args: event.arguments ?? existing.args,
-              argsPreview: event.argumentsPreview || existing.argsPreview,
-              outputPreview: event.outputPreview ?? existing.outputPreview,
-              outputChars: event.outputChars || existing.outputChars,
-              outputTruncated: event.outputTruncated || existing.outputTruncated,
-              detail:
-                existing.detail
-                ?? (event.arguments ? toolRunDetail(event.tool, event.arguments) : undefined),
-            };
-            return { ...message, runs };
-          });
-        },
-        onToolAction: (action) => {
-          if (!streamIsLive()) return;
-          onToolAction(action);
-        },
-        onError: (code, message, details) => {
-          if (!streamIsLive()) return;
-          if (!alreadyRecovered && (code === 'CHAT_NOT_FOUND' || code === 'THREAD_NOT_FOUND')) {
-            // Reported by the retry below if that fails too, so the author is
-            // never shown an error the app is about to resolve by itself.
-            recover = code === 'CHAT_NOT_FOUND' ? 'chat' : 'thread';
-            return;
-          }
-          // The stream died around these calls; the tools themselves did not
-          // report failure. 'interrupted', because painting them as errors
-          // sent authors chasing the wrong culprit.
-          patchActive((active) => ({
-            ...active,
-            runs: active.runs.map((run) =>
-              run.state === 'running' ? { ...run, state: 'interrupted' as const } : run,
-            ),
-          }));
-          reportError(friendlyStreamError(code, message, details));
-        },
-        onDone: (chatId, threadId) => {
-          if (!streamIsLive()) return;
-          const id = chatId || turnChatId;
-          // This transcript *is* the conversation these ids name, so mark it
-          // loaded before the ids land and the loader chases them.
-          if (id) {
-            loadedConversation.current = `${turnDocumentId}:${id}:${
-              typeof threadId === 'number' ? threadId : turnThreadId ?? 'latest'
-            }`;
-          }
-          // Through the ref, because attaching the document mid-turn rebuilt
-          // these setters around the id the session now has, and the ones this
-          // closure captured refuse to write for a document that has moved on.
-          if (chatId && chatId !== turnChatId) {
-            turnChatId = chatId;
-            sessionRef.current.setSelectedChatId(chatId);
-          }
-          if (typeof threadId === 'number' && threadId !== turnThreadId) {
-            turnThreadId = threadId;
-            sessionRef.current.setSelectedThreadId(threadId);
-          }
-        },
-      };
-
-      let result: AgentChatResult | null = null;
-      for (;;) {
-        recover = null;
-        result = await streamAgentChat(
-          {
-            message: text,
-            document_id: turnDocumentId,
-            chat_id: turnChatId,
-            thread_id: turnThreadId,
-            mode: 'assistant',
-          },
-          handlers,
-          {
-            signal: controller.signal,
-            // The recovered pass already carries its own 401 replay; stacking
-            // a fresh pending backoff on top would multiply requests again.
-            retry: alreadyRecovered ? { maxAttempts: 1 } : undefined,
-          },
-        );
-
-        if (!recover || !streamIsLive()) break;
-
-        alreadyRecovered = true;
-        if (recover === 'chat') {
-          turnChatId = null;
-          sessionRef.current.setSelectedChatId(null);
-        }
-        turnThreadId = null;
-        sessionRef.current.setSelectedThreadId(null);
-        loadedConversation.current = null;
-        // The failed attempt reached no tools, but a redelivered id from it
-        // must not block the retry's own staging.
-        processedToolCallIds.current = new Set();
-      }
-
-      if (result && streamIsLive()) {
-        if (result.terminal === 'done' && result.usage) {
-          const usage = result.usage;
-          patchActive((message) => ({ ...message, usage }));
-        } else if (result.terminal === null) {
-          // The connection closed without `done` or `error`. This used to
-          // render as a finished reply — with every pending tool stamped as
-          // a success — when the truth is the server was cut off mid-turn.
-          setError({
-            message:
-              'The connection dropped before the assistant finished. The reply above may be incomplete.',
-            retryable: true,
-          });
-        }
-      }
-    } catch (e) {
-      // An aborted stream is a deliberate stop, not a failure to report.
-      if (streamIsLive()) {
-        const raw = e instanceof Error ? e.message : '';
-        setError({
-          message: 'The assistant request failed before a reply could start.',
-          detail: raw || undefined,
-          retryable: true,
-        });
-      }
-    } finally {
-      // A newer send owns the UI now, or this document's assistant has
-      // unmounted. The older completion must not clean up the new stream.
-      if (
-        mountedRef.current
-        && (abortRef.current === null || abortRef.current === controller)
-      ) {
-        setIsStreaming(false);
-        if (abortRef.current === controller) abortRef.current = null;
-        setAgentStatus(null);
-        // A call that never reported completion is unresolved, not done —
-        // stamping it 'done' here painted stopped and dropped turns as
-        // successes.
-        patchActive((message) => ({
-          ...message,
-          runs: message.runs.map((run) =>
-            run.state === 'running' ? { ...run, state: 'interrupted' as const } : run,
-          ),
-        }));
-        activeMessageIdRef.current = null;
-        setActiveMessageId(null);
-      }
-    }
   };
 
   const onSend = () => send(input.trim());
@@ -997,29 +233,6 @@ function DocumentChatAssistant() {
   const onSuggestion = (suggestion: string) => {
     inputHostRef.current?.focus();
     send(suggestion);
-  };
-
-  const onRetry = () => {
-    const exchange = lastExchange;
-    if (!exchange) return;
-    if (retryCooldownUntil > Date.now()) return;
-    // Drop exactly the failed exchange's rows. Slicing the last two removed
-    // whatever happened to be at the end — including replies from turns that
-    // had nothing to do with the error.
-    setMessages((prev) =>
-      prev.filter(
-        (m) => m.id !== exchange.userMessageId && m.id !== exchange.assistantMessageId,
-      ),
-    );
-    setError(null);
-    send(exchange.text);
-  };
-
-  const onStop = () => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setIsStreaming(false);
-    setAgentStatus(null);
   };
 
   const scrollToLatest = () => {
@@ -1373,12 +586,9 @@ function DocumentChatAssistant() {
                   variant="ghost"
                   className="h-6 gap-1 px-1.5 text-xs"
                   onClick={onRetry}
-                  disabled={retryCooldownRemainingMs > 0}
                 >
                   <RotateCcw className="h-3 w-3" />
-                  {retryCooldownRemainingMs > 0
-                    ? `Try again in ${Math.ceil(retryCooldownRemainingMs / 1000)}s`
-                    : 'Try again'}
+                  Try again
                 </Button>
               )}
             </div>
@@ -1474,205 +684,4 @@ function DocumentChatAssistant() {
   // positioned children, which is what used to keep the window inside the
   // canvas. Contexts survive the portal, so nothing below the shell notices.
   return isDesktop ? createPortal(panel, document.body) : panel;
-}
-
-/* ----------------------------------------
-   Window edges
-   ---------------------------------------- */
-
-const EDGE_CLASS: Record<Exclude<DragMode, 'move'>, string> = {
-  n: 'inset-x-3 top-0 h-1.5 cursor-ns-resize',
-  s: 'inset-x-3 bottom-0 h-1.5 cursor-ns-resize',
-  w: 'inset-y-3 left-0 w-1.5 cursor-ew-resize',
-  e: 'inset-y-3 right-0 w-1.5 cursor-ew-resize',
-  nw: 'left-0 top-0 h-3 w-3 cursor-nwse-resize',
-  ne: 'right-0 top-0 h-3 w-3 cursor-nesw-resize',
-  sw: 'bottom-0 left-0 h-3 w-3 cursor-nesw-resize',
-  se: 'bottom-0 right-0 h-3 w-3 cursor-nwse-resize',
-};
-
-/**
- * The eight grab zones around the window.
- *
- * Only the top-left corner takes focus. Eight tab stops for one operation
- * would bury the composer at the bottom of the panel's tab order, and one
- * handle that resizes in both axes covers everything the other seven do.
- */
-function ResizeHandles({
-  onBegin,
-  onNudge,
-  rect,
-}: {
-  onBegin: (event: React.PointerEvent, mode: DragMode) => void;
-  onNudge: (mode: DragMode, event: React.KeyboardEvent) => boolean;
-  rect: { width: number; height: number };
-}) {
-  return (
-    <>
-      {(Object.keys(EDGE_CLASS) as Array<Exclude<DragMode, 'move'>>).map((edge) => {
-        const keyboard = edge === 'nw';
-        return (
-          <div
-            key={edge}
-            data-resize={edge}
-            onPointerDown={(event) => onBegin(event, edge)}
-            onKeyDown={
-              keyboard
-                ? (event) => {
-                    if (onNudge(edge, event)) event.preventDefault();
-                  }
-                : undefined
-            }
-            {...(keyboard
-              ? {
-                  role: 'separator' as const,
-                  tabIndex: 0,
-                  'aria-label':
-                    'Resize assistant. Left and up arrows enlarge it; right and down arrows shrink it.',
-                  'aria-valuetext': `${Math.round(rect.width)} by ${Math.round(rect.height)} pixels`,
-                }
-              : { 'aria-hidden': true })}
-            style={{ touchAction: 'none' }}
-            className={cn(
-              // Invisible until the pointer is on it, then a hairline in the
-              // accent colour — the same reveal the shell's panel dividers
-              // use. A permanently drawn frame around a floating window is
-              // noise; the resize cursor is what actually announces it.
-              'absolute z-10 rounded-full transition-colors hover:bg-primary/60',
-              EDGE_CLASS[edge],
-              keyboard &&
-                'focus-visible:bg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            )}
-          />
-        );
-      })}
-    </>
-  );
-}
-
-/* ----------------------------------------
-   One turn of the conversation
-   ---------------------------------------- */
-
-function MessageRow({
-  message,
-  live,
-  openChangeIds,
-  onFocusChange,
-}: {
-  message: ChatMessage;
-  live: boolean;
-  openChangeIds: string[];
-  onFocusChange: (changeId: string) => void;
-}) {
-  const isUser = message.role === 'user';
-  const isStreamingTail = live && !isUser && !message.content && message.runs.length === 0;
-
-  if (isUser) {
-    return (
-      <div className="flex justify-end">
-        <div className="min-w-0 max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-primary-strong px-3 py-2 text-sm text-primary-foreground">
-          <ChatRefTags text={message.content} surface="onfill" />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="group/message space-y-2">
-      {message.runs.length > 0 && (
-        <AgentActivity runs={message.runs} live={live} usage={message.usage} />
-      )}
-
-      {isStreamingTail ? (
-        <span className="inline-flex gap-1 px-1 py-2" aria-label="Assistant is typing">
-          {[0, 1, 2].map((dot) => (
-            <span
-              key={dot}
-              className="h-1.5 w-1.5 animate-shimmer rounded-full bg-muted-foreground"
-              style={{ animationDelay: `${dot * 160}ms` }}
-            />
-          ))}
-        </span>
-      ) : (
-        message.content && (
-          <div className="rounded-2xl rounded-bl-sm bg-muted/60 px-3 py-2 text-sm text-foreground">
-            <ChatMarkdown text={message.content} />
-          </div>
-        )
-      )}
-
-      {openChangeIds.length > 0 && (
-        <button
-          type="button"
-          onClick={() => onFocusChange(openChangeIds[0])}
-          className="flex w-full items-center gap-1.5 rounded-md border border-primary/40 bg-primary/10 px-2 py-1.5 text-left text-xs transition-colors hover:bg-primary/15"
-        >
-          <Sparkles aria-hidden="true" className="h-3 w-3 shrink-0 text-primary" />
-          <span className="min-w-0 flex-1">
-            Suggested {openChangeIds.length}{' '}
-            {openChangeIds.length === 1 ? 'change' : 'changes'} — review in the document
-          </span>
-          <CornerDownLeft aria-hidden="true" className="h-3 w-3 shrink-0 text-primary" />
-        </button>
-      )}
-
-      {/* A server in auto-apply mode writes to the document during the turn.
-          The transcript said nothing at all about it, so the only evidence was
-          a highlight that faded after four seconds. */}
-      {message.applied > 0 && (
-        <p className="flex items-center gap-1.5 rounded-md border border-border bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
-          <FileText aria-hidden="true" className="h-3 w-3 shrink-0" />
-          <span className="min-w-0 flex-1">
-            Applied {message.applied} {message.applied === 1 ? 'change' : 'changes'} to the
-            document.
-          </span>
-        </p>
-      )}
-
-      {message.content && !live && <CopyReply text={message.content} />}
-    </div>
-  );
-}
-
-/** Copy a reply out of the panel — the transcript is not selectable mid-stream. */
-function CopyReply({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 1600);
-    return () => clearTimeout(timer);
-  }, [copied]);
-
-  return (
-    <button
-      type="button"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-          setCopied(true);
-        } catch {
-          /* a clipboard the browser refuses is not worth an error banner */
-        }
-      }}
-      className={cn(
-        'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs text-muted-foreground transition-opacity',
-        'opacity-0 hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/message:opacity-100',
-        copied && 'opacity-100',
-      )}
-    >
-      {copied ? (
-        <>
-          <Check aria-hidden="true" className="h-3 w-3 text-diff-add-fg" />
-          Copied
-        </>
-      ) : (
-        <>
-          <Copy aria-hidden="true" className="h-3 w-3" />
-          Copy
-        </>
-      )}
-    </button>
-  );
 }

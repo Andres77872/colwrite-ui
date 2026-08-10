@@ -12,7 +12,7 @@ import { useAuth } from '@/components/auth/authContextState';
 import { usePanels } from '@/components/panels/panelsContextState';
 import { useView } from '@/components/layout/viewContextState';
 import { BrandMark, APP_NAME, APP_TAGLINE } from '@/components/common/Brand';
-import { ChevronDown, LogOut, Menu, PanelRight, PenLine, User } from 'lucide-react';
+import { ChevronDown, Keyboard, LogOut, Menu, PanelRight, PenLine, User } from 'lucide-react';
 
 /** Two-letter monogram from a display name or email local-part. */
 function initialsFor(nameOrEmail: string): string {
@@ -25,7 +25,7 @@ function initialsFor(nameOrEmail: string): string {
   return `${first}${second}`.toUpperCase();
 }
 
-export function Topbar() {
+export function Topbar({ onOpenShortcuts }: { onOpenShortcuts: () => void }) {
   const { user, logout } = useAuth();
   const { isDesktop, setMobileNavOpen, isOpen, toggle } = usePanels();
   const { view, setView } = useView();
@@ -71,6 +71,18 @@ export function Topbar() {
       </div>
 
       <div className="flex items-center gap-1">
+        {/* Mod+/ only reaches the shortcuts reference for people who already
+            know the chord — this is the discoverable door to the same dialog. */}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onOpenShortcuts}
+          aria-label="Keyboard shortcuts"
+          title="Keyboard shortcuts"
+        >
+          <Keyboard className="h-4 w-4" />
+        </Button>
+
         {/* The only route to the tools below md: the rail that normally holds
             this control is desktop-only, and the panel it opens is a sheet. */}
         {!isDesktop && view === 'workspace' && (

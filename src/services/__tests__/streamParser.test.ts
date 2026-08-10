@@ -180,7 +180,7 @@ describe('parseSSEStream', () => {
       onDone,
     });
     expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith('TOOL_TIMEOUT', 'Tool timed out', undefined);
+    expect(onError).toHaveBeenCalledWith('TOOL_TIMEOUT', 'Tool timed out');
     expect(onToken).toHaveBeenCalledWith('I encountered an error');
     expect(onDone).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ chatId: 'x', threadId: null, terminal: 'done' });
@@ -555,19 +555,16 @@ describe('parseSSEStream', () => {
     expect(result.terminal).toBe('error');
   });
 
-  it('surfaces readiness diagnostics from an enriched error event', async () => {
+  it('passes the code and message of an error event straight through', async () => {
+    // Extra fields on the payload are the server's business, not ours: the
+    // handler gets the two arguments it is declared with and nothing else.
     const onError = vi.fn();
     const response = createMockResponse(
-      'event: error\ndata: {"error_code":"PROJECTION_PENDING","message":"still preparing",'
-      + '"readiness_status":"pending","retry_after":2,"applied_head_seq":3,"expected_head_seq":4}\n\n',
+      'event: error\ndata: {"error_code":"DOCUMENT_NOT_FOUND","message":"No such document",'
+      + '"instance":"/api/agent/chat"}\n\n',
     );
     await parseSSEStream(response, { onError });
-    expect(onError).toHaveBeenCalledWith('PROJECTION_PENDING', 'still preparing', {
-      readinessStatus: 'pending',
-      retryAfterSeconds: 2,
-      appliedHeadSeq: 3,
-      expectedHeadSeq: 4,
-    });
+    expect(onError).toHaveBeenCalledWith('DOCUMENT_NOT_FOUND', 'No such document');
   });
 
   it('reports null terminal for a stream that just stops', async () => {

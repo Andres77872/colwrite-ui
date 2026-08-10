@@ -28,13 +28,10 @@ export type ThreadItem = {
  * Chat reads fire from mount effects, so they outlive the component that
  * wanted them: without a signal, a document switch left the previous
  * document's request running — and the api layer's backoff sleep waiting —
- * with nothing to receive it. `retry` is here so a caller that has already
- * established readiness some other way can decline the ladder rather than
- * multiply one failure into three.
+ * with nothing to receive it.
  */
 export type ChatsRequestOptions = {
   signal?: AbortSignal;
-  retry?: { maxAttempts?: number; baseDelayMs?: number };
 };
 
 export async function createChat(

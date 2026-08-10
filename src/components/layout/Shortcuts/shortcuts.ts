@@ -14,6 +14,8 @@ export type ShortcutId =
   | 'toggle-sidebar'
   | 'toggle-assistant'
   | 'save'
+  | 'undo'
+  | 'redo'
   | 'help';
 
 export type Shortcut = {
@@ -37,6 +39,9 @@ export const SHORTCUTS: readonly Shortcut[] = [
   },
   { id: 'toggle-assistant', key: 'j', keys: ['Mod', 'J'], label: 'Show or hide the assistant' },
   { id: 'save', key: 's', keys: ['Mod', 'S'], label: 'Save now' },
+  { id: 'undo', key: 'z', keys: ['Mod', 'Z'], label: 'Undo' },
+  { id: 'redo', key: 'z', shift: true, keys: ['Mod', 'Shift', 'Z'], label: 'Redo' },
+  { id: 'redo', key: 'y', keys: ['Mod', 'Y'], label: 'Redo' },
   { id: 'help', key: '/', keys: ['Mod', '/'], label: 'Show keyboard shortcuts' },
 ];
 

@@ -127,7 +127,7 @@ function Surface() {
         <AppShell
           header={
             <ErrorBoundary label="the toolbar">
-              <Topbar />
+              <Topbar onOpenShortcuts={() => setShortcutsOpen(true)} />
             </ErrorBoundary>
           }
           main={
@@ -142,7 +142,7 @@ function Surface() {
         <AppShell
           header={
             <ErrorBoundary label="the toolbar">
-              <Topbar />
+              <Topbar onOpenShortcuts={() => setShortcutsOpen(true)} />
             </ErrorBoundary>
           }
           left={

@@ -83,7 +83,7 @@ function Harness() {
 
   return (
     <>
-      <ParagraphBlock block={block} />
+      <ParagraphBlock block={block} documentId={editor.documentId} />
       <SlashMenu />
       <button type="button">Outside target</button>
     </>
@@ -162,7 +162,7 @@ afterEach(() => {
 describe('SlashMenu insertion', () => {
   it('inserts a table at the bookmarked caret after search takes focus', async () => {
     const { editable } = await mountEditor();
-    const search = await openMenuAt(editable, 5);
+    const search = await openMenuAt(editable, 6);
 
     expect(editable.contains(document.getSelection()?.anchorNode ?? null)).toBe(false);
     expect(document.activeElement).toBe(search);
@@ -185,12 +185,15 @@ describe('SlashMenu insertion', () => {
     expect(placeholder).toBeTruthy();
     expect(block.html).toContain(`data-child-id="${child?.id}"`);
     expect(block.html).not.toContain('<table');
-    expect(placeholder?.previousSibling?.textContent).toBe('alpha');
+    expect(placeholder?.previousSibling?.textContent).toBe('alpha ');
 
     expect(document.activeElement).toBe(editable);
     const selection = document.getSelection();
     expect(selection?.anchorNode?.previousSibling).toBe(placeholder);
-    expect(selection?.anchorNode?.textContent).toBe('\u00a0');
+    // The active-block rebase round-trips the html, so the placeholder's
+    // caret-landing spacer (nbsp) merges into the following text node; the
+    // caret still lands immediately after the spacer.
+    expect(selection?.anchorNode?.textContent).toBe('\u00a0omega');
     expect(selection?.anchorOffset).toBe(1);
   });
 
@@ -217,24 +220,55 @@ describe('SlashMenu insertion', () => {
     expect(document.activeElement).toBe(editable);
   });
 
-  it('restores the exact caret on Escape', async () => {
+  it('types a literal slash mid-word instead of opening the menu', async () => {
+    // DOIs, URLs and "and/or" all carry a slash inside a word; the menu must
+    // not eat it.
     const { editable } = await mountEditor();
-    const search = await openMenuAt(editable, 3);
+    act(() => {
+      editable.focus();
+      putSelection(editable, 3);
+    });
+
+    // fireEvent returns false when the handler called preventDefault.
+    const notPrevented = fireEvent.keyDown(editable, { key: '/' });
+
+    expect(notPrevented).toBe(true);
+    expect(screen.queryByRole('combobox', { name: 'Search commands' })).toBeNull();
+    expect(paragraph().html).toBe('alpha omega');
+  });
+
+  it('puts the slash back when Escape declines every command', async () => {
+    const { editable } = await mountEditor();
+    const search = await openMenuAt(editable, 6);
 
     fireEvent.keyDown(search, { key: 'Escape' });
 
     await waitFor(() => {
       expect(screen.queryByRole('combobox', { name: 'Search commands' })).toBeNull();
+      expect(editable.textContent).toBe('alpha /omega');
       expect(document.activeElement).toBe(editable);
       expect(document.getSelection()?.anchorNode).toBe(editable.firstChild);
-      expect(document.getSelection()?.anchorOffset).toBe(3);
+      expect(document.getSelection()?.anchorOffset).toBe(7);
     });
+    expect(paragraph().html).toContain('alpha /omega');
     expect(paragraph().children).toEqual([]);
   });
 
-  it('does not restore the paragraph caret after an outside dismissal', async () => {
+  it('restores the exact caret on Escape at the start of the block', async () => {
     const { editable } = await mountEditor();
-    await openMenuAt(editable, 3);
+    const search = await openMenuAt(editable, 0);
+
+    fireEvent.keyDown(search, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('combobox', { name: 'Search commands' })).toBeNull();
+      expect(editable.textContent).toBe('/alpha omega');
+    });
+  });
+
+  it('does not type the slash back after an outside dismissal', async () => {
+    const { editable } = await mountEditor();
+    await openMenuAt(editable, 6);
     const outside = screen.getByRole('button', { name: 'Outside target' });
 
     fireEvent.mouseDown(outside);
@@ -244,6 +278,7 @@ describe('SlashMenu insertion', () => {
       expect(screen.queryByRole('combobox', { name: 'Search commands' })).toBeNull(),
     );
     expect(document.activeElement).toBe(outside);
+    expect(editable.textContent).toBe('alpha omega');
     expect(paragraph().children).toEqual([]);
   });
 });

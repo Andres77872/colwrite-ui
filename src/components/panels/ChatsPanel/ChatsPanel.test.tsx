@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { StrictMode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ChatsPanel } from './ChatsPanel';
-import { EditorContext, type EditorContextValue } from '@/editor/editorContextState';
+import { EditorActionsContext, EditorContext, type EditorContextValue } from '@/editor/editorContextState';
 import { ConfirmContext, type ConfirmOptions } from '@/components/ui/confirmContext';
 import { ToastContext } from '@/components/ui/toastContext';
 import { ChatSessionsContext } from '@/components/chat/chatSessionsState';
@@ -10,10 +10,10 @@ import { ApiError } from '@/services/contracts';
 import * as chatsService from '@/services/chats';
 
 /**
- * A conversation is stored against the document's projected numeric identity,
- * which the server writes shortly after the save that produced it. Until it
- * lands the list cannot be read — a wait, not a failure. These tests pin that
- * the panel says so and recovers by itself.
+ * Chats are stored against the document id, so the list is read as soon as the
+ * document has one. A server that is still catching up answers with a
+ * retryable problem — a wait, not a failure. These tests pin that the panel
+ * says so and recovers by itself.
  */
 
 vi.mock('@/services/chats', () => ({
@@ -27,15 +27,10 @@ const mocked = vi.mocked(chatsService);
 
 const DOC_ID = 'doc-1';
 
-/** The verdict the shared readiness probe returns for the next load. */
-let readiness: { ready: boolean; status: string };
-const waitForReady = vi.fn(async () => readiness);
-
 function editorValue(): EditorContextValue {
   return {
     documentId: DOC_ID,
     ensureRemoteDocument: async () => DOC_ID,
-    waitForReady,
   } as unknown as EditorContextValue;
 }
 
@@ -53,34 +48,36 @@ const CHAT = {
 };
 
 function renderPanel({ strict = false }: { strict?: boolean } = {}) {
+  const editor = editorValue();
+  // The fake carries both state and actions, so it feeds both halves of the
+  // split context.
   const tree = (
-    <EditorContext.Provider value={editorValue()}>
-      <ChatSessionsContext.Provider
-        value={{
-          selectedChatId: null,
-          setSelectedChatId: () => {},
-          selectedThreadId: null,
-          setSelectedThreadId: () => {},
-        }}
-      >
-        <ConfirmContext.Provider value={confirm}>
-          <ToastContext.Provider value={{ toast, dismiss: () => {} }}>
-            <ChatsPanel />
-          </ToastContext.Provider>
-        </ConfirmContext.Provider>
-      </ChatSessionsContext.Provider>
+    <EditorContext.Provider value={editor}>
+      <EditorActionsContext.Provider value={editor}>
+        <ChatSessionsContext.Provider
+          value={{
+            selectedChatId: null,
+            setSelectedChatId: () => {},
+            selectedThreadId: null,
+            setSelectedThreadId: () => {},
+          }}
+        >
+          <ConfirmContext.Provider value={confirm}>
+            <ToastContext.Provider value={{ toast, dismiss: () => {} }}>
+              <ChatsPanel />
+            </ToastContext.Provider>
+          </ConfirmContext.Provider>
+        </ChatSessionsContext.Provider>
+      </EditorActionsContext.Provider>
     </EditorContext.Provider>
   );
   return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
-function projectionPending(): ApiError {
-  return new ApiError('Document reference projection is not ready', 503, {
-    code: 'projection_pending',
+function rateLimited(): ApiError {
+  return new ApiError('Too many requests for this document', 429, {
+    code: 'document_rate_limit_exceeded',
     retryable: true,
-    readiness_status: 'ready',
-    expected_head_seq: 8,
-    applied_head_seq: 3,
     retry_after: 1,
   });
 }
@@ -88,8 +85,6 @@ function projectionPending(): ApiError {
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   mocked.listChats.mockReset();
-  waitForReady.mockClear();
-  readiness = { ready: true, status: 'ready' };
 });
 
 afterEach(() => {
@@ -98,30 +93,28 @@ afterEach(() => {
 });
 
 describe('ChatsPanel while the server catches up', () => {
-  it('never asks for the list while the projection is behind', async () => {
-    readiness = { ready: false, status: 'stale' };
+  it('says the list is on its way when the server calls the failure retryable', async () => {
+    mocked.listChats.mockRejectedValue(rateLimited());
 
     renderPanel();
 
     await waitFor(() => expect(screen.getByText('Getting your chats ready')).toBeTruthy());
-    expect(screen.getByText('This document is still syncing on the server.')).toBeTruthy();
-    // The machinery's own words never reach the author.
+    // Our words for the problem, not the server's description of its machinery.
+    expect(
+      screen.getByText('Too many requests just now — wait a moment and try again.'),
+    ).toBeTruthy();
     expect(screen.queryByText('Could not load chats')).toBeNull();
-
-    // The whole point of the gate: the endpoint that would have logged a 503
-    // per attempt is never called at all, so the console stays clean.
-    expect(mocked.listChats).not.toHaveBeenCalled();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20_000);
     });
-    // And nothing is polling behind the author's back either.
-    expect(mocked.listChats).not.toHaveBeenCalled();
+    // Nothing is polling behind the author's back: the request layer has done
+    // its retrying, and from here it is the Retry button's turn.
+    expect(mocked.listChats).toHaveBeenCalledTimes(1);
   });
 
-  it('opens the list when the author retries and the projection has landed', async () => {
-    readiness = { ready: false, status: 'stale' };
-    mocked.listChats.mockResolvedValue({
+  it('opens the list when the author retries and the server has caught up', async () => {
+    mocked.listChats.mockRejectedValueOnce(rateLimited()).mockResolvedValue({
       chats: [CHAT],
       count: 1,
       status: 'ok',
@@ -131,26 +124,10 @@ describe('ChatsPanel while the server catches up', () => {
     renderPanel();
     await waitFor(() => expect(screen.getByText('Getting your chats ready')).toBeTruthy());
 
-    readiness = { ready: true, status: 'ready' };
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     await waitFor(() => expect(screen.getByText('Outline review')).toBeTruthy());
     expect(screen.queryByText('Getting your chats ready')).toBeNull();
-  });
-
-  it('still reads, exactly once, when the probe itself is inconclusive', async () => {
-    // A probe we could not trust must not wall off a read that may well work —
-    // but it is capped at one attempt so a stale backend costs one line.
-    readiness = { ready: false, status: 'unavailable' };
-    mocked.listChats.mockRejectedValue(projectionPending());
-
-    renderPanel();
-
-    await waitFor(() => expect(screen.getByText('Getting your chats ready')).toBeTruthy());
-    expect(mocked.listChats).toHaveBeenCalledTimes(1);
-    expect(mocked.listChats.mock.calls[0][3]).toMatchObject({
-      retry: { maxAttempts: 1 },
-    });
   });
 
   it('reports a failure the server does not call retryable', async () => {

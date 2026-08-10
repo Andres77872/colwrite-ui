@@ -2,7 +2,7 @@ import { createRef, useImperativeHandle } from 'react';
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProposalsProvider } from '../ProposalsContext';
-import { EditorContext, type EditorContextValue } from '../editorContextState';
+import { EditorActionsContext, EditorContext, type EditorContextValue } from '../editorContextState';
 import { useProposals, type ProposalsContextValue } from '../proposalsContextState';
 import { pendingInDocumentOrder } from '../proposals';
 import { applyPatchToBlocks } from '../docOps';
@@ -15,12 +15,14 @@ import type { Block, ToolAction } from '../types';
  */
 
 const getChangeSet = vi.fn();
+const listPendingChangeSets = vi.fn();
 const acceptChangeSet = vi.fn();
 const rejectChangeSet = vi.fn();
 
 vi.mock('../../services', async () => ({
   ...(await vi.importActual<Record<string, unknown>>('../../services')),
   getChangeSet: (...args: unknown[]) => getChangeSet(...(args as [])),
+  listPendingChangeSets: (...args: unknown[]) => listPendingChangeSets(...(args as [])),
   acceptChangeSet: (...args: unknown[]) => acceptChangeSet(...(args as [])),
   rejectChangeSet: (...args: unknown[]) => rejectChangeSet(...(args as [])),
 }));
@@ -55,10 +57,14 @@ function mount(documentId: string | null = 'doc-1') {
       restoreEpoch,
     } as unknown as EditorContextValue;
     return (
+      // The fake carries both state and actions, so it feeds both halves of
+      // the split context.
       <EditorContext.Provider value={value}>
-        <ProposalsProvider>
-          <Capture />
-        </ProposalsProvider>
+        <EditorActionsContext.Provider value={value}>
+          <ProposalsProvider>
+            <Capture />
+          </ProposalsProvider>
+        </EditorActionsContext.Provider>
       </EditorContext.Provider>
     );
   };
@@ -209,25 +215,30 @@ describe('accepting through the provider', () => {
       return null;
     }
 
-    const Tree = () => (
-      <EditorContext.Provider
-        value={{
-          documentId: 'doc-1',
-          // Read on every render, so each accept positions itself against the
-          // document the previous one produced.
-          get blocks() {
-            return live.blocks;
-          },
-          applyPatch: patch,
-          adoptServerVersion,
-          markRecentlyChanged,
-        } as unknown as EditorContextValue}
-      >
-        <ProposalsProvider>
-          <Host />
-        </ProposalsProvider>
-      </EditorContext.Provider>
-    );
+    const Tree = () => {
+      const value = {
+        documentId: 'doc-1',
+        // Read on every render, so each accept positions itself against the
+        // document the previous one produced.
+        get blocks() {
+          return live.blocks;
+        },
+        applyPatch: patch,
+        adoptServerVersion,
+        markRecentlyChanged,
+      } as unknown as EditorContextValue;
+      // The fake carries both state and actions, so it feeds both halves of
+      // the split context.
+      return (
+        <EditorContext.Provider value={value}>
+          <EditorActionsContext.Provider value={value}>
+            <ProposalsProvider>
+              <Host />
+            </ProposalsProvider>
+          </EditorActionsContext.Provider>
+        </EditorContext.Provider>
+      );
+    };
 
     const view = render(<Tree />);
     return { live, rerender: () => view.rerender(<Tree />) };
@@ -311,6 +322,7 @@ describe('durable change sets', () => {
       { op: 'replace_block', blockId: 'A', block: { html: 'rewritten' } },
       { op: 'append_block', block: { id: 'N1', type: 'divider' } },
     ],
+    unmappableOperations: [] as string[],
     baseHeadSeq: 2,
     baseEtag: 'cw:2',
     toolCallId: 'call_1',
@@ -495,5 +507,34 @@ describe('durable change sets', () => {
     // The decision stands locally; the stale record can be re-rejected later.
     expect(review().pendingCount).toBe(0);
     expect(review().error).toBeNull();
+  });
+
+  it('refuses to stage a batch that uses an operation this version cannot map', async () => {
+    getChangeSet.mockResolvedValue(fetchedSet({ unmappableOperations: ['move_block'] }));
+    mount();
+
+    act(() => void review().receive(durableAction()));
+    await act(async () => {});
+
+    // Staging the mappable subset would let the author unknowingly retire the
+    // whole server record when the last visible change is decided. Nothing is
+    // staged and the record stays pending — no reject goes out.
+    expect(review().pendingCount).toBe(0);
+    expect(review().sets).toEqual([]);
+    expect(review().error).toContain('can’t review');
+    expect(rejectChangeSet).not.toHaveBeenCalled();
+  });
+
+  it('refuses to re-stage an unmappable batch found pending on load', async () => {
+    listPendingChangeSets.mockResolvedValueOnce([
+      fetchedSet({ changeSetId: 'cs-load', unmappableOperations: ['move_block'] }),
+    ]);
+    mount();
+    await act(async () => {});
+
+    expect(review().pendingCount).toBe(0);
+    expect(review().sets).toEqual([]);
+    expect(review().error).toContain('can’t review');
+    expect(rejectChangeSet).not.toHaveBeenCalled();
   });
 });

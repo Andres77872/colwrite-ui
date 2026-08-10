@@ -3,7 +3,7 @@ import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react';
 import { HistoryPanel } from './HistoryPanel';
 import { buildVersionGraph } from './versionGraph';
-import { EditorContext, type EditorContextValue } from '@/editor/editorContextState';
+import { EditorActionsContext, EditorContext, type EditorContextValue } from '@/editor/editorContextState';
 import { ConfirmContext, type ConfirmOptions } from '@/components/ui/confirmContext';
 import { ToastContext } from '@/components/ui/toastContext';
 import type { Doc } from '@/editor/types';
@@ -43,7 +43,6 @@ const currentDoc: Doc = {
 
 const adoptRestoredDocument = vi.fn();
 const saveRemote = vi.fn(async () => {});
-const waitForReady = vi.fn(async () => ({ ready: true, status: 'ready' }));
 let pendingEdits = false;
 
 function editorValue(documentId: string | null): EditorContextValue {
@@ -54,7 +53,6 @@ function editorValue(documentId: string | null): EditorContextValue {
     saveRemote,
     adoptRestoredDocument,
     documentListRevision: 0,
-    waitForReady,
   } as unknown as EditorContextValue;
 }
 
@@ -63,13 +61,18 @@ let confirmAnswer = true;
 const confirm = vi.fn(async (_options: ConfirmOptions) => confirmAnswer);
 
 function renderPanel(documentId: string | null = DOC_ID) {
+  const value = editorValue(documentId);
   return render(
-    <EditorContext.Provider value={editorValue(documentId)}>
-      <ConfirmContext.Provider value={confirm}>
-        <ToastContext.Provider value={{ toast, dismiss: () => {} }}>
-          <HistoryPanel />
-        </ToastContext.Provider>
-      </ConfirmContext.Provider>
+    // The fake carries both state and actions, so it feeds both halves of the
+    // split context.
+    <EditorContext.Provider value={value}>
+      <EditorActionsContext.Provider value={value}>
+        <ConfirmContext.Provider value={confirm}>
+          <ToastContext.Provider value={{ toast, dismiss: () => {} }}>
+            <HistoryPanel />
+          </ToastContext.Provider>
+        </ConfirmContext.Provider>
+      </EditorActionsContext.Provider>
     </EditorContext.Provider>,
   ) as { container: HTMLElement } & { unmount: () => void; rerender: (ui: ReactNode) => void };
 }
@@ -118,9 +121,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   pendingEdits = false;
   confirmAnswer = true;
-  // `clearAllMocks` drops recorded calls but keeps implementations, so a test
-  // that makes the projection lag would leak that into every later one.
-  waitForReady.mockResolvedValue({ ready: true, status: 'ready' });
   mocked.fetchDocumentHead.mockResolvedValue(head());
   mocked.listRevisions.mockResolvedValue({
     revisions: [
@@ -438,59 +438,6 @@ describe('HistoryPanel', () => {
     await waitFor(() => expect(confirm).toHaveBeenCalled());
     expect(mocked.restoreRevision).not.toHaveBeenCalled();
     expect(adoptRestoredDocument).not.toHaveBeenCalled();
-  });
-
-  it('lets projections catch up before restoring', async () => {
-    mocked.diffRevision.mockResolvedValue({
-      baseRevisionId: 'rev-1',
-      targetRevisionId: 'rev-2',
-      targetHeadSeq: null,
-      changes: [],
-    });
-    mocked.getRevision.mockResolvedValue({ ...revision(), content: currentDoc });
-    mocked.restoreRevision.mockResolvedValue(head({ headSeq: 4 }));
-
-    renderPanel();
-    fireEvent.click(await screen.findByText('v2'));
-    fireEvent.click(await screen.findByRole('button', { name: /Restore/ }));
-    await waitFor(() => expect(mocked.restoreRevision).toHaveBeenCalled());
-
-    expect(waitForReady).toHaveBeenCalledWith({ save: false, timeoutMs: 4000 });
-    // Call [0] is now the load gate, so find the restore's own probe rather
-    // than assuming it is the first one this panel made.
-    const restoreProbe = waitForReady.mock.calls.findIndex(
-      (call) => (call as unknown as [{ timeoutMs?: number }])[0]?.timeoutMs === 4000,
-    );
-    expect(restoreProbe).toBeGreaterThanOrEqual(0);
-    expect(waitForReady.mock.invocationCallOrder[restoreProbe]).toBeLessThan(
-      mocked.restoreRevision.mock.invocationCallOrder[0],
-    );
-  });
-
-  it('does not read the timeline at all while history is being prepared', async () => {
-    vi.useFakeTimers();
-    try {
-      // The readiness probe answers before either endpoint is asked, so the
-      // pair that used to log a failure per attempt is never called.
-      waitForReady.mockResolvedValue({ ready: false, status: 'stale' });
-
-      renderPanel();
-      await vi.waitFor(() =>
-        expect(
-          screen.getByText('The history for this document is still being prepared.'),
-        ).toBeTruthy(),
-      );
-      expect(screen.getByRole('button', { name: 'Check again' })).toBeTruthy();
-      expect(mocked.fetchDocumentHead).not.toHaveBeenCalled();
-      expect(mocked.listRevisions).not.toHaveBeenCalled();
-
-      // And nothing keeps asking behind the author's back.
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(mocked.fetchDocumentHead).not.toHaveBeenCalled();
-      expect(mocked.listRevisions).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it('flags a fork point where two loaded versions share a parent', async () => {

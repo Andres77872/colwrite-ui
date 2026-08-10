@@ -186,11 +186,11 @@ async function requestWithHeaders<T>(
 
     const error = apiError(res, data);
 
-    // A document's numeric identity is resolved before the handler does any
-    // work, so a "not ready yet" rejection means nothing was written and any
-    // verb is safe to replay. An `Idempotency-Key` the caller minted rides
-    // along in `requestInit` and stays the same across attempts, so a write
-    // that did land somehow still cannot be applied twice.
+    // The problems we replay — rate limiting, history still being prepared —
+    // are rejected before the handler does any work, so nothing was written
+    // and any verb is safe to replay. An `Idempotency-Key` the caller minted
+    // rides along in `requestInit` and stays the same across attempts, so a
+    // write that did land somehow still cannot be applied twice.
     if (attempt < maxAttempts && isRetryableProblem(error)) {
       const wait = retryWaitMs(
         attempt,

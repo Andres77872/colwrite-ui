@@ -173,18 +173,21 @@ export function ProposedRewriteView({
     <p className={cn('text-md leading-relaxed whitespace-pre-wrap break-words')}>
       {segments.map((segment, index) => {
         if (segment.type === 'equal') return <Fragment key={index}>{segment.value}</Fragment>;
+        // del/ins, not bare spans: colour alone reads as "weWe show" — old and
+        // new concatenated — to anything that does not see the paint.
+        const Tag = segment.type === 'insert' ? 'ins' : 'del';
         return (
-          <span
+          <Tag
             key={index}
             className={cn(
-              'rounded-sm',
+              'rounded-sm no-underline',
               segment.type === 'insert'
                 ? 'bg-diff-add text-diff-add-fg'
                 : 'bg-diff-remove text-diff-remove-fg line-through decoration-1',
             )}
           >
             {segment.value}
-          </span>
+          </Tag>
         );
       })}
     </p>

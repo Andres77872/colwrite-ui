@@ -184,6 +184,49 @@ describe('applyPatchToBlocks', () => {
     expect(blocks).toEqual(initialBlocks);
     expect(desynced).toHaveLength(1);
   });
+
+  it('rejects an insert whose id already exists instead of duplicating it', () => {
+    // Two blocks with one id means duplicate React keys and updates that
+    // split-brain between the copies — a desync to report, not a position to
+    // guess at.
+    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
+      { op: 'insert_block_after', referenceId: 'a', block: makeBlock('b') },
+      { op: 'append_block', block: makeBlock('c') },
+      { op: 'insert_block_at_start', block: makeBlock('a') },
+    ]);
+    expect(blocks).toEqual(initialBlocks);
+    expect(desynced).toHaveLength(3);
+  });
+
+  it('rejects a replace whose merge renames onto an existing id', () => {
+    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
+      { op: 'replace_block', blockId: 'b', block: { id: 'a' } },
+    ]);
+    expect(blocks).toEqual(initialBlocks);
+    expect(desynced).toHaveLength(1);
+  });
+
+  it('lets a later op reference a block an earlier op inserted', () => {
+    // The duplicate check runs against the batch as it stands, not the
+    // pre-batch document.
+    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
+      { op: 'append_block', block: makeBlock('new') },
+      { op: 'replace_block', blockId: 'new', block: { html: '<p>edited</p>' } },
+    ]);
+    expect(desynced).toEqual([]);
+    expect(blocks.map((b) => b.id)).toEqual(['a', 'b', 'c', 'new']);
+  });
+
+  it('rejects a reorder to a non-finite index instead of moving the block to the top', () => {
+    // splice(NaN) coerces to 0 — the old code unshifted the block to the
+    // start of the document.
+    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
+      { op: 'reorder_block', blockId: 'c', toIndex: Number.NaN },
+      { op: 'reorder_block', blockId: 'c', toIndex: Number.POSITIVE_INFINITY },
+    ]);
+    expect(blocks.map((b) => b.id)).toEqual(['a', 'b', 'c']);
+    expect(desynced).toHaveLength(2);
+  });
 });
 
 // ── coerceBlock ──
@@ -288,6 +331,25 @@ describe('coerceChildren', () => {
   it('leaves a clean document identical', () => {
     const blocks = [makeBlock('a'), makeBlock('b')];
     expect(reconcileBlocks(blocks)).toBe(blocks);
+  });
+
+  it('drops blocks whose type or id the canvas cannot handle', () => {
+    // Stored by an older build or hand-edited into JSON, these used to render
+    // as empty rows the author could not select, edit, or delete.
+    const good = makeBlock('good');
+    const result = reconcileBlocks([
+      good,
+      { id: 'bad', type: 'image', html: 'x' } as unknown as Block,
+      { id: '', type: 'paragraph', html: 'x' } as unknown as Block,
+    ]);
+    expect(result).toEqual([good]);
+  });
+
+  it('strips active markup from stored html on the load path', () => {
+    const [block] = reconcileBlocks([
+      makeBlock('p', { html: 'ok <img src=x onerror="alert(1)">' }) as unknown as Block,
+    ]);
+    expect((block as ParagraphBlock).html).toBe('ok ');
   });
 });
 

@@ -40,18 +40,6 @@ export type ToolCallArgsEvent = {
   argumentsTruncated: boolean;
 };
 
-/**
- * Server readiness diagnostics on a terminal `error` event. Present only for
- * retryable rejections such as `PROJECTION_PENDING`, where the backend says
- * which projection state it observed and how long to back off.
- */
-export type SSEErrorDetails = {
-  readinessStatus?: string;
-  retryAfterSeconds?: number;
-  appliedHeadSeq?: number;
-  expectedHeadSeq?: number;
-};
-
 export type SSEEventHandlers = {
   onToken?: (content: string) => void;
   onStatus?: (status: string, detail: string) => void;
@@ -59,7 +47,7 @@ export type SSEEventHandlers = {
   onToolCallArgs?: (event: ToolCallArgsEvent) => void;
   onToolCallEnd?: (event: ToolCallEndEvent) => void;
   onToolAction?: (action: ToolAction) => void;
-  onError?: (errorCode: string, message: string, details?: SSEErrorDetails) => void;
+  onError?: (errorCode: string, message: string) => void;
   onDone?: (
     chatId: string | null,
     threadId: number | null,
@@ -316,23 +304,9 @@ export async function parseSSEStream(
       handlers.onToolCallEnd?.(mapToolCallEnd(data));
     } else if (effectiveEvent === 'error') {
       terminal = 'error';
-      const details: SSEErrorDetails = {};
-      if (typeof data.readiness_status === 'string') {
-        details.readinessStatus = data.readiness_status;
-      }
-      if (typeof data.retry_after === 'number' && Number.isFinite(data.retry_after)) {
-        details.retryAfterSeconds = data.retry_after;
-      }
-      if (typeof data.applied_head_seq === 'number') {
-        details.appliedHeadSeq = data.applied_head_seq;
-      }
-      if (typeof data.expected_head_seq === 'number') {
-        details.expectedHeadSeq = data.expected_head_seq;
-      }
       handlers.onError?.(
         typeof data.error_code === 'string' ? data.error_code : String(data.error_code ?? ''),
         typeof data.message === 'string' ? data.message : String(data.message ?? ''),
-        Object.keys(details).length > 0 ? details : undefined,
       );
     } else if (effectiveEvent === 'done') {
       const chatId =

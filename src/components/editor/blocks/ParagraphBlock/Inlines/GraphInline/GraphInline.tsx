@@ -1,5 +1,6 @@
 import type { GraphChild } from '@/editor';
 import type { InlineWidgetProps } from '../types';
+import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,10 +31,17 @@ function GraphInlineContent(props: InlineWidgetProps<GraphChild>) {
   const { child } = props;
   const { patch, remove } = useInlineChild(props);
 
-  const values = Array.isArray(child.data?.values)
-    ? child.data.values.filter(Number.isFinite)
-    : [];
-  const labels = Array.isArray(child.data?.labels) ? child.data.labels : [];
+  const rawValues = Array.isArray(child.data?.values) ? child.data.values : [];
+  const rawLabels = Array.isArray(child.data?.labels) ? child.data.labels : [];
+  // A non-finite value drops its label with it: filtering `values` alone used
+  // to shift every later label one point to the left.
+  const values: number[] = [];
+  const labels: string[] = [];
+  rawValues.forEach((value, index) => {
+    if (!Number.isFinite(value)) return;
+    values.push(value);
+    labels.push(rawLabels[index] ?? '');
+  });
   const colors = child.data?.colors;
   const kind = child.kind ?? 'bar';
 
@@ -131,13 +139,10 @@ function GraphInlineContent(props: InlineWidgetProps<GraphChild>) {
                       onChange={(event) => setPoint(index, { label: event.target.value })}
                       className="h-7 min-w-0 flex-1 px-2 text-xs shadow-none"
                     />
-                    <Input
-                      type="number"
+                    <ValueInput
                       aria-label={`Value ${index + 1}`}
-                      value={Number.isFinite(value) ? value : ''}
-                      onChange={(event) =>
-                        setPoint(index, { value: Number(event.target.value) || 0 })
-                      }
+                      value={value}
+                      onCommit={(committed) => setPoint(index, { value: committed })}
                       className="h-7 w-20 shrink-0 px-2 text-xs tabular-nums shadow-none"
                     />
                     <Button
@@ -237,4 +242,51 @@ function padLabels(labels: string[], length: number): string[] {
   const out = labels.slice(0, length);
   while (out.length < length) out.push('');
   return out;
+}
+
+/**
+ * A point's value as a draft text field.
+ *
+ * Committing every keystroke used to write `Number('-') || 0` — a zero — the
+ * moment the author typed the minus of a negative value or the dot of a
+ * decimal, so neither was reachable. The draft commits when it parses to a
+ * finite number; an unparseable draft left behind on blur reverts to the
+ * stored value. Text with a decimal input mode rather than type="number":
+ * some browsers report intermediate states like "-" in a number field as the
+ * empty string, which is the same bug one layer down.
+ */
+function ValueInput({
+  value,
+  onCommit,
+  'aria-label': ariaLabel,
+  className,
+}: {
+  value: number;
+  onCommit: (value: number) => void;
+  'aria-label': string;
+  className?: string;
+}) {
+  // null while untouched, so the field follows the stored value (add, remove,
+  // undo) without an effect.
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const commit = (raw: string) => {
+    const parsed = Number(raw);
+    if (raw.trim() !== '' && Number.isFinite(parsed)) onCommit(parsed);
+  };
+
+  return (
+    <Input
+      type="text"
+      inputMode="decimal"
+      aria-label={ariaLabel}
+      value={draft ?? String(value)}
+      onChange={(event) => {
+        setDraft(event.target.value);
+        commit(event.target.value);
+      }}
+      onBlur={() => setDraft(null)}
+      className={className}
+    />
+  );
 }

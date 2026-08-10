@@ -168,6 +168,9 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
   return (
     <div
       data-change-id={change.id}
+      // ReviewBar's Next/Previous puts DOM focus here (see `focusChange`), so
+      // the card must be focusable — but as a target only, never a tab stop.
+      tabIndex={-1}
       // Deliberately not `.block-row`: the canvas measures those to place the
       // drag indicator, and a proposal is not a drop target.
       className={cn(

@@ -244,7 +244,24 @@ export function SlashMenu() {
             const range = insertionRangeRef.current?.cloneRange();
             insertionRangeRef.current = null;
             setVisible(false);
-            if (blockId && range) queueMicrotask(() => restoreRange(blockId, range));
+            if (blockId && range) {
+              queueMicrotask(() => {
+                const editable = refs.current[blockId];
+                // A bookmark whose paragraph was replaced has nothing to type
+                // back into.
+                if (!editable || !rangeBelongsTo(range, editable)) return;
+                // The '/' that opened the menu was preventDefaulted, and
+                // Escape declines every command — so the character goes back
+                // at the bookmark, as if the menu had never opened.
+                range.deleteContents();
+                const slash = document.createTextNode('/');
+                range.insertNode(slash);
+                range.setStartAfter(slash);
+                range.collapse(true);
+                restoreRange(blockId, range);
+                updateHtml(blockId, serializeEditableHtml(editable));
+              });
+            }
           }
           break;
         case 'ArrowDown':
@@ -280,7 +297,7 @@ export function SlashMenu() {
       document.removeEventListener('mousedown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown, true);
     };
-  }, [visible, filteredItems, activeIndex, handleSelect, blockId, restoreRange]);
+  }, [visible, filteredItems, activeIndex, handleSelect, blockId, restoreRange, refs, updateHtml]);
 
   useEffect(
     () => () => {

@@ -1,7 +1,7 @@
 import type { ParagraphBlock as P, ParagraphChild } from '../../../../editor';
 import { Editable } from '../../../common/Editable';
 import { memo, useEffect, useMemo, useState, type ComponentType, type CSSProperties } from 'react';
-import { useEditor } from '../../../../editor';
+import { useEditorActions } from '../../../../editor';
 import { createPortal } from 'react-dom';
 import { AiBeatInline, TableInline, CitationInline, EquationInline, GraphInline } from './Inlines';
 import type { AiBeatWidgetProps } from './Inlines/types';
@@ -21,8 +21,12 @@ const INLINE_WIDGETS: Record<ParagraphChild['type'], ComponentType<AiBeatWidgetP
   graph: GraphInline,
 };
 
-export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P }) {
-  const { refs, updateParagraphChild, removeParagraphChild, updateHtml, documentId, ensureRemoteDocument, waitForReady } = useEditor();
+export const ParagraphBlock = memo(function ParagraphBlock({ block, documentId }: { block: P; documentId: string | null }) {
+  // Actions only: the merged context changes identity on every keystroke,
+  // which re-rendered every paragraph on every edit anywhere in the document.
+  // `documentId` arrives as a prop from Canvas — it changes on navigation,
+  // not per keystroke, so the memo still holds while typing.
+  const { refs, updateParagraphChild, removeParagraphChild, updateHtml, ensureRemoteDocument } = useEditorActions();
   const [mounts, setMounts] = useState<Array<{ id: string; el: HTMLElement }>>([]);
 
   // Mount child components referenced inside HTML placeholders.
@@ -97,7 +101,6 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block }: { block: P
             refs={refs}
             documentId={documentId}
             ensureRemoteDocument={ensureRemoteDocument}
-            waitForReady={waitForReady}
           />,
           el,
           id,

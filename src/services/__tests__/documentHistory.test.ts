@@ -3,7 +3,6 @@ import {
   acceptChangeSet,
   diffRevision,
   fetchDocumentHead,
-  fetchReferenceReadiness,
   getChangeSet,
   getRevision,
   historyErrorCode,
@@ -251,42 +250,6 @@ describe('restoreRevision', () => {
   });
 });
 
-describe('fetchReferenceReadiness', () => {
-  it('probes the readiness endpoint and maps snake_case to camelCase', async () => {
-    const fetchSpy = mockRoutes(() =>
-      json({
-        ready: false,
-        readiness_status: 'pending',
-        expected_head_seq: 4,
-        applied_head_seq: 3,
-        retryable: true,
-        retry_after: 1,
-      }),
-    );
-
-    const readiness = await fetchReferenceReadiness(DOC_ID);
-
-    expect(String(fetchSpy.mock.calls[0][0])).toContain(
-      `/api/v2/documents/${DOC_ID}/reference-readiness`,
-    );
-    expect(readiness).toEqual({
-      ready: false,
-      readinessStatus: 'pending',
-      expectedHeadSeq: 4,
-      appliedHeadSeq: 3,
-      retryable: true,
-      retryAfterSeconds: 1,
-    });
-  });
-
-  it('rejects a payload without the ready flag', async () => {
-    mockRoutes(() => json({ status: 'ok' }));
-    await expect(fetchReferenceReadiness(DOC_ID)).rejects.toThrow(
-      'invalid readiness state',
-    );
-  });
-});
-
 describe('agent change sets', () => {
   const CS_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
   const changeSetPayload = (over: Record<string, unknown> = {}) => ({
@@ -302,6 +265,7 @@ describe('agent change sets', () => {
       { op: 'insert_block_after', reference_id: 'p1', block: { id: 'n1', type: 'divider' } },
       { op: 'reorder_block', block_id: 'p1', to_index: 2 },
       { op: 'update_meta', meta: { name: 'Renamed' } },
+      { op: 'move_block', block_id: 'p1', to_index: 1 },
       { op: 'unknown_future_op', payload: 'ignored' },
     ],
     proposer_id: 'usr-1',
@@ -327,6 +291,16 @@ describe('agent change sets', () => {
       { op: 'reorder_block', blockId: 'p1', toIndex: 2 },
       { op: 'update_meta', meta: { name: 'Renamed' } },
     ]);
+  });
+
+  it('getChangeSet flags operations with no editor mapping instead of dropping them', async () => {
+    mockRoutes(() => json(changeSetPayload()));
+
+    const changeSet = await getChangeSet(DOC_ID, CS_ID);
+
+    // The review flow fails closed on these: staging only the mappable
+    // operations and retiring the record would silently lose the rest.
+    expect(changeSet.unmappableOperations).toEqual(['move_block', 'unknown_future_op']);
   });
 
   it('acceptChangeSet presents the freshest head ETag and adopts the response', async () => {

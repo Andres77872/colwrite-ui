@@ -90,12 +90,9 @@ function attributes(node: ParseNode): Map<string, string> {
   return new Map((node.attrs ?? []).map((attribute) => [attribute.name.toLowerCase(), attribute.value]));
 }
 
-/**
- * Sanitize authored inline HTML and replace child portals with inert internal
- * markers. The parser accepts both quote styles and attribute orders; stale
- * React portal internals are discarded with the placeholder node's children.
- */
-export function sanitizeInlineFragment(input: string): SanitizedFragment {
+type PlaceholderMode = 'marker' | 'preserve' | 'drop';
+
+function renderSanitized(input: string, mode: PlaceholderMode): SanitizedFragment {
   const fragment = parseFragment(input) as unknown as ParseNode;
   const placeholderIds: string[] = [];
 
@@ -114,7 +111,12 @@ export function sanitizeInlineFragment(input: string): SanitizedFragment {
     if (DROP_WITH_CONTENT.has(tag)) return '';
 
     if (LEGACY_BLOCKS.has(tag)) {
-      return `<span class="legacy-block">${renderChildren(node)}</span>`;
+      // Export flattens block markup into a styled span. Editor state keeps
+      // the tag itself (attributes stripped): browsers wrap Enter-splits in
+      // <div>s and stored documents carry that shape, so flattening would
+      // rewrite every clean document on load.
+      if (mode === 'marker') return `<span class="legacy-block">${renderChildren(node)}</span>`;
+      return `<${tag}>${renderChildren(node)}</${tag}>`;
     }
 
     if (!ALLOWED_TAGS.has(tag)) return renderChildren(node);
@@ -123,6 +125,8 @@ export function sanitizeInlineFragment(input: string): SanitizedFragment {
     if (tag === 'span' && attrs.has('data-child-id')) {
       const childId = (attrs.get('data-child-id') ?? '').trim();
       if (!childId || childId.length > 128) return '';
+      if (mode === 'drop') return '';
+      if (mode === 'preserve') return `<span data-child-id="${escapeAttribute(childId)}"></span>`;
       const index = placeholderIds.push(childId) - 1;
       return `\uE000${index}\uE001`;
     }
@@ -149,6 +153,37 @@ export function sanitizeInlineFragment(input: string): SanitizedFragment {
     html: renderChildren(fragment),
     placeholderIds,
   };
+}
+
+/**
+ * Sanitize authored inline HTML and replace child portals with inert internal
+ * markers. The parser accepts both quote styles and attribute orders; stale
+ * React portal internals are discarded with the placeholder node's children.
+ */
+export function sanitizeInlineFragment(input: string): SanitizedFragment {
+  return renderSanitized(input, 'marker');
+}
+
+export type EditableSanitizeOptions = {
+  /**
+   * Widget placeholder spans travel with copied text but their `children`
+   * entries do not, so a pasted placeholder would sit in the html forever as
+   * an empty ghost. Paste therefore drops them; stored or agent-authored
+   * document html must preserve them or the widgets vanish on load.
+   */
+  placeholders?: 'preserve' | 'drop';
+};
+
+/**
+ * Sanitize block html at the editor-state boundary. Every path that writes
+ * foreign markup into the document model — server loads, restores, JSON
+ * import, agent tool ops, paste — goes through here, so no path into editor
+ * state carries active markup (`onerror`, `javascript:` URLs, iframes…).
+ * `Editable` renders state via `innerHTML`, which makes this the one gate
+ * that matters.
+ */
+export function sanitizeEditableHtml(input: string, options?: EditableSanitizeOptions): string {
+  return renderSanitized(input, options?.placeholders === 'drop' ? 'drop' : 'preserve').html;
 }
 
 export type MaterializedPart =

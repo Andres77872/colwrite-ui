@@ -4,6 +4,7 @@ import { Spinner } from '@/components/ui/spinner';
 import type { SetStateAction } from 'react';
 import { useEditor } from '../../../../editor';
 import type { Block } from '../../../../editor';
+import { blockText } from '../../../../editor/proposals';
 import { loadDocument as apiLoadDocument } from '../../../../services';
 import type { DocumentSummary } from '../../../../services';
 import { errorMessage } from '../../../../services';
@@ -159,9 +160,10 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   const labelForBlock = (b: Block, index: number): string => {
     if (b.type === 'heading') return `Heading ${b.level}`;
     if (b.type === 'divider') return `Divider ${index + 1}`;
-    const tmp = document.createElement('div');
-    tmp.innerHTML = b.html || '';
-    const txt = (tmp.textContent || '').trim();
+    // blockText strips tags by regex: assigning block html to a detached
+    // div's innerHTML would fire event handlers (`img onerror`) even
+    // off-document.
+    const txt = blockText(b).trim();
     return txt ? (txt.length > 60 ? txt.slice(0, 57) + '…' : txt) : `Paragraph ${index + 1}`;
   };
 

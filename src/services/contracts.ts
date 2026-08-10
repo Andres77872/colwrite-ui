@@ -57,19 +57,14 @@ export function errorMessage(error: unknown, fallback: string): string {
 /**
  * The machine-readable half of an `application/problem+json` body.
  *
- * `readinessStatus` is a lifecycle flag, not a freshness one: once a document
- * has been projected the server reports `ready` for the rest of its life, even
- * while `appliedHeadSeq` trails `expectedHeadSeq`. Anything deciding whether to
- * retry must read `code` and `retryable` — never that string.
+ * Anything deciding whether to replay a request reads `code` and `retryable`;
+ * `retryAfterSeconds` only says how long to hold it before doing so.
  */
 export interface ProblemDetails {
   code: string | null
   retryable: boolean
   /** Positive seconds only; null when the server gave no hint. */
   retryAfterSeconds: number | null
-  readinessStatus: string | null
-  expectedHeadSeq: number | null
-  appliedHeadSeq: number | null
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -88,9 +83,6 @@ export function problemDetails(error: unknown): ProblemDetails | null {
     code: typeof data.code === 'string' ? data.code : null,
     retryable: data.retryable === true,
     retryAfterSeconds: retryAfter !== null && retryAfter > 0 ? retryAfter : null,
-    readinessStatus: typeof data.readiness_status === 'string' ? data.readiness_status : null,
-    expectedHeadSeq: finiteNumber(data.expected_head_seq),
-    appliedHeadSeq: finiteNumber(data.applied_head_seq),
   }
 }
 
@@ -110,12 +102,11 @@ export function problemRetryAfter(error: unknown): number | null {
 /**
  * Our own words for the problems the server calls retryable.
  *
- * Their `detail` strings describe the machinery — "Document reference
- * projection is not ready" — which tells the person writing the document
- * nothing they can act on.
+ * Their `detail` strings describe the machinery — "History backfill has not
+ * completed" — which tells the person writing the document nothing they can
+ * act on.
  */
 const RETRYABLE_PROBLEM_MESSAGES: Record<string, string> = {
-  projection_pending: 'This document is still syncing on the server.',
   history_not_ready: 'The history for this document is still being prepared.',
   document_rate_limit_exceeded: 'Too many requests just now — wait a moment and try again.',
 }
@@ -124,23 +115,6 @@ const RETRYABLE_PROBLEM_MESSAGES: Record<string, string> = {
 export function describeApiError(error: unknown, fallback: string): string {
   const code = problemCode(error)
   return (code && RETRYABLE_PROBLEM_MESSAGES[code]) || errorMessage(error, fallback)
-}
-
-/**
- * The same words, for a readiness verdict that never became an `ApiError`.
- *
- * Gating a read on the readiness probe means the common "not ready yet" case
- * arrives as a status string rather than a rejected request, and it should not
- * read differently to the author for having taken the quieter path.
- */
-export function describeReadiness(status: string | null | undefined): string {
-  if (status === 'deleted' || status === 'deleting') {
-    return 'This document has been deleted.'
-  }
-  if (status === 'scope_mismatch' || status === 'conflicting' || status === 'failed') {
-    return 'This document could not be prepared on the server.'
-  }
-  return RETRYABLE_PROBLEM_MESSAGES.projection_pending
 }
 
 /** HTTP error with the parsed response body retained for callers and tests. */

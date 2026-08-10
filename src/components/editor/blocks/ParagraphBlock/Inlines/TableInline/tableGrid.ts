@@ -64,7 +64,13 @@ export function parseClipboardTable(text: string): string[][] | null {
 
   const grid = rows.map((row) => row.split(delimiter));
   const width = Math.max(...grid.map((row) => row.length));
-  if (width < 2 && grid.length < 2) return null;
+  // A comma earns its split only from real table shape — several columns on
+  // several rows. "In this work, we show that" has a comma on the line too,
+  // and treating prose as CSV shreds the sentence across the neighbouring
+  // cells. Tabs almost never appear in prose, so tab text keeps the looser
+  // rule.
+  const isTable = delimiter === ',' ? width >= 2 && grid.length >= 2 : width >= 2 || grid.length >= 2;
+  if (!isTable) return null;
 
   return grid.map((row) => {
     const out = row.slice();

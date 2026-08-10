@@ -36,8 +36,9 @@ export function useInlineChild<TChild extends ParagraphChild>({
     const host = refs.current[blockId];
     // Take the placeholder out of the live DOM first: the contenteditable is
     // the source of truth for html, so serializing before this would write the
-    // span straight back in.
-    host?.querySelector(`[data-child-id="${child.id}"]`)?.remove();
+    // span straight back in. The id is escaped because it arrives from tool
+    // payloads — an unescaped quote would break the selector.
+    host?.querySelector(`[data-child-id="${CSS.escape(child.id)}"]`)?.remove();
     removeParagraphChild(blockId, child.id);
     if (host) updateHtml(blockId, serializeEditableHtml(host));
   }, [blockId, child.id, refs, removeParagraphChild, updateHtml]);

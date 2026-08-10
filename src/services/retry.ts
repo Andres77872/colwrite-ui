@@ -3,13 +3,11 @@ import { problemDetails } from './contracts';
 /**
  * One backoff policy for everything that talks to the API.
  *
- * The document's numeric MySQL identity — which chats, threads and resource
- * attachments are all keyed on — is projected asynchronously from the
- * authoritative Mongo head. Between a save and that projection landing, every
- * endpoint that needs the identity fails closed with a typed, retryable
- * problem. That window is normally about a second, so the honest client
- * behaviour is to wait it out rather than report a failure the author cannot
- * act on.
+ * A handful of endpoints fail closed on work the server is still doing — the
+ * history backfill for a document that has never been read this way before,
+ * and the per-document rate limiter shedding a burst. Both clear on their own,
+ * usually within a second or two, so the honest client behaviour is to wait
+ * them out rather than report a failure the author cannot act on.
  */
 
 /**
@@ -20,33 +18,9 @@ import { problemDetails } from './contracts';
  * (health, PDF compile, upstream search) are not retryable at all.
  */
 export const RETRYABLE_PROBLEM_CODES = new Set([
-  'projection_pending',
   'history_not_ready',
   'document_rate_limit_exceeded',
 ]);
-
-/** SSE error codes that mean "the save is still propagating — ask again". */
-export const RETRYABLE_STREAM_CODES = new Set([
-  'PROJECTION_PENDING',
-  'DOCUMENT_REFERENCE_NOT_READY',
-]);
-
-/**
- * Projection states that no amount of waiting will fix. Mirrors the server's
- * own terminal set; anything else — including `ready` on a projection that is
- * merely behind — is worth asking again for.
- */
-export const TERMINAL_READINESS_STATUSES = new Set([
-  'deleted',
-  'deleting',
-  'failed',
-  'scope_mismatch',
-  'conflicting',
-]);
-
-export function isTerminalReadiness(status: string | null | undefined): boolean {
-  return status != null && TERMINAL_READINESS_STATUSES.has(status);
-}
 
 export const MIN_RETRY_DELAY_MS = 500;
 export const MAX_RETRY_DELAY_MS = 5000;
@@ -109,12 +83,10 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> 
  * Whether replaying this request could plausibly succeed.
  *
  * Requires the server's own `retryable` flag *and* a code we understand, so a
- * future retryable problem never gets retried on a guess. A terminal readiness
- * status vetoes it: the projection for that document is gone or broken.
+ * future retryable problem never gets retried on a guess.
  */
 export function isRetryableProblem(error: unknown): boolean {
   const problem = problemDetails(error);
   if (!problem || !problem.retryable) return false;
-  if (!problem.code || !RETRYABLE_PROBLEM_CODES.has(problem.code)) return false;
-  return !isTerminalReadiness(problem.readinessStatus);
+  return problem.code != null && RETRYABLE_PROBLEM_CODES.has(problem.code);
 }

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useRef, useState } from 'react';
+import { Fragment, useCallback, useMemo, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -167,18 +167,29 @@ export function Canvas() {
   // reads top to bottom is what `Accept all` produces — including chained
   // inserts, which used to pile up at the bottom of the page claiming their
   // block had been deleted.
-  const docLevelChanges = documentChanges(sets);
-  const { rows, orphans } = projectDocument(blocks, sets);
+  //
+  // The canvas re-renders for reasons that change none of the inputs — drag
+  // indicators, the creating spinner — so each projection is memoized on what
+  // it actually reads instead of being recomputed on every render.
+  const docLevelChanges = useMemo(() => documentChanges(sets), [sets]);
+  const { rows, orphans } = useMemo(() => projectDocument(blocks, sets), [blocks, sets]);
   // Drag-and-drop measures `.block-row` elements, which proposals are not, so
   // the drop indicator keeps indexing the real block list.
-  const blockIndex = new Map(blocks.map((block, index) => [block.id, index]));
+  const blockIndex = useMemo(
+    () => new Map(blocks.map((block, index) => [block.id, index])),
+    [blocks],
+  );
   // Blocks an addition is attached to. Without this a stack of proposed
   // paragraphs has no visible relationship to the paragraph it was written
   // against, which is the last place the review still read as a separate layer.
-  const anchoring = new Set(
-    rows.flatMap((row) =>
-      row.kind === 'insert' && row.change.anchorBlockId ? [row.change.anchorBlockId] : [],
-    ),
+  const anchoring = useMemo(
+    () =>
+      new Set(
+        rows.flatMap((row) =>
+          row.kind === 'insert' && row.change.anchorBlockId ? [row.change.anchorBlockId] : [],
+        ),
+      ),
+    [rows],
   );
 
   // A single insertion index drives every drop indicator. The previous version
@@ -346,11 +357,14 @@ export function Canvas() {
         updateIndicatorFromPoint(event.clientY);
       }}
       onDropCapture={(event) => {
+        // Only block drags are intercepted here — swallowing any other
+        // payload kills native drag-to-move for selected text. `types`
+        // identifies the drag even where `getData` is still empty mid-drag.
+        if (!isBlockDrag(event)) return;
+        event.preventDefault();
         const fromId =
           event.dataTransfer.getData(BLOCK_DRAG_TYPE) || event.dataTransfer.getData('text/plain');
-        if (!fromId) return;
-        event.preventDefault();
-        if (insertIndex !== null) {
+        if (fromId && insertIndex !== null) {
           const fromIndex = blocks.findIndex((b) => b.id === fromId);
           if (fromIndex !== -1) {
             // Removing the dragged block first shifts every later target down one.
@@ -481,7 +495,7 @@ export function Canvas() {
                             // the gutter menu.
                             onClick={() => toggleCollapsed(block.id)}
                             aria-expanded={false}
-                            className="inline-flex max-w-full items-center gap-2 rounded-sm border border-border/50 bg-card/60 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:border-border hover:bg-card"
+                            className="inline-flex max-w-full items-center gap-2 rounded-sm border border-border/50 bg-card/60 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:border-border hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             <ChevronRight aria-hidden="true" className="h-3 w-3 shrink-0" />
                             <span className="font-medium text-foreground/80">
@@ -491,7 +505,7 @@ export function Canvas() {
                           </button>
                         ) : (
                           <>
-                            {block.type === 'paragraph' && <ParagraphBlock block={block} />}
+                            {block.type === 'paragraph' && <ParagraphBlock block={block} documentId={documentId} />}
                             {block.type === 'heading' && <HeadingBlock block={block} />}
                             {block.type === 'divider' && <DividerBlock />}
                           </>

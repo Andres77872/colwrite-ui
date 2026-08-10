@@ -5,7 +5,10 @@ import { cn } from '@/lib/utils';
 
 export const HeadingBlock = memo(function HeadingBlock({ block }: { block: H }) {
   return (
-    <div className="heading-block w-full">
+    // The contenteditable inside cannot take the role (Editable owns that
+    // element), so the wrapper carries it — without it a screen reader sees
+    // prose where the document outline should be.
+    <div className="heading-block w-full" role="heading" aria-level={block.level}>
       <Editable
         id={block.id}
         html={block.html}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createRef, useImperativeHandle } from 'react';
 import type { Block, Doc, ParagraphChild } from '@/editor/types';
 
@@ -560,6 +560,22 @@ describe('EquationInline', () => {
 
     fireEvent.keyDown(field, { key: 'Enter' });
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('moves focus into the panel on open and back to the trigger on close', async () => {
+    await mount(equation('e1'));
+    const trigger = screen.getByRole('button', { name: 'E = mc^2' });
+    fireEvent.click(trigger);
+
+    // The popover portals to document.body, so focus has to be moved there —
+    // Tab from the trigger could never reach it on its own.
+    const field = screen.getByPlaceholderText('E = mc^2');
+    expect(document.activeElement).toBe(field);
+
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // Radix defers the focus return by a tick (FocusScope unmount).
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it('keeps the numbered option unavailable for inline maths', async () => {

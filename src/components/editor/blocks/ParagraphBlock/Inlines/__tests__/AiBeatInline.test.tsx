@@ -58,7 +58,6 @@ function Harness({
       refs={refs}
       documentId={documentId}
       ensureRemoteDocument={vi.fn().mockResolvedValue('doc-456')}
-      waitForReady={vi.fn().mockResolvedValue({ ready: true, status: 'ready' })}
     />
   );
 }

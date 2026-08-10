@@ -1,4 +1,5 @@
 import { citationYear } from './citations';
+import { sanitizeEditableHtml } from '@/export/sanitize';
 import type { Block, ParagraphChild, ToolOperation } from './types';
 
 /** Block types the canvas knows how to render. */
@@ -91,13 +92,40 @@ export function withoutOrphanChildren(block: Block): Block {
  */
 export function reconcileBlocks(blocks: Block[]): Block[] {
   let changed = false;
-  const out = blocks.map((block) => {
+  // Blocks whose id or type the canvas cannot handle used to sail through
+  // here (stored by an older build, or hand-edited into JSON) and render as
+  // empty rows the author cannot select, edit, or delete. Same rejection rule
+  // as `coerceBlock`, inlined so clean blocks keep their identity.
+  const kept = blocks.filter((block) => {
+    const ok =
+      block &&
+      typeof block.id === 'string' &&
+      block.id !== '' &&
+      BLOCK_TYPES.has(block.type);
+    if (!ok) changed = true;
+    return ok;
+  });
+  const out = kept.map((block) => {
     let next = block;
-    if (block.type === 'paragraph' && Array.isArray(block.children)) {
-      const children = coerceChildren(block.children);
-      if (children.length !== block.children.length) next = { ...block, children };
-      else if (children.some((child, index) => child !== block.children![index])) {
-        next = { ...block, children };
+    // Sanitize persisted html: stored documents predate the ingest boundary,
+    // so markup that the boundary now rejects can still be sitting in the
+    // local cache or on the server. Widget placeholders are preserved —
+    // dropping them would delete the widgets.
+    if (
+      (block.type === 'paragraph' || block.type === 'heading') &&
+      typeof block.html === 'string'
+    ) {
+      const html = sanitizeEditableHtml(block.html);
+      if (html !== block.html) next = { ...next, html } as Block;
+    }
+    if (next.type === 'paragraph' && Array.isArray(next.children)) {
+      const original = next.children;
+      const children = coerceChildren(original);
+      if (
+        children.length !== original.length ||
+        children.some((child, index) => child !== original[index])
+      ) {
+        next = { ...next, children };
       }
     }
     next = withoutOrphanChildren(next);
@@ -126,7 +154,9 @@ export function coerceBlock(raw: unknown): Block | null {
 
   if (type === 'divider') return { ...candidate, id, type: 'divider' } as Block;
 
-  const html = typeof candidate.html === 'string' ? candidate.html : '';
+  // The html is as untrusted as the rest of the payload: it lands on the
+  // canvas via `innerHTML`, so active markup must not survive this boundary.
+  const html = typeof candidate.html === 'string' ? sanitizeEditableHtml(candidate.html) : '';
 
   if (type === 'heading') {
     const rawLevel = Number(candidate.level);
@@ -156,6 +186,12 @@ export type ApplyPatchResult = {
   desynced: ToolOperation[];
   /** Ids of blocks this patch touched, for change highlighting. */
   touched: string[];
+  /**
+   * True when nothing was applied because the document moved on since the
+   * caller computed its plan. The caller should recompute against the
+   * returned live `blocks` and retry.
+   */
+  stale?: boolean;
 };
 
 /**
@@ -181,6 +217,13 @@ export function applyPatchToBlocks(
       desynced.push(op);
       return;
     }
+    // An id already in the document is a desync, not an insert: applying it
+    // produces duplicate React keys, and later updates split-brain between
+    // the two copies. Report rather than guess which copy is real.
+    if (next.some((existing) => existing.id === block.id)) {
+      desynced.push(op);
+      return;
+    }
     next.splice(index, 0, block);
     touched.push(block.id);
   };
@@ -198,7 +241,9 @@ export function applyPatchToBlocks(
         // agent-authored as an inserted block is — a bad child here would
         // otherwise reach the canvas by the one path that never validated.
         const merged = coerceBlock({ ...next[idx], ...op.block });
-        if (!merged) {
+        // A merge that renames the block onto an existing id is rejected for
+        // the same reason as a duplicate insert above.
+        if (!merged || (merged.id !== op.blockId && next.some((b) => b.id === merged.id))) {
           desynced.push(op);
           break;
         }
@@ -241,7 +286,9 @@ export function applyPatchToBlocks(
       }
       case 'reorder_block': {
         const from = next.findIndex((b) => b.id === op.blockId);
-        if (from === -1) {
+        // A non-numeric target used to survive Math.min/max as NaN, and
+        // splice(NaN) coerces to 0 — silently moving the block to the top.
+        if (from === -1 || !Number.isFinite(op.toIndex)) {
           desynced.push(op);
           break;
         }

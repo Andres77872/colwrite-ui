@@ -3,7 +3,6 @@ import { ApiError } from '../contracts';
 import {
   abortableSleep,
   isRetryableProblem,
-  isTerminalReadiness,
   MAX_RETRY_DELAY_MS,
   MIN_RETRY_DELAY_MS,
   retryDelayMs,
@@ -15,38 +14,12 @@ function problem(body: unknown, status = 503): ApiError {
 }
 
 describe('isRetryableProblem', () => {
-  it('accepts the projection lag the server reports as ready', () => {
-    // The status column says `ready` for the rest of a document's life once it
-    // has been projected even once; the gap between the two sequences is what
-    // actually failed. Reading the string as terminal is the bug this guards.
-    expect(
-      isRetryableProblem(
-        problem({
-          code: 'projection_pending',
-          retryable: true,
-          readiness_status: 'ready',
-          expected_head_seq: 8,
-          applied_head_seq: 3,
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it.each(['deleted', 'deleting', 'failed', 'scope_mismatch', 'conflicting'])(
-    'refuses a %s projection, which never catches up',
-    (readiness_status) => {
-      expect(
-        isRetryableProblem(
-          problem({ code: 'projection_pending', retryable: true, readiness_status }),
-        ),
-      ).toBe(false);
-    },
-  );
-
   it.each([
     ['history_not_ready', 409],
     ['document_rate_limit_exceeded', 429],
   ])('accepts %s despite its non-503 status', (code, status) => {
+    // A status-code test would have missed both of the codes we actually
+    // replay, which is why the gate reads `code` instead.
     expect(isRetryableProblem(problem({ code, retryable: true }, status))).toBe(true);
   });
 
@@ -59,7 +32,7 @@ describe('isRetryableProblem', () => {
   });
 
   it('refuses a known code the server did not flag', () => {
-    expect(isRetryableProblem(problem({ code: 'projection_pending' }))).toBe(false);
+    expect(isRetryableProblem(problem({ code: 'history_not_ready' }, 409))).toBe(false);
   });
 
   it.each([
@@ -68,20 +41,6 @@ describe('isRetryableProblem', () => {
     ['nothing at all', null],
   ])('refuses %s', (_label, error) => {
     expect(isRetryableProblem(error)).toBe(false);
-  });
-});
-
-describe('isTerminalReadiness', () => {
-  it.each(['ready', 'pending', 'missing', 'disabled', 'unavailable'])(
-    'treats %s as worth asking again',
-    (status) => {
-      expect(isTerminalReadiness(status)).toBe(false);
-    },
-  );
-
-  it('treats an absent status as non-terminal', () => {
-    expect(isTerminalReadiness(undefined)).toBe(false);
-    expect(isTerminalReadiness(null)).toBe(false);
   });
 });
 

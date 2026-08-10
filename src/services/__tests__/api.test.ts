@@ -194,11 +194,11 @@ describe('typed API errors', () => {
 });
 
 /**
- * The document's numeric identity is projected asynchronously from the
- * authoritative head, so between a save and that projection landing every
- * endpoint keyed on it rejects with a typed, retryable problem. That window is
- * about a second; waiting it out here is what keeps three panels from showing
- * the author a permanent failure for a transient one.
+ * A few endpoints fail closed on work the server is still finishing — the
+ * history backfill for a document read this way for the first time, and the
+ * per-document rate limiter shedding a burst. Both clear on their own in about
+ * a second; waiting them out here is what keeps three panels from showing the
+ * author a permanent failure for a transient one.
  */
 describe('retryable problem backoff', () => {
   beforeEach(() => {
@@ -208,40 +208,35 @@ describe('retryable problem backoff', () => {
     vi.useRealTimers();
   });
 
-  function problem(body: unknown, status = 503, headers?: Record<string, string>): Response {
+  function problem(body: unknown, status = 409, headers?: Record<string, string>): Response {
     return new Response(JSON.stringify(body), {
       status,
       headers: { 'Content-Type': 'application/problem+json', ...headers },
     });
   }
 
-  /** The exact body the server sends while its reference projection lags. */
-  const PROJECTION_PENDING = {
-    type: 'https://colwrite.com/problems/projection_pending',
-    title: 'Projection Pending',
-    status: 503,
-    detail: 'Document reference projection is not ready',
-    instance: '/document/doc-1/chats',
-    code: 'projection_pending',
+  /** The exact body the server sends while a document's history is backfilling. */
+  const HISTORY_NOT_READY = {
+    type: 'https://colwrite.com/problems/history_not_ready',
+    title: 'History Not Ready',
+    status: 409,
+    detail: 'Document history is not ready',
+    instance: '/v2/documents/doc-1/revisions',
+    code: 'history_not_ready',
     retryable: true,
-    expected_head_seq: 8,
-    applied_head_seq: 3,
-    readiness_status: 'ready',
     retry_after: 1,
   };
 
-  it('replays a projection_pending rejection and returns the eventual success', async () => {
-    // `readiness_status: "ready"` is the projection row's lifecycle flag, not a
-    // freshness one — reading it as terminal is exactly the bug this guards.
+  it('replays a history_not_ready rejection and returns the eventual success', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(problem(PROJECTION_PENDING))
-      .mockResolvedValueOnce(json({ chats: [], count: 0 }));
+      .mockResolvedValueOnce(problem(HISTORY_NOT_READY))
+      .mockResolvedValueOnce(json({ revisions: [], count: 0 }));
 
-    const promise = get<{ count: number }>('/document/doc-1/chats');
+    const promise = get<{ count: number }>('/v2/documents/doc-1/revisions');
     await vi.runAllTimersAsync();
 
-    expect(await promise).toEqual({ chats: [], count: 0 });
+    expect(await promise).toEqual({ revisions: [], count: 0 });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -249,11 +244,13 @@ describe('retryable problem backoff', () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(
-        problem({ code: 'projection_pending', retryable: true }, 503, { 'Retry-After': '2' }),
+        problem({ code: 'document_rate_limit_exceeded', retryable: true }, 429, {
+          'Retry-After': '2',
+        }),
       )
       .mockResolvedValueOnce(json({ ok: true }));
 
-    const promise = get('/document/doc-1/chats');
+    const promise = get('/v2/documents/doc-1/revisions');
     await vi.advanceTimersByTimeAsync(1999);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -266,11 +263,11 @@ describe('retryable problem backoff', () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(
-        problem({ code: 'projection_pending', retryable: true, retry_after: 3 }),
+        problem({ code: 'history_not_ready', retryable: true, retry_after: 3 }),
       )
       .mockResolvedValueOnce(json({ ok: true }));
 
-    const promise = get('/document/doc-1/chats');
+    const promise = get('/v2/documents/doc-1/revisions');
     await vi.advanceTimersByTimeAsync(2999);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -279,15 +276,15 @@ describe('retryable problem backoff', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('retries the retryable non-503 problems too', async () => {
+  it('retries on the problem code rather than the status', async () => {
     // `history_not_ready` is a 409 and rate limiting is a 429, so a
     // status-code test would have missed both.
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(problem({ code: 'history_not_ready', retryable: true }, 409))
-      .mockResolvedValueOnce(json({ revisions: [] }));
+      .mockResolvedValueOnce(problem({ code: 'document_rate_limit_exceeded', retryable: true }, 429))
+      .mockResolvedValueOnce(json({ chats: [], count: 0 }));
 
-    const promise = get('/v2/documents/doc-1/revisions');
+    const promise = get('/document/doc-1/chats');
     await vi.runAllTimersAsync();
     await promise;
 
@@ -299,9 +296,9 @@ describe('retryable problem backoff', () => {
     // would be unusable on the replay.
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockImplementation(() => Promise.resolve(problem(PROJECTION_PENDING)));
+      .mockImplementation(() => Promise.resolve(problem(HISTORY_NOT_READY)));
 
-    const promise = get('/document/doc-1/chats');
+    const promise = get('/v2/documents/doc-1/revisions');
     const expectation = expect(promise).rejects.toBeInstanceOf(ApiError);
     await vi.runAllTimersAsync();
     await expectation;
@@ -310,11 +307,6 @@ describe('retryable problem backoff', () => {
   });
 
   it.each([
-    [
-      'a terminal readiness status, which never catches up',
-      { code: 'projection_pending', retryable: true, readiness_status: 'deleted' },
-      503,
-    ],
     [
       'a plain 503 with no problem code',
       { detail: 'PDF compile capacity exceeded' },
@@ -353,9 +345,9 @@ describe('retryable problem backoff', () => {
     // would be unusable on the replay.
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockImplementation(() => Promise.resolve(problem(PROJECTION_PENDING)));
+      .mockImplementation(() => Promise.resolve(problem(HISTORY_NOT_READY)));
 
-    const promise = get('/document/doc-1/chats', { retry: { maxAttempts: 1 } });
+    const promise = get('/v2/documents/doc-1/revisions', { retry: { maxAttempts: 1 } });
     const expectation = expect(promise).rejects.toBeInstanceOf(ApiError);
     await vi.runAllTimersAsync();
     await expectation;
@@ -369,7 +361,7 @@ describe('retryable problem backoff', () => {
     // A fresh key per attempt would let the server apply the same write twice.
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(problem(PROJECTION_PENDING))
+      .mockResolvedValueOnce(problem(HISTORY_NOT_READY))
       .mockResolvedValueOnce(json({ ok: true }));
 
     const promise = post('/v2/documents/doc-1/change-sets/cs-1/accept', undefined, {
@@ -391,10 +383,10 @@ describe('retryable problem backoff', () => {
     // would be unusable on the replay.
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockImplementation(() => Promise.resolve(problem(PROJECTION_PENDING)));
+      .mockImplementation(() => Promise.resolve(problem(HISTORY_NOT_READY)));
 
     const controller = new AbortController();
-    const promise = get('/document/doc-1/chats', { signal: controller.signal });
+    const promise = get('/v2/documents/doc-1/revisions', { signal: controller.signal });
     const expectation = expect(promise).rejects.toThrow('Aborted');
     await vi.advanceTimersByTimeAsync(100);
     controller.abort();

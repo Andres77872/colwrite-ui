@@ -77,7 +77,29 @@ export function ChartFigure(props: ChartFigureProps) {
       {kind === 'pie' ? (
         <PieChart {...props} hover={hover} setHover={setHover} labelFor={labelFor} />
       ) : (
-        <CartesianChart {...props} hover={hover} setHover={setHover} labelFor={labelFor} />
+        <>
+          <CartesianChart {...props} hover={hover} setHover={setHover} labelFor={labelFor} />
+          {/* The svg's label says what the chart is; a screen reader still has
+              no way to the numbers. The pie has its visible legend for this —
+              cartesian charts get the same rows as a hidden table. */}
+          <table className="sr-only">
+            <caption>{`${kind} chart data`}</caption>
+            <thead>
+              <tr>
+                <th scope="col">{props.xLabel || 'Item'}</th>
+                <th scope="col">{props.yLabel || 'Value'}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {values.map((value, index) => (
+                <tr key={index}>
+                  <th scope="row">{labelFor(index)}</th>
+                  <td>{formatNumber(value)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
 
       {interactive && hover !== null && (

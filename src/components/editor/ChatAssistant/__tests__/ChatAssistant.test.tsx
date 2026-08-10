@@ -34,14 +34,6 @@ const loadDocument = vi.fn(async (id: string) =>
 );
 const saveDocument = vi.fn(async () => ({ status: 'ok', message: '', version: 2 }));
 const createDocument = vi.fn(async () => ({ document_id: 'created-doc', version: 1 }));
-const fetchReferenceReadiness = vi.fn(async () => ({
-  ready: true,
-  readinessStatus: 'ready',
-  expectedHeadSeq: 2,
-  appliedHeadSeq: 2,
-  retryable: false,
-  retryAfterSeconds: 0,
-}));
 
 vi.mock('@/services/agentChat', () => ({
   streamAgentChat: (...args: unknown[]) => streamAgentChat(...args),
@@ -62,7 +54,6 @@ vi.mock('@/services', async () => ({
   loadDocument: (id: string) => loadDocument(id),
   deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
   listDocuments: () => listDocuments(),
-  fetchReferenceReadiness: (...args: unknown[]) => fetchReferenceReadiness(...(args as [])),
 }));
 
 const { EditorProvider, useEditor } = await import('@/editor');
@@ -837,22 +828,6 @@ describe('what the agent reads', () => {
     );
     expect(streamAgentChat).not.toHaveBeenCalled();
   });
-
-  it('waits for the server-side chat reference before streaming', async () => {
-    await mount();
-    fetchReferenceReadiness.mockClear();
-
-    await act(async () => {
-      harness.editor.setDocName('Renamed by the author');
-    });
-    await sendWith([]);
-
-    await waitFor(() => expect(streamAgentChat).toHaveBeenCalledTimes(1));
-    expect(fetchReferenceReadiness).toHaveBeenCalled();
-    expect(fetchReferenceReadiness.mock.invocationCallOrder[0]).toBeLessThan(
-      streamAgentChat.mock.invocationCallOrder[0],
-    );
-  });
 });
 
 describe('a chat id the server no longer has', () => {
@@ -912,121 +887,5 @@ describe('a chat id the server no longer has', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert').textContent).toContain('Chat not found'),
     );
-  });
-});
-
-/**
- * A conversation is keyed on the document's projected identity, so opening one
- * moments after a save can outrun the projection. The request layer waits that
- * out once; the panel keeps asking rather than leaving the author looking at an
- * error for a transcript that is about to exist.
- */
-describe('a conversation opened before the server has caught up', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    listThreads.mockReset().mockImplementation(async () => ({ threads: [] }));
-    listMessages
-      .mockReset()
-      .mockImplementation(async () => ({ messages: [], pivotThreadId: null }));
-  });
-
-  /** Every probe inside the wait budget answers "behind". */
-  function stayBehind() {
-    fetchReferenceReadiness.mockResolvedValue({
-      ready: false,
-      readinessStatus: 'stale',
-      expectedHeadSeq: 8,
-      appliedHeadSeq: 3,
-      retryable: true,
-      retryAfterSeconds: 1,
-    });
-  }
-
-  /** Run out the readiness wait budget so the gate settles on a verdict. */
-  async function exhaustReadinessWait() {
-    for (let step = 0; step < 8; step += 1) {
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(500);
-      });
-    }
-  }
-
-  it('says so without touching the chat endpoints at all', async () => {
-    await mount();
-    stayBehind();
-
-    await act(async () => {
-      harness.chats.setSelectedChatId('lagging-chat');
-    });
-    await exhaustReadinessWait();
-
-    await waitFor(() =>
-      expect(screen.getByText('Getting this conversation ready')).toBeTruthy(),
-    );
-    expect(screen.getByText('This document is still syncing on the server.')).toBeTruthy();
-    // The endpoints that would have logged a 503 per attempt are never called.
-    expect(listThreads).not.toHaveBeenCalled();
-    expect(listMessages).not.toHaveBeenCalled();
-    // "Try again" resends the last message, which is not what failed here.
-    expect(screen.queryByRole('button', { name: /try again/i })).toBeNull();
-  });
-
-  it('opens the conversation when the author retries and it has landed', async () => {
-    await mount();
-    stayBehind();
-
-    await act(async () => {
-      harness.chats.setSelectedChatId('lagging-chat');
-    });
-    await exhaustReadinessWait();
-    await waitFor(() =>
-      expect(screen.getByText('Getting this conversation ready')).toBeTruthy(),
-    );
-
-    listThreads.mockResolvedValue({ threads: [{ id: 12 }] });
-    listMessages.mockResolvedValue({
-      messages: [{ role: 'user', content: 'Earlier question' }],
-      pivotThreadId: 12,
-    });
-    fetchReferenceReadiness.mockResolvedValue({
-      ready: true,
-      readinessStatus: 'ready',
-      expectedHeadSeq: 8,
-      appliedHeadSeq: 8,
-      retryable: false,
-      retryAfterSeconds: 0,
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    });
-
-    await waitFor(() => expect(screen.getByText('Earlier question')).toBeTruthy());
-  });
-
-  it('does not reopen forever when the projection stays behind', async () => {
-    await mount();
-    stayBehind();
-
-    await act(async () => {
-      harness.chats.setSelectedChatId('stuck-chat');
-    });
-    await exhaustReadinessWait();
-    await waitFor(() =>
-      expect(screen.getByText('Getting this conversation ready')).toBeTruthy(),
-    );
-
-    for (let second = 0; second < 15; second += 1) {
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1000);
-      });
-    }
-
-    // A stalled projection waits for the author, not for a timer.
-    expect(listThreads).not.toHaveBeenCalled();
   });
 });

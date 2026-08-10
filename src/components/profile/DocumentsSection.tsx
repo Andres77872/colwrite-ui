@@ -15,10 +15,10 @@ const keyOfDocument = (document: UserDocument) => document.document_id;
 
 /**
  * DocumentsSection — every document the user has written, with the activity
- * MySQL correlates to it.
+ * counters MySQL correlates to it.
  *
- * Deliberately not the sidebar's list: that one is the MongoDB content index
- * and cannot know how many chats or assistant runs a document accumulated.
+ * Deliberately not the sidebar's list: that one is the content index and
+ * cannot know how many chats or assistant runs a document accumulated.
  */
 export function DocumentsSection({
   documents,

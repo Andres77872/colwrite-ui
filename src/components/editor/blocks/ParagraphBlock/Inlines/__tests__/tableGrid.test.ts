@@ -101,6 +101,20 @@ describe('parseClipboardTable', () => {
     expect(parseClipboardTable('just some prose')).toBeNull();
   });
 
+  it('leaves a comma-containing sentence to the browser', () => {
+    // One comma on one line is punctuation, not a grid: the split would move
+    // the sentence's second half into the neighbouring cell.
+    expect(parseClipboardTable('In this work, we show that')).toBeNull();
+    expect(parseClipboardTable('and/or, asides, DOIs: 10.1000/xyz, all prose')).toBeNull();
+  });
+
+  it('leaves multi-line prose with commas to the browser', () => {
+    // A paragraph pasted as several lines keeps its commas in the text when
+    // the lines do not all carry one.
+    expect(parseClipboardTable('In this work, we show that\nthe method scales')).toBeNull();
+    expect(parseClipboardTable('first line\nsecond, with a comma\nthird')).toBeNull();
+  });
+
   it('ignores a trailing newline', () => {
     expect(parseClipboardTable('a\tb\n')).toEqual([['a', 'b']]);
   });

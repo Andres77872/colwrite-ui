@@ -21,9 +21,4 @@ export interface AiBeatWidgetProps<TChild extends ParagraphChild = ParagraphChil
   extends InlineWidgetProps<TChild> {
   documentId: string | null;
   ensureRemoteDocument: () => Promise<string | null>;
-  waitForReady: (options?: {
-    timeoutMs?: number;
-    save?: boolean;
-    signal?: AbortSignal;
-  }) => Promise<{ ready: boolean; status: string }>;
 }

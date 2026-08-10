@@ -147,10 +147,14 @@ describe('streamAgentChat', () => {
   it('6. non-OK problem+json body becomes a typed ApiError', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
-        JSON.stringify({ code: 'projection_pending', retryable: true, detail: 'not ready' }),
+        JSON.stringify({
+          code: 'document_rate_limit_exceeded',
+          retryable: true,
+          detail: 'Too many requests',
+        }),
         {
-          status: 503,
-          statusText: 'Service Unavailable',
+          status: 429,
+          statusText: 'Too Many Requests',
           headers: { 'Content-Type': 'application/problem+json' },
         },
       ),
@@ -169,13 +173,37 @@ describe('streamAgentChat', () => {
 
     expect(caught).toBeInstanceOf(ApiError);
     const apiError = caught as ApiError;
-    expect(apiError.status).toBe(503);
-    expect((apiError.data as { code: string }).code).toBe('projection_pending');
-    expect(apiError.message).toBe('not ready');
+    expect(apiError.status).toBe(429);
+    expect((apiError.data as { code: string }).code).toBe('document_rate_limit_exceeded');
+    expect(apiError.message).toBe('Too many requests');
+  });
+
+  it('7. a terminal error event reaches the caller instead of being replayed', async () => {
+    // The turn was accepted, so only the caller knows what to say about it —
+    // and a second POST would bill the author for a reply they never saw.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      createSSEResponse([
+        {
+          event: 'error',
+          data: JSON.stringify({
+            error_code: 'DOCUMENT_NOT_FOUND',
+            message: 'No such document',
+          }),
+        },
+      ]),
+    );
+
+    const onError = vi.fn();
+    const result = await streamAgentChat({ message: 'Hi', document_id: 'doc-1' }, { onError });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith('DOCUMENT_NOT_FOUND', 'No such document');
+    expect(result.terminal).toBe('error');
   });
 });
 
-describe('streamAgentChat pending retries', () => {
+describe('streamAgentChat retries', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -184,15 +212,6 @@ describe('streamAgentChat pending retries', () => {
     vi.restoreAllMocks();
   });
 
-  const pendingEvent = {
-    event: 'error',
-    data: JSON.stringify({
-      error_code: 'PROJECTION_PENDING',
-      message: 'still preparing',
-      readiness_status: 'pending',
-      retry_after: 1,
-    }),
-  };
   const doneEvent = {
     event: 'done',
     data: JSON.stringify({
@@ -202,83 +221,25 @@ describe('streamAgentChat pending retries', () => {
     }),
   };
 
-  it('retries a PROJECTION_PENDING stream and surfaces no error on success', async () => {
+  /** A retryable rejection, fresh each call: `text()` consumes the body. */
+  function rateLimited(retryAfter?: number): Response {
+    return new Response(
+      // `retryable` as the server actually sends it: the shared gate wants the
+      // flag *and* a code it knows, so a future retryable problem is never
+      // replayed on a guess.
+      JSON.stringify({
+        code: 'document_rate_limit_exceeded',
+        retryable: true,
+        ...(retryAfter !== undefined ? { retry_after: retryAfter } : {}),
+      }),
+      { status: 429, headers: { 'Content-Type': 'application/problem+json' } },
+    );
+  }
+
+  it('replays a retryable rejection and honours retry_after', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(createSSEResponse([pendingEvent]))
-      .mockResolvedValueOnce(createSSEResponse([pendingEvent]))
-      .mockResolvedValueOnce(createSSEResponse([{ event: 'token', data: '{"content":"ok"}' }, doneEvent]));
-
-    const onError = vi.fn();
-    const onToken = vi.fn();
-    const promise = streamAgentChat(
-      { message: 'Hi', document_id: 'doc-1' },
-      { onError, onToken },
-    );
-    await vi.runAllTimersAsync();
-    const result = await promise;
-
-    expect(fetchSpy).toHaveBeenCalledTimes(3);
-    expect(onError).not.toHaveBeenCalled();
-    expect(onToken).toHaveBeenCalledWith('ok');
-    expect(result.terminal).toBe('done');
-  });
-
-  it('surfaces the error exactly once after retries are exhausted', async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockImplementation(async () => createSSEResponse([pendingEvent]));
-
-    const onError = vi.fn();
-    const promise = streamAgentChat(
-      { message: 'Hi', document_id: 'doc-1' },
-      { onError },
-    );
-    await vi.runAllTimersAsync();
-    const result = await promise;
-
-    expect(fetchSpy).toHaveBeenCalledTimes(3);
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith(
-      'PROJECTION_PENDING',
-      'still preparing',
-      expect.objectContaining({ readinessStatus: 'pending', retryAfterSeconds: 1 }),
-    );
-    expect(result.terminal).toBe('error');
-  });
-
-  it('never replays a turn that already produced output', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      createSSEResponse([
-        { event: 'token', data: '{"content":"partial"}' },
-        pendingEvent,
-      ]),
-    );
-
-    const onError = vi.fn();
-    const promise = streamAgentChat(
-      { message: 'Hi', document_id: 'doc-1' },
-      { onError },
-    );
-    await vi.runAllTimersAsync();
-    await promise;
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledTimes(1);
-  });
-
-  it('retries an HTTP 503 projection_pending problem and honours retry_after', async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(
-        new Response(
-          // `retryable` as the server actually sends it: the shared gate wants
-          // the flag *and* a code it knows, so a future retryable problem is
-          // never replayed on a guess.
-          JSON.stringify({ code: 'projection_pending', retryable: true, retry_after: 2 }),
-          { status: 503, headers: { 'Content-Type': 'application/problem+json' } },
-        ),
-      )
+      .mockResolvedValueOnce(rateLimited(2))
       .mockResolvedValueOnce(createSSEResponse([doneEvent]));
 
     const promise = streamAgentChat({ message: 'Hi', document_id: 'doc-1' }, {});
@@ -292,8 +253,40 @@ describe('streamAgentChat pending retries', () => {
     expect(result.terminal).toBe('done');
   });
 
+  it('replays history_not_ready, which is a 409 rather than a 503', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'history_not_ready', retryable: true }), {
+          status: 409,
+          headers: { 'Content-Type': 'application/problem+json' },
+        }),
+      )
+      .mockResolvedValueOnce(createSSEResponse([doneEvent]));
+
+    const promise = streamAgentChat({ message: 'Hi', document_id: 'doc-1' }, {});
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(result.terminal).toBe('done');
+  });
+
+  it('gives up after the third attempt and throws the last error', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => rateLimited());
+
+    const promise = streamAgentChat({ message: 'Hi', document_id: 'doc-1' }, {});
+    const expectation = expect(promise).rejects.toBeInstanceOf(ApiError);
+    await vi.runAllTimersAsync();
+    await expectation;
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
   it('an abort during the backoff sleep rejects instead of retrying', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(createSSEResponse([pendingEvent]));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => rateLimited());
 
     const ac = new AbortController();
     const promise = streamAgentChat(

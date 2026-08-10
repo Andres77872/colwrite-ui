@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useEditor } from '@/editor';
 import { createChat, deleteChat, listChats, updateChatTitle, type ChatItem } from '@/services/chats';
-import { describeApiError, describeReadiness } from '@/services/contracts';
-import { isRetryableProblem, isTerminalReadiness } from '@/services/retry';
+import { describeApiError } from '@/services/contracts';
+import { isRetryableProblem } from '@/services/retry';
 import { useChatSessions } from '@/components/chat/chatSessionsState';
 import { cn } from '@/lib/utils';
 import { formatDateTime } from '@/lib/text';
@@ -27,32 +27,19 @@ import {
 
 const PAGE_SIZE = 10;
 
-/**
- * Readiness verdicts that say nothing about the projection — a dropped probe,
- * or a backend without the endpoint. Reading anyway is right: the server keeps
- * its own typed rejection as the source of truth, and a probe we could not
- * trust must not wall off a read that would have worked.
- */
-const INCONCLUSIVE_READINESS = new Set([
-  'unavailable',
-  'aborted',
-  'no_document',
-  'save_failed',
-]);
-
 function chatLabel(chat: ChatItem): string {
   return chat.title?.trim() || `Untitled chat · ${chat.chat_id.slice(0, 8)}`;
 }
 
 /**
- * A conversation is stored against the document's projected numeric identity,
- * which lands shortly after the save that created it. Until it does the list
- * cannot be read — a wait, not a failure, and worth saying so.
+ * Chats are stored against the document id, so the list can only be read once
+ * the document has one. A server that is still catching up says so with a
+ * retryable problem — a wait, not a failure, and worth saying so.
  */
 type ListError = { message: string; preparing: boolean };
 
 export function ChatsPanel() {
-  const { documentId, ensureRemoteDocument, waitForReady } = useEditor();
+  const { documentId, ensureRemoteDocument } = useEditor();
   const { selectedChatId, setSelectedChatId, setSelectedThreadId } = useChatSessions();
   const confirm = useConfirm();
   const { toast } = useToast();
@@ -70,17 +57,6 @@ export function ChatsPanel() {
   /** Bumped to re-run the load effect — the single way the list is fetched. */
   const [refreshTick, setRefreshTick] = useState(0);
   const reload = useCallback(() => setRefreshTick((tick) => tick + 1), []);
-  /**
-   * The editor context value is rebuilt unmemoized on every render, so
-   * `waitForReady` is a fresh closure each time and putting it in a dep array
-   * would re-run the load forever.
-   */
-  const waitForReadyRef = useRef(waitForReady);
-  // Synced in a layout effect, not during render: a render React discards must
-  // not be the one that decides which probe the next load uses.
-  useLayoutEffect(() => {
-    waitForReadyRef.current = waitForReady;
-  });
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(count / PAGE_SIZE)), [count]);
 
@@ -107,34 +83,16 @@ export function ChatsPanel() {
       }
       setLoading(true);
       try {
-        // Ask whether the server can answer before asking it to. The probe is
-        // a 200 either way, so waiting here costs nothing in the console,
-        // where the chats endpoint would have logged a 503 per attempt.
-        //
-        // `save: false` is load-bearing, not a default: flushing pending edits
-        // would advance the very head this read is waiting for, and the wait
-        // could never end. No signal either — the probe is shared between the
-        // panels, and aborting it would settle it for everyone awaiting it.
-        const readiness = await waitForReadyRef.current({ timeoutMs: 3000, save: false });
+        // Keep the request on the asynchronous side of the effect boundary:
+        // StrictMode sets up, tears down and sets up again inside one commit,
+        // and a request sent synchronously would go out before its own cleanup
+        // could abort it — two real requests, each amplified by the transport's
+        // retry ladder.
+        await Promise.resolve();
         if (controller.signal.aborted) return;
-
-        const inconclusive = INCONCLUSIVE_READINESS.has(readiness.status);
-        if (!readiness.ready && !inconclusive) {
-          setListError({
-            message: describeReadiness(readiness.status),
-            preparing: !isTerminalReadiness(readiness.status),
-          });
-          setItems([]);
-          setCount(0);
-          return;
-        }
 
         const res = await listChats(documentId, PAGE_SIZE, (page - 1) * PAGE_SIZE, {
           signal: controller.signal,
-          // A verdict we could not trust must not wall off a read that may
-          // well work — but cap it at one attempt so a stale backend costs one
-          // console line rather than three.
-          ...(inconclusive ? { retry: { maxAttempts: 1 } } : {}),
         });
         if (controller.signal.aborted) return;
         setItems(res.chats ?? []);

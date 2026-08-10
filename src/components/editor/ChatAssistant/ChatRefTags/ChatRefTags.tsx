@@ -3,6 +3,7 @@ import { useEditor } from '../../../../editor';
 import type { Block } from '../../../../editor';
 import { cn } from '@/lib/utils';
 import { parseRefs } from './refTags';
+import { blockText } from '../../../../editor/proposals';
 
 function labelForBlock(blocks: Block[], blockId: string): string {
   const index = blocks.findIndex(b => b.id === blockId);
@@ -10,9 +11,9 @@ function labelForBlock(blocks: Block[], blockId: string): string {
   if (!b) return `Block ${blockId}`;
   if (b.type === 'heading') return `Heading ${b.level}`;
   if (b.type === 'divider') return `Divider ${index + 1}`;
-  const tmp = document.createElement('div');
-  tmp.innerHTML = b.html || '';
-  const txt = (tmp.textContent || '').trim();
+  // blockText strips tags by regex: assigning block html to a detached div's
+  // innerHTML would fire event handlers (`img onerror`) even off-document.
+  const txt = blockText(b).trim();
   return txt ? (txt.length > 60 ? txt.slice(0, 57) + '…' : txt) : `Paragraph ${index + 1}`;
 }
 

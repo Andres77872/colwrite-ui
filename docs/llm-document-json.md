@@ -39,6 +39,10 @@ Example (shape only):
   - `prefix` (optional): string (e.g., "see")
   - `suffix` (optional): string (e.g., "ch. 2")
   - `locator` (optional): string (page/section locator)
+  - `sources` (optional): array of resolved bibliographic records, one per key —
+    `{ "key": string, "title"?, "authors"?, "year"? (string), "venue"?, "url"?, "doi"? }`;
+    each `key` must match an entry in `keys`. Lets the reference list render
+    full entries instead of bare keys.
 
 Example paragraph with a citation child:
 ```json
@@ -56,7 +60,8 @@ Example paragraph with a citation child:
   - `id`: string
   - `type`: "equation"
   - `latex`: string (LaTeX math without `$` delimiters)
-  - `numbered` (optional): boolean
+  - `display` (optional): boolean (render on its own centred line)
+  - `numbered` (optional): boolean (display equations only)
   - `labelId` (optional): string
 
 Example paragraph with an equation child:
@@ -74,12 +79,15 @@ Example paragraph with an equation child:
 - Child object (graph):
   - `id`: string
   - `type`: "graph"
-  - `kind`: `"bar" | "line" | "pie"`
+  - `kind`: `"bar" | "line" | "area" | "pie"`
   - `data`: object
     - `values`: number[]
     - `labels` (optional): string[]
     - `colors` (optional): string[]
   - `title` (optional): string
+  - `caption` (optional): string (figure caption under the chart)
+  - `xLabel` (optional): string (axis label, cartesian kinds)
+  - `yLabel` (optional): string (axis label, cartesian kinds)
 
 Example paragraph with a graph child:
 ```json
@@ -177,6 +185,8 @@ Paragraphs may embed inline widgets using placeholders inside `html` and a match
   - `cols`: number (> 0)
   - `data`: string[][] with `rows` arrays, each of length `cols`
   - `header` (optional): boolean (first row is a header)
+  - `align` (optional): array of `"left" | "center" | "right"` per column; a missing entry means left
+  - `caption` (optional): string (figure caption rendered under the table)
 
 Example paragraph with a table child:
 ```json

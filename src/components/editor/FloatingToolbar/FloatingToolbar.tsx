@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import { useEditor } from '@/editor';
 import { dispatchAction } from '@/services/actionDispatcher';
-import { isTerminalReadiness } from '@/services/retry';
 import type { AiAction } from '@/config/aiActions';
 import { AIActionMenu } from './AIActionMenu/AIActionMenu';
 import {
@@ -18,8 +18,26 @@ import { Bold, Italic, Strikethrough, Underline } from 'lucide-react';
 
 const TOOLBAR_HEIGHT = 44;
 const VIEWPORT_MARGIN = 8;
-/** Roughly the toolbar's width; used only to keep it inside the viewport. */
+/** Roughly the toolbar's width; used only until the real size is measured. */
 const ESTIMATED_WIDTH = 260;
+
+/**
+ * Keep the toolbar on screen: flip below the selection when there is no room
+ * above, and clamp horizontally so it never runs off either edge.
+ *
+ * Before the first layout the size is the estimate above; afterwards the
+ * measured size, so the guess is spent on one frame at most.
+ */
+function positionFor(rect: DOMRect, size: { width: number; height: number }) {
+  const preferredTop = rect.top - size.height;
+  const top = preferredTop < VIEWPORT_MARGIN ? rect.bottom + VIEWPORT_MARGIN : preferredTop;
+  const half = size.width / 2;
+  const left = Math.min(
+    Math.max(rect.left + rect.width / 2, half + VIEWPORT_MARGIN),
+    window.innerWidth - half - VIEWPORT_MARGIN,
+  );
+  return { top, left };
+}
 
 type FormatStateKey = 'bold' | 'italic' | 'underline' | 'strike';
 
@@ -50,7 +68,7 @@ const EMPTY_STATE: FormatState = { bold: false, italic: false, underline: false,
  * this toolbar could not appear at all and the AI action menu was unreachable.
  */
 function useFloatingToolbar() {
-  const { exec, refs, updateHtml, addParagraphChild, documentId, ensureRemoteDocument, waitForReady } =
+  const { exec, refs, updateHtml, addParagraphChild, documentId, ensureRemoteDocument } =
     useEditor();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -63,6 +81,13 @@ function useFloatingToolbar() {
   // items run from the keyboard, where opening the menu moves DOM focus away
   // from the text and a live `getSelection()` read is no longer reliable.
   const savedRangeRef = useRef<Range | null>(null);
+  // The selection rect behind the current position, kept so a measured
+  // toolbar size can refine a position computed against the estimates.
+  const selectionRectRef = useRef<DOMRect | null>(null);
+  const sizeRef = useRef({ width: ESTIMATED_WIDTH, height: TOOLBAR_HEIGHT });
+  // Escape hides the toolbar until the selection it acted on is released —
+  // restoring that selection would otherwise re-show it in the same gesture.
+  const dismissedRef = useRef(false);
 
   useEffect(() => {
     const onSlashVisibility = (event: Event) => {
@@ -92,6 +117,9 @@ function useFloatingToolbar() {
 
       const selection = document.getSelection();
       if (!selection || selection.rangeCount === 0 || selection.isCollapsed || slashOpenRef.current) {
+        // A collapsed selection ends the dismissal: the next one is a fresh
+        // selection and gets the toolbar back.
+        dismissedRef.current = false;
         setVisible(false);
         return;
       }
@@ -110,6 +138,8 @@ function useFloatingToolbar() {
         return;
       }
 
+      if (dismissedRef.current) return;
+
       const range = selection.getRangeAt(0);
       const rect = range.getBoundingClientRect();
       if (!rect || (rect.width === 0 && rect.height === 0)) {
@@ -118,19 +148,9 @@ function useFloatingToolbar() {
       }
 
       savedRangeRef.current = range.cloneRange();
+      selectionRectRef.current = rect;
 
-      // Keep the toolbar on screen: flip below the selection when there is no
-      // room above, and clamp horizontally so it never runs off either edge.
-      const preferredTop = rect.top - TOOLBAR_HEIGHT;
-      const top =
-        preferredTop < VIEWPORT_MARGIN ? rect.bottom + VIEWPORT_MARGIN : preferredTop;
-      const half = ESTIMATED_WIDTH / 2;
-      const left = Math.min(
-        Math.max(rect.left + rect.width / 2, half + VIEWPORT_MARGIN),
-        window.innerWidth - half - VIEWPORT_MARGIN,
-      );
-
-      setPos({ top, left });
+      setPos(positionFor(rect, sizeRef.current));
       try {
         setStates({
           bold: document.queryCommandState('bold'),
@@ -156,6 +176,19 @@ function useFloatingToolbar() {
 
   // Abort any in-flight generation if the toolbar unmounts.
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // The first position of an opening is computed against the size estimates;
+  // measure the rendered toolbar and refine it before the browser paints.
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const el = toolbarRef.current;
+    const rect = selectionRectRef.current;
+    if (!el || !rect) return;
+    const { offsetWidth: width, offsetHeight: height } = el;
+    if (width === sizeRef.current.width && height === sizeRef.current.height) return;
+    sizeRef.current = { width, height };
+    setPos(positionFor(rect, sizeRef.current));
+  }, [visible]);
 
   const findBlockId = useCallback((node: Node | null): { el: HTMLDivElement | null; id: string | null } => {
     let current: Node | null = node;
@@ -186,6 +219,19 @@ function useFloatingToolbar() {
     selection.removeAllRanges();
     selection.addRange(range);
   }, [findBlockId]);
+
+  /**
+   * Escape out of the toolbar: hide it and put the selection back.
+   *
+   * Restoring the saved range fires `selectionchange`, which would re-open the
+   * toolbar in the same gesture — the dismissal flag holds it closed until the
+   * selection collapses.
+   */
+  const dismiss = useCallback(() => {
+    dismissedRef.current = true;
+    setVisible(false);
+    focusSavedRange();
+  }, [focusSavedRange]);
 
   const onFormat = (command: string) => (event: React.MouseEvent | React.KeyboardEvent) => {
     event.preventDefault();
@@ -351,15 +397,6 @@ function useFloatingToolbar() {
             return;
           }
 
-          // The rewrite run is keyed on the server-side chat reference of the
-          // save above; a terminal projection state cannot be retried away.
-          const readiness = await waitForReady({ signal: controller.signal });
-          if (stopped || controller.signal.aborted) return;
-          if (!readiness.ready && isTerminalReadiness(readiness.status)) {
-            wrapper.setAttribute('data-error', '1');
-            return;
-          }
-
           await dispatchAction({
             selectedText,
             action,
@@ -438,10 +475,10 @@ function useFloatingToolbar() {
 
       await runStream();
     },
-    [addParagraphChild, documentId, ensureRemoteDocument, findBlockId, updateHtml, waitForReady],
+    [addParagraphChild, documentId, ensureRemoteDocument, findBlockId, updateHtml],
   );
 
-  return { visible, pos, states, activeIndex, setActiveIndex, toolbarRef, onFormat, onAi };
+  return { visible, pos, states, activeIndex, setActiveIndex, toolbarRef, onFormat, onAi, dismiss };
 }
 
 /**
@@ -465,12 +502,17 @@ function useRovingTabIndex(
 
 export function FloatingToolbar() {
   const { loadingDocumentId } = useEditor();
-  const { visible, pos, states, activeIndex, setActiveIndex, toolbarRef, onFormat, onAi } =
+  const { visible, pos, states, activeIndex, setActiveIndex, toolbarRef, onFormat, onAi, dismiss } =
     useFloatingToolbar();
 
   useRovingTabIndex(toolbarRef, visible, activeIndex);
 
   const onToolbarKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      dismiss();
+      return;
+    }
     const items = Array.from(toolbarRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? []);
     if (items.length === 0) return;
     const current = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -505,20 +547,19 @@ export function FloatingToolbar() {
       onMouseDown={(event) => event.preventDefault()}
     >
       {FORMAT_BUTTONS.map(({ command, stateKey, label, icon: Icon, shortcut }) => (
-        <button
+        <Button
           key={command}
           type="button"
-          className={cn(
-            'grid h-7 w-7 place-items-center rounded-sm transition-colors hover:bg-accent',
-            states[stateKey] && 'bg-primary/15 text-primary',
-          )}
+          variant="ghost"
+          size="icon-sm"
+          className={cn('rounded-sm', states[stateKey] && 'bg-primary/15 text-primary')}
           onClick={onFormat(command)}
           aria-label={shortcut ? `${label} (${shortcut})` : label}
           aria-pressed={states[stateKey]}
           title={shortcut ? `${label} · ${shortcut}` : label}
         >
           <Icon aria-hidden="true" className="h-4 w-4" />
-        </button>
+        </Button>
       ))}
 
       <div role="separator" aria-orientation="vertical" className="mx-1 h-5 w-px bg-border" />

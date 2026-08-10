@@ -6,11 +6,15 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { BLOCK_TYPES, blockTypeLabel, useEditor, type Block } from '@/editor';
 import {
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   ChevronRight,
   Eye,
@@ -22,7 +26,14 @@ import {
   Unlock,
 } from 'lucide-react';
 
-/** Column and heading-level choices rendered as a segmented control. */
+/**
+ * Column and heading-level choices rendered as a segmented control.
+ *
+ * These are menu radio items, not raw buttons: the menu roves focus over its
+ * own items and preventDefaults Tab, so anything else inside it is unreachable
+ * by keyboard. Preventing the select default keeps the menu open between
+ * picks, as the buttons behaved before.
+ */
 function SegmentedChoice<T extends number>({
   label,
   options,
@@ -41,27 +52,28 @@ function SegmentedChoice<T extends number>({
       <div className="mb-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
-      <div role="group" aria-label={label} className="flex gap-1">
-        {options.map((option) => {
-          const isActive = option === value;
-          return (
-            <button
-              key={option}
-              type="button"
-              aria-pressed={isActive}
-              className={cn(
-                'h-7 flex-1 rounded-sm border text-xs font-medium transition-colors',
-                isActive
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-border hover:bg-accent',
-              )}
-              onClick={() => onChange(option)}
-            >
-              {format(option)}
-            </button>
-          );
-        })}
-      </div>
+      <DropdownMenuRadioGroup
+        role="group"
+        aria-label={label}
+        className="flex gap-1"
+        value={String(value)}
+        onValueChange={(next) => onChange(Number(next) as T)}
+      >
+        {options.map((option) => (
+          <DropdownMenuRadioItem
+            key={option}
+            value={String(option)}
+            onSelect={(event) => event.preventDefault()}
+            className={cn(
+              'h-7 flex-1 justify-center border px-0 text-xs font-medium',
+              'data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground',
+              'data-[state=unchecked]:border-border',
+            )}
+          >
+            {format(option)}
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
     </div>
   );
 }
@@ -81,6 +93,7 @@ export function BlockControls({ id }: { id: string }) {
   const {
     addBlockAfter,
     removeBlock,
+    moveBlock,
     toggleAiHidden,
     toggleLocked,
     toggleCollapsed,
@@ -94,6 +107,7 @@ export function BlockControls({ id }: { id: string }) {
   } = useEditor();
 
   const block = blocks.find((b) => b.id === id);
+  const blockIndex = blocks.findIndex((b) => b.id === id);
 
   const isAddOpen = openMenuBlockId === id && openMenuType === 'add';
   const isOptionsOpen = openMenuBlockId === id && openMenuType === 'options';
@@ -130,7 +144,10 @@ export function BlockControls({ id }: { id: string }) {
           <button
             type="button"
             className={cn(
+              // Hand-rolled rather than Button: icon-xs would shrink the 16px
+              // glyph to 14px. The ring is the standard one it lacks.
               'flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               isAddOpen && 'bg-accent text-foreground',
             )}
             aria-label={`Insert a block after this ${label.toLowerCase()}`}
@@ -159,6 +176,7 @@ export function BlockControls({ id }: { id: string }) {
             type="button"
             className={cn(
               'flex h-6 w-6 cursor-grab items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:cursor-grabbing',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               isOptionsOpen && 'bg-accent text-foreground',
             )}
             aria-label={`${label} options — drag to reorder`}
@@ -210,6 +228,19 @@ export function BlockControls({ id }: { id: string }) {
           )}
 
           <DropdownMenuGroup>
+            {/* Drag reorder is pointer-only; these are the same move for the
+                keyboard. Disabled at the edges, where there is nowhere to go. */}
+            <DropdownMenuItem disabled={blockIndex <= 0} onSelect={() => moveBlock(id, -1)}>
+              <ArrowUp />
+              Move up
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={blockIndex < 0 || blockIndex >= blocks.length - 1}
+              onSelect={() => moveBlock(id, 1)}
+            >
+              <ArrowDown />
+              Move down
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => toggleAiHidden(id)}>
               {block.aiHidden ? <Eye /> : <EyeOff />}
               {block.aiHidden ? 'Show to assistant' : 'Hide from assistant'}

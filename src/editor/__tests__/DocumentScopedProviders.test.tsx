@@ -8,6 +8,7 @@ import {
 } from '@/components/chat/chatSessionsState';
 import { ProposalsProvider } from '../ProposalsContext';
 import {
+  EditorActionsContext,
   EditorContext,
   type EditorContextValue,
 } from '../editorContextState';
@@ -88,13 +89,18 @@ function CaptureDocumentState() {
 }
 
 function Tree({ documentId }: { documentId: string }) {
+  const value = editorValue(documentId);
+  // The fake carries both state and actions, so it feeds both halves of the
+  // split context.
   return (
-    <EditorContext.Provider value={editorValue(documentId)}>
-      <ProposalsProvider>
-        <ChatSessionsProvider>
-          <CaptureDocumentState />
-        </ChatSessionsProvider>
-      </ProposalsProvider>
+    <EditorContext.Provider value={value}>
+      <EditorActionsContext.Provider value={value}>
+        <ProposalsProvider>
+          <ChatSessionsProvider>
+            <CaptureDocumentState />
+          </ChatSessionsProvider>
+        </ProposalsProvider>
+      </EditorActionsContext.Provider>
     </EditorContext.Provider>
   );
 }

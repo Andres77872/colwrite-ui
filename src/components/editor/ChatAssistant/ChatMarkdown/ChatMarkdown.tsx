@@ -110,9 +110,15 @@ function parseBlocks(source: string): Block[] {
       continue;
     }
 
-    // Fenced code. An unterminated fence is normal mid-stream, so it renders
-    // as far as it has arrived rather than waiting for a closing marker.
-    const fence = line.match(/^```(\w*)\s*$/);
+    // Fenced code. The opener is any line starting with ``` — info strings may
+    // contain spaces (```js title="a.js"), a space before the language
+    // (``` python), or be a mid-stream partial (```py t); only the leading word
+    // is treated as the language. This must match every line the paragraph
+    // branch below excludes: a line starting with ``` that neither branch
+    // consumed used to spin this render loop forever. An unterminated fence is
+    // normal mid-stream, so it renders as far as it has arrived rather than
+    // waiting for a closing marker.
+    const fence = line.match(/^```(\w*)/);
     if (fence) {
       const code: string[] = [];
       index++;
@@ -167,6 +173,14 @@ function parseBlocks(source: string): Block[] {
     ) {
       paragraph.push(lines[index]);
       index++;
+    }
+    if (paragraph.length === 0) {
+      // Defensive: every line shape must be consumed by exactly one branch.
+      // If none matched, emit the line as literal text and move on — never
+      // loop without advancing.
+      blocks.push({ type: 'p', lines: [lines[index]] });
+      index++;
+      continue;
     }
     blocks.push({ type: 'p', lines: paragraph });
   }

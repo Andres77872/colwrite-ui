@@ -211,6 +211,43 @@ describe('FloatingToolbar keyboard operation', () => {
 
     expect(screen.getByRole('toolbar', { name: 'Text formatting' })).toBeTruthy();
   });
+
+  it('Escape closes the toolbar and returns focus to the saved selection', async () => {
+    const { editable } = await mountEditor();
+
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+
+    const bold = await screen.findByRole('button', { name: /^Bold/ });
+    act(() => {
+      bold.focus();
+    });
+
+    fireEvent.keyDown(screen.getByRole('toolbar', { name: 'Text formatting' }), { key: 'Escape' });
+
+    expect(screen.queryByRole('toolbar')).toBeNull();
+    expect(document.activeElement).toBe(editable);
+    expect(document.getSelection()?.toString()).toBe('Evidence');
+
+    // Restoring the selection fired selectionchange; the toolbar must stay
+    // hidden for that same selection rather than reopening in the same gesture.
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    expect(screen.queryByRole('toolbar')).toBeNull();
+
+    // A fresh selection is a new intent and gets the toolbar back.
+    act(() => {
+      document.getSelection()?.removeAllRanges();
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    act(() => {
+      selectText(editable, 0, 'Evidence'.length);
+    });
+    expect(await screen.findByRole('toolbar', { name: 'Text formatting' })).toBeTruthy();
+  });
 });
 
 describe('FloatingToolbar structured citation acceptance', () => {

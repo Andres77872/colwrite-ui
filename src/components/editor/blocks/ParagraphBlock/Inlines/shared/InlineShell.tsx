@@ -49,8 +49,12 @@ export const InlinePill = forwardRef<
  *
  * Wires the three things each widget used to do by hand — and occasionally
  * forgot: stop the surrounding contenteditable from seeing popover events,
- * keep Radix from moving focus into the panel (the caret belongs to the
- * document), and hand children a `close` for the Done button.
+ * move focus into the panel on open (and back to the trigger on close), and
+ * hand children a `close` for the Done button.
+ *
+ * Open-focus used to be suppressed so the document caret would not move, but
+ * these triggers live in contentEditable=false islands — there is no caret to
+ * preserve, and suppressing it left the portalled panel unreachable by Tab.
  *
  * `closeAndLeave` is the same close for an action that has already sent focus
  * somewhere else on purpose — a citation jumping to its reference entry. The
@@ -92,7 +96,8 @@ export function InlinePopover({
         className={contentClassName}
         // The paragraph underneath is contenteditable; without this the first
         // keystroke in a field lands in the document instead.
-        onOpenAutoFocus={(event) => event.preventDefault()}
+        // Radix's default open-focus moves to the first field; that is what
+        // makes the portalled panel reachable from the keyboard, so it stays.
         onCloseAutoFocus={(event) => {
           if (!restoreFocus) event.preventDefault();
         }}

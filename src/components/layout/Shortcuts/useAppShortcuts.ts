@@ -26,7 +26,7 @@ function modalIsOpen(): boolean {
  */
 export function useAppShortcuts({ onShowHelp }: { onShowHelp: () => void }) {
   const { toggle, toggleLeftCollapsed, toggleAssistant } = usePanels();
-  const { save } = useEditor();
+  const { save, undo, redo } = useEditor();
 
   useEffect(() => {
     const run: Record<ShortcutId, () => void> = {
@@ -34,6 +34,8 @@ export function useAppShortcuts({ onShowHelp }: { onShowHelp: () => void }) {
       'toggle-sidebar': toggleLeftCollapsed,
       'toggle-assistant': toggleAssistant,
       save,
+      undo,
+      redo,
       help: onShowHelp,
     };
 
@@ -43,12 +45,14 @@ export function useAppShortcuts({ onShowHelp }: { onShowHelp: () => void }) {
       if (!shortcut) return;
       if (shortcut.id !== 'save' && modalIsOpen()) return;
       // Claim the key before the browser does — Mod+S in particular would
-      // otherwise open the "save page as" dialog over the app.
+      // otherwise open the "save page as" dialog over the app. Mod+Z must not
+      // reach the contenteditable either: the native undo stack only knows
+      // the focused block's DOM and would diverge from document state.
       event.preventDefault();
       run[shortcut.id]();
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onShowHelp, save, toggle, toggleAssistant, toggleLeftCollapsed]);
+  }, [onShowHelp, save, undo, redo, toggle, toggleAssistant, toggleLeftCollapsed]);
 }

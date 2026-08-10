@@ -24,6 +24,7 @@ import {
   type ProposedChange,
 } from './proposals';
 import { uid } from '../lib/uid';
+import { revealElement } from '../lib/reveal';
 import { ProposalsContext, type ProposalsContextValue } from './proposalsContextState';
 export type { ProposalsContextValue } from './proposalsContextState';
 
@@ -44,6 +45,16 @@ function emptyState(documentId: string | null): DocumentProposalsState {
     error: null,
   };
 }
+
+/**
+ * A durable batch that uses an operation with no editor mapping fails closed:
+ * staging the mappable subset would let the author unknowingly retire the
+ * whole server record — unmappable operations included — when the last
+ * visible change is decided. The set stays pending for a version that can
+ * review it.
+ */
+const UNREVIEWABLE_PROPOSAL_ERROR =
+  'The assistant prepared changes, but they use an operation this app version can’t review. Update the app to review them.';
 
 /**
  * Holds the agent's proposed edits until the author decides on them.
@@ -138,6 +149,10 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         if (restoreEpochRef.current !== epochAtStart) return;
         // Another tab may have decided it while the stream was still open.
         if (fetched.status !== 'pending') return;
+        if (fetched.unmappableOperations.length > 0) {
+          updateForDocument((current) => ({ ...current, error: UNREVIEWABLE_PROPOSAL_ERROR }));
+          return;
+        }
         const set = buildChangeSet({
           ...action,
           documentId: targetDocumentId,
@@ -185,6 +200,10 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
           const signature = `change-set:${changeSet.changeSetId}`;
           if (seenBatchesRef.current.has(signature)) continue;
           seenBatchesRef.current.add(signature);
+          if (changeSet.unmappableOperations.length > 0) {
+            updateForDocument((current) => ({ ...current, error: UNREVIEWABLE_PROPOSAL_ERROR }));
+            continue;
+          }
           const set = buildChangeSet({
             tool: 'doc_edit',
             toolCallId: changeSet.toolCallId ?? '',
@@ -478,13 +497,25 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         // Positioned against the batch siblings already in the document rather
         // than replayed literally, so the result does not depend on the order
         // the author happened to click in. See `resolveAcceptOp`.
-        const plan = resolveAcceptPlan([target], state.sets, blocks);
-        if (plan.ops.length > 0) {
-          const { desynced, touched } = applyPatch(plan.ops, { persist: true });
-          markRecentlyChanged(touched);
-          settled = desynced.length === 0;
-        } else {
+        let plan = resolveAcceptPlan([target], state.sets, blocks);
+        if (plan.ops.length === 0) {
           settled = false;
+        } else {
+          let outcome = applyPatch(plan.ops, { persist: true, base: blocks });
+          if (outcome.stale) {
+            // The author kept typing between the render this plan came from
+            // and the click. Recompute against the live blocks: the retry
+            // cannot go stale inside a single synchronous section, and an
+            // atomic refusal beats the old half-applied-then-stuck-pending
+            // outcome.
+            const liveBlocks = outcome.blocks;
+            plan = resolveAcceptPlan([target], state.sets, liveBlocks);
+            outcome = plan.ops.length > 0
+              ? applyPatch(plan.ops, { persist: true, base: liveBlocks })
+              : { blocks: liveBlocks, desynced: [], touched: [] };
+          }
+          markRecentlyChanged(outcome.touched);
+          settled = !outcome.stale && plan.ops.length > 0 && outcome.desynced.length === 0;
         }
 
         if (!settled) {
@@ -552,17 +583,30 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     const queue = orderedChanges(state.sets).filter((change) => change.status === 'pending');
     if (queue.length === 0) return;
 
-    const plan = resolveAcceptPlan(queue, state.sets, blocks);
+    let plan = resolveAcceptPlan(queue, state.sets, blocks);
+    let applyDesynced = 0;
     if (plan.ops.length > 0) {
-      const { touched } = applyPatch(plan.ops, { persist: true });
-      markRecentlyChanged(touched);
+      let outcome = applyPatch(plan.ops, { persist: true, base: blocks });
+      if (outcome.stale) {
+        // Same recompute-and-retry as `settle`: the document moved between
+        // render and click, so the plan's positions no longer match it.
+        const liveBlocks = outcome.blocks;
+        plan = resolveAcceptPlan(queue, state.sets, liveBlocks);
+        outcome = plan.ops.length > 0
+          ? applyPatch(plan.ops, { persist: true, base: liveBlocks })
+          : { blocks: liveBlocks, desynced: [], touched: [] };
+      }
+      markRecentlyChanged(outcome.touched);
+      // Ops that desynced at apply time count as failures too — simulation
+      // passing is no guarantee the live document agreed.
+      applyDesynced = outcome.stale ? plan.ops.length : outcome.desynced.length;
     }
 
     // Only what this run actually decided. Clearing every set discarded a
     // batch that had arrived while the confirmation dialog was open — the
     // author never saw it, and it was counted as reviewed.
     const decided = new Set(plan.applied.map((change) => change.id));
-    const failed = plan.desynced.length;
+    const failed = plan.desynced.length + applyDesynced;
 
     updateForDocument((current) => ({
       ...current,
@@ -626,8 +670,9 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     // Rendered by the canvas; the frame delay lets a just-mounted card exist.
     requestAnimationFrame(() => {
       if (activeDocumentIdRef.current !== ownerDocumentId) return;
-      const element = document.querySelector<HTMLElement>(`[data-change-id="${changeId}"]`);
-      element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Scrolling alone is sighted-only: Next/Previous also has to put focus
+      // on the card, or the next Tab walks away from what was just revealed.
+      revealElement(document.querySelector(`[data-change-id="${changeId}"]`));
     });
   }, [ownerDocumentId, updateForDocument]);
 

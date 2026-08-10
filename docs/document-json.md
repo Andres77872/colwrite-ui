@@ -101,6 +101,8 @@ export type AiBeatChild = {
   collapsed?: boolean;
 };
 
+export type TableAlign = 'left' | 'center' | 'right';
+
 export type TableChild = {
   id: string;
   type: 'table';
@@ -108,6 +110,26 @@ export type TableChild = {
   cols: number;
   data: string[][]; // rows x cols
   header?: boolean; // first row as header
+  /** Per-column alignment; a missing entry means left. */
+  align?: TableAlign[];
+  /** Figure caption rendered under the table. */
+  caption?: string;
+};
+
+/** Enough about a source to render a citation as something other than a key. */
+export type CitationSource = {
+  key: string;
+  title?: string;
+  authors?: string;
+  year?: string;
+  venue?: string;
+  url?: string;
+  provider?: 'arxiv' | 'semantic_scholar' | 'manual';
+  providerId?: string;
+  doi?: string;
+  externalIds?: Record<string, string>;
+  pdfUrl?: string;
+  // …plus optional provider metrics (citationCount, isOpenAccess, …)
 };
 
 export type CitationChild = {
@@ -118,26 +140,32 @@ export type CitationChild = {
   prefix?: string;                   // e.g., 'see', 'cf.'
   suffix?: string;                   // e.g., 'ch. 2', 'pp. 21–24'
   locator?: string;                  // page/section locator
+  /** Resolved bibliographic detail, keyed by entries in `keys`. */
+  sources?: CitationSource[];
 };
 
 export type EquationChild = {
   id: string;
   type: 'equation';
   latex: string;               // LaTeX math without $ delimiters
-  numbered?: boolean;          // reserved; false by default for inline
+  display?: boolean;           // render on its own centred line
+  numbered?: boolean;          // display equations only
   labelId?: string;            // optional anchor for cross-references
 };
 
 export type GraphChild = {
   id: string;
   type: 'graph';
-  kind: 'bar' | 'line' | 'pie';
+  kind: 'bar' | 'line' | 'area' | 'pie';
   data: {
     values: number[];
     labels?: string[];
     colors?: string[];
   };
   title?: string;
+  caption?: string;
+  xLabel?: string;
+  yLabel?: string;
 };
 
 export type ParagraphChild = AiBeatChild | TableChild | CitationChild | EquationChild | GraphChild;

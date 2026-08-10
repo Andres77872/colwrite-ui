@@ -33,22 +33,12 @@ const listDocuments = vi.fn(async () => ({
   message: '',
 }));
 
-const fetchReferenceReadiness = vi.fn(async (_id: string) => ({
-  ready: true,
-  readinessStatus: 'ready',
-  expectedHeadSeq: 4 as number | null,
-  appliedHeadSeq: 4 as number | null,
-  retryable: false,
-  retryAfterSeconds: 0,
-}));
-
 vi.mock('@/services', () => ({
   createDocument: (document: unknown) => createDocument(document),
   saveDocument: (id: string, document: unknown) => saveDocument(id, document),
   loadDocument: (id: string, init?: { signal?: AbortSignal }) => loadDocument(id, init),
   deleteDocument: (id: string) => deleteDocument(id),
   listDocuments: () => listDocuments(),
-  fetchReferenceReadiness: (id: string) => fetchReferenceReadiness(id),
 }));
 
 const { EditorProvider, useEditor } = await import('@/editor');
@@ -122,14 +112,6 @@ beforeEach(() => {
     sortOrder: 'desc',
     status: 'ok',
     message: '',
-  });
-  fetchReferenceReadiness.mockReset().mockResolvedValue({
-    ready: true,
-    readinessStatus: 'ready',
-    expectedHeadSeq: 4,
-    appliedHeadSeq: 4,
-    retryable: false,
-    retryAfterSeconds: 0,
   });
 });
 
@@ -251,6 +233,94 @@ describe('remote autosave', () => {
 
     expect(saveDocument).not.toHaveBeenCalled();
     expect(currentEditor().lastSaveSource).toBe('manual');
+  });
+
+  it('retries a failed autosave with backoff instead of waiting for the next keystroke', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockClear();
+    saveDocument
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValue({ status: 'ok', message: '', version: 4 });
+    vi.useFakeTimers();
+
+    act(() => currentEditor().setDocName('Needs a retry'));
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+      await Promise.resolve();
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(currentEditor().saveError).toMatch(/could not be saved/i);
+
+    // No new edit: the retry fires on the backoff schedule by itself.
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+      await Promise.resolve();
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(2);
+    expect(currentEditor().saveError).toBeNull();
+
+    // Success stops the backoff — no third call appears later.
+    await act(async () => {
+      vi.advanceTimersByTime(120000);
+      await Promise.resolve();
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a failed autosave once the edits are persisted elsewhere', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockClear();
+    saveDocument.mockRejectedValueOnce(new Error('network down'));
+    vi.useFakeTimers();
+
+    act(() => currentEditor().setDocName('Transient'));
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+      await Promise.resolve();
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+
+    // A restore adopts a new baseline, so nothing is dirty any more.
+    act(() => currentEditor().adoptRestoredDocument(remoteDoc('Restored', 6), 6));
+    await act(async () => {
+      vi.advanceTimersByTime(120000);
+      await Promise.resolve();
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+  });
+
+  // M8: a draft that had not reached the server yet used to be silently
+  // abandoned when the author opened another document.
+  it('creates an edited local draft remotely before switching away from it', async () => {
+    render(
+      <EditorProvider>
+        <CaptureEditor />
+      </EditorProvider>,
+    );
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+    expect(currentEditor().documentId).toBeNull();
+
+    act(() => currentEditor().setDocName('Unsaved draft'));
+    await act(async () => currentEditor().switchTo('doc-2'));
+
+    expect(createDocument).toHaveBeenCalledTimes(1);
+    expect(createDocument.mock.calls[0][0]).toMatchObject({ name: 'Unsaved draft' });
+    expect(loadDocument).toHaveBeenCalledWith('doc-2', { signal: expect.any(AbortSignal) });
+    expect(currentEditor().documentId).toBe('doc-2');
+  });
+
+  it('does not create anything when switching away from a pristine local draft', async () => {
+    render(
+      <EditorProvider>
+        <CaptureEditor />
+      </EditorProvider>,
+    );
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+
+    await act(async () => currentEditor().switchTo('doc-2'));
+
+    expect(createDocument).not.toHaveBeenCalled();
+    expect(loadDocument).toHaveBeenCalledWith('doc-2', { signal: expect.any(AbortSignal) });
   });
 });
 
@@ -602,201 +672,283 @@ describe('attaching a draft to a document id', () => {
   });
 });
 
-describe('waitForReady', () => {
-  it('flushes pending edits first and reports ready from the probe', async () => {
+describe('save integrity', () => {
+  // C3: Ctrl+S used to write only the local cache while the header reported
+  // "Saved". The shortcut now performs the real remote save.
+  it('save() persists to the server, not just the local cache', async () => {
     await mountRemoteDocument();
     saveDocument.mockClear();
 
-    act(() => currentEditor().setDocName('Edited before asking'));
-    expect(currentEditor().hasPendingEdits()).toBe(true);
-
-    let result: { ready: boolean; status: string } | undefined;
-    await act(async () => {
-      result = await currentEditor().waitForReady();
-    });
+    act(() => currentEditor().setDocName('Saved via shortcut'));
+    await act(async () => currentEditor().save());
 
     expect(saveDocument).toHaveBeenCalledTimes(1);
-    expect(fetchReferenceReadiness).toHaveBeenCalledWith('doc-1');
-    expect(result).toEqual({ ready: true, status: 'ready' });
-    // The save adopted the server's returned version as the new head seq.
-    expect(currentEditor().savedHeadSeq()).toBe(4);
+    expect(saveDocument.mock.calls[0][0]).toBe('doc-1');
+    expect(saveDocument.mock.calls[0][1]).toMatchObject({
+      version: 3,
+      name: 'Saved via shortcut',
+    });
+    expect(currentEditor().lastSaveSource).toBe('manual');
   });
 
-  it('memoizes readiness per head seq and skips the probe next time', async () => {
+  it('save() on a clean remote document reports manual without a redundant PUT', async () => {
     await mountRemoteDocument();
+    saveDocument.mockClear();
 
-    await act(async () => {
-      await currentEditor().waitForReady();
-    });
-    fetchReferenceReadiness.mockClear();
+    await act(async () => currentEditor().save());
 
-    let result: { ready: boolean; status: string } | undefined;
-    await act(async () => {
-      result = await currentEditor().waitForReady();
-    });
-
-    expect(fetchReferenceReadiness).not.toHaveBeenCalled();
-    expect(result).toEqual({ ready: true, status: 'ready' });
+    expect(saveDocument).not.toHaveBeenCalled();
+    expect(currentEditor().lastSaveSource).toBe('manual');
+    expect(currentEditor().lastSavedAt).not.toBeNull();
   });
 
-  it('stops immediately on a terminal projection status', async () => {
+  // C4: a response to a save that was in flight during a restore carried an
+  // older version; adopting it dragged versionRef below the server head and
+  // every later save failed the optimistic lock.
+  it('ignores a stale version from a save that was in flight during a restore', async () => {
     await mountRemoteDocument();
-    fetchReferenceReadiness.mockResolvedValue({
-      ready: false,
-      readinessStatus: 'deleted',
-      expectedHeadSeq: 3,
-      appliedHeadSeq: null,
-      retryable: false,
-      retryAfterSeconds: 0,
-    });
+    saveDocument.mockClear();
 
-    let result: { ready: boolean; status: string } | undefined;
+    let resolveFirst:
+      | ((value: { status: string; message: string; version: number }) => void)
+      | undefined;
+    saveDocument.mockImplementationOnce(
+      () => new Promise(resolve => {
+        resolveFirst = resolve;
+      }),
+    );
+
+    act(() => currentEditor().setDocName('Before restore'));
+    let firstSave!: Promise<void>;
+    act(() => {
+      firstSave = currentEditor().saveRemote();
+    });
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledTimes(1));
+
+    // The server restores to a newer version while the save is in flight.
+    act(() => currentEditor().adoptRestoredDocument(remoteDoc('Restored', 6), 6));
+    expect(currentEditor().doc.version).toBe(6);
+
     await act(async () => {
-      result = await currentEditor().waitForReady();
+      resolveFirst?.({ status: 'ok', message: '', version: 4 });
+      await firstSave;
     });
 
-    expect(fetchReferenceReadiness).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ ready: false, status: 'deleted' });
+    // The stale response must not regress the version…
+    expect(currentEditor().doc.version).toBe(6);
+
+    // …and the next save must lock on the restored head, not the stale one.
+    act(() => currentEditor().setDocName('After restore'));
+    await act(async () => currentEditor().saveRemote());
+    expect(saveDocument).toHaveBeenCalledTimes(2);
+    expect(saveDocument.mock.calls[1][1]).toMatchObject({ version: 6 });
   });
 
-  it('degrades to not-ready instead of throwing when the probe fails', async () => {
+  // M9: an override is a body snapshot of the document open at call time. If
+  // the workspace moved on while a queued save was awaited, the PUT must not
+  // land on the newly active document.
+  it('does not PUT an override body after the workspace moved to another document', async () => {
     await mountRemoteDocument();
-    fetchReferenceReadiness.mockRejectedValue(new Error('network down'));
+    saveDocument.mockClear();
 
-    let result: { ready: boolean; status: string } | undefined;
-    await act(async () => {
-      result = await currentEditor().waitForReady();
+    // An in-flight save the override save has to queue behind.
+    let resolveFirst:
+      | ((value: { status: string; message: string; version: number }) => void)
+      | undefined;
+    saveDocument
+      .mockImplementationOnce(
+        () => new Promise(resolve => {
+          resolveFirst = resolve;
+        }),
+      )
+      // The override PUT, if it happens at all, must be observable.
+      .mockResolvedValue({ status: 'ok', message: '', version: 7 });
+
+    act(() => currentEditor().setDocName('First edit'));
+    let firstSave!: Promise<void>;
+    act(() => {
+      firstSave = currentEditor().saveRemote();
+    });
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledTimes(1));
+
+    const docAtCallTime = currentEditor().doc;
+    let overrideSave!: Promise<void>;
+    act(() => {
+      overrideSave = currentEditor().saveRemote({ ...docAtCallTime, name: 'Renamed' });
     });
 
-    expect(result).toEqual({ ready: false, status: 'unavailable' });
-  });
-
-  it('reports save_failed instead of probing when the flush fails', async () => {
-    await mountRemoteDocument();
-    saveDocument.mockRejectedValueOnce(new Error('offline'));
-
-    act(() => currentEditor().setDocName('Edited before asking'));
-
-    let result: { ready: boolean; status: string } | undefined;
+    // Move the workspace while the override save is queued. The document is
+    // dirty, so the switch flushes first; keep that flush pending too, so the
+    // override save can only resume after the switch committed doc-2.
+    let resolveFlush:
+      | ((value: { status: string; message: string; version: number }) => void)
+      | undefined;
+    saveDocument.mockImplementationOnce(
+      () => new Promise(resolve => {
+        resolveFlush = resolve;
+      }),
+    );
+    let switched!: Promise<boolean>;
     await act(async () => {
-      result = await currentEditor().waitForReady();
+      resolveFirst?.({ status: 'ok', message: '', version: 4 });
+      await firstSave;
+      switched = currentEditor().switchTo('doc-2');
     });
-
-    expect(result).toEqual({ ready: false, status: 'save_failed' });
-    expect(fetchReferenceReadiness).not.toHaveBeenCalled();
-  });
-
-  it('shares one probe between callers asking about the same head', async () => {
-    await mountRemoteDocument();
-    const pending = deferred<Awaited<ReturnType<typeof fetchReferenceReadiness>>>();
-    fetchReferenceReadiness.mockReturnValueOnce(pending.promise);
-
-    let both: Array<{ ready: boolean; status: string }> | undefined;
-    await act(async () => {
-      const first = currentEditor().waitForReady({ save: false });
-      const second = currentEditor().waitForReady({ save: false });
-      pending.resolve({
-        ready: true,
-        readinessStatus: 'ready',
-        expectedHeadSeq: 3,
-        appliedHeadSeq: 3,
-        retryable: false,
-        retryAfterSeconds: 0,
-      });
-      both = await Promise.all([first, second]);
-    });
-
-    expect(fetchReferenceReadiness).toHaveBeenCalledTimes(1);
-    expect(both).toEqual([
-      { ready: true, status: 'ready' },
-      { ready: true, status: 'ready' },
-    ]);
-  });
-
-  it('does not answer a caller past a newer save with the older head verdict', async () => {
-    await mountRemoteDocument();
-    const stale = deferred<Awaited<ReturnType<typeof fetchReferenceReadiness>>>();
-    fetchReferenceReadiness.mockReturnValueOnce(stale.promise);
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledTimes(2));
 
     await act(async () => {
-      // In flight for head 3, and deliberately left unresolved.
-      void currentEditor().waitForReady({ save: false });
-      // A save lands; the next caller is asking about head 5, not head 3.
-      currentEditor().adoptServerVersion(5);
-      await currentEditor().waitForReady({ save: false });
+      resolveFlush?.({ status: 'ok', message: '', version: 5 });
+      await switched;
+      await overrideSave;
     });
 
-    expect(fetchReferenceReadiness).toHaveBeenCalledTimes(2);
-    stale.resolve({
-      ready: true,
-      readinessStatus: 'ready',
-      expectedHeadSeq: 3,
-      appliedHeadSeq: 3,
-      retryable: false,
-      retryAfterSeconds: 0,
-    });
+    expect(currentEditor().documentId).toBe('doc-2');
+    const overridePut = saveDocument.mock.calls.find(
+      ([, body]) => (body as { name?: string }).name === 'Renamed',
+    );
+    // If the override PUT happened at all, it must have gone to doc-1 — never
+    // to the document the workspace moved to.
+    expect(overridePut?.[0]).not.toBe('doc-2');
+    for (const [target] of saveDocument.mock.calls) {
+      expect(target).not.toBe('doc-2');
+    }
   });
+});
 
-  it('rides out a single probe hiccup rather than reporting it as an answer', async () => {
-    await mountRemoteDocument();
-    fetchReferenceReadiness
-      .mockRejectedValueOnce(new Error('network blip'))
-      .mockResolvedValueOnce({
-        ready: true,
-        readinessStatus: 'ready',
-        expectedHeadSeq: 3,
-        appliedHeadSeq: 3,
-        retryable: false,
-        retryAfterSeconds: 0,
-      });
-
-    let result: { ready: boolean; status: string } | undefined;
-    await act(async () => {
-      result = await currentEditor().waitForReady({ save: false });
-    });
-
-    expect(fetchReferenceReadiness).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ ready: true, status: 'ready' });
-  });
-
-  it.each(['deleting', 'scope_mismatch', 'conflicting'])(
-    'stops on the %s projection status too',
-    async (readinessStatus) => {
-      await mountRemoteDocument();
-      fetchReferenceReadiness.mockResolvedValue({
-        ready: false,
-        readinessStatus,
-        expectedHeadSeq: 3,
-        appliedHeadSeq: null,
-        retryable: false,
-        retryAfterSeconds: 0,
-      });
-
-      let result: { ready: boolean; status: string } | undefined;
-      await act(async () => {
-        result = await currentEditor().waitForReady({ save: false });
-      });
-
-      expect(fetchReferenceReadiness).toHaveBeenCalledTimes(1);
-      expect(result).toEqual({ ready: false, status: readinessStatus });
-    },
-  );
-
-  it('answers no_document for a draft that has never been saved', async () => {
-    localStorage.setItem('colwrite:hasRemoteDocs', 'false');
+describe('undo/redo', () => {
+  function mountLocal() {
+    localStorage.setItem(
+      'colwrite:doc:local',
+      JSON.stringify({
+        documentId: null,
+        doc: {
+          version: 1,
+          blocks: [
+            { id: 'p1', type: 'paragraph', html: 'First', children: [] },
+            { id: 'p2', type: 'paragraph', html: 'Second', children: [] },
+          ],
+        },
+      }),
+    );
     render(
       <EditorProvider>
         <CaptureEditor />
       </EditorProvider>,
     );
+  }
+
+  it('walks back and re-applies structural edits', async () => {
+    mountLocal();
     await waitFor(() => expect(editorRef.current).not.toBeNull());
 
-    let result: { ready: boolean; status: string } | undefined;
+    act(() => currentEditor().removeBlock('p2'));
+    expect(currentEditor().blocks.map(b => b.id)).toEqual(['p1']);
+
+    act(() => currentEditor().undo());
+    expect(currentEditor().blocks.map(b => b.id)).toEqual(['p1', 'p2']);
+
+    act(() => currentEditor().redo());
+    expect(currentEditor().blocks.map(b => b.id)).toEqual(['p1']);
+  });
+
+  it('coalesces a typing burst in one block into a single step', async () => {
+    mountLocal();
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+
+    act(() => currentEditor().updateHtml('p1', 'First.'));
+    act(() => currentEditor().updateHtml('p1', 'First. More'));
+    act(() => currentEditor().updateHtml('p1', 'First. More text'));
+
+    act(() => currentEditor().undo());
+    expect(currentEditor().blocks[0]).toMatchObject({ html: 'First' });
+  });
+
+  it('starts a new step for a different block and clears redo on a new edit', async () => {
+    mountLocal();
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+
+    act(() => currentEditor().updateHtml('p1', 'Changed p1'));
+    act(() => currentEditor().updateHtml('p2', 'Changed p2'));
+
+    act(() => currentEditor().undo());
+    expect(currentEditor().blocks[1]).toMatchObject({ html: 'Second' });
+    expect(currentEditor().blocks[0]).toMatchObject({ html: 'Changed p1' });
+
+    // A new edit after undoing must not resurrect the discarded future.
+    act(() => currentEditor().updateHtml('p2', 'Edited instead'));
+    act(() => currentEditor().redo());
+    expect(currentEditor().blocks[1]).toMatchObject({ html: 'Edited instead' });
+  });
+
+  it('drops history on a restore instead of resurrecting pre-restore text', async () => {
+    mountLocal();
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
+
+    act(() => currentEditor().updateHtml('p1', 'Before restore'));
+    act(() => currentEditor().adoptRestoredDocument(
+      { version: 6, name: 'Restored', blocks: [{ id: 'r1', type: 'paragraph', html: 'Server copy', children: [] }] },
+      6,
+    ));
+
+    act(() => currentEditor().undo());
+    expect(currentEditor().blocks.map(b => b.id)).toEqual(['r1']);
+  });
+
+  it('marks an undo dirty so autosave persists it', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockClear();
+    vi.useFakeTimers();
+
+    act(() => currentEditor().setDocName('Before undo'));
+    act(() => currentEditor().undo());
     await act(async () => {
-      result = await currentEditor().waitForReady({ save: false });
+      vi.advanceTimersByTime(5000);
+      await Promise.resolve();
     });
 
-    expect(result).toEqual({ ready: false, status: 'no_document' });
-    expect(fetchReferenceReadiness).not.toHaveBeenCalled();
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(saveDocument.mock.calls[0][1]).toMatchObject({ name: 'Remote document' });
+  });
+});
+
+describe('setFromJSON', () => {
+  it('rejects a document containing a block the canvas cannot render', async () => {
+    await mountRemoteDocument();
+    const before = currentEditor().doc;
+
+    expect(() =>
+      act(() =>
+        currentEditor().setFromJSON(
+          JSON.stringify({
+            version: 9,
+            blocks: [
+              { id: 'p1', type: 'paragraph', html: 'ok' },
+              { id: 'x1', type: 'image', html: 'not a block' },
+            ],
+          }),
+        ),
+      ),
+    ).toThrow(/invalid block/i);
+    expect(currentEditor().doc).toBe(before);
+  });
+
+  it('accepts a valid document through the same coercion as wire data', async () => {
+    await mountRemoteDocument();
+
+    act(() =>
+      currentEditor().setFromJSON(
+        JSON.stringify({
+          version: 9,
+          name: 'Imported',
+          blocks: [
+            { id: 'p1', type: 'paragraph', html: 'ok <img src=x onerror="alert(1)">' },
+          ],
+        }),
+      ),
+    );
+
+    expect(currentEditor().doc.name).toBe('Imported');
+    expect(currentEditor().doc.blocks).toHaveLength(1);
+    expect(currentEditor().doc.blocks[0]).toMatchObject({ id: 'p1', html: 'ok ' });
   });
 });

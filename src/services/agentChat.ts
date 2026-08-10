@@ -1,14 +1,8 @@
 import { buildUrl, ensureRefreshed } from './api';
 import { ApiError, problemRetryAfter } from './contracts';
-import {
-  abortableSleep,
-  isRetryableProblem,
-  isTerminalReadiness,
-  RETRYABLE_STREAM_CODES,
-  retryDelayMs,
-} from './retry';
+import { abortableSleep, isRetryableProblem, retryDelayMs } from './retry';
 import { emitRequireLogin } from './session';
-import { parseSSEStream, type SSEErrorDetails, type SSEEventHandlers } from './streamParser';
+import { parseSSEStream, type SSEEventHandlers } from './streamParser';
 
 // ── Types ──
 
@@ -60,10 +54,10 @@ export type AgentChatRetryOptions = {
 export type AgentChatOptions = {
   signal?: AbortSignal;
   /**
-   * Backoff policy for server "not ready yet" rejections
-   * (`PROJECTION_PENDING` / `DOCUMENT_REFERENCE_NOT_READY`). Applied by
-   * default; pass `{maxAttempts: 1}` to disable. A turn that already produced
-   * output is never replayed regardless of this setting.
+   * Backoff policy for the retryable problems the endpoint rejects with before
+   * the stream opens (rate limiting, history still being prepared). Applied by
+   * default; pass `{maxAttempts: 1}` to disable. Once the stream is open the
+   * turn is never replayed, so a reply cannot be delivered twice.
    */
   retry?: AgentChatRetryOptions;
 };
@@ -93,9 +87,13 @@ async function apiErrorFromResponse(res: Response): Promise<ApiError> {
  *   - 401 rotates the session cookie and replays once, then behaves as below
  *   - 401/403 triggers `emitRequireLogin()` then throws
  *   - Other status codes throw an `ApiError` carrying the parsed problem body
- *   - A 503 `projection_pending` problem, or a streamed `PROJECTION_PENDING` /
- *     `DOCUMENT_REFERENCE_NOT_READY` error event, is retried with backoff per
- *     `opts.retry` before the final error is surfaced
+ *   - A problem the server flags retryable (`history_not_ready`,
+ *     `document_rate_limit_exceeded`) is replayed with backoff per `opts.retry`
+ *     before the final error is surfaced
+ *
+ * A terminal `error` event inside the stream is never retried — it is handed
+ * straight to `handlers.onError`, because by then the turn has been accepted
+ * and only the caller knows what to say about it.
  *
  * Returns an `AgentChatResult` with the `chatId`, `threadId`, and `usage`
  * captured from the terminal `event: done` SSE payload.
@@ -139,10 +137,6 @@ export async function streamAgentChat(
   const maxAttempts = Math.max(1, opts?.retry?.maxAttempts ?? 3);
   const baseDelayMs = opts?.retry?.baseDelayMs ?? 500;
 
-  // A replayed request would duplicate anything the model already streamed,
-  // so the first delivered token/tool event permanently disables retries.
-  let producedOutput = false;
-
   for (let attempt = 1; ; attempt += 1) {
     let res = await send();
     if (res.status === 401 && (await ensureRefreshed())) {
@@ -151,11 +145,10 @@ export async function streamAgentChat(
 
     if (!res.ok) {
       const error = await apiErrorFromResponse(res);
-      // The shared gate rather than a hardcoded status/code pair: it also
-      // covers the other retryable problems, and — the part that was missing
-      // here — vetoes a terminal readiness status, which the in-stream error
-      // path below already respects.
-      if (isRetryableProblem(error) && attempt < maxAttempts && !producedOutput) {
+      // The shared gate rather than a hardcoded status/code pair, so this
+      // endpoint replays exactly the problems everything else does. Nothing
+      // has streamed yet at this point, so a replay cannot duplicate output.
+      if (isRetryableProblem(error) && attempt < maxAttempts) {
         await abortableSleep(
           retryDelayMs(attempt, baseDelayMs, problemRetryAfter(error)),
           opts?.signal,
@@ -174,46 +167,9 @@ export async function streamAgentChat(
       threadId: null,
       usage: null,
     };
-    let pendingRetryDelayMs: number | null = null;
-
-    const markOutput = () => {
-      producedOutput = true;
-    };
 
     const wrappedHandlers: SSEEventHandlers = {
       ...handlers,
-      onToken: (content) => {
-        markOutput();
-        handlers.onToken?.(content);
-      },
-      onToolCallStart: (tool, toolCallId, args) => {
-        markOutput();
-        handlers.onToolCallStart?.(tool, toolCallId, args);
-      },
-      onToolAction: (action) => {
-        markOutput();
-        handlers.onToolAction?.(action);
-      },
-      onError: (errorCode: string, message: string, details?: SSEErrorDetails) => {
-        if (
-          RETRYABLE_STREAM_CODES.has(errorCode)
-          // A projection that is deleted or broken never catches up, so the
-          // author should hear that now rather than after three more waits.
-          && !isTerminalReadiness(details?.readinessStatus)
-          && attempt < maxAttempts
-          && !producedOutput
-        ) {
-          // Swallow this attempt's error — the caller sees one final error,
-          // not one per retried attempt.
-          pendingRetryDelayMs = retryDelayMs(
-            attempt,
-            baseDelayMs,
-            details?.retryAfterSeconds ?? null,
-          );
-          return;
-        }
-        handlers.onError?.(errorCode, message, details);
-      },
       onDone: (chatId, threadId, usage) => {
         capturedResult = {
           chatId,
@@ -226,11 +182,6 @@ export async function streamAgentChat(
     };
 
     const parsed = await parseSSEStream(res, wrappedHandlers, { signal: opts?.signal });
-
-    if (pendingRetryDelayMs !== null) {
-      await abortableSleep(pendingRetryDelayMs, opts?.signal);
-      continue;
-    }
 
     return { ...capturedResult, terminal: parsed.terminal };
   }
