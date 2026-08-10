@@ -1,0 +1,182 @@
+/* ============================================================
+   COLWRITE — DESIGN TOKENS
+   Mirrors src/styles/globals.css (Tailwind v4 @theme) as plain CSS
+   custom properties so this reference renders without a build step.
+   Dark-first, single-mode by design.
+   ============================================================ */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- Surfaces ---- */
+  --background: #0a0a0f;
+  --foreground: #f0f2f5;
+  --card: #12121a;
+  --card-foreground: #f0f2f5;
+  --popover: #16161f;
+  --popover-foreground: #f0f2f5;
+
+  /* ---- Brand ---- */
+  --primary: #6366f1;
+  --primary-strong: #4f46e5;
+  --primary-foreground: #ffffff;
+  --accent-dark: #4f46e5;
+
+  /* ---- Secondary / muted / accent ---- */
+  --secondary: #1e1e2a;
+  --secondary-foreground: #e2e4e9;
+  --muted: #1a1a24;
+  --muted-foreground: #8b8b9a;
+  --accent: #1f1f2e;
+  --accent-foreground: #f0f2f5;
+
+  /* ---- Status ---- */
+  --destructive: #ef4444;
+  --destructive-strong: #dc2626;
+  --destructive-foreground: #ffffff;
+  --success: #22c55e;
+  --success-foreground: #04140a;
+  --warning: #f59e0b;
+  --warning-foreground: #1a1204;
+  --info: #0ea5e9;
+  --info-foreground: #04121a;
+
+  /* ---- Borders / inputs / ring ---- */
+  --border: #2a2a3a;
+  --input: #1e1e2a;
+  --ring: #6366f1;
+
+  /* ---- Block editor state ---- */
+  --block-hidden: #ec4899;
+  --block-locked: #f59e0b;
+
+  /* ---- Review diffs ---- */
+  --diff-add: rgb(34 197 94 / 0.18);
+  --diff-add-fg: #6ee7a8;
+  --diff-add-border: #22c55e;
+  --diff-remove: rgb(239 68 68 / 0.18);
+  --diff-remove-fg: #f4a3a3;
+  --diff-remove-border: #ef4444;
+
+  /* ---- Chart series (fixed categorical order) ---- */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --chart-grid: #23232f;
+  --chart-axis: #33334a;
+
+  /* ---- Typography ---- */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+  --text-2xs: 10px;   --lh-2xs: 14px;
+  --text-xs: 11px;    --lh-xs: 16px;
+  --text-sm: 13px;    --lh-sm: 18px;
+  --text-base: 14px;  --lh-base: 20px;
+  --text-md: 15px;    --lh-md: 24px;
+  --text-lg: 16px;    --lh-lg: 24px;
+  --text-xl: 20px;    --lh-xl: 28px;
+  --text-2xl: 28px;   --lh-2xl: 36px;
+  --text-3xl: 36px;   --lh-3xl: 44px;
+  --text-4xl: 48px;   --lh-4xl: 56px;
+
+  /* ---- Radius ---- */
+  --radius-none: 0px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
+
+  /* ---- Shadows (each embeds a hairline white ring) ---- */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(255 255 255 / 0.03);
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.03);
+  --shadow-lg: 0 10px 25px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.04);
+  --shadow-xl: 0 20px 40px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.05);
+
+  /* ---- Motion ---- */
+  --transition-fast: 120ms;
+  --transition-base: 150ms;
+  --transition-slow: 200ms;
+
+  /* ---- Z-index scale ---- */
+  --z-base: 1;
+  --z-sticky: 10;
+  --z-chrome: 20;
+  --z-dropdown: 50;
+  --z-floating: 100;
+  --z-modal-backdrop: 200;
+  --z-modal: 250;
+  --z-popover: 300;
+  --z-toast: 350;
+  --z-tooltip: 400;
+
+  /* ---- Editor measurements ---- */
+  --doc-measure: 800px;
+  --doc-gutter: 40px;
+}
+
+/* ============================================================
+   KEYFRAMES
+   ============================================================ */
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes shimmer { 50% { opacity: 0.45; } }
+@keyframes slide-in-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes reveal-flash {
+  0%, 100% { background-color: transparent; box-shadow: 0 0 0 0 transparent; }
+  12%, 55% {
+    background-color: color-mix(in oklab, var(--primary) 26%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 26%, transparent);
+  }
+}
+
+/* ============================================================
+   BASE
+   ============================================================ */
+
+* { box-sizing: border-box; border-color: var(--border); }
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--lh-base);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+img, svg, video { display: block; max-width: 100%; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button:not(:disabled) { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+::selection { background: color-mix(in oklab, var(--primary) 30%, transparent); }
+
+* { scrollbar-width: thin; scrollbar-color: rgb(255 255 255 / 0.14) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.1);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgb(255 255 255 / 0.2); background-clip: content-box; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

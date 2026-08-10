@@ -1,0 +1,1895 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ColWrite — Design System &amp; Views</title>
+<link rel="stylesheet" href="./tokens.css" />
+<link rel="stylesheet" href="./components.css" />
+<!-- views.css before reference.css: reference.css owns the responsive
+     overrides for .hero-grid / .profile-split, which need to cascade last. -->
+<link rel="stylesheet" href="./views.css" />
+<link rel="stylesheet" href="./reference.css" />
+</head>
+<body>
+
+<!-- ============================================================
+     ICON SPRITE — simplified Lucide geometry, 24×24, stroke 2
+     ============================================================ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <g id="i-base" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></g>
+  </defs>
+  <symbol id="ic-file-text" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M10 9H8M16 13H8M16 17H8"/></g></symbol>
+  <symbol id="ic-file-code" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="m10 13-2 2 2 2M14 17l2-2-2-2"/></g></symbol>
+  <symbol id="ic-file-plus" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M9 15h6M12 18v-6"/></g></symbol>
+  <symbol id="ic-file-down" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M12 18v-6m-3 3 3 3 3-3"/></g></symbol>
+  <symbol id="ic-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></g></symbol>
+  <symbol id="ic-network" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></g></symbol>
+  <symbol id="ic-scan-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/><path d="m16 16-1.9-1.9"/></g></symbol>
+  <symbol id="ic-book-open" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></g></symbol>
+  <symbol id="ic-message-square" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></g></symbol>
+  <symbol id="ic-message-plus" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v6M9 10h6"/></g></symbol>
+  <symbol id="ic-messages" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></g></symbol>
+  <symbol id="ic-history" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/></g></symbol>
+  <symbol id="ic-panel-right" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></g></symbol>
+  <symbol id="ic-panel-left" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></g></symbol>
+  <symbol id="ic-panel-left-close" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18m7-9-3-3m3 3-3 3"/></g></symbol>
+  <symbol id="ic-x" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></g></symbol>
+  <symbol id="ic-check" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></g></symbol>
+  <symbol id="ic-check-circle" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></g></symbol>
+  <symbol id="ic-chevron-down" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></g></symbol>
+  <symbol id="ic-chevron-up" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></g></symbol>
+  <symbol id="ic-chevron-right" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></g></symbol>
+  <symbol id="ic-sparkles" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 3.2a.5.5 0 0 1 .96 0l1.1 4.2a2 2 0 0 0 1.44 1.44l4.2 1.1a.5.5 0 0 1 0 .96l-4.2 1.1a2 2 0 0 0-1.44 1.44l-1.1 4.2a.5.5 0 0 1-.96 0l-1.1-4.2a2 2 0 0 0-1.44-1.44l-4.2-1.1a.5.5 0 0 1 0-.96l4.2-1.1A2 2 0 0 0 10.4 7.4z"/><path d="M19 15v3M20.5 16.5h-3"/></g></symbol>
+  <symbol id="ic-save" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7M7 3v4a1 1 0 0 0 1 1h7"/></g></symbol>
+  <symbol id="ic-download" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m4-4 5 5 5-5"/></g></symbol>
+  <symbol id="ic-trash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></g></symbol>
+  <symbol id="ic-keyboard" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></g></symbol>
+  <symbol id="ic-log-out" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 17 5-5-5-5M21 12H9M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></g></symbol>
+  <symbol id="ic-user" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></g></symbol>
+  <symbol id="ic-menu" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></g></symbol>
+  <symbol id="ic-alert-circle" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></g></symbol>
+  <symbol id="ic-x-circle" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></g></symbol>
+  <symbol id="ic-info" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></g></symbol>
+  <symbol id="ic-triangle-alert" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></g></symbol>
+  <symbol id="ic-circle-slash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9 15 15 9"/></g></symbol>
+  <symbol id="ic-cloud" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></g></symbol>
+  <symbol id="ic-cloud-off" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 0 1-1.7-13.8"/><path d="M11 5a7 7 0 0 1 4.7 5h1.8a4.5 4.5 0 0 1 3.4 7.4"/><path d="m2 2 20 20"/></g></symbol>
+  <symbol id="ic-loader" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></g></symbol>
+  <symbol id="ic-send" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 21.7a.5.5 0 0 0 .94-.02l6.5-19a.5.5 0 0 0-.64-.64l-19 6.5a.5.5 0 0 0-.02.94l7.93 3.18a2 2 0 0 1 1.11 1.11z"/><path d="m21.85 2.15-10.94 10.94"/></g></symbol>
+  <symbol id="ic-square" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/></g></symbol>
+  <symbol id="ic-maximize" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></g></symbol>
+  <symbol id="ic-minimize" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3"/></g></symbol>
+  <symbol id="ic-arrow-down" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14m7-7-7 7-7-7"/></g></symbol>
+  <symbol id="ic-arrow-left" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7M19 12H5"/></g></symbol>
+  <symbol id="ic-arrow-right" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14m-7-7 7 7-7 7"/></g></symbol>
+  <symbol id="ic-refresh" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16M8 16H3v5"/></g></symbol>
+  <symbol id="ic-rotate-ccw" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5"/></g></symbol>
+  <symbol id="ic-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></g></symbol>
+  <symbol id="ic-eye-off" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.4 10.4 0 0 1 12 5c7 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3 7 10 7a9.7 9.7 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/></g></symbol>
+  <symbol id="ic-plus" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5v14"/></g></symbol>
+  <symbol id="ic-quote" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/><path d="M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/></g></symbol>
+  <symbol id="ic-sigma" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 7V5a1 1 0 0 0-1-1H6.5a.5.5 0 0 0-.4.8l4.5 6a2 2 0 0 1 0 2.4l-4.5 6a.5.5 0 0 0 .4.8H17a1 1 0 0 0 1-1v-2"/></g></symbol>
+  <symbol id="ic-table" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18M3 9h18M3 15h18"/></g></symbol>
+  <symbol id="ic-chart" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16M18 17V9M13 17V5M8 17v-3"/></g></symbol>
+  <symbol id="ic-columns" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/></g></symbol>
+  <symbol id="ic-flask" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2v6a2 2 0 0 0 .25.96l5.5 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.75-2.96l5.5-10.08A2 2 0 0 0 10 8V2"/><path d="M6.45 15h11.1M8.5 2h7"/></g></symbol>
+  <symbol id="ic-external" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></g></symbol>
+  <symbol id="ic-link" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"/></g></symbol>
+  <symbol id="ic-git-branch" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></g></symbol>
+  <symbol id="ic-bot" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></g></symbol>
+  <symbol id="ic-coins" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18M7 6h1v4"/></g></symbol>
+  <symbol id="ic-file-stack" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Z"/><path d="M4 6v14a2 2 0 0 0 2 2h10"/></g></symbol>
+  <symbol id="ic-dashboard" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></g></symbol>
+  <symbol id="ic-sliders" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5H3M12 19H3M14 3v4M16 17v4M21 12h-9M21 19h-5M21 5h-7M8 10v4M8 12H3"/></g></symbol>
+  <symbol id="ic-corner-down-left" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4v7a4 4 0 0 1-4 4H4"/><path d="m9 10-5 5 5 5"/></g></symbol>
+  <symbol id="ic-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2"/></g></symbol>
+  <symbol id="ic-wand" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 21 12-12"/><path d="M17 3v4M19 5h-4M19 15v4M21 17h-4"/><path d="m14 6 4 4"/></g></symbol>
+  <symbol id="ic-languages" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></g></symbol>
+  <symbol id="ic-pen-line" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></g></symbol>
+  <symbol id="ic-folder" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></g></symbol>
+  <symbol id="ic-clock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></g></symbol>
+  <symbol id="ic-grip" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></g></symbol>
+  <symbol id="ic-more" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></g></symbol>
+  <symbol id="ic-upload" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></g></symbol>
+  <symbol id="ic-bold" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12h9a4 4 0 0 0 0-8H6zM6 12h10a4 4 0 0 1 0 8H6z"/></g></symbol>
+  <symbol id="ic-italic" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 4h-9M14 20H5M15 4 9 20"/></g></symbol>
+  <symbol id="ic-underline" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v6a6 6 0 0 0 12 0V4M4 20h16"/></g></symbol>
+  <symbol id="ic-heading" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v16M18 4v16M6 12h12"/></g></symbol>
+  <symbol id="ic-minus" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></g></symbol>
+  <symbol id="ic-move" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4"/></g></symbol>
+  <symbol id="ic-type" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></g></symbol>
+</svg>
+
+<div class="app">
+
+<!-- ============================================================
+     SIDEBAR NAV
+     ============================================================ -->
+<aside class="nav">
+  <div class="nav-brand">
+    <span class="brand-mark lg">CW</span>
+    <div>
+      <div class="t-lg semibold">ColWrite</div>
+      <div class="t-xs muted">Design system &amp; views</div>
+    </div>
+  </div>
+  <nav class="nav-links" aria-label="Sections">
+    <p class="nav-group">Foundations</p>
+    <a href="#overview">Overview</a>
+    <a href="#color">Color</a>
+    <a href="#typography">Typography</a>
+    <a href="#shape">Radius, shadow &amp; motion</a>
+    <a href="#charts">Chart series</a>
+    <p class="nav-group">Components</p>
+    <a href="#buttons">Buttons</a>
+    <a href="#badges">Badges &amp; alerts</a>
+    <a href="#forms">Forms</a>
+    <a href="#surfaces">Surfaces &amp; cards</a>
+    <a href="#overlays">Overlays &amp; menus</a>
+    <a href="#feedback">Feedback &amp; status</a>
+    <a href="#navigation">Navigation</a>
+    <p class="nav-group">Editor primitives</p>
+    <a href="#blocks">Blocks &amp; controls</a>
+    <a href="#inlines">Inline widgets</a>
+    <a href="#diffs">Diffs &amp; proposals</a>
+    <p class="nav-group">Views</p>
+    <a href="#v-landing">Landing page</a>
+    <a href="#v-workspace">Editor workspace</a>
+    <a href="#v-chat">Chat assistant</a>
+    <a href="#v-review">Review workflow</a>
+    <a href="#v-slash">Slash menu &amp; toolbar</a>
+    <a href="#v-panels">Tool panels</a>
+    <a href="#v-profile">Profile dashboard</a>
+    <a href="#v-dialogs">Dialogs &amp; empty states</a>
+  </nav>
+</aside>
+
+<!-- ============================================================
+     MAIN
+     ============================================================ -->
+<main class="main">
+
+<!-- ---------- OVERVIEW ---------- -->
+<section id="overview" class="sec">
+  <p class="eyebrow">Reference</p>
+  <h1 class="h1">ColWrite design system</h1>
+  <p class="lead">
+    A dark-first system for a scientific block editor with an AI assistant. Every token, primitive
+    and screen below is a faithful reproduction of the shipping app: surfaces tuned against
+    <code>#0a0a0f</code>, one filled-accent split for contrast, and a review-first interaction model
+    where nothing the assistant writes reaches the document without an explicit accept.
+  </p>
+
+  <div class="grid-3" style="margin-top:24px">
+    <div class="card" style="padding:16px">
+      <p class="t-xs muted">Principle 01</p>
+      <p class="medium" style="margin:6px 0 4px">Single-mode dark</p>
+      <p class="t-sm muted">No light palette. Shadows, scrollbars, scrims and the eight chart series are validated against one background; a palette flip alone would not produce a working theme.</p>
+    </div>
+    <div class="card" style="padding:16px">
+      <p class="t-xs muted">Principle 02</p>
+      <p class="medium" style="margin:6px 0 4px">Contrast splits the accent</p>
+      <p class="t-sm muted"><code>primary</code> carries text, borders and washes. <code>primary-strong</code> fills surfaces that hold white labels — 6.3:1 where the lighter hue managed 4.47:1.</p>
+    </div>
+    <div class="card" style="padding:16px">
+      <p class="t-xs muted">Principle 03</p>
+      <p class="medium" style="margin:6px 0 4px">Meaning never rests on hue</p>
+      <p class="t-sm muted">Diffs pair a background with a foreground and a real <code>&lt;ins&gt;</code>/<code>&lt;del&gt;</code>. Change cards name their kind in words. Icons are decorative; text carries it.</p>
+    </div>
+  </div>
+
+  <div class="stat-row" style="margin-top:20px">
+    <div class="stat"><span class="n">7</span><span class="l">button variants</span></div>
+    <div class="stat"><span class="n">7</span><span class="l">button sizes</span></div>
+    <div class="stat"><span class="n">24</span><span class="l">primitives</span></div>
+    <div class="stat"><span class="n">7</span><span class="l">tool panels</span></div>
+    <div class="stat"><span class="n">10</span><span class="l">z-index steps</span></div>
+    <div class="stat"><span class="n">8</span><span class="l">chart series</span></div>
+  </div>
+</section>
+
+<!-- ---------- COLOR ---------- -->
+<section id="color" class="sec">
+  <h2 class="h2">Color</h2>
+  <p class="lead">Deep dark surfaces with a subtle blue cast. Every value below is a live token.</p>
+
+  <h3 class="h3">Surfaces</h3>
+  <div class="grid-swatch">
+    <div class="swatch"><div class="chip" style="background:var(--background)"></div><div class="meta"><div class="name">background</div><div class="value">#0a0a0f</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--card)"></div><div class="meta"><div class="name">card</div><div class="value">#12121a</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--popover)"></div><div class="meta"><div class="name">popover</div><div class="value">#16161f</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--muted)"></div><div class="meta"><div class="name">muted</div><div class="value">#1a1a24</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--secondary)"></div><div class="meta"><div class="name">secondary</div><div class="value">#1e1e2a</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--accent)"></div><div class="meta"><div class="name">accent</div><div class="value">#1f1f2e</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--border)"></div><div class="meta"><div class="name">border</div><div class="value">#2a2a3a</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--input)"></div><div class="meta"><div class="name">input</div><div class="value">#1e1e2a</div></div></div>
+  </div>
+
+  <h3 class="h3">Foreground</h3>
+  <div class="grid-swatch">
+    <div class="swatch"><div class="chip" style="background:var(--foreground)"></div><div class="meta"><div class="name">foreground</div><div class="value">#f0f2f5</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--secondary-foreground)"></div><div class="meta"><div class="name">secondary-foreground</div><div class="value">#e2e4e9</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--muted-foreground)"></div><div class="meta"><div class="name">muted-foreground</div><div class="value">#8b8b9a</div></div></div>
+  </div>
+
+  <h3 class="h3">Brand — and why it splits</h3>
+  <div class="grid-swatch">
+    <div class="swatch"><div class="chip" style="background:var(--primary)"></div><div class="meta"><div class="name">primary</div><div class="value">#6366f1 · text, borders, rings</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--primary-strong)"></div><div class="meta"><div class="name">primary-strong</div><div class="value">#4f46e5 · filled surfaces</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--destructive)"></div><div class="meta"><div class="name">destructive</div><div class="value">#ef4444 · text on dark</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--destructive-strong)"></div><div class="meta"><div class="name">destructive-strong</div><div class="value">#dc2626 · filled surfaces</div></div></div>
+  </div>
+  <div class="note">
+    <svg class="i16" aria-hidden="true"><use href="#ic-info"/></svg>
+    <p><strong>The split exists for contrast.</strong> <code>#6366f1</code> against white measures 4.47:1 — just under the 4.5:1 that 11–13px button labels need. <code>#4f46e5</code> measures 6.3:1 at the same hue, one step down. The same reasoning gives <code>destructive</code> its <code>-strong</code> pair (3.76:1 → 4.8:1).</p>
+  </div>
+
+  <h3 class="h3">Status</h3>
+  <div class="grid-swatch">
+    <div class="swatch"><div class="chip" style="background:var(--success)"></div><div class="meta"><div class="name">success</div><div class="value">#22c55e</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--warning)"></div><div class="meta"><div class="name">warning</div><div class="value">#f59e0b</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--info)"></div><div class="meta"><div class="name">info</div><div class="value">#0ea5e9</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--ring)"></div><div class="meta"><div class="name">ring</div><div class="value">#6366f1</div></div></div>
+  </div>
+
+  <h3 class="h3">Block state &amp; review diffs</h3>
+  <div class="grid-swatch">
+    <div class="swatch"><div class="chip" style="background:var(--block-hidden)"></div><div class="meta"><div class="name">block-hidden</div><div class="value">#ec4899</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--block-locked)"></div><div class="meta"><div class="name">block-locked</div><div class="value">#f59e0b</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--diff-add);border-bottom:2px solid var(--diff-add-border)"></div><div class="meta"><div class="name">diff-add</div><div class="value">rgb(34 197 94 / .18)</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--diff-add-fg)"></div><div class="meta"><div class="name">diff-add-fg</div><div class="value">#6ee7a8</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--diff-remove);border-bottom:2px solid var(--diff-remove-border)"></div><div class="meta"><div class="name">diff-remove</div><div class="value">rgb(239 68 68 / .18)</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--diff-remove-fg)"></div><div class="meta"><div class="name">diff-remove-fg</div><div class="value">#f4a3a3</div></div></div>
+  </div>
+</section>
+
+<!-- ---------- TYPOGRAPHY ---------- -->
+<section id="typography" class="sec">
+  <h2 class="h2">Typography</h2>
+  <p class="lead">Inter for the interface, Source Serif 4 available for document prose, and a ten-step scale in which every step carries its own leading. The interface base is 14&nbsp;px — smaller than the web default, because this is a dense tool.</p>
+
+  <div class="type-table">
+    <div class="type-row"><span class="tok">text-2xs</span><span class="dim">10 / 14</span><span style="font-size:var(--text-2xs);line-height:var(--lh-2xs)">Metadata, keycaps, timestamps</span></div>
+    <div class="type-row"><span class="tok">text-xs</span><span class="dim">11 / 16</span><span style="font-size:var(--text-xs);line-height:var(--lh-xs)">Panel labels, hints, badges</span></div>
+    <div class="type-row"><span class="tok">text-sm</span><span class="dim">13 / 18</span><span style="font-size:var(--text-sm);line-height:var(--lh-sm)">Buttons, list rows, chat messages</span></div>
+    <div class="type-row"><span class="tok">text-base</span><span class="dim">14 / 20</span><span style="font-size:var(--text-base);line-height:var(--lh-base)">Interface default</span></div>
+    <div class="type-row"><span class="tok">text-md</span><span class="dim">15 / 24</span><span style="font-size:var(--text-md);line-height:var(--lh-md)">Document body — paragraphs in the canvas</span></div>
+    <div class="type-row"><span class="tok">text-lg</span><span class="dim">16 / 24</span><span style="font-size:var(--text-lg);line-height:var(--lh-lg)">Section leads</span></div>
+    <div class="type-row"><span class="tok">text-xl</span><span class="dim">20 / 28</span><span style="font-size:var(--text-xl);line-height:var(--lh-xl)">Document title · heading 3</span></div>
+    <div class="type-row"><span class="tok">text-2xl</span><span class="dim">28 / 36</span><span style="font-size:var(--text-2xl);line-height:var(--lh-2xl)">Heading 2</span></div>
+    <div class="type-row"><span class="tok">text-3xl</span><span class="dim">36 / 44</span><span style="font-size:var(--text-3xl);line-height:var(--lh-3xl)">Heading 1</span></div>
+    <div class="type-row"><span class="tok">text-4xl</span><span class="dim">48 / 56</span><span style="font-size:var(--text-4xl);line-height:var(--lh-4xl)">Marketing hero</span></div>
+  </div>
+
+  <div class="note">
+    <svg class="i16" aria-hidden="true"><use href="#ic-info"/></svg>
+    <p><code>text-4xl</code> exists because the scale used to stop at <code>3xl</code> — the landing hero reached for Tailwind's stock <code>text-4xl</code>, which resolves to 36&nbsp;px and silently duplicated <code>3xl</code> under a second name.</p>
+  </div>
+</section>
+
+<!-- ---------- SHAPE / MOTION ---------- -->
+<section id="shape" class="sec">
+  <h2 class="h2">Radius, shadow &amp; motion</h2>
+
+  <h3 class="h3">Radius</h3>
+  <div class="row-wrap">
+    <div class="radius-demo"><div style="border-radius:var(--radius-sm)"></div><span>sm · 6</span></div>
+    <div class="radius-demo"><div style="border-radius:var(--radius-md)"></div><span>md · 10</span></div>
+    <div class="radius-demo"><div style="border-radius:var(--radius-lg)"></div><span>lg · 12</span></div>
+    <div class="radius-demo"><div style="border-radius:var(--radius-xl)"></div><span>xl · 16</span></div>
+    <div class="radius-demo"><div style="border-radius:var(--radius-2xl)"></div><span>2xl · 24</span></div>
+    <div class="radius-demo"><div style="border-radius:var(--radius-full)"></div><span>full</span></div>
+  </div>
+
+  <h3 class="h3">Shadow</h3>
+  <p class="t-sm muted" style="max-width:70ch;margin-bottom:14px">Every level embeds a hairline white inset ring. On a near-black surface a drop shadow alone reads as nothing — the ring is what carries the edge.</p>
+  <div class="grid-4">
+    <div class="shadow-demo" style="box-shadow:var(--shadow-sm)"><span>sm</span></div>
+    <div class="shadow-demo" style="box-shadow:var(--shadow-md)"><span>md</span></div>
+    <div class="shadow-demo" style="box-shadow:var(--shadow-lg)"><span>lg</span></div>
+    <div class="shadow-demo" style="box-shadow:var(--shadow-xl)"><span>xl</span></div>
+  </div>
+
+  <h3 class="h3">Motion</h3>
+  <div class="grid-3">
+    <div class="card" style="padding:14px"><p class="mono t-xs" style="color:var(--primary)">--transition-fast</p><p class="t-sm muted" style="margin:4px 0 0">120 ms · button state, hover</p></div>
+    <div class="card" style="padding:14px"><p class="mono t-xs" style="color:var(--primary)">--transition-base</p><p class="t-sm muted" style="margin:4px 0 0">150 ms · enter/exit, accordions</p></div>
+    <div class="card" style="padding:14px"><p class="mono t-xs" style="color:var(--primary)">--transition-slow</p><p class="t-sm muted" style="margin:4px 0 0">200 ms · panel width, rail</p></div>
+  </div>
+
+  <h3 class="h3">Z-index — one ordered scale</h3>
+  <div class="z-scale">
+    <div class="z-row"><span class="tok">--z-base</span><span class="tnum">1</span><span class="muted t-sm">In-flow chrome</span></div>
+    <div class="z-row"><span class="tok">--z-sticky</span><span class="tnum">10</span><span class="muted t-sm">Topbar, document header</span></div>
+    <div class="z-row"><span class="tok">--z-chrome</span><span class="tnum">20</span><span class="muted t-sm">App header, landing nav</span></div>
+    <div class="z-row"><span class="tok">--z-dropdown</span><span class="tnum">50</span><span class="muted t-sm">Dropdown menus</span></div>
+    <div class="z-row"><span class="tok">--z-floating</span><span class="tnum">100</span><span class="muted t-sm">Chat assistant window</span></div>
+    <div class="z-row"><span class="tok">--z-modal-backdrop</span><span class="tnum">200</span><span class="muted t-sm">Dialog scrim</span></div>
+    <div class="z-row"><span class="tok">--z-modal</span><span class="tnum">250</span><span class="muted t-sm">Dialogs, sheets</span></div>
+    <div class="z-row"><span class="tok">--z-popover</span><span class="tnum">300</span><span class="muted t-sm">Slash menu, floating toolbar</span></div>
+    <div class="z-row"><span class="tok">--z-toast</span><span class="tnum">350</span><span class="muted t-sm">Toasts</span></div>
+    <div class="z-row"><span class="tok">--z-tooltip</span><span class="tnum">400</span><span class="muted t-sm">Tooltips</span></div>
+  </div>
+
+  <h3 class="h3">Editor measurements</h3>
+  <div class="grid-3">
+    <div class="card" style="padding:14px"><p class="mono t-xs" style="color:var(--primary)">--doc-measure</p><p class="t-sm muted" style="margin:4px 0 0">800 px · prose column width</p></div>
+    <div class="card" style="padding:14px"><p class="mono t-xs" style="color:var(--primary)">--doc-gutter</p><p class="t-sm muted" style="margin:4px 0 0">40 px · block controls gutter</p></div>
+    <div class="card" style="padding:14px"><p class="mono t-xs" style="color:var(--primary)">panel widths</p><p class="t-sm muted" style="margin:4px 0 0">left 260 (200–400) · right 380 (280–640) · rail 52</p></div>
+  </div>
+</section>
+
+<!-- ---------- CHARTS ---------- -->
+<section id="charts" class="sec">
+  <h2 class="h2">Chart series</h2>
+  <p class="lead">A fixed categorical order, not a cycling list: a hue belongs to a category, so adding or removing one must never repaint the others. Validated as a set — lightness band, chroma floor, adjacent-pair separation under simulated colour-vision deficiency, and 3:1 against the card surface.</p>
+
+  <div class="grid-swatch">
+    <div class="swatch"><div class="chip" style="background:var(--series-1)"></div><div class="meta"><div class="name">series-1</div><div class="value">#3987e5</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--series-2)"></div><div class="meta"><div class="name">series-2</div><div class="value">#d95926</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--series-3)"></div><div class="meta"><div class="name">series-3</div><div class="value">#199e70</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--series-4)"></div><div class="meta"><div class="name">series-4</div><div class="value">#c98500</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--series-5)"></div><div class="meta"><div class="name">series-5</div><div class="value">#d55181</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--series-6)"></div><div class="meta"><div class="name">series-6</div><div class="value">#008300</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--series-7)"></div><div class="meta"><div class="name">series-7</div><div class="value">#9085e9</div></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--series-8)"></div><div class="meta"><div class="name">series-8</div><div class="value">#e66767</div></div></div>
+  </div>
+
+  <div class="grid-2" style="margin-top:20px">
+    <div class="card" style="padding:16px">
+      <p class="t-sm medium" style="margin:0 0 12px">Inline bar chart — the GraphInline widget</p>
+      <svg viewBox="0 0 320 140" style="width:100%;height:auto" role="img" aria-label="Bar chart, five categories">
+        <line x1="34" y1="10" x2="34" y2="112" stroke="var(--chart-axis)" stroke-width="1"/>
+        <line x1="34" y1="112" x2="310" y2="112" stroke="var(--chart-axis)" stroke-width="1"/>
+        <line x1="34" y1="78" x2="310" y2="78" stroke="var(--chart-grid)" stroke-width="1"/>
+        <line x1="34" y1="44" x2="310" y2="44" stroke="var(--chart-grid)" stroke-width="1"/>
+        <rect x="48" y="60" width="38" height="52" rx="3" fill="var(--series-1)"/>
+        <rect x="102" y="34" width="38" height="78" rx="3" fill="var(--series-2)"/>
+        <rect x="156" y="72" width="38" height="40" rx="3" fill="var(--series-3)"/>
+        <rect x="210" y="22" width="38" height="90" rx="3" fill="var(--series-4)"/>
+        <rect x="264" y="50" width="38" height="62" rx="3" fill="var(--series-5)"/>
+        <text x="28" y="115" text-anchor="end" fill="var(--muted-foreground)" font-size="9">0</text>
+        <text x="28" y="81" text-anchor="end" fill="var(--muted-foreground)" font-size="9">40</text>
+        <text x="28" y="47" text-anchor="end" fill="var(--muted-foreground)" font-size="9">80</text>
+        <text x="67" y="128" text-anchor="middle" fill="var(--muted-foreground)" font-size="9">7B</text>
+        <text x="121" y="128" text-anchor="middle" fill="var(--muted-foreground)" font-size="9">13B</text>
+        <text x="175" y="128" text-anchor="middle" fill="var(--muted-foreground)" font-size="9">34B</text>
+        <text x="229" y="128" text-anchor="middle" fill="var(--muted-foreground)" font-size="9">8×7B</text>
+        <text x="283" y="128" text-anchor="middle" fill="var(--muted-foreground)" font-size="9">70B</text>
+      </svg>
+    </div>
+    <div class="card" style="padding:16px">
+      <p class="t-sm medium" style="margin:0 0 12px">Activity chart — 30-day profile history</p>
+      <svg viewBox="0 0 320 140" style="width:100%;height:auto" role="img" aria-label="Activity over 30 days">
+        <line x1="30" y1="112" x2="312" y2="112" stroke="var(--chart-axis)" stroke-width="1"/>
+        <line x1="30" y1="70" x2="312" y2="70" stroke="var(--chart-grid)" stroke-width="1"/>
+        <line x1="30" y1="28" x2="312" y2="28" stroke="var(--chart-grid)" stroke-width="1"/>
+        <polyline fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round"
+          points="34,96 43,88 52,92 61,74 70,80 79,62 88,70 97,52 106,58 115,48 124,64 133,44 142,50 151,38 160,46 169,32 178,40 187,50 196,36 205,44 214,30 223,38 232,26 241,34 250,42 259,30 268,36 277,24 286,32 295,22"/>
+        <polyline fill="none" stroke="var(--series-3)" stroke-width="2" stroke-linejoin="round" opacity="0.9"
+          points="34,106 43,104 52,102 61,100 70,102 79,96 88,98 97,92 106,94 115,88 124,92 133,86 142,88 151,82 160,86 169,80 178,84 187,86 196,78 205,82 214,76 223,80 232,74 241,78 250,80 259,74 268,78 277,72 286,76 295,70"/>
+        <text x="24" y="115" text-anchor="end" fill="var(--muted-foreground)" font-size="9">0</text>
+        <text x="24" y="73" text-anchor="end" fill="var(--muted-foreground)" font-size="9">25</text>
+        <text x="24" y="31" text-anchor="end" fill="var(--muted-foreground)" font-size="9">50</text>
+        <text x="34" y="128" fill="var(--muted-foreground)" font-size="9">30 days ago</text>
+        <text x="295" y="128" text-anchor="end" fill="var(--muted-foreground)" font-size="9">today</text>
+      </svg>
+      <div class="row-wrap" style="margin-top:10px">
+        <span class="legend"><i style="background:var(--series-1)"></i>Assistant runs</span>
+        <span class="legend"><i style="background:var(--series-3)"></i>Saves</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------- BUTTONS ---------- -->
+<section id="buttons" class="sec">
+  <h2 class="h2">Buttons</h2>
+  <p class="lead">Seven variants × seven sizes, one <code>cva</code> definition. Filled variants use the <code>-strong</code> hues; every variant declares <code>focus-visible:outline-none</code> alongside its ring, so a focused control never paints a ring and an outline at two different offsets.</p>
+
+  <div class="spec">
+    <div class="spec-label">Variants</div>
+    <div class="row-wrap">
+      <button class="btn btn--default">Save</button>
+      <button class="btn btn--secondary">Secondary</button>
+      <button class="btn btn--outline">Outline</button>
+      <button class="btn btn--ghost">Ghost</button>
+      <button class="btn btn--destructive">Delete</button>
+      <button class="btn btn--link">Link</button>
+      <button class="btn btn--icon-variant sz-icon" aria-label="Icon variant"><svg aria-hidden="true"><use href="#ic-plus"/></svg></button>
+    </div>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Sizes</div>
+    <div class="row-wrap">
+      <button class="btn btn--default sz-lg">lg · 40</button>
+      <button class="btn btn--default">default · 36</button>
+      <button class="btn btn--default sz-sm">sm · 32</button>
+      <button class="btn btn--default sz-xs">xs · 24</button>
+      <button class="btn btn--default sz-icon" aria-label="icon"><svg aria-hidden="true"><use href="#ic-save"/></svg></button>
+      <button class="btn btn--default sz-icon-sm" aria-label="icon-sm"><svg aria-hidden="true"><use href="#ic-save"/></svg></button>
+      <button class="btn btn--default sz-icon-xs" aria-label="icon-xs"><svg aria-hidden="true"><use href="#ic-save"/></svg></button>
+    </div>
+    <p class="t-xs muted" style="margin-top:10px">The two smallest sizes carry their own icon size: a 16&nbsp;px glyph in a 24&nbsp;px box leaves no optical padding.</p>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">With icons &amp; states</div>
+    <div class="row-wrap">
+      <button class="btn btn--default sz-sm"><svg aria-hidden="true"><use href="#ic-save"/></svg>Save</button>
+      <button class="btn btn--ghost sz-sm"><svg aria-hidden="true"><use href="#ic-file-plus"/></svg>New</button>
+      <button class="btn btn--ghost sz-sm"><svg aria-hidden="true"><use href="#ic-download"/></svg>Export</button>
+      <button class="btn btn--outline sz-sm"><svg class="spin" aria-hidden="true"><use href="#ic-loader"/></svg>Refreshing…</button>
+      <button class="btn btn--default sz-sm" disabled>Disabled</button>
+      <button class="btn btn--default sz-sm focus-demo">Focus ring</button>
+    </div>
+  </div>
+</section>
+
+<!-- ---------- BADGES & ALERTS ---------- -->
+<section id="badges" class="sec">
+  <h2 class="h2">Badges &amp; alerts</h2>
+
+  <div class="spec">
+    <div class="spec-label">Badge</div>
+    <div class="row-wrap">
+      <span class="badge badge--default">Default</span>
+      <span class="badge badge--secondary">Secondary</span>
+      <span class="badge badge--outline">Outline</span>
+      <span class="badge badge--success">Ready</span>
+      <span class="badge badge--warning">Processing</span>
+      <span class="badge badge--info">v3</span>
+      <span class="badge badge--destructive">Failed</span>
+    </div>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Alert</div>
+    <div class="stack-2" style="max-width:640px">
+      <div class="alert alert--destructive"><svg class="i16 shrink0" aria-hidden="true"><use href="#ic-alert-circle"/></svg><span>Could not load your profile. The request timed out after 30 seconds.</span></div>
+      <div class="alert alert--warning"><svg class="i16 shrink0" aria-hidden="true"><use href="#ic-triangle-alert"/></svg><span>This document has unsaved changes that will be lost.</span></div>
+      <div class="alert alert--info"><svg class="i16 shrink0" aria-hidden="true"><use href="#ic-info"/></svg><span>Enable this paper source in Profile → Agent tools before using it.</span></div>
+      <div class="alert alert--success"><svg class="i16 shrink0" aria-hidden="true"><use href="#ic-check-circle"/></svg><span>Document restored to revision 12.</span></div>
+    </div>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Extraction status — resource pipeline</div>
+    <div class="row-wrap">
+      <span class="badge badge--secondary"><svg class="i12" aria-hidden="true"><use href="#ic-clock"/></svg>Queued</span>
+      <span class="badge badge--warning"><svg class="i12 spin" aria-hidden="true"><use href="#ic-loader"/></svg>Extracting</span>
+      <span class="badge badge--success"><svg class="i12" aria-hidden="true"><use href="#ic-check"/></svg>Ready</span>
+      <span class="badge badge--destructive"><svg class="i12" aria-hidden="true"><use href="#ic-x"/></svg>Failed</span>
+    </div>
+  </div>
+</section>
+
+<!-- ---------- FORMS ---------- -->
+<section id="forms" class="sec">
+  <h2 class="h2">Forms</h2>
+
+  <div class="grid-2">
+    <div class="spec">
+      <div class="spec-label">Input</div>
+      <div class="stack-2">
+        <input class="input" placeholder="Untitled document" />
+        <div class="input-search">
+          <svg class="lead-icon i14" aria-hidden="true"><use href="#ic-search"/></svg>
+          <input class="input" type="search" placeholder="Search arXiv…" />
+        </div>
+        <input class="input" value="Focused" style="border-color:var(--ring);box-shadow:0 0 0 1px var(--background),0 0 0 3px var(--ring)" readonly />
+        <input class="input" value="Disabled" disabled />
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">Textarea, select, checkbox</div>
+      <div class="stack-2">
+        <textarea class="textarea mono t-xs" rows="4">{
+  "name": "Sparse routing at scale",
+  "blocks": [ … ]
+}</textarea>
+        <div class="row">
+          <select class="select" style="width:auto"><option>10</option><option>20</option><option>50</option></select>
+          <span class="t-xs muted">Results to return</span>
+        </div>
+        <label class="row t-sm" style="gap:8px">
+          <span class="checkbox" data-state="checked"><svg class="i12" aria-hidden="true"><use href="#ic-check"/></svg></span>
+          Let the assistant search arXiv
+        </label>
+        <label class="row t-sm muted" style="gap:8px">
+          <span class="checkbox"></span>
+          Let the assistant search Semantic Scholar
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Search form — shared by arXiv and ColPali</div>
+    <form class="row" style="max-width:560px" onsubmit="return false">
+      <div class="input-search grow">
+        <svg class="lead-icon i14" aria-hidden="true"><use href="#ic-search"/></svg>
+        <input class="input" type="search" value="mixture of experts routing" />
+      </div>
+      <select class="select" style="width:auto"><option>10</option></select>
+      <button class="btn btn--default sz-sm">Search</button>
+    </form>
+    <p class="t-xs muted" style="margin-top:10px">The input is deliberately <em>not</em> disabled while loading — disabling a focused field drops focus and stops someone refining a query they can already see is wrong. The submit button guards re-entry.</p>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Kbd</div>
+    <p class="t-xs muted"><span class="kbd">Enter</span> to send · <span class="kbd">Shift</span>+<span class="kbd">Enter</span> for a new line · <span class="kbd">#</span> to reference · <span class="kbd">Ctrl</span>+<span class="kbd">/</span> for shortcuts</p>
+  </div>
+</section>
+
+<!-- ---------- SURFACES ---------- -->
+<section id="surfaces" class="sec">
+  <h2 class="h2">Surfaces &amp; cards</h2>
+
+  <div class="grid-3">
+    <div class="card">
+      <div class="card-header">
+        <h4 class="card-title">Card</h4>
+        <p class="card-desc">Header, content and footer. Renders <code>asChild</code> so a search result stays an <code>&lt;article&gt;</code> and still shares one treatment.</p>
+      </div>
+      <div class="card-content"><div class="skeleton" style="height:8px;width:100%"></div><div class="skeleton" style="height:8px;width:70%;margin-top:6px"></div></div>
+      <div class="card-footer"><button class="btn btn--outline sz-sm">Action</button></div>
+    </div>
+
+    <div class="card" style="padding:16px">
+      <div class="row" style="gap:12px">
+        <span class="feature-icon"><svg class="i16" aria-hidden="true"><use href="#ic-quote"/></svg></span>
+        <h4 class="t-sm medium" style="margin:0">Feature card</h4>
+      </div>
+      <p class="t-sm muted" style="margin:8px 0 0;line-height:var(--lh-sm)">Icon well, title, description and an optional demo slot. Used across the landing page.</p>
+      <div class="demo-well"><span class="citation-pill">[1]</span></div>
+    </div>
+
+    <div class="panel-surface" style="padding:0">
+      <div class="panel-header"><svg class="i16 muted" aria-hidden="true"><use href="#ic-book-open"/></svg>Panel surface<span class="ml-auto"></span><button class="btn btn--ghost sz-icon-sm" aria-label="Close"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+      <div style="padding:12px">
+        <p class="t-sm muted" style="margin:0">One shared treatment for all four shell regions — <code>bg-card</code>, hairline border at 60% and a 16&nbsp;px radius — so sidebar, canvas, aside and rail read as one system.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="spec" style="margin-top:20px">
+    <div class="spec-label">Paper card — one search result</div>
+    <article class="card" style="padding:12px;max-width:520px">
+      <div class="row" style="justify-content:space-between">
+        <span class="t-xs muted tnum">#1</span>
+        <span class="badge badge--info">0.87 match</span>
+      </div>
+      <h3 class="t-sm medium" style="margin:6px 0 0;line-height:1.35"><a class="link" href="#v-panels">Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity</a></h3>
+      <p class="t-xs muted" style="margin:4px 0 0">W. Fedus, B. Zoph, N. Shazeer · 2021-01-11 · v2</p>
+      <div class="row" style="align-items:flex-start;gap:12px;margin-top:8px">
+        <div class="thumb"></div>
+        <div class="grow">
+          <p class="t-xs" style="margin:0;line-height:1.6;color:color-mix(in oklab, var(--foreground) 80%, transparent)">In deep learning, models typically reuse the same parameters for all inputs. Mixture of Experts models defy this and instead select different parameters for each incoming example…</p>
+          <button class="link t-xs" style="margin-top:4px;background:none;border:0;padding:0">Read more</button>
+        </div>
+      </div>
+      <div class="row-wrap t-xs muted" style="margin-top:10px;gap:12px">
+        <a class="reslink" href="#v-panels"><svg class="i12" aria-hidden="true"><use href="#ic-external"/></svg>arXiv</a>
+        <a class="reslink" href="#v-panels"><svg class="i12" aria-hidden="true"><use href="#ic-file-down"/></svg>PDF</a>
+        <a class="reslink" href="#v-panels"><svg class="i12" aria-hidden="true"><use href="#ic-link"/></svg>DOI</a>
+        <span class="ml-auto"><button class="btn btn--outline sz-xs"><svg aria-hidden="true"><use href="#ic-quote"/></svg>Cite</button></span>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- ---------- OVERLAYS ---------- -->
+<section id="overlays" class="sec">
+  <h2 class="h2">Overlays &amp; menus</h2>
+  <p class="lead">All Radix-backed: dialog, popover, dropdown, tooltip, sheet, collapsible. The enter/exit vocabulary (<code>animate-in</code>, <code>fade-in-0</code>, <code>zoom-in-95</code>) is implemented directly in the stylesheet rather than pulled in as a dependency.</p>
+
+  <div class="grid-3">
+    <div class="spec">
+      <div class="spec-label">Dropdown menu</div>
+      <div class="surface-popover" style="width:224px">
+        <div class="menu-label"><span class="t-xs muted" style="display:block">Signed in as</span><span class="t-sm medium truncate" style="display:block;color:var(--foreground)">a.lamos@lab.edu</span></div>
+        <div class="menu-sep"></div>
+        <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-user"/></svg>Profile &amp; preferences</div>
+        <div class="menu-sep"></div>
+        <div class="menu-item danger"><svg class="i16" aria-hidden="true"><use href="#ic-log-out"/></svg>Sign out</div>
+      </div>
+    </div>
+
+    <div class="spec">
+      <div class="spec-label">Tooltip &amp; popover</div>
+      <div class="stack-3">
+        <span class="tooltip">Collapse sidebar</span>
+        <div class="surface-popover" style="width:200px;padding:12px">
+          <p class="t-sm medium" style="margin:0 0 4px">Citation format</p>
+          <p class="t-xs muted" style="margin:0">Numeric, author–year or IEEE.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="spec">
+      <div class="spec-label">Collapsible / disclosure</div>
+      <div class="disclosure">
+        <button class="disclosure-head" aria-expanded="true"><svg class="i12 rot90" aria-hidden="true"><use href="#ic-chevron-right"/></svg>3 steps<span class="ml-auto t-2xs tnum muted">12.9K in · 4.2K out</span></button>
+        <ol class="disclosure-body">
+          <li class="row t-xs" style="align-items:flex-start;gap:8px"><svg class="i12" style="color:var(--diff-add-fg);margin-top:3px" aria-hidden="true"><use href="#ic-check"/></svg><span>Read the document<span class="muted" style="display:block">18 blocks</span></span></li>
+          <li class="row t-xs" style="align-items:flex-start;gap:8px"><svg class="i12" style="color:var(--diff-add-fg);margin-top:3px" aria-hidden="true"><use href="#ic-check"/></svg><span>Searched arXiv<span class="muted" style="display:block">“sparse routing” · 10 results</span></span></li>
+          <li class="row t-xs" style="align-items:flex-start;gap:8px"><svg class="i12 spin" style="margin-top:3px" aria-hidden="true"><use href="#ic-loader"/></svg><span>Proposing a rewrite</span></li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-top:20px">
+    <div class="spec">
+      <div class="spec-label">Dialog</div>
+      <div class="dialog-scrim">
+        <div class="dialog" style="max-width:100%">
+          <h3 class="t-lg semibold" style="margin:0">Delete “Sparse routing at scale”?</h3>
+          <p class="t-sm muted" style="margin:8px 0 0">This permanently removes the document and its chats. It cannot be undone.</p>
+          <div class="row" style="justify-content:flex-end;margin-top:18px">
+            <button class="btn btn--ghost sz-sm">Cancel</button>
+            <button class="btn btn--destructive sz-sm">Delete</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">Sheet — the mobile drawer for sidebar and tools</div>
+      <div class="dialog-scrim" style="place-items:stretch">
+        <div class="panel-surface" style="max-width:70%;margin-left:auto;display:flex;flex-direction:column">
+          <div class="panel-header">Tools<span class="ml-auto"></span><button class="btn btn--ghost sz-icon-sm" aria-label="Close"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+          <div style="padding:12px" class="stack-2">
+            <div class="skeleton" style="height:36px"></div>
+            <div class="skeleton" style="height:64px"></div>
+            <div class="skeleton" style="height:64px;opacity:.6"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------- FEEDBACK ---------- -->
+<section id="feedback" class="sec">
+  <h2 class="h2">Feedback &amp; status</h2>
+
+  <div class="grid-2">
+    <div class="spec">
+      <div class="spec-label">Toast — four variants, bottom-centre, max three</div>
+      <div class="stack-2" style="max-width:420px">
+        <div class="toast toast--success"><svg class="i16 shrink0" style="color:var(--success);margin-top:2px" aria-hidden="true"><use href="#ic-check-circle"/></svg><div class="grow"><p class="t-sm medium" style="margin:0">Document saved</p></div><button class="btn btn--ghost sz-icon-xs" aria-label="Dismiss"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+        <div class="toast toast--error"><svg class="i16 shrink0" style="color:var(--destructive);margin-top:2px" aria-hidden="true"><use href="#ic-x-circle"/></svg><div class="grow"><p class="t-sm medium" style="margin:0">Autosave failed</p><p class="t-xs muted" style="margin:2px 0 0">Version conflict — the document changed on the server.</p></div><button class="btn btn--ghost sz-icon-xs" aria-label="Dismiss"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+        <div class="toast toast--warning"><svg class="i16 shrink0" style="color:var(--warning);margin-top:2px" aria-hidden="true"><use href="#ic-triangle-alert"/></svg><div class="grow"><p class="t-sm medium" style="margin:0">Upload is still extracting</p></div><button class="btn btn--ghost sz-icon-xs" aria-label="Dismiss"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+        <div class="toast"><svg class="i16 shrink0 muted" style="margin-top:2px" aria-hidden="true"><use href="#ic-info"/></svg><div class="grow"><p class="t-sm medium" style="margin:0">Copied to clipboard</p></div><button class="btn btn--ghost sz-icon-xs" aria-label="Dismiss"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+      </div>
+      <p class="t-xs muted" style="margin-top:10px">Errors use <code>role="alert"</code> and <code>aria-live="assertive"</code>; everything else waits for a pause in speech. A repeated title reuses the existing toast and restarts its timer rather than stacking copies.</p>
+    </div>
+
+    <div class="spec">
+      <div class="spec-label">Spinner, skeleton, empty state</div>
+      <div class="stack-3">
+        <span class="row t-sm muted"><svg class="spinner spin" aria-hidden="true"><use href="#ic-loader"/></svg>Loading your profile…</span>
+        <div class="stack-2">
+          <div class="skeleton" style="height:56px"></div>
+          <div class="skeleton" style="height:56px;opacity:.7"></div>
+          <div class="skeleton" style="height:56px;opacity:.45"></div>
+        </div>
+        <div class="card">
+          <div class="empty">
+            <span class="icon-well"><svg class="i16" aria-hidden="true"><use href="#ic-panel-right"/></svg></span>
+            <p class="title">No tool selected</p>
+            <p class="desc">Pick a tool from the rail to open it here.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spec" style="margin-top:20px">
+    <div class="spec-label">Save status — the header readout</div>
+    <div class="row-wrap" style="gap:20px">
+      <span class="row t-xs muted"><svg class="i14" aria-hidden="true"><use href="#ic-check"/></svg>Autosaved 14:32</span>
+      <span class="row t-xs muted"><svg class="i14 spin" aria-hidden="true"><use href="#ic-loader"/></svg>Saving…</span>
+      <span class="row t-xs muted"><svg class="i14" aria-hidden="true"><use href="#ic-cloud-off"/></svg>Not saved to the server yet</span>
+      <span class="row t-xs muted"><svg class="i14" aria-hidden="true"><use href="#ic-cloud"/></svg>Synced</span>
+      <span class="row t-xs" style="color:var(--destructive)"><svg class="i14" aria-hidden="true"><use href="#ic-alert-circle"/></svg>Not saved</span>
+    </div>
+    <p class="t-xs muted" style="margin-top:10px">A failed save outranks everything else: autosave errors used to be swallowed, so a document that had quietly stopped saving looked exactly like one that was saving fine.</p>
+  </div>
+</section>
+
+<!-- ---------- NAVIGATION ---------- -->
+<section id="navigation" class="sec">
+  <h2 class="h2">Navigation</h2>
+
+  <div class="grid-2">
+    <div class="spec">
+      <div class="spec-label">Tabs</div>
+      <div class="tabs-list">
+        <button class="tab" data-state="active"><svg class="i14" aria-hidden="true"><use href="#ic-dashboard"/></svg>Overview</button>
+        <button class="tab"><svg class="i14" aria-hidden="true"><use href="#ic-sliders"/></svg>Agent tools</button>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">Tools rail — a real toolbar, one tab stop, arrow-key navigation</div>
+      <div class="rail-demo">
+        <button class="rail-btn" aria-label="Hide tools panel"><svg class="i16" aria-hidden="true"><use href="#ic-panel-right"/></svg></button>
+        <span class="rail-sep"></span>
+        <button class="rail-btn" aria-label="Document JSON"><svg class="i16" aria-hidden="true"><use href="#ic-file-code"/></svg></button>
+        <button class="rail-btn" aria-label="arXiv Search"><svg class="i16" aria-hidden="true"><use href="#ic-search"/></svg></button>
+        <button class="rail-btn" aria-label="Semantic Scholar"><svg class="i16" aria-hidden="true"><use href="#ic-network"/></svg></button>
+        <button class="rail-btn" aria-label="ColPali Search"><svg class="i16" aria-hidden="true"><use href="#ic-scan-search"/></svg></button>
+        <button class="rail-btn" aria-pressed="true" aria-label="Library"><svg class="i16" aria-hidden="true"><use href="#ic-book-open"/></svg></button>
+        <button class="rail-btn" aria-label="Chats"><svg class="i16" aria-hidden="true"><use href="#ic-message-square"/></svg></button>
+        <button class="rail-btn" aria-label="History"><svg class="i16" aria-hidden="true"><use href="#ic-history"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="spec" style="margin-top:20px">
+    <div class="spec-label">Brand — one definition for five surfaces</div>
+    <div class="row-wrap" style="gap:24px">
+      <span class="brand-mark sm">CW</span>
+      <span class="brand-mark md">CW</span>
+      <span class="brand-mark lg">CW</span>
+      <span class="brand-mark xl">CW</span>
+      <span class="brand-lockup"><span class="brand-mark md">CW</span><span><span class="t-lg semibold" style="display:block">ColWrite</span><span class="t-xs muted" style="display:block">Assistant writer for arXiv papers</span></span></span>
+    </div>
+  </div>
+
+  <div class="spec" style="margin-top:20px">
+    <div class="spec-label">Resize handle — keyboard-operable, reports value/min/max</div>
+    <div class="row" style="gap:0;max-width:420px">
+      <div class="panel-surface grow" style="height:56px"></div>
+      <div class="resize-handle" role="separator" aria-label="Resize sidebar" tabindex="0"></div>
+      <div class="panel-surface grow" style="height:56px"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------- BLOCKS ---------- -->
+<section id="blocks" class="sec">
+  <h2 class="h2">Blocks &amp; controls</h2>
+  <p class="lead">The document is a flat list of blocks — paragraph, heading, divider — rendered into an 800&nbsp;px measure with a 40&nbsp;px gutter. Controls live in that gutter so they never displace the prose.</p>
+
+  <div class="spec">
+    <div class="spec-label">Block types</div>
+    <div class="card doc" style="padding:20px 20px 20px 60px;max-width:720px">
+      <div class="block-hover">
+        <span class="block-gutter"><button aria-label="Add block"><svg class="i12" aria-hidden="true"><use href="#ic-plus"/></svg></button><button aria-label="Drag block"><svg class="i12" aria-hidden="true"><use href="#ic-grip"/></svg></button></span>
+        <h1 class="b">Sparse routing at scale</h1>
+      </div>
+      <h2 class="b">1 · Introduction</h2>
+      <p class="b">Mixture-of-experts layers decouple parameter count from per-token compute, which is what makes a trillion-parameter model tractable on today's accelerators <span class="citation-pill">[1]</span>.</p>
+      <hr class="b" />
+      <h3 class="b">1.1 Notation</h3>
+      <p class="b">We write the gating function as <span class="equation-chip">g(x) = softmax(W_g x)</span> throughout.</p>
+    </div>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Block states</div>
+    <div class="grid-2">
+      <div class="card doc" style="padding:16px 16px 16px 52px">
+        <div class="block-hover block-row" data-selected="true">
+          <span class="block-gutter"><button aria-label="Add"><svg class="i12" aria-hidden="true"><use href="#ic-plus"/></svg></button><button aria-label="Drag"><svg class="i12" aria-hidden="true"><use href="#ic-grip"/></svg></button></span>
+          <p class="b" style="margin:0">Selected — the block-row wash at 10% primary.</p>
+        </div>
+      </div>
+      <div class="card doc" style="padding:16px">
+        <div class="stack-2">
+          <p class="row t-xs" style="color:var(--block-hidden);margin:0"><svg class="i14" aria-hidden="true"><use href="#ic-eye-off"/></svg>Hidden from assistant — excluded from the prompt</p>
+          <p class="row t-xs" style="color:var(--block-locked);margin:0"><svg class="i14" aria-hidden="true"><use href="#ic-lock"/></svg>Locked — never modified, even on a whole-document restructure</p>
+          <p class="row t-xs muted" style="margin:0"><svg class="i14" aria-hidden="true"><use href="#ic-columns"/></svg>Columns — a paragraph reflows into up to four</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Block controls — the gutter menu</div>
+    <div class="row-wrap" style="align-items:flex-start;gap:16px">
+      <div class="surface-popover" style="width:200px">
+        <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-type"/></svg>Turn into paragraph</div>
+        <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-heading"/></svg>Turn into heading</div>
+        <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-minus"/></svg>Turn into divider</div>
+        <div class="menu-sep"></div>
+        <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-columns"/></svg>Columns <span class="ml-auto t-2xs muted">1–4</span></div>
+        <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-eye-off"/></svg>Hide from assistant</div>
+        <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-lock"/></svg>Lock block</div>
+        <div class="menu-sep"></div>
+        <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-copy"/></svg>Duplicate</div>
+        <div class="menu-item danger"><svg class="i16" aria-hidden="true"><use href="#ic-trash"/></svg>Delete</div>
+      </div>
+      <div class="card" style="padding:14px;max-width:38ch">
+        <p class="t-sm muted" style="margin:0">Every entry acts on one block. The two state toggles are what bound the assistant: hidden blocks never enter the prompt, locked blocks are never rewritten.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------- INLINES ---------- -->
+<section id="inlines" class="sec">
+  <h2 class="h2">Inline widgets</h2>
+  <p class="lead">Five widget types live inside the paragraph flow rather than beside it. Each is a <code>contenteditable=false</code> island the caret treats as a single character.</p>
+
+  <div class="grid-3">
+    <div class="card" style="padding:16px">
+      <div class="row" style="gap:12px"><span class="feature-icon"><svg class="i16" aria-hidden="true"><use href="#ic-quote"/></svg></span><h4 class="t-sm medium" style="margin:0">Citation</h4></div>
+      <p class="t-sm muted" style="margin:8px 0 0">Numeric, author–year or IEEE, keyed by DOI or arXiv ID.</p>
+      <div class="demo-well"><p class="t-sm" style="margin:0;color:color-mix(in oklab,var(--foreground) 80%,transparent)">…decoupling parameter count from compute <span class="citation-pill">[1]</span>.</p></div>
+    </div>
+    <div class="card" style="padding:16px">
+      <div class="row" style="gap:12px"><span class="feature-icon"><svg class="i16" aria-hidden="true"><use href="#ic-sigma"/></svg></span><h4 class="t-sm medium" style="margin:0">Equation</h4></div>
+      <p class="t-sm muted" style="margin:8px 0 0">LaTeX inline, with optional numbering and referenceable labels.</p>
+      <div class="demo-well"><span class="equation-chip">E = mc²</span></div>
+    </div>
+    <div class="card" style="padding:16px">
+      <div class="row" style="gap:12px"><span class="feature-icon"><svg class="i16" aria-hidden="true"><use href="#ic-table"/></svg></span><h4 class="t-sm medium" style="margin:0">Table</h4></div>
+      <p class="t-sm muted" style="margin:8px 0 0">Editable tables that live inside the paragraph flow.</p>
+      <div class="demo-well">
+        <div class="mini-table"><span>Model</span><span>Active</span><span>Score</span><span>MoE-8×7B</span><span>12.9B</span><span>81.4</span><span>Dense-34B</span><span>34B</span><span>80.1</span></div>
+      </div>
+    </div>
+    <div class="card" style="padding:16px">
+      <div class="row" style="gap:12px"><span class="feature-icon"><svg class="i16" aria-hidden="true"><use href="#ic-chart"/></svg></span><h4 class="t-sm medium" style="margin:0">Graph</h4></div>
+      <p class="t-sm muted" style="margin:8px 0 0">Bar, line and pie mini-charts built from plain data.</p>
+      <div class="demo-well"><span class="mini-chart" aria-hidden="true"><i style="height:45%"></i><i style="height:70%"></i><i style="height:55%"></i><i style="height:90%"></i><i style="height:65%"></i></span></div>
+    </div>
+    <div class="card" style="padding:16px">
+      <div class="row" style="gap:12px"><span class="feature-icon"><svg class="i16" aria-hidden="true"><use href="#ic-sparkles"/></svg></span><h4 class="t-sm medium" style="margin:0">AI Beat</h4></div>
+      <p class="t-sm muted" style="margin:8px 0 0">Generate content in place from a prompt, then accept it into the text.</p>
+      <div class="demo-well"><span class="aibeat-chip"><svg class="i14" aria-hidden="true"><use href="#ic-sparkles"/></svg>“Summarize the ablation in one sentence”</span></div>
+    </div>
+    <div class="card" style="padding:16px">
+      <div class="row" style="gap:12px"><span class="feature-icon"><svg class="i16" aria-hidden="true"><use href="#ic-columns"/></svg></span><h4 class="t-sm medium" style="margin:0">Multi-column</h4></div>
+      <p class="t-sm muted" style="margin:8px 0 0">Paragraphs reflow into up to four columns, so methods and results sit side by side.</p>
+      <div class="demo-well" style="gap:8px">
+        <div class="grow stack-1" style="border:1px solid color-mix(in oklab,var(--border) 40%,transparent);border-radius:var(--radius-md);padding:8px"><span class="skeleton" style="height:4px;width:100%"></span><span class="skeleton" style="height:4px;width:83%"></span><span class="skeleton" style="height:4px;width:100%"></span></div>
+        <div class="grow stack-1" style="border:1px solid color-mix(in oklab,var(--border) 40%,transparent);border-radius:var(--radius-md);padding:8px"><span class="skeleton" style="height:4px;width:100%"></span><span class="skeleton" style="height:4px;width:66%"></span><span class="skeleton" style="height:4px;width:83%"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Inline AI suggestion — built with raw DOM, styled in the component layer</div>
+    <div class="card" style="padding:20px;max-width:720px">
+      <p class="t-md" style="margin:0;line-height:var(--lh-md)">
+        Routing decisions are made per token, which
+        <span class="ai-suggest"><span class="ai-original">is good for efficiency</span> <span class="ai-generated">keeps the active parameter count flat as total capacity grows<span class="caret"></span></span><span class="ai-controls"><button class="ai-accept" title="Accept">✓</button><button class="ai-reject" title="Reject">✕</button><button class="ai-stop" title="Stop">■</button><button class="ai-regenerate" title="Regenerate">↻</button></span></span>.
+      </p>
+    </div>
+    <p class="t-xs muted" style="margin-top:10px">The original is struck through at 50% opacity while the suggestion streams in <code>primary</code> beside it. Nothing is written to the document until Accept.</p>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Reference chips — the assistant composer</div>
+    <div class="row-wrap">
+      <span class="ref-chip ref-chip--doc"><svg class="i12" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="truncate">Sparse routing at scale</span><span style="opacity:.6">×</span></span>
+      <span class="ref-chip ref-chip--block"><svg class="i12" aria-hidden="true"><use href="#ic-type"/></svg><span class="truncate">Block · 1.1 Notation</span><span style="opacity:.6">×</span></span>
+      <span style="background:var(--primary-strong);border-radius:var(--radius-md);padding:6px 10px" class="row">
+        <span class="t-xs" style="color:var(--primary-foreground)">Compare</span>
+        <span class="ref-chip ref-chip--onfill"><svg class="i12" aria-hidden="true"><use href="#ic-file-text"/></svg>on a filled bubble</span>
+      </span>
+    </div>
+    <p class="t-xs muted" style="margin-top:10px">A chip is one character to the caret; nothing inside it is a target. On the filled user bubble only a translucent wash of the same hue stays legible — hence the third variant.</p>
+  </div>
+</section>
+
+<!-- ---------- DIFFS ---------- -->
+<section id="diffs" class="sec">
+  <h2 class="h2">Diffs &amp; proposals</h2>
+  <p class="lead">Five change kinds, each with a rail colour, a wash, and — this is the part that matters — its kind spelled out in words. The old gutter showed three unlabeled glyphs stacked in 14&nbsp;px; with 48 cards on screen nobody could tell what any of them meant.</p>
+
+  <div class="spec">
+    <div class="spec-label">Word-level diff</div>
+    <div class="card" style="padding:20px;max-width:720px">
+      <p class="t-md" style="margin:0;line-height:var(--lh-md)">Mixture-of-experts layers <del class="diff">are useful because they</del><ins class="diff">decouple parameter count from per-token compute, which</ins> make a trillion-parameter model tractable on <ins class="diff">today's</ins> accelerators.</p>
+    </div>
+    <p class="t-xs muted" style="margin-top:10px">Real <code>&lt;ins&gt;</code> and <code>&lt;del&gt;</code> elements, not coloured spans: colour alone reads as “weWe show” — old and new concatenated — to anything that does not see the paint.</p>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Change kinds</div>
+    <div class="stack-2" style="max-width:720px">
+      <div class="review-change k-insert">
+        <div class="row-wrap" style="margin-bottom:4px">
+          <span class="kind-label k-insert"><svg class="i12" aria-hidden="true"><use href="#ic-plus"/></svg>Insert</span>
+          <span class="grow t-2xs muted truncate">Insert paragraph after “Introduction”</span>
+          <span class="row" style="gap:4px"><button class="btn btn--ghost sz-xs" style="color:var(--diff-add-fg)"><svg aria-hidden="true"><use href="#ic-check"/></svg>Accept</button><button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-x"/></svg>Reject</button></span>
+        </div>
+        <p class="t-md" style="margin:0;color:var(--diff-add-fg)">We release code and routing traces to support reproduction of every result.</p>
+      </div>
+
+      <div class="review-change k-replace">
+        <div class="row-wrap" style="margin-bottom:4px">
+          <span class="kind-label k-replace"><svg class="i12" aria-hidden="true"><use href="#ic-pen-line"/></svg>Rewrite</span>
+          <span class="grow t-2xs muted truncate">Rewrite paragraph in “Introduction”</span>
+          <span class="row" style="gap:4px"><button class="btn btn--ghost sz-xs" style="color:var(--diff-add-fg)"><svg aria-hidden="true"><use href="#ic-check"/></svg>Accept</button><button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-x"/></svg>Reject</button></span>
+        </div>
+        <p class="t-md" style="margin:0">Routing is <del class="diff">done token by token</del><ins class="diff">computed per token by a learned gate</ins>, so the active parameter count stays flat.</p>
+      </div>
+
+      <div class="review-change k-delete">
+        <div class="row-wrap" style="margin-bottom:4px">
+          <span class="kind-label k-delete"><svg class="i12" aria-hidden="true"><use href="#ic-trash"/></svg>Delete</span>
+          <span class="grow t-2xs muted truncate">Remove paragraph in “Related work”</span>
+          <span class="row" style="gap:4px"><button class="btn btn--ghost sz-xs" style="color:var(--diff-add-fg)"><svg aria-hidden="true"><use href="#ic-check"/></svg>Accept</button><button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-x"/></svg>Reject</button></span>
+        </div>
+        <p class="t-sm muted" style="margin:0">Remove this block from the document.</p>
+      </div>
+
+      <div class="review-change k-reorder">
+        <div class="row-wrap" style="margin-bottom:4px">
+          <span class="kind-label k-reorder"><svg class="i12" aria-hidden="true"><use href="#ic-move"/></svg>Move</span>
+          <span class="grow t-2xs muted truncate">Move paragraph in “Method”</span>
+          <span class="row" style="gap:4px"><button class="btn btn--ghost sz-xs" style="color:var(--diff-add-fg)"><svg aria-hidden="true"><use href="#ic-check"/></svg>Accept</button><button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-x"/></svg>Reject</button></span>
+        </div>
+        <p class="t-sm muted" style="margin:0">Move below “We train every variant for 300B tokens…”.</p>
+      </div>
+
+      <div class="review-change k-rename">
+        <div class="row-wrap" style="margin-bottom:4px">
+          <span class="kind-label k-rename"><svg class="i12" aria-hidden="true"><use href="#ic-type"/></svg>Title</span>
+          <span class="grow t-2xs muted truncate">Rename the document</span>
+          <span class="row" style="gap:4px"><button class="btn btn--ghost sz-xs" style="color:var(--diff-add-fg)"><svg aria-hidden="true"><use href="#ic-check"/></svg>Accept</button><button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-x"/></svg>Reject</button></span>
+        </div>
+        <p class="t-xl semibold" style="margin:0">Sparse routing at trillion scale</p>
+      </div>
+
+      <div class="review-change k-insert" style="opacity:.85">
+        <div class="row-wrap" style="margin-bottom:4px">
+          <span class="kind-label k-insert"><svg class="i12" aria-hidden="true"><use href="#ic-plus"/></svg>Insert</span>
+          <span class="grow t-2xs muted truncate">Insert paragraph after the addition above</span>
+          <span class="row" style="gap:4px"><button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-x"/></svg>Reject</button></span>
+        </div>
+        <p class="row t-2xs muted" style="margin:0 0 2px"><svg class="i12" aria-hidden="true"><use href="#ic-lock"/></svg>This continues the addition above — accept that one first.</p>
+        <p class="t-md" style="margin:0;color:var(--diff-add-fg)">Traces are published under CC-BY with per-token expert assignments.</p>
+      </div>
+    </div>
+    <p class="t-xs muted" style="margin-top:10px">A blocked change still offers Reject. It previously offered neither button, so a batch whose first change you did not want could not be cleared from the document at all.</p>
+  </div>
+</section>
+
+<!-- ============================================================
+     VIEWS
+     ============================================================ -->
+
+<!-- ---------- LANDING ---------- -->
+<section id="v-landing" class="sec">
+  <h2 class="h2">View · Landing page</h2>
+  <p class="lead">What a signed-out visitor sees. Every visual is a static replica of the real editor UI, and the copy only claims features that exist — the page reads as a tour of the product, not a brochure.</p>
+
+  <div class="view-frame">
+    <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>colwrite.app — signed out</span></div>
+
+    <div class="landing-nav">
+      <span class="brand-lockup"><span class="brand-mark sm">CW</span><span class="t-base semibold">ColWrite</span></span>
+      <nav class="row" style="gap:2px;margin-left:8px">
+        <a href="#v-landing">Editor</a><a href="#v-landing">AI actions</a><a href="#v-landing">Review</a><a href="#v-landing">Research</a><a href="#v-landing">Control</a>
+      </nav>
+      <button class="btn btn--default sz-sm ml-auto">Sign in</button>
+    </div>
+
+    <div class="hero">
+      <div class="hero-grid">
+        <div>
+          <p class="pill-alpha"><svg class="i14" aria-hidden="true"><use href="#ic-flask"/></svg>In alpha · invite-only</p>
+          <h1 style="margin:16px 0 0;font-size:var(--text-3xl);line-height:var(--lh-3xl);font-weight:600;letter-spacing:-0.02em">The writing environment where AI edits wait for your approval</h1>
+          <p class="t-md muted" style="margin:16px 0 0;max-width:44ch;line-height:var(--lh-md)">ColWrite is a focused editor for scientific documents — blocks, citations and LaTeX inline — with an assistant that drafts and rewrites, but saves nothing until you accept the suggestion.</p>
+          <div class="row-wrap" style="margin-top:24px;gap:12px">
+            <button class="btn btn--default sz-lg">Sign in to continue</button>
+            <button class="btn btn--outline sz-lg">See how it works</button>
+          </div>
+          <p class="t-xs muted" style="margin-top:16px">Assistant writer for arXiv papers · Autosave as you type · Documents as clean JSON</p>
+        </div>
+
+        <!-- editor mock -->
+        <div class="panel-surface" style="box-shadow:var(--shadow-xl)">
+          <div class="row" style="border-bottom:1px solid color-mix(in oklab,var(--border) 60%,transparent);padding:8px 12px">
+            <span class="t-sm medium truncate grow">Sparse routing at scale</span>
+            <span class="row t-2xs muted" style="gap:4px"><svg class="i12" aria-hidden="true"><use href="#ic-check"/></svg>Autosaved 14:32</span>
+          </div>
+          <div class="doc" style="padding:16px 18px">
+            <h3 class="b" style="margin-top:0">1 · Introduction</h3>
+            <p class="b t-sm" style="line-height:1.7">Mixture-of-experts layers decouple parameter count from per-token compute <span class="citation-pill">[1]</span>, which is what makes a trillion-parameter model tractable. We write the gate as <span class="equation-chip">g(x) = softmax(W_g x)</span>.</p>
+            <div class="review-change k-replace" style="padding-left:12px">
+              <div class="row-wrap" style="margin-bottom:4px">
+                <span class="kind-label k-replace"><svg class="i12" aria-hidden="true"><use href="#ic-pen-line"/></svg>Rewrite</span>
+                <span class="grow t-2xs muted truncate">Rewrite paragraph</span>
+                <span class="row" style="gap:2px"><button class="btn btn--ghost sz-xs" style="color:var(--diff-add-fg)"><svg aria-hidden="true"><use href="#ic-check"/></svg></button><button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></span>
+              </div>
+              <p class="t-sm" style="margin:0;line-height:1.7">Routing is <del class="diff">done token by token</del><ins class="diff">computed per token by a learned gate</ins>.</p>
+            </div>
+            <p class="b t-sm" style="line-height:1.7;margin-top:12px">We release code and routing traces for every experiment.</p>
+          </div>
+          <div class="row t-2xs muted" style="border-top:1px solid color-mix(in oklab,var(--border) 50%,transparent);padding:6px 12px;gap:16px">
+            <span><span class="medium tnum" style="color:color-mix(in oklab,var(--foreground) 80%,transparent)">1,284</span> words</span>
+            <span><span class="medium tnum" style="color:color-mix(in oklab,var(--foreground) 80%,transparent)">18</span> blocks</span>
+            <span><span class="medium tnum" style="color:color-mix(in oklab,var(--foreground) 80%,transparent)">6</span> inline widgets</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="landing-sec">
+      <div class="landing-inner">
+        <p class="eyebrow">Block editor</p>
+        <h2 style="margin:4px 0 8px;font-size:var(--text-2xl);font-weight:600;letter-spacing:-0.02em">A document model made for papers</h2>
+        <p class="lead">Paragraphs, headings and dividers — with rich widgets that sit inline in the text. Press <span class="kbd">/</span> inside a paragraph to insert any of them.</p>
+        <div class="grid-3" style="margin-top:24px">
+          <div class="card" style="padding:16px"><div class="row" style="gap:12px"><span class="feature-icon"><svg class="i16" aria-hidden="true"><use href="#ic-quote"/></svg></span><h4 class="t-sm medium" style="margin:0">Citation</h4></div><p class="t-sm muted" style="margin:8px 0 0">Inline citation tags — numeric, author–year or IEEE — keyed by DOI or arXiv ID.</p></div>
+          <div class="card" style="padding:16px"><div class="row" style="gap:12px"><span class="feature-icon"><svg class="i16" aria-hidden="true"><use href="#ic-sigma"/></svg></span><h4 class="t-sm medium" style="margin:0">Equation</h4></div><p class="t-sm muted" style="margin:8px 0 0">LaTeX inline, with optional numbering and referenceable labels.</p></div>
+          <div class="card" style="padding:16px"><div class="row" style="gap:12px"><span class="feature-icon"><svg class="i16" aria-hidden="true"><use href="#ic-table"/></svg></span><h4 class="t-sm medium" style="margin:0">Table</h4></div><p class="t-sm muted" style="margin:8px 0 0">Editable tables that live inside the paragraph flow, not next to it.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="landing-sec">
+      <div class="landing-inner">
+        <div class="grid-2" style="gap:40px;align-items:center">
+          <div>
+            <p class="eyebrow">Review workflow</p>
+            <h2 style="margin:4px 0 8px;font-size:var(--text-2xl);font-weight:600;letter-spacing:-0.02em">The assistant proposes. You dispose.</h2>
+            <p class="lead">Ask the assistant to rewrite, restructure or draft — every edit lands in the document as a suggested change, right where it would appear.</p>
+            <ul class="checklist">
+              <li><svg class="i16" aria-hidden="true"><use href="#ic-check"/></svg><span>Word-level diffs show exactly what moved — additions, rewrites, deletions, moves and title changes.</span></li>
+              <li><svg class="i16" aria-hidden="true"><use href="#ic-check"/></svg><span>Accept or reject each change where it lands, or work through the batch from the review bar.</span></li>
+              <li><svg class="i16" aria-hidden="true"><use href="#ic-check"/></svg><span>Dependent changes stay locked until the change they build on is accepted.</span></li>
+              <li><svg class="i16" aria-hidden="true"><use href="#ic-check"/></svg><span>Chat with the document: reference it with <span class="kbd">#</span>, then ask for rewrites, structure, summaries or references.</span></li>
+            </ul>
+          </div>
+          <div class="stack-2">
+            <div class="review-change k-replace">
+              <div class="row-wrap" style="margin-bottom:4px"><span class="kind-label k-replace"><svg class="i12" aria-hidden="true"><use href="#ic-pen-line"/></svg>Rewrite</span><span class="grow t-2xs muted truncate">Rewrite paragraph in “Introduction”</span></div>
+              <p class="t-sm" style="margin:0;line-height:1.7">Mixture-of-experts layers <del class="diff">are useful because they</del><ins class="diff">decouple parameter count from per-token compute, which</ins> make trillion-parameter models tractable.</p>
+            </div>
+            <div class="review-change k-insert">
+              <div class="row-wrap" style="margin-bottom:4px"><span class="kind-label k-insert"><svg class="i12" aria-hidden="true"><use href="#ic-plus"/></svg>Insert</span><span class="grow t-2xs muted truncate">Insert paragraph after “Introduction”</span></div>
+              <p class="row t-2xs muted" style="margin:0 0 2px"><svg class="i12" aria-hidden="true"><use href="#ic-lock"/></svg>This continues the addition above — accept that one first.</p>
+              <p class="t-sm" style="margin:0;color:var(--diff-add-fg);line-height:1.7">We release code and routing traces to support reproduction of every result.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="landing-sec">
+      <div class="landing-inner" style="text-align:center">
+        <div class="cta">
+          <p class="pill-alpha"><svg class="i14" aria-hidden="true"><use href="#ic-flask"/></svg>Alpha software</p>
+          <h2 style="margin:16px auto 0;max-width:26ch;font-size:var(--text-2xl);font-weight:600;letter-spacing:-0.02em">Write your next paper with ColWrite</h2>
+          <p class="t-md muted" style="margin:12px auto 0;max-width:52ch;line-height:var(--lh-md)">Accounts are invite-only during alpha, and features and data formats may change. Sign in with the credentials you were given.</p>
+          <button class="btn btn--default sz-lg" style="margin-top:24px">Sign in to continue</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="border-top:1px solid color-mix(in oklab,var(--border) 50%,transparent);padding:20px 24px" class="row-wrap">
+      <span class="brand-lockup"><span class="brand-mark sm">CW</span><span><span class="t-base semibold" style="display:block">ColWrite</span><span class="t-xs muted">Assistant writer for arXiv papers</span></span></span>
+      <span class="ml-auto t-2xs" style="color:color-mix(in oklab,var(--muted-foreground) 60%,transparent)">In alpha — features and data formats may change.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ---------- WORKSPACE ---------- -->
+<section id="v-workspace" class="sec">
+  <h2 class="h2">View · Editor workspace</h2>
+  <p class="lead">The signed-in surface. Five regions — topbar, sidebar, canvas, tools panel, tools rail — each on the same panel treatment, separated by 12&nbsp;px gutters that double as resize handles. Below <code>md</code> the sidebar and tools panel become overlay drawers.</p>
+
+  <div class="view-frame">
+    <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Workspace · document open · tools panel showing Library</span></div>
+    <div class="shell">
+
+      <!-- topbar -->
+      <div class="shell-topbar">
+        <div class="row" style="min-width:0">
+          <span class="brand-mark md">CW</span>
+          <div style="min-width:0">
+            <div class="t-base semibold" style="line-height:1.2">ColWrite</div>
+            <div class="t-xs muted truncate">Assistant writer for arXiv papers</div>
+          </div>
+        </div>
+        <div class="row" style="gap:4px">
+          <button class="btn btn--ghost sz-icon-sm" aria-label="Keyboard shortcuts"><svg aria-hidden="true"><use href="#ic-keyboard"/></svg></button>
+          <button class="btn btn--ghost sz-sm" style="height:auto;padding:6px 8px">
+            <span style="display:grid;place-items:center;height:24px;width:24px;border-radius:var(--radius-md);background:var(--secondary);color:var(--secondary-foreground);font-size:var(--text-2xs);font-weight:700">AL</span>
+            <span style="text-align:left"><span class="t-sm medium" style="display:block;line-height:1.2">Andres</span><span class="t-2xs muted" style="display:block;line-height:1.2">a.lamos@lab.edu</span></span>
+            <svg class="i14" style="opacity:.5" aria-hidden="true"><use href="#ic-chevron-down"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="shell-body">
+        <!-- sidebar -->
+        <nav class="panel-surface shell-col" style="width:240px">
+          <div class="row" style="height:44px;padding:0 12px;border-bottom:1px solid color-mix(in oklab,var(--border) 50%,transparent)">
+            <h3 class="t-sm medium truncate grow" style="margin:0;color:color-mix(in oklab,var(--foreground) 90%,transparent)">Documents</h3>
+            <button class="btn btn--ghost sz-icon-sm muted" aria-label="Collapse sidebar"><svg aria-hidden="true"><use href="#ic-panel-left-close"/></svg></button>
+          </div>
+          <div class="grow" style="overflow-y:auto;padding:8px">
+            <button class="btn btn--outline sz-sm" style="width:100%;margin-bottom:8px"><svg aria-hidden="true"><use href="#ic-file-plus"/></svg>New document</button>
+            <div class="input-search" style="margin-bottom:8px">
+              <svg class="lead-icon i14" aria-hidden="true"><use href="#ic-search"/></svg>
+              <input class="input" style="height:32px;font-size:var(--text-xs)" placeholder="Filter documents…" />
+            </div>
+            <p class="t-2xs muted" style="margin:8px 4px 4px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">Recent</p>
+            <div class="doc-row" aria-current="true"><svg class="i14" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="truncate grow">Sparse routing at scale</span></div>
+            <div class="doc-row"><svg class="i14" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="truncate grow">Ablation notes — v3</span></div>
+            <div class="doc-row"><svg class="i14" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="truncate grow">Related work survey</span></div>
+            <div class="doc-row"><svg class="i14" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="truncate grow">Rebuttal draft</span></div>
+            <div class="doc-row"><svg class="i14" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="truncate grow">Untitled document</span></div>
+          </div>
+          <div style="border-top:1px solid color-mix(in oklab,var(--border) 50%,transparent);padding:8px 12px">
+            <p class="t-2xs" style="margin:0;color:color-mix(in oklab,var(--muted-foreground) 60%,transparent)">v0.1 · alpha</p>
+          </div>
+        </nav>
+
+        <div class="resize-handle" role="separator" aria-label="Resize sidebar"></div>
+
+        <!-- canvas -->
+        <main class="panel-surface shell-col grow" style="position:relative">
+          <div class="doc-header">
+            <div class="row grow" style="min-width:0">
+              <span class="t-xl semibold truncate">Sparse routing at scale</span>
+            </div>
+            <div class="row" style="gap:8px">
+              <span class="row t-xs muted"><svg class="i14" aria-hidden="true"><use href="#ic-check"/></svg>Autosaved 14:32</span>
+              <button class="btn btn--ghost sz-sm"><svg aria-hidden="true"><use href="#ic-file-plus"/></svg>New</button>
+              <button class="btn btn--ghost sz-sm"><svg aria-hidden="true"><use href="#ic-download"/></svg>Export</button>
+              <button class="btn btn--default sz-sm"><svg aria-hidden="true"><use href="#ic-save"/></svg>Save</button>
+              <button class="btn btn--ghost sz-icon-sm muted" aria-label="Delete document"><svg aria-hidden="true"><use href="#ic-trash"/></svg></button>
+            </div>
+          </div>
+
+          <div class="doc-scroll doc">
+            <div class="doc-measure">
+              <div class="block-hover">
+                <span class="block-gutter"><button aria-label="Add block"><svg class="i12" aria-hidden="true"><use href="#ic-plus"/></svg></button><button aria-label="Drag block"><svg class="i12" aria-hidden="true"><use href="#ic-grip"/></svg></button></span>
+                <h1 class="b">Sparse routing at scale</h1>
+              </div>
+              <p class="b muted" style="font-size:var(--text-sm)">A. Lamos, R. Okoye, M. Sørensen · Preprint · March 2026</p>
+              <h2 class="b">1 · Introduction</h2>
+              <p class="b">Mixture-of-experts layers decouple parameter count from per-token compute <span class="citation-pill">[1]</span>, which is what makes a trillion-parameter model tractable on today's accelerators. The gate is written throughout as <span class="equation-chip">g(x) = softmax(W_g x)</span>.</p>
+              <p class="b">We train every variant for 300B tokens under an identical data mixture, so the only free variable is the routing rule itself.</p>
+              <hr class="b" />
+              <h2 class="b">2 · Results</h2>
+              <p class="b">Held-out perplexity improves monotonically with expert count until the router saturates at 64 experts.</p>
+              <div class="mini-table" style="width:100%;grid-template-columns:2fr 1fr 1fr;margin-bottom:12px"><span>Model</span><span>Active</span><span>Score</span><span>MoE-8×7B</span><span>12.9B</span><span>81.4</span><span>Dense-34B</span><span>34B</span><span>80.1</span></div>
+              <p class="b">Routing traces are released alongside the checkpoints <span class="citation-pill">[2]</span>.</p>
+            </div>
+          </div>
+
+          <div class="doc-footer">
+            <span class="t-xs muted"><span class="medium tnum" style="color:color-mix(in oklab,var(--foreground) 80%,transparent)">1,284</span> words</span>
+            <span class="t-xs muted"><span class="medium tnum" style="color:color-mix(in oklab,var(--foreground) 80%,transparent)">8,102</span> characters</span>
+            <span class="t-xs muted"><span class="medium tnum" style="color:color-mix(in oklab,var(--foreground) 80%,transparent)">18</span> blocks</span>
+            <span class="t-xs muted"><span class="medium tnum" style="color:color-mix(in oklab,var(--foreground) 80%,transparent)">4</span> headings</span>
+            <span class="t-xs muted"><span class="medium tnum" style="color:color-mix(in oklab,var(--foreground) 80%,transparent)">6</span> inline widgets</span>
+          </div>
+        </main>
+
+        <div class="resize-handle" role="separator" aria-label="Resize tools panel"></div>
+
+        <!-- tools aside -->
+        <aside class="panel-surface shell-col" style="width:300px">
+          <div class="panel-header"><svg class="i16 muted" aria-hidden="true"><use href="#ic-book-open"/></svg>Library<span class="ml-auto"></span><button class="btn btn--ghost sz-icon-sm" aria-label="Close Library"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+          <div class="grow" style="overflow-y:auto;padding:12px">
+            <div class="input-search" style="margin-bottom:10px">
+              <svg class="lead-icon i14" aria-hidden="true"><use href="#ic-search"/></svg>
+              <input class="input" style="height:32px" placeholder="Search inside your PDFs…" />
+            </div>
+            <div class="dropzone">
+              <svg class="i16 muted" aria-hidden="true"><use href="#ic-upload"/></svg>
+              <span class="t-xs muted">Drop a PDF, or click to upload</span>
+            </div>
+            <p class="t-2xs muted" style="margin:12px 0 6px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">4 resources · 21.4 MB</p>
+            <div class="stack-2">
+              <div class="card" style="padding:10px">
+                <div class="row"><svg class="i14 muted" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="t-xs medium truncate grow">switch-transformers.pdf</span><span class="badge badge--success t-2xs" style="padding:1px 6px">Ready</span></div>
+                <p class="t-2xs muted" style="margin:4px 0 0">64 pages · 4.2 MB · indexed 3 days ago</p>
+              </div>
+              <div class="card" style="padding:10px">
+                <div class="row"><svg class="i14 muted" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="t-xs medium truncate grow">glam-scaling.pdf</span><span class="badge badge--warning t-2xs" style="padding:1px 6px"><svg class="i12 spin" aria-hidden="true"><use href="#ic-loader"/></svg>Extracting</span></div>
+                <p class="t-2xs muted" style="margin:4px 0 0">31 pages · 2.8 MB · uploading pages 12/31</p>
+              </div>
+              <div class="card" style="padding:10px">
+                <div class="row"><svg class="i14 muted" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="t-xs medium truncate grow">router-ablations.pdf</span><span class="badge badge--destructive t-2xs" style="padding:1px 6px">Failed</span></div>
+                <p class="t-2xs muted" style="margin:4px 0 0">Encrypted PDF — text could not be extracted</p>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- rail -->
+        <nav class="panel-surface" style="margin-left:8px;width:52px;padding:6px 0;display:flex;flex-direction:column;align-items:center;gap:4px">
+          <button class="rail-btn" aria-label="Hide tools panel"><svg class="i16" aria-hidden="true"><use href="#ic-panel-right"/></svg></button>
+          <span class="rail-sep"></span>
+          <button class="rail-btn" aria-label="Document JSON"><svg class="i16" aria-hidden="true"><use href="#ic-file-code"/></svg></button>
+          <button class="rail-btn" aria-label="arXiv Search"><svg class="i16" aria-hidden="true"><use href="#ic-search"/></svg></button>
+          <button class="rail-btn" aria-label="Semantic Scholar"><svg class="i16" aria-hidden="true"><use href="#ic-network"/></svg></button>
+          <button class="rail-btn" aria-label="ColPali Search"><svg class="i16" aria-hidden="true"><use href="#ic-scan-search"/></svg></button>
+          <button class="rail-btn" aria-pressed="true" aria-label="Library"><svg class="i16" aria-hidden="true"><use href="#ic-book-open"/></svg></button>
+          <button class="rail-btn" aria-label="Chats"><svg class="i16" aria-hidden="true"><use href="#ic-message-square"/></svg></button>
+          <button class="rail-btn" aria-label="History"><svg class="i16" aria-hidden="true"><use href="#ic-history"/></svg></button>
+        </nav>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-3" style="margin-top:20px">
+    <div class="card" style="padding:14px"><p class="t-xs medium" style="margin:0 0 4px">Sidebar collapsed</p><p class="t-sm muted" style="margin:0">56 px. The list is replaced by a single Documents affordance with a tooltip; the collapse state persists per account.</p></div>
+    <div class="card" style="padding:14px"><p class="t-xs medium" style="margin:0 0 4px">Below <code>md</code></p><p class="t-sm muted" style="margin:0">Sidebar and tools become Radix sheets — focus trap, initial focus and focus restore included. The rail is desktop-only.</p></div>
+    <div class="card" style="padding:14px"><p class="t-xs medium" style="margin:0 0 4px">Profile surface</p><p class="t-sm muted" style="margin:0">Drops sidebar, rail and aside — all three act on the open document. The topbar stays, because it is the way back.</p></div>
+  </div>
+</section>
+
+<!-- ---------- CHAT ---------- -->
+<section id="v-chat" class="sec">
+  <h2 class="h2">View · Chat assistant</h2>
+  <p class="lead">A draggable, resizable window portalled to <code>&lt;body&gt;</code> so it can rest anywhere over the viewport rather than being clipped by the canvas. It never writes to the document — replies point at changes waiting in the text.</p>
+
+  <div class="grid-2" style="align-items:start">
+    <div class="chat-window">
+      <div class="chat-head">
+        <svg class="i16" style="color:var(--primary)" aria-hidden="true"><use href="#ic-sparkles"/></svg>
+        <div style="min-width:0">
+          <p class="t-sm medium" style="margin:0;line-height:1.2">Assistant</p>
+          <p class="t-2xs muted row" style="margin:0;gap:4px"><svg class="i12" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="truncate">Sparse routing at scale</span></p>
+        </div>
+        <span class="working-pill shrink0"><span class="pulse-dot" aria-hidden="true"></span>Working</span>
+        <div class="ml-auto row" style="gap:2px">
+          <button class="btn btn--ghost sz-icon-sm" aria-label="Start a new chat"><svg aria-hidden="true"><use href="#ic-message-plus"/></svg></button>
+          <button class="btn btn--ghost sz-icon-sm" aria-label="Maximise assistant"><svg aria-hidden="true"><use href="#ic-maximize"/></svg></button>
+          <button class="btn btn--ghost sz-icon-sm" aria-label="Hide assistant"><svg aria-hidden="true"><use href="#ic-x"/></svg></button>
+        </div>
+      </div>
+
+      <button class="pending-strip">
+        <svg class="i14" style="color:var(--primary)" aria-hidden="true"><use href="#ic-sparkles"/></svg>
+        <span class="grow" style="text-align:left">3 changes are waiting in the document</span>
+        <svg class="i14" style="color:var(--primary)" aria-hidden="true"><use href="#ic-arrow-down"/></svg>
+      </button>
+
+      <div class="chat-scroll">
+        <div class="chat-inner">
+          <div style="display:flex;justify-content:flex-end">
+            <div class="bubble-user">Tighten the introduction and cite something recent for the routing claim <span class="ref-chip ref-chip--onfill"><svg class="i12" aria-hidden="true"><use href="#ic-file-text"/></svg>Sparse routing at scale</span></div>
+          </div>
+
+          <div class="stack-2">
+            <div class="disclosure">
+              <button class="disclosure-head" aria-expanded="true"><svg class="i12 rot90" aria-hidden="true"><use href="#ic-chevron-right"/></svg>3 steps<span class="ml-auto t-2xs tnum muted">12.9K in · 4.2K out</span></button>
+              <ol class="disclosure-body">
+                <li class="row t-xs" style="align-items:flex-start;gap:8px"><svg class="i12" style="color:var(--diff-add-fg);margin-top:3px" aria-hidden="true"><use href="#ic-check"/></svg><svg class="i12 muted" style="margin-top:3px" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="grow">Read the document<span class="muted" style="display:block">18 blocks · 1,284 words</span></span><span class="muted t-2xs tnum">0.4s</span></li>
+                <li class="row t-xs" style="align-items:flex-start;gap:8px"><svg class="i12" style="color:var(--diff-add-fg);margin-top:3px" aria-hidden="true"><use href="#ic-check"/></svg><svg class="i12 muted" style="margin-top:3px" aria-hidden="true"><use href="#ic-search"/></svg><span class="grow">Searched arXiv<span class="muted" style="display:block">“sparse routing 2025” · 10 results</span></span><span class="muted t-2xs tnum">2.1s</span></li>
+                <li class="row t-xs" style="align-items:flex-start;gap:8px"><svg class="i12 spin" style="margin-top:3px" aria-hidden="true"><use href="#ic-loader"/></svg><svg class="i12 muted" style="margin-top:3px" aria-hidden="true"><use href="#ic-pen-line"/></svg><span class="grow">Proposing a rewrite</span></li>
+              </ol>
+            </div>
+
+            <div class="bubble-assistant">
+              <p style="margin:0 0 8px">I tightened the opening paragraph and split the training-setup sentence out of it. Two things worth your judgement:</p>
+              <ul style="margin:0 0 8px;padding-left:18px"><li>The “tractable on today's accelerators” claim now cites <span class="citation-pill">[3]</span> rather than the 2021 survey.</li><li>I left the notation paragraph alone — it is locked.</li></ul>
+              <p style="margin:0">Three changes are waiting in the document.</p>
+            </div>
+
+            <button class="reply-changes">
+              <svg class="i12" style="color:var(--primary)" aria-hidden="true"><use href="#ic-sparkles"/></svg>
+              <span class="grow" style="text-align:left">Suggested 3 changes — review in the document</span>
+              <svg class="i12" style="color:var(--primary)" aria-hidden="true"><use href="#ic-corner-down-left"/></svg>
+            </button>
+
+            <div class="row t-2xs muted" style="gap:6px"><button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-copy"/></svg>Copy</button></div>
+          </div>
+
+          <p class="row t-xs muted" style="margin:0;gap:8px"><span class="pulse-dot" aria-hidden="true"></span>Writing the reply…</p>
+        </div>
+      </div>
+
+      <div class="chat-composer">
+        <div class="composer-box">
+          <div class="composer-field">Compare this with <span class="ref-chip ref-chip--block"><svg class="i12" aria-hidden="true"><use href="#ic-type"/></svg>Block · 2 · Results</span> and say which claim is weaker<span class="caret" aria-hidden="true"></span></div>
+          <div class="composer-bar">
+            <p class="grow truncate t-2xs muted" style="margin:0"><span class="kbd">Enter</span> to send · <span class="kbd">Shift</span>+<span class="kbd">Enter</span> for a new line · <span class="kbd">#</span> to reference</p>
+            <button class="btn btn--default sz-icon-sm" aria-label="Send message"><svg aria-hidden="true"><use href="#ic-send"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stack-3">
+      <div class="spec" style="margin:0">
+        <div class="spec-label">Empty state — the start of a session</div>
+        <div class="card" style="padding:20px">
+          <div style="text-align:center">
+            <p class="t-sm medium" style="margin:0">Ask about <span style="color:var(--primary)">“Sparse routing at scale”</span></p>
+            <p class="t-xs muted" style="margin:6px 0 0">Suggestions, rewrites, structure, summaries or references. Edits arrive as changes you accept in the document — nothing is written behind your back.</p>
+          </div>
+          <div class="row-wrap" style="justify-content:center;gap:6px;margin-top:16px">
+            <button class="suggestion-chip">Summarize this document</button>
+            <button class="suggestion-chip">Improve the introduction</button>
+            <button class="suggestion-chip">Find references for this claim</button>
+            <button class="suggestion-chip">Suggest a structure</button>
+          </div>
+          <p class="t-xs muted" style="text-align:center;margin:16px 0 0">Asking saves this document first, so the assistant can work on it.</p>
+        </div>
+      </div>
+
+      <div class="spec" style="margin:0">
+        <div class="spec-label">Streaming, stop, and error</div>
+        <div class="stack-2">
+          <span class="row" style="gap:4px;padding:8px 4px" aria-label="Assistant is typing"><span class="pulse-dot" style="background:var(--muted-foreground)"></span><span class="pulse-dot" style="background:var(--muted-foreground);animation-delay:160ms"></span><span class="pulse-dot" style="background:var(--muted-foreground);animation-delay:320ms"></span></span>
+          <div class="row"><button class="btn btn--destructive sz-icon-sm" aria-label="Stop generating"><svg aria-hidden="true"><use href="#ic-square"/></svg></button><span class="t-xs muted">Stop · Esc</span></div>
+          <div class="chat-error">
+            <p class="row t-xs" style="margin:0;color:var(--destructive);align-items:flex-start;gap:6px"><svg class="i14" style="margin-top:1px" aria-hidden="true"><use href="#ic-alert-circle"/></svg><span>The assistant stopped responding partway through the turn.</span></p>
+            <p class="t-2xs muted" style="margin:4px 0 0 20px">upstream_timeout after 60s</p>
+            <button class="btn btn--ghost sz-xs" style="margin-top:4px"><svg aria-hidden="true"><use href="#ic-rotate-ccw"/></svg>Try again</button>
+          </div>
+          <div class="card" style="padding:12px;text-align:center">
+            <p class="t-sm medium" style="margin:0">Getting this conversation ready</p>
+            <p class="t-xs muted" style="margin:4px 0 0">The transcript is still being projected. This usually takes a second.</p>
+            <button class="btn btn--outline sz-sm" style="margin-top:8px">Retry</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <svg class="i16" aria-hidden="true"><use href="#ic-info"/></svg>
+    <p>The transcript is deliberately <strong>not</strong> an <code>aria-live</code> region. Markdown arrives token by token, which made a screen reader restart the whole growing reply on every chunk. The typing indicator and the agent status line announce progress; <code>role="status"</code> announces the finished reply once.</p>
+  </div>
+</section>
+
+<!-- ---------- REVIEW ---------- -->
+<section id="v-review" class="sec">
+  <h2 class="h2">View · Review workflow</h2>
+  <p class="lead">A batch can span the whole document, so the sticky review bar carries the count and a way to step through it — otherwise there is no way to know whether you have seen all of it. Each card is still decided in place.</p>
+
+  <div class="view-frame">
+    <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Canvas · 3 pending changes</span></div>
+    <div style="background:var(--card)">
+      <!-- document header -->
+      <div class="doc-header">
+        <span class="t-xl semibold truncate grow">Sparse routing at scale</span>
+        <div class="row" style="gap:8px">
+          <span class="row t-xs muted"><svg class="i14" aria-hidden="true"><use href="#ic-check"/></svg>Autosaved 14:32</span>
+          <button class="btn btn--default sz-sm"><svg aria-hidden="true"><use href="#ic-save"/></svg>Save</button>
+        </div>
+      </div>
+
+      <!-- invite -->
+      <div class="row-wrap t-xs" style="border-bottom:1px solid color-mix(in oklab,var(--border) 60%,transparent);padding:8px 16px;gap:8px">
+        <svg class="i14" style="color:var(--primary)" aria-hidden="true"><use href="#ic-file-text"/></svg>
+        <span class="grow">The assistant created a new document.</span>
+        <button class="btn btn--default sz-xs">Open it</button>
+        <button class="btn btn--ghost sz-xs">Stay here</button>
+      </div>
+
+      <!-- review bar -->
+      <div style="border-bottom:1px solid var(--border);background:color-mix(in oklab,var(--card) 95%,transparent)">
+        <div class="row-wrap" style="padding:8px 16px;gap:8px">
+          <svg class="i16 shrink0" style="color:var(--primary)" aria-hidden="true"><use href="#ic-sparkles"/></svg>
+          <p class="t-sm medium" style="margin:0">3 suggested changes</p>
+          <p class="t-xs muted" style="margin:0">Review each one in the document.</p>
+          <div class="ml-auto row" style="gap:4px">
+            <button class="btn btn--ghost sz-icon-sm" aria-label="Previous change"><svg aria-hidden="true"><use href="#ic-chevron-up"/></svg></button>
+            <button class="btn btn--ghost sz-icon-sm" aria-label="Next change"><svg aria-hidden="true"><use href="#ic-chevron-down"/></svg></button>
+            <button class="btn btn--ghost sz-xs">List</button>
+            <button class="btn btn--default sz-xs"><svg aria-hidden="true"><use href="#ic-check"/></svg>Accept all</button>
+            <button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-x"/></svg>Reject all</button>
+          </div>
+        </div>
+        <ul class="review-list">
+          <li><button data-active="true">Rewrite paragraph in “Introduction”</button></li>
+          <li><button>Insert paragraph after “Introduction”</button></li>
+          <li><button>Move paragraph in “Method”</button></li>
+        </ul>
+      </div>
+
+      <!-- document with changes in place -->
+      <div class="doc" style="padding:20px 0 28px">
+        <div class="doc-measure">
+          <h2 class="b" style="margin-top:0">1 · Introduction</h2>
+
+          <div class="review-change k-replace" style="--doc-gutter:16px;padding-left:16px;box-shadow:0 0 0 1px color-mix(in oklab,var(--primary) 50%,transparent)">
+            <div class="row-wrap" style="margin-bottom:4px">
+              <span class="kind-label k-replace"><svg class="i12" aria-hidden="true"><use href="#ic-pen-line"/></svg>Rewrite</span>
+              <span class="grow t-2xs muted truncate">Rewrite paragraph in “Introduction”</span>
+              <span class="row" style="gap:4px"><button class="btn btn--ghost sz-xs" style="color:var(--diff-add-fg)"><svg aria-hidden="true"><use href="#ic-check"/></svg>Accept</button><button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-x"/></svg>Reject</button></span>
+            </div>
+            <p class="t-md" style="margin:0;line-height:var(--lh-md)">Mixture-of-experts layers <del class="diff">are useful because they</del><ins class="diff">decouple parameter count from per-token compute, which</ins> make a trillion-parameter model tractable on <ins class="diff">today's</ins> accelerators <span class="citation-pill">[3]</span>.</p>
+          </div>
+
+          <div class="review-change k-insert" style="--doc-gutter:16px;padding-left:16px">
+            <div class="row-wrap" style="margin-bottom:4px">
+              <span class="kind-label k-insert"><svg class="i12" aria-hidden="true"><use href="#ic-plus"/></svg>Insert</span>
+              <span class="grow t-2xs muted truncate">Insert paragraph after “Introduction”</span>
+              <span class="row" style="gap:4px"><button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-x"/></svg>Reject</button></span>
+            </div>
+            <p class="row t-2xs muted" style="margin:0 0 2px"><svg class="i12" aria-hidden="true"><use href="#ic-lock"/></svg>This continues the addition above — accept that one first.</p>
+            <p class="t-md" style="margin:0;color:var(--diff-add-fg);line-height:var(--lh-md)">We release code and routing traces to support reproduction of every result.</p>
+          </div>
+
+          <p class="b" style="margin-top:12px">We train every variant for 300B tokens under an identical data mixture, so the only free variable is the routing rule itself.</p>
+
+          <div class="review-change k-reorder" style="--doc-gutter:16px;padding-left:16px">
+            <div class="row-wrap" style="margin-bottom:4px">
+              <span class="kind-label k-reorder"><svg class="i12" aria-hidden="true"><use href="#ic-move"/></svg>Move</span>
+              <span class="grow t-2xs muted truncate">Move paragraph in “Method”</span>
+              <span class="row" style="gap:4px"><button class="btn btn--ghost sz-xs" style="color:var(--diff-add-fg)"><svg aria-hidden="true"><use href="#ic-check"/></svg>Accept</button><button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-x"/></svg>Reject</button></span>
+            </div>
+            <p class="t-sm muted" style="margin:0">Move below “We train every variant for 300B tokens…”.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-3" style="margin-top:20px">
+    <div class="card" style="padding:14px"><p class="t-xs medium" style="margin:0 0 4px">Accept all / Reject all confirm</p><p class="t-sm muted" style="margin:0">Both act on every pending change at once with no undo. Rejecting all was the sharpest edge in the app — one click discarded the whole batch silently.</p></div>
+    <div class="card" style="padding:14px"><p class="t-xs medium" style="margin:0 0 4px">Leaving with changes open</p><p class="t-sm muted" style="margin:0">Review state belongs to the open document, so opening the assistant's new document asks first — it discards everything still pending here.</p></div>
+    <div class="card" style="padding:14px"><p class="t-xs medium" style="margin:0 0 4px">Next / Previous</p><p class="t-sm muted" style="margin:0">Steps in reading order and puts DOM focus on the card, which is why a card is focusable as a target but never a tab stop.</p></div>
+  </div>
+</section>
+
+<!-- ---------- SLASH MENU & TOOLBAR ---------- -->
+<section id="v-slash" class="sec">
+  <h2 class="h2">View · Slash menu &amp; floating toolbar</h2>
+  <p class="lead">Two popovers over the canvas. <span class="kbd">/</span> inside a paragraph inserts a widget; selecting text raises the format toolbar and its AI menu.</p>
+
+  <div class="grid-2" style="align-items:start">
+    <div>
+      <div class="spec-label">Slash menu — combobox over a grouped listbox</div>
+      <div class="slash">
+        <div class="slash-search">
+          <svg class="i16 muted" aria-hidden="true"><use href="#ic-search"/></svg>
+          <span class="t-sm muted">Search commands…</span>
+        </div>
+        <div class="slash-list">
+          <div class="slash-group">Insert</div>
+          <div class="slash-item" data-active="true">
+            <span class="glyph">❝</span>
+            <span class="grow"><span class="t-sm medium" style="display:block">Citation</span><span class="t-xs muted truncate" style="display:block">Reference a paper by DOI or arXiv ID</span></span>
+          </div>
+          <div class="slash-item">
+            <span class="glyph">∑</span>
+            <span class="grow"><span class="t-sm medium" style="display:block">Equation</span><span class="t-xs muted truncate" style="display:block">Inline LaTeX, numbered and labelled</span></span>
+          </div>
+          <div class="slash-item">
+            <span class="glyph">▦</span>
+            <span class="grow"><span class="t-sm medium" style="display:block">Table</span><span class="t-xs muted truncate" style="display:block">A grid inside the paragraph flow</span></span>
+          </div>
+          <div class="slash-item">
+            <span class="glyph">▤</span>
+            <span class="grow"><span class="t-sm medium" style="display:block">Graph</span><span class="t-xs muted truncate" style="display:block">Bar, line or pie from plain data</span></span>
+          </div>
+          <div class="slash-group">Assistant</div>
+          <div class="slash-item">
+            <span class="glyph">✦</span>
+            <span class="grow"><span class="t-sm medium" style="display:block">AI Beat</span><span class="t-xs muted truncate" style="display:block">Generate a passage in place from a prompt</span></span>
+          </div>
+        </div>
+        <div class="slash-foot">
+          <span><span class="kbd">↑↓</span> Navigate</span><span><span class="kbd">↵</span> Select</span><span><span class="kbd">Esc</span> Close</span>
+        </div>
+      </div>
+      <p class="t-xs muted" style="margin-top:10px">Escape declines every command and puts the <code>/</code> back at the bookmark, as if the menu had never opened.</p>
+    </div>
+
+    <div class="stack-4">
+      <div>
+        <div class="spec-label">Floating toolbar</div>
+        <div class="float-toolbar">
+          <button class="btn btn--ghost sz-icon-sm" aria-label="Bold"><svg aria-hidden="true"><use href="#ic-bold"/></svg></button>
+          <button class="btn btn--ghost sz-icon-sm" aria-label="Italic"><svg aria-hidden="true"><use href="#ic-italic"/></svg></button>
+          <button class="btn btn--ghost sz-icon-sm" aria-label="Underline"><svg aria-hidden="true"><use href="#ic-underline"/></svg></button>
+          <span class="float-sep"></span>
+          <button class="btn btn--ghost sz-icon-sm" aria-label="Link"><svg aria-hidden="true"><use href="#ic-link"/></svg></button>
+          <button class="btn btn--ghost sz-icon-sm" aria-label="Cite"><svg aria-hidden="true"><use href="#ic-quote"/></svg></button>
+          <span class="float-sep"></span>
+          <button class="btn btn--ghost sz-sm semibold"><svg aria-hidden="true"><use href="#ic-sparkles"/></svg>AI</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="spec-label">AI action menu — ten actions in three groups</div>
+        <div class="surface-popover" style="width:240px">
+          <div class="menu-label caps">Edit</div>
+          <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-wand"/></svg>Improve writing</div>
+          <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-check-circle"/></svg>Fix grammar</div>
+          <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-arrow-right"/></svg>Continue writing</div>
+          <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-refresh"/></svg>Rephrase</div>
+          <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-minimize"/></svg>Make shorter</div>
+          <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-maximize"/></svg>Make longer</div>
+          <div class="menu-sep"></div>
+          <div class="menu-label caps">Reference</div>
+          <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-search"/></svg>Search for references</div>
+          <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-plus"/></svg>Add details</div>
+          <div class="menu-sep"></div>
+          <div class="menu-label caps">Transform</div>
+          <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-file-stack"/></svg>Make more concise</div>
+          <div class="menu-item"><svg class="i16" aria-hidden="true"><use href="#ic-languages"/></svg>Translate<svg class="i12 ml-auto" aria-hidden="true"><use href="#ic-chevron-right"/></svg></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="spec-label">Keyboard shortcuts dialog</div>
+        <div class="dialog" style="max-width:100%">
+          <h3 class="t-lg semibold" style="margin:0 0 12px">Keyboard shortcuts</h3>
+          <div class="shortcut-list">
+            <div><span>Show or hide the tools panel</span><span><span class="kbd">Ctrl</span><span class="kbd">\</span></span></div>
+            <div><span>Collapse or expand the sidebar</span><span><span class="kbd">Ctrl</span><span class="kbd">Shift</span><span class="kbd">\</span></span></div>
+            <div><span>Show or hide the assistant</span><span><span class="kbd">Ctrl</span><span class="kbd">J</span></span></div>
+            <div><span>Save now</span><span><span class="kbd">Ctrl</span><span class="kbd">S</span></span></div>
+            <div><span>Undo</span><span><span class="kbd">Ctrl</span><span class="kbd">Z</span></span></div>
+            <div><span>Redo</span><span><span class="kbd">Ctrl</span><span class="kbd">Shift</span><span class="kbd">Z</span></span></div>
+            <div><span>Show keyboard shortcuts</span><span><span class="kbd">Ctrl</span><span class="kbd">/</span></span></div>
+          </div>
+          <p class="t-xs muted" style="margin:12px 0 0">Every binding carries the platform modifier: this app is contenteditable edge to edge, so a bare-key shortcut would type into the document instead of firing.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------- PANELS ---------- -->
+<section id="v-panels" class="sec">
+  <h2 class="h2">View · Tool panels</h2>
+  <p class="lead">Seven panels share one host: a header with the tool's icon and name, a close control, and a scrolling body. Two of them are gated on an account paper source being enabled.</p>
+
+  <div class="panel-grid">
+
+    <!-- arXiv -->
+    <div class="panel-surface shell-col" style="height:420px">
+      <div class="panel-header"><svg class="i16 muted" aria-hidden="true"><use href="#ic-search"/></svg>arXiv Search<span class="ml-auto"></span><button class="btn btn--ghost sz-icon-sm" aria-label="Close"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+      <div class="grow" style="overflow-y:auto;padding:12px">
+        <form class="row" onsubmit="return false">
+          <div class="input-search grow"><svg class="lead-icon i14" aria-hidden="true"><use href="#ic-search"/></svg><input class="input" style="height:32px" type="search" value="mixture of experts" /></div>
+          <select class="select" style="width:auto;height:32px"><option>10</option></select>
+          <button class="btn btn--default sz-sm">Search</button>
+        </form>
+        <div class="stack-2" style="margin-top:12px">
+          <article class="card" style="padding:10px">
+            <div class="row" style="justify-content:space-between"><span class="t-xs muted tnum">#1</span><span class="badge badge--outline t-2xs" style="padding:1px 6px">cs.LG</span></div>
+            <h3 class="t-sm medium" style="margin:6px 0 0;line-height:1.35"><a class="link" href="#v-panels">Switch Transformers: Scaling to Trillion Parameter Models</a></h3>
+            <p class="t-2xs muted" style="margin:4px 0 0">W. Fedus, B. Zoph, N. Shazeer · 2021-01-11 · v2</p>
+            <p class="t-xs" style="margin:6px 0 0;line-height:1.6;color:color-mix(in oklab,var(--foreground) 80%,transparent)">In deep learning, models typically reuse the same parameters for all inputs. Mixture of Experts models defy this…</p>
+            <div class="row-wrap t-2xs" style="margin-top:8px;gap:12px"><a class="reslink" href="#v-panels"><svg class="i12" aria-hidden="true"><use href="#ic-external"/></svg>arXiv</a><a class="reslink" href="#v-panels"><svg class="i12" aria-hidden="true"><use href="#ic-file-down"/></svg>PDF</a><span class="ml-auto"><button class="btn btn--outline sz-xs"><svg aria-hidden="true"><use href="#ic-quote"/></svg>Cite</button></span></div>
+          </article>
+          <article class="card" style="padding:10px">
+            <div class="row" style="justify-content:space-between"><span class="t-xs muted tnum">#2</span><span class="badge badge--outline t-2xs" style="padding:1px 6px">cs.CL</span></div>
+            <h3 class="t-sm medium" style="margin:6px 0 0;line-height:1.35"><a class="link" href="#v-panels">GLaM: Efficient Scaling of Language Models with Mixture-of-Experts</a></h3>
+            <p class="t-2xs muted" style="margin:4px 0 0">N. Du, Y. Huang, A. Dai · 2021-12-13 · v3</p>
+          </article>
+        </div>
+      </div>
+    </div>
+
+    <!-- Semantic Scholar -->
+    <div class="panel-surface shell-col" style="height:420px">
+      <div class="panel-header"><svg class="i16 muted" aria-hidden="true"><use href="#ic-network"/></svg>Semantic Scholar<span class="ml-auto"></span><button class="btn btn--ghost sz-icon-sm" aria-label="Close"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+      <div class="grow" style="overflow-y:auto;padding:12px">
+        <form class="row" onsubmit="return false">
+          <div class="input-search grow"><svg class="lead-icon i14" aria-hidden="true"><use href="#ic-search"/></svg><input class="input" style="height:32px" type="search" value="expert routing collapse" /></div>
+          <button class="btn btn--default sz-sm">Search</button>
+        </form>
+        <article class="card" style="padding:10px;margin-top:12px">
+          <div class="row" style="justify-content:space-between"><span class="t-xs muted tnum">#1</span><span class="badge badge--info t-2xs" style="padding:1px 6px">418 citations</span></div>
+          <h3 class="t-sm medium" style="margin:6px 0 0;line-height:1.35"><a class="link" href="#v-panels">Outrageously Large Neural Networks: The Sparsely-Gated MoE Layer</a></h3>
+          <p class="t-2xs muted" style="margin:4px 0 0">N. Shazeer et al. · ICLR 2017</p>
+          <div class="row-wrap" style="margin-top:8px;gap:6px">
+            <button class="btn btn--outline sz-xs"><svg aria-hidden="true"><use href="#ic-git-branch"/></svg>Citations</button>
+            <button class="btn btn--outline sz-xs"><svg aria-hidden="true"><use href="#ic-link"/></svg>References</button>
+          </div>
+          <p class="t-2xs muted" style="margin:8px 0 0">Data from the Semantic Scholar Academic Graph, CC BY-NC.</p>
+        </article>
+      </div>
+    </div>
+
+    <!-- ColPali -->
+    <div class="panel-surface shell-col" style="height:420px">
+      <div class="panel-header"><svg class="i16 muted" aria-hidden="true"><use href="#ic-scan-search"/></svg>ColPali Search<span class="ml-auto"></span><button class="btn btn--ghost sz-icon-sm" aria-label="Close"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+      <div class="grow" style="overflow-y:auto;padding:12px">
+        <form class="row" onsubmit="return false">
+          <div class="input-search grow"><svg class="lead-icon i14" aria-hidden="true"><use href="#ic-search"/></svg><input class="input" style="height:32px" type="search" value="router load balancing loss curve" /></div>
+          <button class="btn btn--default sz-sm">Search</button>
+        </form>
+        <p class="t-2xs muted" style="margin:12px 0 8px">Pages ranked by visual and semantic similarity.</p>
+        <article class="card" style="padding:10px">
+          <div class="row" style="justify-content:space-between"><span class="t-xs muted tnum">#1</span><span class="badge badge--info t-2xs" style="padding:1px 6px">0.87</span></div>
+          <div class="row" style="align-items:flex-start;gap:10px;margin-top:8px">
+            <div class="thumb"></div>
+            <div class="grow">
+              <h3 class="t-sm medium" style="margin:0;line-height:1.35">Switch Transformers — page 14</h3>
+              <p class="t-2xs muted" style="margin:4px 0 0">Figure 6 · auxiliary load-balancing loss</p>
+              <p class="t-xs" style="margin:6px 0 0;line-height:1.6;color:color-mix(in oklab,var(--foreground) 80%,transparent)">…the auxiliary loss encourages uniform expert assignment across the batch…</p>
+            </div>
+          </div>
+        </article>
+      </div>
+    </div>
+
+    <!-- Chats -->
+    <div class="panel-surface shell-col" style="height:420px">
+      <div class="panel-header"><svg class="i16 muted" aria-hidden="true"><use href="#ic-message-square"/></svg>Chats<span class="ml-auto"></span><button class="btn btn--ghost sz-icon-sm" aria-label="Close"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+      <div class="grow" style="overflow-y:auto;padding:12px">
+        <button class="btn btn--outline sz-sm" style="width:100%"><svg aria-hidden="true"><use href="#ic-message-plus"/></svg>New chat</button>
+        <p class="t-2xs muted" style="margin:12px 0 6px;text-transform:uppercase;letter-spacing:.06em;font-weight:600">This document</p>
+        <div class="stack-2">
+          <div class="card" style="padding:10px;border-color:color-mix(in oklab,var(--primary) 40%,transparent)">
+            <p class="t-sm medium truncate" style="margin:0">Tighten the introduction</p>
+            <p class="t-2xs muted" style="margin:4px 0 0">6 messages · 3 changes proposed · 12 min ago</p>
+          </div>
+          <div class="card" style="padding:10px">
+            <p class="t-sm medium truncate" style="margin:0">Find recent routing references</p>
+            <p class="t-2xs muted" style="margin:4px 0 0">4 messages · yesterday</p>
+          </div>
+          <div class="card" style="padding:10px">
+            <p class="t-sm medium truncate" style="margin:0">Restructure the results section</p>
+            <p class="t-2xs muted" style="margin:4px 0 0">11 messages · 3 days ago</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- History -->
+    <div class="panel-surface shell-col" style="height:420px">
+      <div class="panel-header"><svg class="i16 muted" aria-hidden="true"><use href="#ic-history"/></svg>History<span class="ml-auto"></span><button class="btn btn--ghost sz-icon-sm" aria-label="Close"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+      <div class="grow" style="overflow-y:auto;padding:12px">
+        <p class="t-2xs muted" style="margin:0 0 8px">Every accepted save is an immutable snapshot that records the version it grew out of — so history is a tree, not a line.</p>
+        <div class="rev-row">
+          <span class="rev-rail"><span class="rev-node current"></span></span>
+          <div>
+            <div class="row"><span class="t-sm medium">Edited</span><span class="badge badge--default t-2xs" style="padding:1px 6px">Current</span><span class="ml-auto t-2xs muted tnum">r14</span></div>
+            <p class="t-2xs muted" style="margin:2px 0 0">Today 14:32 · assistant · 1 paragraph rewritten</p>
+          </div>
+        </div>
+        <div class="rev-row">
+          <span class="rev-rail"><span class="rev-node"></span></span>
+          <div>
+            <div class="row"><span class="t-sm medium">Saved</span><span class="ml-auto t-2xs muted tnum">r13</span></div>
+            <p class="t-2xs muted" style="margin:2px 0 0">Today 13:58 · you · 2 paragraphs, 1 citation</p>
+            <button class="btn btn--ghost sz-xs" style="margin-top:4px"><svg aria-hidden="true"><use href="#ic-rotate-ccw"/></svg>Restore</button>
+          </div>
+        </div>
+        <div class="rev-row">
+          <span class="rev-rail"><span class="rev-node"></span></span>
+          <div>
+            <div class="row"><span class="t-sm medium">Restored</span><span class="ml-auto t-2xs muted tnum">r12</span></div>
+            <p class="t-2xs muted" style="margin:2px 0 0">Yesterday 18:04 · restored from r9 — a new branch</p>
+          </div>
+        </div>
+        <div class="rev-row">
+          <span class="rev-rail"><span class="rev-node"></span></span>
+          <div>
+            <div class="row"><span class="t-sm medium">Created</span><span class="ml-auto t-2xs muted tnum">r1</span></div>
+            <p class="t-2xs muted" style="margin:2px 0 0">6 Mar · you</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- JSON -->
+    <div class="panel-surface shell-col" style="height:420px">
+      <div class="panel-header"><svg class="i16 muted" aria-hidden="true"><use href="#ic-file-code"/></svg>Document JSON<span class="ml-auto"></span><button class="btn btn--ghost sz-icon-sm" aria-label="Close"><svg aria-hidden="true"><use href="#ic-x"/></svg></button></div>
+      <div class="grow shell-col" style="padding:12px;min-height:0">
+        <div class="row-wrap" style="margin-bottom:8px;gap:6px">
+          <button class="btn btn--outline sz-xs"><svg aria-hidden="true"><use href="#ic-wand"/></svg>Format</button>
+          <button class="btn btn--outline sz-xs"><svg aria-hidden="true"><use href="#ic-copy"/></svg>Copy</button>
+          <button class="btn btn--ghost sz-xs muted"><svg aria-hidden="true"><use href="#ic-rotate-ccw"/></svg>Revert</button>
+          <span class="ml-auto"><button class="btn btn--default sz-xs"><svg aria-hidden="true"><use href="#ic-save"/></svg>Apply</button></span>
+        </div>
+        <textarea class="textarea mono t-2xs grow" style="min-height:0;resize:none">{
+  "name": "Sparse routing at scale",
+  "blocks": [
+    { "id": "b1", "type": "heading", "level": 1,
+      "html": "Sparse routing at scale" },
+    { "id": "b2", "type": "paragraph",
+      "html": "Mixture-of-experts layers decouple …",
+      "children": [
+        { "id": "c1", "type": "citation",
+          "format": "numeric", "key": "arxiv:2101.03961" }
+      ] },
+    { "id": "b3", "type": "divider" }
+  ]
+}</textarea>
+        <p class="row t-2xs" style="margin:8px 0 0;color:var(--destructive);gap:6px"><svg class="i12" aria-hidden="true"><use href="#ic-alert-circle"/></svg>Unexpected token } in JSON at position 412</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <svg class="i16" aria-hidden="true"><use href="#ic-info"/></svg>
+    <p>A panel whose paper source is switched off in <em>Profile → Agent tools</em> is not rendered at all — the rail hides the entry, and the host shows a named empty state if it is reached another way. That is the same registry the rail reads, so labels can never drift between the two.</p>
+  </div>
+</section>
+
+<!-- ---------- PROFILE ---------- -->
+<section id="v-profile" class="sec">
+  <h2 class="h2">View · Profile dashboard</h2>
+  <p class="lead">One <code>/users/me/overview</code> call backs the whole page — each endpoint revalidates the session, and a per-widget fetch would pay that cost five times over to render it once.</p>
+
+  <div class="view-frame">
+    <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span>Profile &amp; preferences</span></div>
+    <div style="background:var(--background);padding:20px 24px 28px">
+      <div class="row" style="justify-content:space-between;margin-bottom:16px">
+        <button class="btn btn--ghost sz-sm"><svg aria-hidden="true"><use href="#ic-arrow-left"/></svg>Back to editor</button>
+        <button class="btn btn--outline sz-sm"><svg aria-hidden="true"><use href="#ic-refresh"/></svg>Refresh</button>
+      </div>
+
+      <div class="tabs-list" style="margin-bottom:16px">
+        <button class="tab" data-state="active"><svg class="i14" aria-hidden="true"><use href="#ic-dashboard"/></svg>Overview</button>
+        <button class="tab"><svg class="i14" aria-hidden="true"><use href="#ic-sliders"/></svg>Agent tools</button>
+      </div>
+
+      <!-- header -->
+      <div class="card" style="padding:16px;margin-bottom:16px">
+        <div class="row-wrap" style="gap:16px">
+          <span class="brand-mark xl" style="border-radius:var(--radius-xl)">AL</span>
+          <div class="grow" style="min-width:0">
+            <p class="t-xl semibold" style="margin:0">Andres Lamos</p>
+            <p class="t-sm muted" style="margin:2px 0 0">a.lamos@lab.edu · joined March 2025</p>
+            <p class="t-xs muted" style="margin:8px 0 0;max-width:60ch">Working on sparse routing and inference-time expert selection. Reviewer for NeurIPS and ICLR.</p>
+          </div>
+          <button class="btn btn--outline sz-sm"><svg aria-hidden="true"><use href="#ic-pen-line"/></svg>Edit profile</button>
+        </div>
+      </div>
+
+      <!-- stat tiles -->
+      <div class="tile-row">
+        <div class="tile"><span class="lbl"><svg class="i14" aria-hidden="true"><use href="#ic-file-text"/></svg>Documents</span><p class="val">14</p><p class="hint">2 deleted</p></div>
+        <div class="tile"><span class="lbl"><svg class="i14" aria-hidden="true"><use href="#ic-save"/></svg>Saves</span><p class="val">386</p><p class="hint">Revisions written</p></div>
+        <div class="tile"><span class="lbl"><svg class="i14" aria-hidden="true"><use href="#ic-messages"/></svg>Chats</span><p class="val">52</p><p class="hint">418 messages</p></div>
+        <div class="tile"><span class="lbl"><svg class="i14" aria-hidden="true"><use href="#ic-bot"/></svg>Assistant runs</span><p class="val">231</p><p class="hint">1.1K tool calls</p></div>
+        <div class="tile"><span class="lbl"><svg class="i14" aria-hidden="true"><use href="#ic-coins"/></svg>Tokens</span><p class="val">4.6M</p><p class="hint">3.9M in · 712K out</p></div>
+        <div class="tile"><span class="lbl"><svg class="i14" aria-hidden="true"><use href="#ic-file-stack"/></svg>Resources</span><p class="val">23</p><p class="hint">184 MB</p></div>
+      </div>
+
+      <!-- activity -->
+      <div class="card" style="padding:16px;margin-top:16px">
+        <div class="row" style="justify-content:space-between;margin-bottom:12px">
+          <p class="t-sm medium" style="margin:0">Activity — last 30 days</p>
+          <span class="row-wrap" style="gap:12px"><span class="legend"><i style="background:var(--series-1)"></i>Assistant runs</span><span class="legend"><i style="background:var(--series-3)"></i>Saves</span></span>
+        </div>
+        <svg viewBox="0 0 640 150" style="width:100%;height:auto" role="img" aria-label="Assistant runs and saves over the last 30 days">
+          <line x1="34" y1="120" x2="632" y2="120" stroke="var(--chart-axis)" stroke-width="1"/>
+          <line x1="34" y1="80" x2="632" y2="80" stroke="var(--chart-grid)" stroke-width="1"/>
+          <line x1="34" y1="40" x2="632" y2="40" stroke="var(--chart-grid)" stroke-width="1"/>
+          <g fill="var(--series-1)" opacity="0.85">
+            <rect x="40" y="86" width="12" height="34" rx="2"/><rect x="60" y="72" width="12" height="48" rx="2"/><rect x="80" y="94" width="12" height="26" rx="2"/><rect x="100" y="60" width="12" height="60" rx="2"/><rect x="120" y="78" width="12" height="42" rx="2"/><rect x="140" y="104" width="12" height="16" rx="2"/><rect x="160" y="112" width="12" height="8" rx="2"/><rect x="180" y="66" width="12" height="54" rx="2"/><rect x="200" y="52" width="12" height="68" rx="2"/><rect x="220" y="70" width="12" height="50" rx="2"/><rect x="240" y="88" width="12" height="32" rx="2"/><rect x="260" y="46" width="12" height="74" rx="2"/><rect x="280" y="100" width="12" height="20" rx="2"/><rect x="300" y="110" width="12" height="10" rx="2"/><rect x="320" y="64" width="12" height="56" rx="2"/><rect x="340" y="38" width="12" height="82" rx="2"/><rect x="360" y="56" width="12" height="64" rx="2"/><rect x="380" y="82" width="12" height="38" rx="2"/><rect x="400" y="92" width="12" height="28" rx="2"/><rect x="420" y="106" width="12" height="14" rx="2"/><rect x="440" y="114" width="12" height="6" rx="2"/><rect x="460" y="58" width="12" height="62" rx="2"/><rect x="480" y="44" width="12" height="76" rx="2"/><rect x="500" y="68" width="12" height="52" rx="2"/><rect x="520" y="76" width="12" height="44" rx="2"/><rect x="540" y="30" width="12" height="90" rx="2"/><rect x="560" y="50" width="12" height="70" rx="2"/><rect x="580" y="96" width="12" height="24" rx="2"/><rect x="600" y="108" width="12" height="12" rx="2"/><rect x="620" y="62" width="12" height="58" rx="2"/>
+          </g>
+          <polyline fill="none" stroke="var(--series-3)" stroke-width="2" stroke-linejoin="round"
+            points="46,110 66,104 86,112 106,96 126,102 146,116 166,118 186,98 206,90 226,100 246,106 266,88 286,112 306,116 326,100 346,84 366,94 386,104 406,108 426,114 446,118 466,96 486,86 506,98 526,102 546,80 566,92 586,110 606,116 626,94"/>
+          <text x="28" y="123" text-anchor="end" fill="var(--muted-foreground)" font-size="10">0</text>
+          <text x="28" y="83" text-anchor="end" fill="var(--muted-foreground)" font-size="10">15</text>
+          <text x="28" y="43" text-anchor="end" fill="var(--muted-foreground)" font-size="10">30</text>
+          <text x="40" y="140" fill="var(--muted-foreground)" font-size="10">8 Feb</text>
+          <text x="632" y="140" text-anchor="end" fill="var(--muted-foreground)" font-size="10">9 Mar</text>
+        </svg>
+      </div>
+
+      <!-- documents + tool usage -->
+      <div style="display:grid;gap:16px;grid-template-columns:3fr 2fr;margin-top:16px" class="profile-split">
+        <div class="card" style="padding:16px">
+          <p class="t-sm medium" style="margin:0 0 12px">Documents</p>
+          <div class="stack-1">
+            <div class="doc-row"><svg class="i14" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="truncate grow" style="color:var(--foreground)">Sparse routing at scale</span><span class="t-2xs muted tnum">1,284 w · today</span></div>
+            <div class="doc-row"><svg class="i14" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="truncate grow">Ablation notes — v3</span><span class="t-2xs muted tnum">742 w · 2d</span></div>
+            <div class="doc-row"><svg class="i14" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="truncate grow">Related work survey</span><span class="t-2xs muted tnum">3,910 w · 5d</span></div>
+            <div class="doc-row"><svg class="i14" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="truncate grow">Rebuttal draft</span><span class="t-2xs muted tnum">610 w · 12d</span></div>
+          </div>
+          <button class="btn btn--ghost sz-sm" style="margin-top:8px">Load more</button>
+        </div>
+        <div class="card" style="padding:16px">
+          <p class="t-sm medium" style="margin:0 0 12px">Tool usage</p>
+          <div class="stack-2">
+            <div><div class="row t-xs"><span class="grow">Read document</span><span class="muted tnum">412</span></div><div class="usage-bar"><i style="width:100%;background:var(--series-1)"></i></div></div>
+            <div><div class="row t-xs"><span class="grow">Propose change</span><span class="muted tnum">288</span></div><div class="usage-bar"><i style="width:70%;background:var(--series-2)"></i></div></div>
+            <div><div class="row t-xs"><span class="grow">Search arXiv</span><span class="muted tnum">164</span></div><div class="usage-bar"><i style="width:40%;background:var(--series-3)"></i></div></div>
+            <div><div class="row t-xs"><span class="grow">Search library</span><span class="muted tnum">96</span></div><div class="usage-bar"><i style="width:23%;background:var(--series-4)"></i></div></div>
+            <div><div class="row t-xs"><span class="grow">Add citation</span><span class="muted tnum">57</span></div><div class="usage-bar"><i style="width:14%;background:var(--series-5)"></i></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- uploads -->
+      <div class="card" style="padding:16px;margin-top:16px">
+        <div class="row" style="justify-content:space-between;margin-bottom:12px">
+          <p class="t-sm medium" style="margin:0">Uploads <span class="muted" style="font-weight:400">· 23 files, 184 MB</span></p>
+          <button class="btn btn--outline sz-sm"><svg aria-hidden="true"><use href="#ic-upload"/></svg>Upload PDF</button>
+        </div>
+        <div class="grid-3">
+          <div class="card" style="padding:10px"><div class="row"><svg class="i14 muted" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="t-xs medium truncate grow">switch-transformers.pdf</span></div><div class="row" style="margin-top:6px"><span class="badge badge--success t-2xs" style="padding:1px 6px">Ready</span><span class="ml-auto t-2xs muted">4.2 MB</span></div></div>
+          <div class="card" style="padding:10px"><div class="row"><svg class="i14 muted" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="t-xs medium truncate grow">glam-scaling.pdf</span></div><div class="row" style="margin-top:6px"><span class="badge badge--warning t-2xs" style="padding:1px 6px">Extracting</span><span class="ml-auto t-2xs muted">2.8 MB</span></div></div>
+          <div class="card" style="padding:10px"><div class="row"><svg class="i14 muted" aria-hidden="true"><use href="#ic-file-text"/></svg><span class="t-xs medium truncate grow">router-ablations.pdf</span></div><div class="row" style="margin-top:6px"><span class="badge badge--destructive t-2xs" style="padding:1px 6px">Failed</span><span class="ml-auto t-2xs muted">7.1 MB</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Agent tools tab — what the assistant is allowed to reach</div>
+    <div class="card" style="padding:16px;max-width:640px">
+      <p class="t-sm muted" style="margin:0 0 12px">Turning a source off hides its panel from the rail and removes its tool from the AI action menu, so the assistant cannot call it.</p>
+      <div class="stack-2">
+        <label class="row t-sm" style="gap:10px"><span class="checkbox" data-state="checked"><svg class="i12" aria-hidden="true"><use href="#ic-check"/></svg></span><span class="grow">arXiv <span class="muted t-xs">— paper search and ColPali page search</span></span></label>
+        <label class="row t-sm" style="gap:10px"><span class="checkbox" data-state="checked"><svg class="i12" aria-hidden="true"><use href="#ic-check"/></svg></span><span class="grow">Semantic Scholar <span class="muted t-xs">— citation graph</span></span></label>
+        <label class="row t-sm muted" style="gap:10px"><span class="checkbox"></span><span class="grow">Web search <span class="t-xs">— not available in alpha</span></span></label>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ---------- DIALOGS & EMPTY STATES ---------- -->
+<section id="v-dialogs" class="sec">
+  <h2 class="h2">View · Dialogs &amp; empty states</h2>
+
+  <div class="grid-2">
+    <div class="spec" style="margin:0">
+      <div class="spec-label">Sign in — invite-only during alpha</div>
+      <div class="dialog-scrim">
+        <div class="dialog" style="max-width:380px">
+          <div style="text-align:center">
+            <span class="brand-mark xl" style="margin:0 auto 12px">CW</span>
+            <h3 class="t-lg semibold" style="margin:0">Sign in to ColWrite</h3>
+            <p class="t-sm muted" style="margin:6px 0 0">Accounts are invite-only during alpha.</p>
+          </div>
+          <div class="stack-2" style="margin-top:16px">
+            <input class="input" placeholder="Email" />
+            <input class="input" type="password" placeholder="Password" />
+            <button class="btn btn--default" style="width:100%">Sign in</button>
+          </div>
+          <div class="alert alert--destructive" style="margin-top:12px"><svg class="i16 shrink0" aria-hidden="true"><use href="#ic-alert-circle"/></svg><span>Those credentials were not recognised.</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="spec" style="margin:0">
+      <div class="spec-label">Export document</div>
+      <div class="dialog-scrim">
+        <div class="dialog" style="max-width:100%">
+          <h3 class="t-lg semibold" style="margin:0">Export “Sparse routing at scale”</h3>
+          <p class="t-sm muted" style="margin:6px 0 16px">A standalone file — fonts, equations and citation styles are inlined, so it opens anywhere.</p>
+          <div class="stack-2">
+            <label class="export-opt" data-selected="true"><span class="checkbox" data-state="checked"><svg class="i12" aria-hidden="true"><use href="#ic-check"/></svg></span><span class="grow"><span class="t-sm medium" style="display:block">Standalone HTML</span><span class="t-xs muted">One file, offline KaTeX, no network requests</span></span></label>
+            <label class="export-opt"><span class="checkbox"></span><span class="grow"><span class="t-sm medium" style="display:block">Print / PDF</span><span class="t-xs muted">Opens the browser print dialog with a paper stylesheet</span></span></label>
+            <label class="export-opt"><span class="checkbox"></span><span class="grow"><span class="t-sm medium" style="display:block">Document JSON</span><span class="t-xs muted">The exact tree the assistant reads and writes</span></span></label>
+          </div>
+          <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn btn--ghost sz-sm">Cancel</button><button class="btn btn--default sz-sm"><svg aria-hidden="true"><use href="#ic-download"/></svg>Export</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Empty &amp; loading states across the app</div>
+    <div class="grid-3">
+      <div class="card"><div class="empty"><span class="icon-well"><svg class="i16" aria-hidden="true"><use href="#ic-file-text"/></svg></span><p class="title">No documents yet</p><p class="desc">Start writing, and the first save puts it in this list.</p><div class="row" style="margin-top:8px"><button class="btn btn--default sz-sm"><svg aria-hidden="true"><use href="#ic-file-plus"/></svg>New document</button></div></div></div>
+      <div class="card"><div class="empty"><span class="icon-well"><svg class="i16" aria-hidden="true"><use href="#ic-search"/></svg></span><p class="title">No results</p><p class="desc">Nothing on arXiv matched “expert routing collapse 2027”.</p></div></div>
+      <div class="card"><div class="empty"><span class="icon-well"><svg class="i16" aria-hidden="true"><use href="#ic-book-open"/></svg></span><p class="title">Library is disabled</p><p class="desc">Enable this paper source in Profile → Agent tools before using it.</p></div></div>
+      <div class="card"><div class="empty"><span class="icon-well"><svg class="i16" aria-hidden="true"><use href="#ic-triangle-alert"/></svg></span><p class="title">Something went wrong in the editor</p><p class="desc">The rest of the app kept working. Reload this panel to try again.</p><div class="row" style="margin-top:8px"><button class="btn btn--outline sz-sm"><svg aria-hidden="true"><use href="#ic-rotate-ccw"/></svg>Reload</button></div></div></div>
+      <div class="card" style="padding:16px"><p class="t-xs medium" style="margin:0 0 10px">Document loading</p><div class="stack-2"><div class="skeleton" style="height:28px;width:60%"></div><div class="skeleton" style="height:10px"></div><div class="skeleton" style="height:10px;width:92%"></div><div class="skeleton" style="height:10px;width:76%"></div><div class="skeleton" style="height:10px;width:88%;opacity:.6"></div></div></div>
+      <div class="card" style="padding:16px"><p class="t-xs medium" style="margin:0 0 10px">Search results loading</p><div class="stack-2"><div class="skeleton" style="height:52px"></div><div class="skeleton" style="height:52px;opacity:.7"></div><div class="skeleton" style="height:52px;opacity:.45"></div></div></div>
+    </div>
+  </div>
+
+  <div class="note">
+    <svg class="i16" aria-hidden="true"><use href="#ic-info"/></svg>
+    <p>Every empty state comes from one component. Panels used to hand-roll this with a decorative emoji, which read inconsistently and was announced as meaningless text. The icon here is presentational and hidden from the accessibility tree; the title and description carry the meaning.</p>
+  </div>
+</section>
+
+<footer class="sec" style="padding-bottom:0">
+  <p class="t-xs muted">ColWrite design system · dark-first · generated from <code>src/styles/globals.css</code>, <code>src/components/ui</code> and the shipping views.</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>
