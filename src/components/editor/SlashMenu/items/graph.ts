@@ -1,3 +1,4 @@
+import { ChartColumn } from 'lucide-react';
 import type { SlashItem } from '../types';
 import { insertInlineChild } from './insertChild';
 
@@ -5,7 +6,8 @@ export const graphItem: SlashItem = {
   id: 'graph',
   label: 'Figure',
   desc: 'A bar, line, area or pie chart',
-  icon: '📈',
+  icon: ChartColumn,
+  keywords: ['graph', 'chart', 'plot', 'bar', 'line', 'pie', 'data', 'image'],
   group: 'insert',
   onSelect: (ctx) =>
     insertInlineChild(ctx, (id) => ({

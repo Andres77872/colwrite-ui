@@ -75,12 +75,13 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block, documentId }
 
   return (
     <div className={cn("paragraph-block w-full", columns > 1 && "multi-column")}>
-      <Editable 
-        id={block.id} 
-        html={block.html} 
-        placeholder="Type something, or press '/' for commands…" 
-        style={editableStyle} 
-        slashEnabled 
+      <Editable
+        id={block.id}
+        html={block.html}
+        locked={block.locked === true}
+        placeholder="Type something, or press '/' for commands…"
+        style={editableStyle}
+        slashEnabled
         className="text-md leading-relaxed"
       />
       {mounts.map(({ id, el }: { id: string; el: HTMLElement }) => {

@@ -93,6 +93,54 @@ describe('BlockControls segmented choices', () => {
   });
 });
 
+describe('BlockControls drag handle', () => {
+  /**
+   * The regression this guards is subtle and total: the handle used to be the
+   * options menu's trigger as well, and Radix opens a menu on `pointerdown`
+   * with `event.preventDefault()`. Preventing that default is precisely what
+   * stops the browser from starting a native drag, so pressing the handle
+   * opened the menu and drag-to-reorder never fired once.
+   */
+  it('leaves pointerdown alone, so the browser can start a drag', () => {
+    render(<BlockControls id="p2" />);
+    const handle = screen.getByRole('button', { name: /drag to reorder/i });
+
+    expect(handle.getAttribute('draggable')).toBe('true');
+    // A menu trigger would announce itself, and would be the thing that
+    // swallows the gesture.
+    expect(handle.getAttribute('aria-haspopup')).toBeNull();
+
+    const notPrevented = fireEvent.pointerDown(handle, { button: 0 });
+    expect(notPrevented).toBe(true);
+  });
+
+  it('carries the block id on the drag, under both types the canvas reads', () => {
+    render(<BlockControls id="p2" />);
+    const handle = screen.getByRole('button', { name: /drag to reorder/i });
+
+    const data: Record<string, string> = {};
+    const dataTransfer = {
+      setData: (type: string, value: string) => { data[type] = value; },
+      effectAllowed: '',
+    };
+    fireEvent.dragStart(handle, { dataTransfer });
+
+    expect(data['application/x-block-id']).toBe('p2');
+    expect(data['text/plain']).toBe('p2');
+    expect(dataTransfer.effectAllowed).toBe('move');
+    // An open menu would portal an overlay across the drop target.
+    expect(editorMocks.setBlockMenu).toHaveBeenCalledWith(null, null);
+  });
+
+  it('keeps the options menu on its own trigger', () => {
+    render(<BlockControls id="p2" />);
+    const trigger = screen.getByRole('button', { name: /options/i });
+
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
+    expect(trigger.getAttribute('draggable')).toBeNull();
+  });
+});
+
 describe('BlockControls keyboard reorder', () => {
   it('moves the block from the menu, one step at a time', () => {
     renderOptionsOpen('p2');

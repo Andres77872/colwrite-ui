@@ -43,6 +43,20 @@ type HistoryEntry = {
   time: number;
 };
 
+/**
+ * An empty block of the given type.
+ *
+ * The same three-way expression was written out in each insertion helper, so a
+ * new block type — or a change to a paragraph's defaults — had to be made in
+ * every one of them or the block came out shaped differently depending on
+ * which affordance created it.
+ */
+function blankBlock(id: string, type: Block['type']): Block {
+  if (type === 'paragraph') return { id, type: 'paragraph', html: '', children: [], columns: 1 };
+  if (type === 'heading') return { id, type: 'heading', level: 2, html: '' };
+  return { id, type: 'divider' };
+}
+
 function makeDefaultDoc(): Doc {
   return {
     version: 1,
@@ -466,13 +480,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
   const addBlockAtStart = useCallback((type: Block['type']): string => {
     const newId = uid();
-    setBlocks(prev => {
-      const next: Block =
-        type === 'paragraph' ? { id: newId, type: 'paragraph', html: '', children: [], columns: 1 } :
-        type === 'heading' ? { id: newId, type: 'heading', level: 2, html: '' } :
-        { id: newId, type: 'divider' };
-      return [next, ...prev];
-    });
+    setBlocks(prev => [blankBlock(newId, type), ...prev]);
     return newId;
   }, [setBlocks]);
 
@@ -480,12 +488,26 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const newId = uid();
     setBlocks(prev => {
       const idx = prev.findIndex(b => b.id === afterId);
-      const next: Block =
-        type === 'paragraph' ? { id: newId, type: 'paragraph', html: '', children: [], columns: 1 } :
-        type === 'heading' ? { id: newId, type: 'heading', level: 2, html: '' } :
-        { id: newId, type: 'divider' };
       const out = [...prev];
-      out.splice(idx + 1, 0, next);
+      out.splice(idx + 1, 0, blankBlock(newId, type));
+      return out;
+    });
+    return newId;
+  }, [setBlocks]);
+
+  /**
+   * Insert above a given block.
+   *
+   * The gutter menu could only ever insert below, so nothing could be put in
+   * front of the first block: `addBlockAtStart` reached the same place but was
+   * surfaced only on the empty-document screen.
+   */
+  const addBlockBefore = useCallback((beforeId: string, type: Block['type']): string => {
+    const newId = uid();
+    setBlocks(prev => {
+      const idx = prev.findIndex(b => b.id === beforeId);
+      const out = [...prev];
+      out.splice(idx === -1 ? 0 : idx, 0, blankBlock(newId, type));
       return out;
     });
     return newId;
@@ -695,7 +717,15 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     b.id === id && b.type === 'heading' ? ({ ...b, level }) : b
   ))), [setBlocks]);
 
-  const exec = useCallback((cmd: string) => document.execCommand(cmd, false), []);
+  /**
+   * A contenteditable command. `value` carries the argument the few commands
+   * that take one need — `createLink` above all, which was unreachable while
+   * this signature had nowhere to put a URL.
+   */
+  const exec = useCallback(
+    (cmd: string, value?: string) => document.execCommand(cmd, false, value),
+    [],
+  );
 
   const newLocal = useCallback(() => {
     const requestToken = beginDocumentTransition(null);
@@ -1375,6 +1405,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     setDocName,
     addBlockAtStart,
     addBlockAfter,
+    addBlockBefore,
     insertBlockAtStartExact,
     insertBlockAfterExact,
     insertBlockBeforeExact,
@@ -1425,6 +1456,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     setDocName,
     addBlockAtStart,
     addBlockAfter,
+    addBlockBefore,
     insertBlockAtStartExact,
     insertBlockAfterExact,
     insertBlockBeforeExact,

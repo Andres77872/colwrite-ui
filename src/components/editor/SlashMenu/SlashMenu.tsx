@@ -3,13 +3,14 @@ import { cn } from '@/lib/utils';
 import { Kbd } from '@/components/ui/kbd';
 import { useEditor } from '@/editor';
 import { aiBeatItem } from './items/aiBeat';
+import { basicBlockItems } from './items/blocks';
 import { tableItem } from './items/table';
 import { citationItem } from './items/citation';
 import { displayEquationItem, equationItem } from './items/equation';
 import { graphItem } from './items/graph';
 import { serializeEditableHtml } from '../../common/Editable/editableHtml';
 import type { SlashContext, SlashItem } from './types';
-import { Search, SearchX } from 'lucide-react';
+import { Dot, Search, SearchX } from 'lucide-react';
 import {
   SLASH_MENU_EVENT,
   emitSlashMenuVisibility,
@@ -41,6 +42,7 @@ const GROUPS = [
 ] as const;
 
 const ITEMS: readonly SlashItem[] = [
+  ...basicBlockItems,
   aiBeatItem,
   tableItem,
   graphItem,
@@ -49,11 +51,22 @@ const ITEMS: readonly SlashItem[] = [
   displayEquationItem,
 ];
 
+/** Whether an item answers `query`, over its label, description and aliases. */
+function matches(item: SlashItem, query: string): boolean {
+  if (item.label.toLowerCase().includes(query)) return true;
+  if ((item.desc ?? '').toLowerCase().includes(query)) return true;
+  return (item.keywords ?? []).some((keyword) => keyword.includes(query));
+}
+
 export function SlashMenu() {
   const {
     refs,
     updateHtml,
     addParagraphChild,
+    addBlockAfter,
+    addBlockBefore,
+    removeBlock,
+    setHeadingLevel,
     documentId,
     loadingDocumentId,
     createRemote,
@@ -86,10 +99,7 @@ export function SlashMenu() {
     if (!q) return ITEMS;
     // An empty result set shows the empty state rather than silently falling
     // back to the full list, which made typos look like a broken filter.
-    return ITEMS.filter(
-      (item) =>
-        item.label.toLowerCase().includes(q) || (item.desc ?? '').toLowerCase().includes(q),
-    );
+    return ITEMS.filter((item) => matches(item, q));
   }, [query]);
 
   const rectFromNode = useCallback((node: Node | null): DOMRect | null => {
@@ -203,10 +213,50 @@ export function SlashMenu() {
       refs,
       updateHtml: (id) => updateHtml(id, serializeEditableHtml(refs.current[id]!)),
       addParagraphChild,
+      /**
+       * The caret's block becomes `type` when it holds nothing but the text
+       * the command was typed over; otherwise the new block goes below it.
+       * Choosing Heading on a blank line should give a heading, not a heading
+       * under a leftover empty paragraph.
+       */
+      replaceOrInsertBlock: (type, level) => {
+        const current = blocks.find((b) => b.id === blockId);
+        const isBlank =
+          !!current &&
+          'html' in current &&
+          current.html.replace(/<[^>]*>/g, '').trim() === '' &&
+          (current.type !== 'paragraph' || (current.children ?? []).length === 0);
+
+        if (isBlank && current.type === type) {
+          if (type === 'heading' && level) setHeadingLevel(current.id, level);
+          return current.id;
+        }
+
+        const newId = isBlank
+          ? addBlockBefore(current.id, type)
+          : addBlockAfter(blockId!, type);
+        if (type === 'heading' && level) setHeadingLevel(newId, level);
+        // The blank block the command was typed in has served its purpose.
+        if (isBlank) removeBlock(current.id);
+        return newId;
+      },
+      focusBlock: (id) => queueMicrotask(() => refs.current[id]?.focus()),
       documentId,
       createRemote,
     }),
-    [blockId, refs, updateHtml, addParagraphChild, documentId, createRemote],
+    [
+      blockId,
+      blocks,
+      refs,
+      updateHtml,
+      addParagraphChild,
+      addBlockAfter,
+      addBlockBefore,
+      removeBlock,
+      setHeadingLevel,
+      documentId,
+      createRemote,
+    ],
   );
 
   const handleSelect = useCallback(
@@ -390,9 +440,9 @@ export function SlashMenu() {
                   >
                     <span
                       aria-hidden="true"
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-secondary text-base"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-secondary text-muted-foreground"
                     >
-                      {item.icon || '•'}
+                      {item.icon ? <item.icon className="h-4 w-4" /> : <Dot className="h-4 w-4" />}
                     </span>
                     <span className="min-w-0 flex-1 py-0.5">
                       <span className="block text-sm font-medium">{item.label}</span>
@@ -410,9 +460,15 @@ export function SlashMenu() {
         })}
 
         {filteredItems.length === 0 && (
+          // Naming what the menu does hold: reporting only the miss leaves the
+          // writer guessing whether they typed the wrong word or the command
+          // does not exist.
           <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
             <SearchX aria-hidden="true" className="h-4 w-4 text-muted-foreground/70" />
             <p className="text-sm text-muted-foreground">No commands match “{query.trim()}”</p>
+            <p className="text-xs text-muted-foreground/80">
+              Try headings, paragraph or divider — or a table, figure, citation or equation.
+            </p>
           </div>
         )}
       </div>

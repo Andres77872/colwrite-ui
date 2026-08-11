@@ -199,9 +199,17 @@
   --z-toast: 350;
   --z-tooltip: 400;
 
-  /* Editor measurements shared between Canvas, chrome and gutters */
+  /* Editor measurements shared between Canvas, chrome and gutters.
+
+     The gutter has to hold `BlockControls` — 4px of padding, two 24px buttons
+     and the 2px between them, 54px in all. At 40px the second button, which is
+     both the drag handle and the options trigger, overhung the text column by
+     14px: on hover or focus it landed on the first characters of the block, so
+     clicking to place the caret started a drag instead. The two numbers are
+     tied together now, and the control group is sized from this token rather
+     than laying itself out and hoping. */
   --doc-measure: 800px;
-  --doc-gutter: 40px;
+  --doc-gutter: 56px;
 }
 
 /* ============================================
@@ -432,41 +440,87 @@
      than with utility classes on a React element.
      ---------------------------------------- */
 
+  /* A panel in the run of text rather than a stretch of it: the two versions
+     stack so the rewrite can be read against the original in one pass, and
+     they carry the same diff tokens as a block-level proposal so the same
+     decision looks like the same decision wherever it is asked. */
   .ai-suggest {
-    @apply rounded-sm px-0.5 bg-primary/10;
+    @apply my-1 block rounded-md border border-primary/30 bg-primary/5 p-2;
+  }
+
+  .ai-suggest[data-error="1"] {
+    @apply border-destructive/40 bg-destructive/5;
+  }
+
+  .ai-original,
+  .ai-generated {
+    @apply block rounded-sm px-1.5 py-1;
+  }
+
+  .ai-original {
+    @apply bg-diff-remove text-diff-remove-fg line-through
+           decoration-diff-remove-border/60;
+  }
+
+  .ai-generated {
+    @apply mt-1 bg-diff-add text-diff-add-fg;
+  }
+
+  /* An empty replacement has no line box, so the row it will fill collapses to
+     nothing and the panel looks broken while the first token is in flight. */
+  .ai-generated:empty::before {
+    content: '\200b';
+  }
+
+  /* Unless nothing is coming: a failed rewrite that kept its empty green row
+     would be claiming an addition it does not have. */
+  .ai-suggest[data-error="1"] .ai-generated:empty {
+    @apply hidden;
   }
 
   .ai-suggest[data-generating="1"] .ai-generated::after {
     content: '';
-    @apply inline-block w-1 h-4 ml-0.5 align-text-bottom bg-primary rounded-xs;
+    @apply ml-0.5 inline-block h-4 w-1 rounded-xs bg-diff-add-border align-text-bottom;
     animation: shimmer 1.1s ease-in-out infinite;
   }
 
-  .ai-suggest[data-error="1"] {
-    @apply bg-destructive/10;
-  }
-
-  .ai-original {
-    @apply line-through opacity-50;
-  }
-
-  .ai-generated {
-    @apply text-primary;
+  .ai-error {
+    @apply mt-1.5 block text-xs text-destructive;
   }
 
   .ai-controls {
-    @apply inline-flex gap-1 ml-1 align-middle;
+    @apply mt-2 flex flex-wrap items-center gap-1.5;
   }
 
-  .ai-controls button {
-    @apply inline-flex items-center justify-center w-5 h-5 rounded-sm text-2xs
-           border border-border/60 transition-colors;
+  .ai-status {
+    @apply mr-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground;
   }
 
-  .ai-accept { @apply bg-success/15 text-success hover:bg-success/25; }
-  .ai-reject { @apply bg-destructive/15 text-destructive hover:bg-destructive/25; }
+  /* The suggestion is raw DOM inside the paragraph, so the system `Spinner`
+     cannot be mounted into it — this is the same mark in CSS. */
+  .ai-spinner {
+    @apply inline-block h-3 w-3 shrink-0 rounded-full border-2 border-current
+           border-t-transparent align-[-1px] opacity-70;
+    animation: spin 0.7s linear infinite;
+  }
+
+  .ai-suggest:not([data-generating="1"]) .ai-status {
+    @apply hidden;
+  }
+
+  .ai-btn {
+    @apply inline-flex h-6 items-center justify-center rounded-sm border
+           border-border/60 px-2 text-xs font-medium transition-colors;
+  }
+
+  .ai-btn[hidden] {
+    display: none;
+  }
+
+  .ai-accept { @apply border-success/40 bg-success/15 text-success hover:bg-success/25; }
+  .ai-reject { @apply bg-muted text-muted-foreground hover:bg-accent hover:text-foreground; }
   .ai-stop { @apply bg-muted text-muted-foreground hover:bg-accent hover:text-foreground; }
-  .ai-regenerate { @apply bg-primary/15 text-primary hover:bg-primary/25; }
+  .ai-regenerate { @apply border-primary/40 bg-primary/15 text-primary hover:bg-primary/25; }
 
   /* ----------------------------------------
      Assistant composer

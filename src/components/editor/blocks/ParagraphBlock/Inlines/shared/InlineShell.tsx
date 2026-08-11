@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { stopEditorEvents } from './stopEditorEvents';
-import { GripVertical, Settings2, Trash2 } from 'lucide-react';
+import { Settings2, Trash2 } from 'lucide-react';
 
 /* ----------------------------------------
    Shared chrome for inline widgets
@@ -172,9 +172,16 @@ export function SettingsCheck({
  * Block-level frame for the widgets that occupy their own line — tables and
  * figures.
  *
- * Controls live in a header that only materialises on hover or focus. The old
- * version pinned a permanently visible strip of grey buttons above every
- * table, so a document with three tables read as a form, not as a paper.
+ * The header is split in two, because the two halves want opposite things. A
+ * permanently visible strip of grey buttons above every table makes a document
+ * read as a form rather than as a paper — but the previous fix, `opacity-0` on
+ * the whole strip, kept its full height, so every figure sat under an empty
+ * band inside its own frame and nothing at rest said the figure was
+ * interactive at all.
+ *
+ * So: the label stays, because that is the part that helps at rest, and only
+ * the buttons fade in on hover or focus. There is no reserved empty space,
+ * because there is no longer anything hidden that occupies any.
  */
 export function InlineFigureShell({
   label,
@@ -200,17 +207,21 @@ export function InlineFigureShell({
       {...stopEditorEvents}
     >
       <span className="block overflow-hidden rounded-lg border border-border bg-card transition-colors focus-within:border-primary/50 group-hover/figure:border-border/80">
-        <span
-          className={cn(
-            'flex items-center gap-1 border-b border-border/60 bg-muted/40 px-2 py-1',
-            'opacity-0 transition-opacity group-hover/figure:opacity-100 group-focus-within/figure:opacity-100',
-          )}
-        >
-          <GripVertical aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground/60" />
+        <span className="flex min-h-7 items-center gap-1 border-b border-border/60 bg-muted/40 px-2 py-1">
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             {label}
           </span>
-          <span className="ml-auto flex items-center gap-0.5">
+          {/* The grip was decorative — figures cannot be dragged — so it made
+              a promise the shell does not keep. It comes back when they can. */}
+          <span
+            className={cn(
+              'ml-auto flex items-center gap-0.5',
+              'opacity-0 transition-opacity group-hover/figure:opacity-100 group-focus-within/figure:opacity-100',
+              // Never unreachable by keyboard: focus inside brings it back, but
+              // an invisible button must not be clickable in the meantime.
+              'pointer-events-none group-hover/figure:pointer-events-auto group-focus-within/figure:pointer-events-auto',
+            )}
+          >
             {controls}
             <Button
               type="button"

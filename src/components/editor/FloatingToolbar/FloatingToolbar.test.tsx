@@ -188,7 +188,8 @@ describe('FloatingToolbar keyboard operation', () => {
     // a keyboard user could select text and never apply a style to it.
     fireEvent.click(bold);
 
-    expect(exec).toHaveBeenCalledWith('bold', false);
+    // The third argument is the command value, which `bold` does not take.
+    expect(exec).toHaveBeenCalledWith('bold', false, undefined);
     Reflect.deleteProperty(document, 'execCommand');
   });
 
@@ -264,7 +265,8 @@ describe('FloatingToolbar structured citation acceptance', () => {
     // addresses the document by id. Only once the suggestion has actually
     // streamed in is there something to accept.
     await waitFor(() => expect(actionMocks.dispatch).toHaveBeenCalled());
-    const accept = await screen.findByRole('button', { name: 'Accept suggestion' });
+    // Labelled, not a bare ✓, and the label carries its shortcut.
+    const accept = await screen.findByRole('button', { name: /^Accept/ });
     // `click`, not `mouseDown` — the control has to answer the event that Enter
     // and Space produce, or the suggestion cannot be accepted without a mouse.
     fireEvent.click(accept);

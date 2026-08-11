@@ -435,13 +435,12 @@ export function Canvas() {
                 const block = row.block;
                 const index = blockIndex.get(block.id) ?? 0;
                 const isCollapsed = block.collapsed === true;
-                const isAiHidden = block.aiHidden === true;
-                const isLocked = block.locked === true;
                 // Rewrites, deletions and moves are about this block, so they
                 // read below it, next to the text they would change.
                 const onBlock = row.changes;
                 const pendingDelete = onBlock.some((change) => change.kind === 'delete');
                 const pendingRewrite = onBlock.some((change) => change.kind === 'replace');
+                const hasProposal = onBlock.length > 0 || anchoring.has(block.id);
 
                 return (
                   <Fragment key={block.id}>
@@ -455,27 +454,29 @@ export function Canvas() {
                     <div
                       className={cn(
                         'block-row group relative rounded-sm py-1 pr-2 transition-colors duration-75',
-                        'hover:bg-accent/20',
-                        block.id === activeId && 'bg-primary/5',
-                        // `Editable` suppresses the global focus outline so
-                        // prose is never boxed in, which left the 5% active
-                        // tint as the only cue — too faint to locate by eye.
-                        // Deepen it while focus is genuinely in the text.
-                        'has-[.editable:focus-visible]:bg-primary/10',
-                        isCollapsed && 'bg-muted/20',
-                        // Semantic tokens rather than raw palette values, so the
-                        // states stay legible if the theme changes.
-                        isAiHidden && 'border-l-2 border-block-hidden/50 bg-block-hidden/5',
-                        isLocked && !isAiHidden && 'border-l-2 border-block-locked/50 bg-block-locked/5',
-                        // A block with an open suggestion, and one an accepted
-                        // change just landed on, both need to be findable
-                        // without scrolling the whole document.
-                        (onBlock.length > 0 || anchoring.has(block.id))
-                          && 'bg-primary/5 ring-1 ring-primary/25',
-                        // The proposal is shown on the block itself rather than
-                        // as a second copy underneath it: a deletion strikes
-                        // the real text through, and a rewrite steps back so
-                        // the replacement below reads as the new version.
+                        // Three channels, one per kind of state, in this
+                        // precedence. A row used to be able to carry ten
+                        // overlapping washes — hover, active, focused,
+                        // collapsed, hidden, locked and four proposal states —
+                        // several of which combined, two of which sat five
+                        // percent apart on the same hue, and one of which
+                        // silently suppressed another.
+                        //
+                        // 1. TINT — where the caret is, and nothing else.
+                        //    Hover stays a step below it: it is a pointer
+                        //    affordance for the gutter controls, not state.
+                        'hover:bg-accent/15',
+                        block.id === activeId && 'bg-primary/10',
+                        // 2. GUTTER MARKS — the author's own decisions about
+                        //    the block (locked, hidden, collapsed) are drawn by
+                        //    `BlockControls`, so they can co-occur and none of
+                        //    them has to outbid a tint to be seen.
+                        //
+                        // 3. DIFF TREATMENT — what the assistant wants to do,
+                        //    on the text itself. A deletion strikes the real
+                        //    text through and a rewrite steps back so the
+                        //    replacement below reads as the new version.
+                        hasProposal && 'ring-1 ring-primary/25',
                         pendingDelete && 'bg-diff-remove/20 ring-diff-remove-border/40 line-through decoration-diff-remove-border/70',
                         pendingRewrite && !pendingDelete && 'opacity-60',
                         recentlyChanged.has(block.id) && 'bg-diff-add',

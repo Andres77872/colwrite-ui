@@ -350,6 +350,11 @@ function commandContext(
     refs: { current: { p1: editable } },
     updateHtml,
     addParagraphChild,
+    // These two serve the "Basic blocks" commands, which operate on the block
+    // list rather than on the caret's range; the payload tests here cover the
+    // inline-widget commands.
+    replaceOrInsertBlock: vi.fn(() => 'p1'),
+    focusBlock: vi.fn(),
     documentId: null,
     createRemote: vi.fn(async () => 'created-doc'),
   };

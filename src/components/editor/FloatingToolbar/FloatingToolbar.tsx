@@ -14,7 +14,8 @@ import {
   clearChildPlaceholders,
   serializeEditableHtml,
 } from '@/components/common/Editable/editableHtml';
-import { Bold, Italic, Strikethrough, Underline } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Bold, Code, Italic, Link2, Strikethrough } from 'lucide-react';
 
 const TOOLBAR_HEIGHT = 44;
 const VIEWPORT_MARGIN = 8;
@@ -39,7 +40,15 @@ function positionFor(rect: DOMRect, size: { width: number; height: number }) {
   return { top, left };
 }
 
-type FormatStateKey = 'bold' | 'italic' | 'underline' | 'strike';
+/** `⌘X` on Apple platforms, `Ctrl+X` everywhere else. */
+function modKeyLabel(key: string): string {
+  const apple =
+    typeof navigator !== 'undefined' &&
+    /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent);
+  return apple ? `⌘${key}` : `Ctrl+${key}`;
+}
+
+type FormatStateKey = 'bold' | 'italic' | 'strike' | 'code';
 
 interface FormatButton {
   command: string;
@@ -49,16 +58,60 @@ interface FormatButton {
   shortcut?: string;
 }
 
+/**
+ * Underline is gone and link and inline code have taken its place.
+ *
+ * Underline in running prose reads as a link and means nothing in a paper,
+ * while link — the most-used inline format in any writing tool — was
+ * unreachable: `⌘K` did nothing and the toolbar did not offer it.
+ */
 const FORMAT_BUTTONS: readonly FormatButton[] = [
-  { command: 'bold', stateKey: 'bold', label: 'Bold', icon: Bold, shortcut: '⌘B' },
-  { command: 'italic', stateKey: 'italic', label: 'Italic', icon: Italic, shortcut: '⌘I' },
-  { command: 'underline', stateKey: 'underline', label: 'Underline', icon: Underline, shortcut: '⌘U' },
+  { command: 'bold', stateKey: 'bold', label: 'Bold', icon: Bold, shortcut: modKeyLabel('B') },
+  { command: 'italic', stateKey: 'italic', label: 'Italic', icon: Italic, shortcut: modKeyLabel('I') },
   { command: 'strikeThrough', stateKey: 'strike', label: 'Strikethrough', icon: Strikethrough },
+  { command: 'code', stateKey: 'code', label: 'Inline code', icon: Code },
 ];
 
 type FormatState = Record<FormatStateKey, boolean>;
 
-const EMPTY_STATE: FormatState = { bold: false, italic: false, underline: false, strike: false };
+const EMPTY_STATE: FormatState = { bold: false, italic: false, strike: false, code: false };
+
+/** The `<code>` element the selection sits inside, if any. */
+function codeAncestor(node: Node | null): HTMLElement | null {
+  const element = node?.nodeType === 1 ? (node as HTMLElement) : node?.parentElement;
+  return element?.closest('code') ?? null;
+}
+
+/** The `<a>` the selection sits inside, if any. */
+function linkAncestor(node: Node | null): HTMLAnchorElement | null {
+  const element = node?.nodeType === 1 ? (node as HTMLElement) : node?.parentElement;
+  return (element?.closest('a') as HTMLAnchorElement | null) ?? null;
+}
+
+/**
+ * Wrap the selection in `<code>`, or unwrap it when it is already inside one.
+ *
+ * `document.execCommand` has no inline-code command, so this is done by hand.
+ * `surroundContents` throws on a range that partially selects a node, which is
+ * ordinary in prose — the fallback extracts and re-inserts instead.
+ */
+function toggleInlineCode(range: Range): void {
+  const existing = codeAncestor(range.commonAncestorContainer);
+  if (existing) {
+    const parent = existing.parentNode;
+    if (!parent) return;
+    while (existing.firstChild) parent.insertBefore(existing.firstChild, existing);
+    parent.removeChild(existing);
+    return;
+  }
+  const code = document.createElement('code');
+  try {
+    range.surroundContents(code);
+  } catch {
+    code.append(range.extractContents());
+    range.insertNode(code);
+  }
+}
 
 /**
  * The toolbar's selection tracking, formatting and AI-suggestion machinery.
@@ -74,6 +127,9 @@ function useFloatingToolbar() {
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const [states, setStates] = useState<FormatState>(EMPTY_STATE);
   const [activeIndex, setActiveIndex] = useState(0);
+  /** The href on the current selection, and whether its editor is open. */
+  const [linkHref, setLinkHref] = useState<string | null>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const slashOpenRef = useRef(false);
@@ -155,12 +211,14 @@ function useFloatingToolbar() {
         setStates({
           bold: document.queryCommandState('bold'),
           italic: document.queryCommandState('italic'),
-          underline: document.queryCommandState('underline'),
           strike: document.queryCommandState('strikeThrough'),
+          code: codeAncestor(range.commonAncestorContainer) !== null,
         });
       } catch {
         setStates(EMPTY_STATE);
       }
+      setLinkHref(linkAncestor(range.commonAncestorContainer)?.getAttribute('href') ?? null);
+      setLinkOpen(false);
       setVisible(true);
     };
 
@@ -237,8 +295,51 @@ function useFloatingToolbar() {
     event.preventDefault();
     event.stopPropagation();
     focusSavedRange();
+    if (command === 'code') {
+      const selection = document.getSelection();
+      if (!selection?.rangeCount) return;
+      toggleInlineCode(selection.getRangeAt(0));
+      commitActiveBlock();
+      setStates((prev) => ({ ...prev, code: !prev.code }));
+      return;
+    }
     exec(command);
   };
+
+  /** Write the block's DOM back to document state after a hand-made edit. */
+  const commitActiveBlock = useCallback(() => {
+    const { el, id } = findBlockId(document.getSelection()?.anchorNode ?? null);
+    if (el && id) updateHtml(id, serializeEditableHtml(el));
+  }, [findBlockId, updateHtml]);
+
+  /**
+   * Apply, replace or clear the link on the saved selection.
+   *
+   * `createLink` on a range already inside an `<a>` nests one anchor in
+   * another, so an existing link is unwrapped first and then rewritten.
+   */
+  const applyLink = useCallback(
+    (href: string | null) => {
+      focusSavedRange();
+      const selection = document.getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      if (!range) return;
+
+      const existing = linkAncestor(range.commonAncestorContainer);
+      if (existing) {
+        const parent = existing.parentNode;
+        if (parent) {
+          while (existing.firstChild) parent.insertBefore(existing.firstChild, existing);
+          parent.removeChild(existing);
+        }
+      }
+      if (href) exec('createLink', href);
+      commitActiveBlock();
+      setLinkHref(href);
+      setLinkOpen(false);
+    },
+    [commitActiveBlock, exec, focusSavedRange],
+  );
 
   const onAi = useCallback(
     async (action: AiAction, language?: string) => {
@@ -253,7 +354,14 @@ function useFloatingToolbar() {
 
       abortRef.current?.abort();
 
-      // Structure: [original (struck through)][generated][accept/reject/stop]
+      // The old and the new stacked, not run together in the line.
+      //
+      // The original and its streaming replacement used to render adjacent and
+      // inline, so a three-sentence rewrite made the paragraph twice as long
+      // with the two versions interleaved in reading order — the layout that
+      // makes a comparison hardest, for the one task that is nothing but
+      // comparison. They are two rows now, carrying the same `diff-remove` /
+      // `diff-add` tokens the block-level review already uses.
       const wrapper = document.createElement('span');
       wrapper.className = 'ai-suggest';
       wrapper.setAttribute('data-action', action);
@@ -268,17 +376,41 @@ function useFloatingToolbar() {
       generated.className = 'ai-generated';
       generated.contentEditable = 'true';
 
+      const errorLine = document.createElement('span');
+      errorLine.className = 'ai-error';
+      errorLine.contentEditable = 'false';
+      errorLine.hidden = true;
+
       const controls = document.createElement('span');
       controls.className = 'ai-controls';
       controls.contentEditable = 'false';
 
-      const makeControl = (className: string, title: string, glyph: string) => {
+      // Progress used to be a `data-generating` attribute and whatever the
+      // stylesheet made of it; failure used to be `data-error` and nothing at
+      // all — no message, no cause, no retry label.
+      const status = document.createElement('span');
+      status.className = 'ai-status';
+      const spinner = document.createElement('span');
+      spinner.className = 'ai-spinner';
+      spinner.setAttribute('aria-hidden', 'true');
+      const statusText = document.createElement('span');
+      statusText.textContent = 'Writing…';
+      status.append(spinner, statusText);
+      status.setAttribute('role', 'status');
+
+      /**
+       * A control in the same vocabulary as the rest of the app: a labelled
+       * button, not a bare glyph. ✓, ✕ and ■ asked the same question the
+       * review bar asks — keep this or not — in a second, cheaper-looking
+       * language, and the cheap one was the one editing your sentence.
+       */
+      const makeControl = (className: string, label: string, hint?: string) => {
         const button = document.createElement('button');
         button.type = 'button';
-        button.className = className;
-        button.title = title;
-        button.setAttribute('aria-label', title);
-        button.textContent = glyph;
+        button.className = `ai-btn ${className}`;
+        button.title = hint ? `${label} · ${hint}` : label;
+        button.setAttribute('aria-label', button.title);
+        button.textContent = label;
         return button;
       };
 
@@ -302,10 +434,15 @@ function useFloatingToolbar() {
         };
       };
 
-      const acceptBtn = makeControl('ai-accept', 'Accept suggestion', '✓');
-      const rejectBtn = makeControl('ai-reject', 'Reject suggestion', '✕');
-      const stopBtn = makeControl('ai-stop', 'Stop generating', '■');
-      controls.append(acceptBtn, rejectBtn, stopBtn);
+      const acceptBtn = makeControl('ai-accept', 'Accept', modKeyLabel('↵'));
+      const rejectBtn = makeControl('ai-reject', 'Reject', 'Esc');
+      // Stop and regenerate are two different things, so they are two
+      // different buttons. The stop control used to turn into a ↻ in place,
+      // which changes what a control means without moving it.
+      const stopBtn = makeControl('ai-stop', 'Stop');
+      const regenerateBtn = makeControl('ai-regenerate', 'Try again');
+      regenerateBtn.hidden = true;
+      controls.append(status, acceptBtn, rejectBtn, stopBtn, regenerateBtn);
 
       let originalFrag: DocumentFragment;
       try {
@@ -315,7 +452,7 @@ function useFloatingToolbar() {
         originalFrag.append(document.createTextNode(selectedText));
       }
       original.append(originalFrag);
-      wrapper.append(original, generated, controls);
+      wrapper.append(original, generated, errorLine, controls);
       range.insertNode(wrapper);
 
       /**
@@ -354,33 +491,30 @@ function useFloatingToolbar() {
 
       let stopped = false;
 
-      const setStopMode = () => {
-        stopBtn.className = 'ai-stop';
-        stopBtn.title = 'Stop generating';
-        stopBtn.setAttribute('aria-label', 'Stop generating');
-        stopBtn.textContent = '■';
-        bindControl(stopBtn, () => {
-          stopped = true;
-          abortRef.current?.abort();
-        });
-      };
+      bindControl(stopBtn, () => {
+        stopped = true;
+        abortRef.current?.abort();
+      });
+      bindControl(regenerateBtn, () => {
+        void runStream();
+      });
 
-      const setRegenerateMode = () => {
-        stopBtn.className = 'ai-regenerate';
-        stopBtn.title = 'Regenerate';
-        stopBtn.setAttribute('aria-label', 'Regenerate suggestion');
-        stopBtn.textContent = '↻';
-        bindControl(stopBtn, () => {
-          void runStream();
-        });
+      /** Say what went wrong, in the citation widget's register. */
+      const fail = (message: string) => {
+        wrapper.setAttribute('data-error', '1');
+        errorLine.textContent = message;
+        errorLine.hidden = false;
       };
 
       const runStream = async () => {
         stopped = false;
         wrapper.setAttribute('data-generating', '1');
         wrapper.removeAttribute('data-error');
+        errorLine.hidden = true;
+        errorLine.textContent = '';
         generated.replaceChildren();
-        setStopMode();
+        stopBtn.hidden = false;
+        regenerateBtn.hidden = true;
 
         abortRef.current?.abort();
         const controller = new AbortController();
@@ -393,7 +527,7 @@ function useFloatingToolbar() {
           // message does.
           const targetDocumentId = documentId ?? (await ensureRemoteDocument());
           if (!targetDocumentId) {
-            wrapper.setAttribute('data-error', '1');
+            fail('This draft could not be saved to the server, so the assistant has nothing to work from. Check your connection and try again.');
             return;
           }
 
@@ -414,11 +548,15 @@ function useFloatingToolbar() {
               schedulePersist();
             },
           });
-        } catch {
-          if (!stopped) wrapper.setAttribute('data-error', '1');
+        } catch (error) {
+          if (!stopped) {
+            const detail = error instanceof Error ? error.message.trim() : '';
+            fail(detail ? `The rewrite failed: ${detail}` : 'The rewrite failed before it finished.');
+          }
         } finally {
           wrapper.removeAttribute('data-generating');
-          setRegenerateMode();
+          stopBtn.hidden = true;
+          regenerateBtn.hidden = false;
         }
       };
 
@@ -465,12 +603,30 @@ function useFloatingToolbar() {
         replaceWith(frag);
       });
 
-      bindControl(rejectBtn, () => {
+      const reject = () => {
         stopped = true;
         abortRef.current?.abort();
         const frag = document.createDocumentFragment();
         frag.append(...Array.from(original.childNodes));
         replaceWith(frag);
+      };
+
+      bindControl(rejectBtn, reject);
+
+      // The decision was mouse-only: the buttons carried no shortcut, and the
+      // surrounding editable deliberately ignores keys inside `.ai-suggest`.
+      wrapper.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          event.stopPropagation();
+          acceptBtn.click();
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          reject();
+        }
       });
 
       await runStream();
@@ -478,7 +634,87 @@ function useFloatingToolbar() {
     [addParagraphChild, documentId, ensureRemoteDocument, findBlockId, updateHtml],
   );
 
-  return { visible, pos, states, activeIndex, setActiveIndex, toolbarRef, onFormat, onAi, dismiss };
+  return {
+    visible,
+    pos,
+    states,
+    activeIndex,
+    setActiveIndex,
+    toolbarRef,
+    onFormat,
+    onAi,
+    dismiss,
+    linkHref,
+    linkOpen,
+    setLinkOpen,
+    applyLink,
+  };
+}
+
+/**
+ * The link editor, opened from the toolbar's link button or `Mod+K`.
+ *
+ * It replaces the toolbar row rather than floating beside it: the toolbar is
+ * already positioned against the selection, and a second floating surface
+ * would need its own clamping against the viewport edges.
+ */
+function LinkEditor({
+  href,
+  onApply,
+  onCancel,
+}: {
+  href: string | null;
+  onApply: (href: string | null) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(href ?? '');
+
+  const commit = () => {
+    const trimmed = value.trim();
+    onApply(trimmed ? trimmed : null);
+  };
+
+  return (
+    <div className="flex items-center gap-1">
+      <Input
+        autoFocus
+        type="url"
+        inputMode="url"
+        aria-label="Link address"
+        placeholder="https://example.com"
+        className="h-7 w-56 text-xs"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        // The toolbar prevents mousedown to keep the selection; the field
+        // needs the pointer to reach it.
+        onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            commit();
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            onCancel();
+          }
+        }}
+      />
+      <Button type="button" variant="ghost" size="sm" className="h-7" onClick={commit}>
+        Apply
+      </Button>
+      {href && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 text-destructive"
+          onClick={() => onApply(null)}
+        >
+          Remove
+        </Button>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -502,10 +738,38 @@ function useRovingTabIndex(
 
 export function FloatingToolbar() {
   const { loadingDocumentId } = useEditor();
-  const { visible, pos, states, activeIndex, setActiveIndex, toolbarRef, onFormat, onAi, dismiss } =
-    useFloatingToolbar();
+  const {
+    visible,
+    pos,
+    states,
+    activeIndex,
+    setActiveIndex,
+    toolbarRef,
+    onFormat,
+    onAi,
+    dismiss,
+    linkHref,
+    linkOpen,
+    setLinkOpen,
+    applyLink,
+  } = useFloatingToolbar();
 
-  useRovingTabIndex(toolbarRef, visible, activeIndex);
+  useRovingTabIndex(toolbarRef, visible && !linkOpen, activeIndex);
+
+  // `⌘K` is the binding every writing tool uses for this and the one the
+  // toolbar's own tooltip advertises; it did nothing at all.
+  useEffect(() => {
+    if (!visible) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey) || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      setLinkOpen(true);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [visible, setLinkOpen]);
 
   const onToolbarKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
@@ -546,25 +810,48 @@ export function FloatingToolbar() {
       // Keep the text selection alive while interacting with the toolbar.
       onMouseDown={(event) => event.preventDefault()}
     >
-      {FORMAT_BUTTONS.map(({ command, stateKey, label, icon: Icon, shortcut }) => (
-        <Button
-          key={command}
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className={cn('rounded-sm', states[stateKey] && 'bg-primary/15 text-primary')}
-          onClick={onFormat(command)}
-          aria-label={shortcut ? `${label} (${shortcut})` : label}
-          aria-pressed={states[stateKey]}
-          title={shortcut ? `${label} · ${shortcut}` : label}
-        >
-          <Icon aria-hidden="true" className="h-4 w-4" />
-        </Button>
-      ))}
+      {linkOpen ? (
+        <LinkEditor href={linkHref} onApply={applyLink} onCancel={() => setLinkOpen(false)} />
+      ) : (
+        <>
+          {FORMAT_BUTTONS.map(({ command, stateKey, label, icon: Icon, shortcut }) => (
+            <Button
+              key={command}
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className={cn('rounded-sm', states[stateKey] && 'bg-primary/15 text-primary')}
+              onClick={onFormat(command)}
+              aria-label={shortcut ? `${label} (${shortcut})` : label}
+              aria-pressed={states[stateKey]}
+              title={shortcut ? `${label} · ${shortcut}` : label}
+            >
+              <Icon aria-hidden="true" className="h-4 w-4" />
+            </Button>
+          ))}
 
-      <div role="separator" aria-orientation="vertical" className="mx-1 h-5 w-px bg-border" />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className={cn('rounded-sm', linkHref && 'bg-primary/15 text-primary')}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setLinkOpen(true);
+            }}
+            aria-label={`${linkHref ? 'Edit link' : 'Add link'} (${modKeyLabel('K')})`}
+            aria-pressed={Boolean(linkHref)}
+            title={`${linkHref ? 'Edit link' : 'Add link'} · ${modKeyLabel('K')}`}
+          >
+            <Link2 aria-hidden="true" className="h-4 w-4" />
+          </Button>
 
-      <AIActionMenu onAction={onAi} />
+          <div role="separator" aria-orientation="vertical" className="mx-1 h-5 w-px bg-border" />
+
+          <AIActionMenu onAction={onAi} />
+        </>
+      )}
     </div>
   );
 }

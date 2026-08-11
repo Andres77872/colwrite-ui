@@ -85,6 +85,7 @@ export function Editable({
   className,
   style,
   slashEnabled = false,
+  locked = false,
 }: {
   id: string;
   html: string;
@@ -92,6 +93,17 @@ export function Editable({
   className?: string;
   style?: CSSProperties;
   slashEnabled?: boolean;
+  /**
+   * Whether the block is locked against editing.
+   *
+   * "Lock block" wrote a flag that was read in exactly one place — the row's
+   * class list — so a locked block still typed normally. An affordance that
+   * says a block is protected and does not protect it is worse than not
+   * offering it, so the flag gates the contenteditable itself. The element
+   * stays focusable so arrow-key navigation still crosses the block and its
+   * text can still be selected and copied.
+   */
+  locked?: boolean;
 }) {
   // Actions plus the active-block context: the full state value changes on
   // every keystroke anywhere in the document, and subscribing to it made every
@@ -173,13 +185,19 @@ export function Editable({
         // state while writing. The affordance is the row tint in `Canvas`,
         // which keys off `.editable:focus-visible`.
         "min-h-[1.5em] w-full outline-none whitespace-pre-wrap break-words",
+        locked && "cursor-default",
         className
       )}
       ref={(element) => {
         editableRef.current = element;
         registerEditable(id, element);
       }}
-      contentEditable
+      contentEditable={!locked}
+      // A non-editable div is not in the tab order, and `refs.current[id].focus()`
+      // on one does nothing — which would strand arrow-key navigation on the
+      // block before a locked one.
+      tabIndex={locked ? 0 : undefined}
+      aria-readonly={locked || undefined}
       suppressContentEditableWarning
       onMouseDown={() => { pointerDownRef.current = true; }}
       onFocus={(e) => {
@@ -299,6 +317,9 @@ export function Editable({
             return;
           }
         }
+        // Nothing that mutates a locked block applies to it. Arrow keys fall
+        // through to the navigation handler below, which only moves the caret.
+        if (locked && !e.key.startsWith('Arrow')) return;
         if (slashEnabled && e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
           // Mid-word the key falls through and types a literal '/'; the menu
           // only opens at a word boundary.

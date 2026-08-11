@@ -68,6 +68,7 @@ export type EditorActionsContextValue = {
   setDocName: (name: string) => void;
   addBlockAtStart: (type: Block['type']) => string;
   addBlockAfter: (afterId: string, type: Block['type']) => string;
+  addBlockBefore: (beforeId: string, type: Block['type']) => string;
   insertBlockAtStartExact: (block: Block) => void;
   insertBlockAfterExact: (afterId: string, block: Block) => void;
   insertBlockBeforeExact: (beforeId: string, block: Block) => void;
@@ -86,7 +87,7 @@ export type EditorActionsContextValue = {
   updateParagraphChild: (blockId: string, childId: string, next: Partial<ParagraphChild>) => void;
   removeParagraphChild: (blockId: string, childId: string) => void;
   setHeadingLevel: (id: string, level: 1 | 2 | 3) => void;
-  exec: (cmd: string) => void;
+  exec: (cmd: string, value?: string) => void;
   /**
    * Block order at call time, without subscribing to `blocks`. Arrow-key
    * navigation needs the answer at keydown time; subscribing would re-render

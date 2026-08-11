@@ -12,6 +12,7 @@ export const HeadingBlock = memo(function HeadingBlock({ block }: { block: H }) 
       <Editable
         id={block.id}
         html={block.html}
+        locked={block.locked === true}
         placeholder="Heading"
         className={cn(
           "font-semibold leading-tight tracking-tight",
