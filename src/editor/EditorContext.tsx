@@ -374,6 +374,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     undo: [],
     redo: [],
   });
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
   /** Set while undo/redo replays a state, so the replay is not itself journaled. */
   const applyingHistoryRef = useRef(false);
 
@@ -402,6 +404,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
         if (stack.length > UNDO_LIMIT) stack.shift();
       }
       historyRef.current.redo = [];
+      setCanUndo(true);
+      setCanRedo(false);
     }
   }, [commitDoc]);
 
@@ -1309,6 +1313,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const entry = historyRef.current.undo.pop();
     if (!entry) return;
     historyRef.current.redo.push(entry);
+    setCanUndo(historyRef.current.undo.length > 0);
+    setCanRedo(true);
     applyingHistoryRef.current = true;
     try {
       mutateDoc(() => entry.before);
@@ -1321,6 +1327,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const entry = historyRef.current.redo.pop();
     if (!entry) return;
     historyRef.current.undo.push(entry);
+    setCanUndo(true);
+    setCanRedo(historyRef.current.redo.length > 0);
     applyingHistoryRef.current = true;
     try {
       mutateDoc(() => entry.after);
@@ -1334,6 +1342,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   // server has already moved past.
   useEffect(() => {
     historyRef.current = { undo: [], redo: [] };
+    setCanUndo(false);
+    setCanRedo(false);
   }, [documentSessionId, restoreEpoch]);
 
   const save = useCallback(() => {
@@ -1516,6 +1526,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     isAutoSaving,
     lastSaveSource,
     saveError,
+    canUndo,
+    canRedo,
     documentLoadNotice,
     restoreEpoch,
     hasAnyRemoteDocs,
@@ -1534,6 +1546,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     isAutoSaving,
     lastSaveSource,
     saveError,
+    canUndo,
+    canRedo,
     documentLoadNotice,
     restoreEpoch,
     hasAnyRemoteDocs,

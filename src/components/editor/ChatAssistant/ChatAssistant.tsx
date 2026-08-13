@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -10,6 +11,7 @@ import { createPortal } from 'react-dom';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { usePersistentState, isBoolean } from '@/hooks/usePersistentState';
 import { usePanels } from '@/components/panels/panelsContextState';
 import { useIsDesktop } from '@/hooks/useMediaQuery';
@@ -79,10 +81,21 @@ function DocumentChatAssistant() {
   // reason to touch it.
   const { assistantOpen: expanded, setAssistantOpen: setExpanded } = usePanels();
   const [maximized, setMaximized] = usePersistentState<boolean>('chat.maximized', false, isBoolean);
+  const isDesktop = useIsDesktop();
+  // Unlike the desktop preference, a covering mobile sheet is deliberately
+  // visit-local. A window left open on a large screen must not greet the
+  // author by covering the canvas after a reload or breakpoint change.
+  const mobileViewportSession = useMemo(
+    () => Symbol(isDesktop ? 'desktop assistant viewport' : 'mobile assistant viewport'),
+    [isDesktop],
+  );
+  const [mobileOpenSession, setMobileOpenSession] = useState<symbol | null>(null);
   const [input, setInput] = useState('');
   const [atBottom, setAtBottom] = useState(true);
 
   const listRef = useRef<HTMLDivElement | null>(null);
+  const assistantTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const restoreAssistantFocusRef = useRef(false);
   const inputHostRef = useRef<ChatTaggedInputHandle | null>(null);
   const refPickerRef = useRef<ChatRefPickerHandle | null>(null);
   const pinnedToBottom = useRef(true);
@@ -131,13 +144,67 @@ function DocumentChatAssistant() {
     loadedConversationRef,
   });
 
-  // Below `md` there is no room to place a window: it fills the canvas, and
-  // dragging it anywhere would only push it off screen.
-  const isDesktop = useIsDesktop();
+  // Below the shell's desktop breakpoint there is no room to place a window:
+  // it becomes a modal sheet instead of being draggable off screen.
   const floating = isDesktop && !maximized;
+  const mobileOpen = !isDesktop && mobileOpenSession === mobileViewportSession;
+  const panelOpen = expanded && (isDesktop || mobileOpen);
   const { rect, dragging, beginDrag, nudge, reset } = useChatWindow({
     enabled: floating,
   });
+
+  const showAssistant = useCallback(() => {
+    if (!isDesktop) setMobileOpenSession(mobileViewportSession);
+    setExpanded(true);
+  }, [isDesktop, mobileViewportSession, setExpanded]);
+
+  const hideAssistant = useCallback(() => {
+    // The trigger is conditionally rendered, so Radix cannot restore focus to
+    // the same DOM node after the sheet unmounts. Arm its ref callback to focus
+    // the replacement button as soon as React commits it.
+    restoreAssistantFocusRef.current = true;
+    setMobileOpenSession(null);
+    setExpanded(false);
+  }, [setExpanded]);
+
+  const bindAssistantTrigger = useCallback((node: HTMLButtonElement | null) => {
+    assistantTriggerRef.current = node;
+    if (!node || !restoreAssistantFocusRef.current) return;
+    restoreAssistantFocusRef.current = false;
+    requestAnimationFrame(() => node.focus());
+  }, []);
+
+  // Crossing either way invalidates a prior mobile-sheet grant. In
+  // particular, desktop -> mobile closes the persisted desktop window before
+  // it can become a covering overlay; mobile can then be opened explicitly.
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      if (!isDesktop) setExpanded(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isDesktop, setExpanded]);
+
+  // The global shortcut still owns the shell-level expanded state. Treat a
+  // fresh false -> true transition while already mobile as an explicit open,
+  // but never treat a persisted true value on mount as one.
+  const previousExpanded = useRef(expanded);
+  useEffect(() => {
+    const openedOnMobile = !isDesktop && expanded && !previousExpanded.current;
+    previousExpanded.current = expanded;
+    if (!openedOnMobile) return;
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setMobileOpenSession(mobileViewportSession);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, isDesktop, mobileViewportSession]);
 
   const visibleMessages = useMemo(
     () => messages.filter((m) => m.role !== 'system'),
@@ -194,18 +261,25 @@ function DocumentChatAssistant() {
     list.scrollTop = list.scrollHeight;
   }, [visibleMessages, isStreaming, agentStatus]);
 
+  const previousSelectedChatId = useRef(selectedChatId);
   useEffect(() => {
-    if (selectedChatId) setExpanded(true);
-  }, [selectedChatId, setExpanded]);
+    const changedDuringThisVisit = selectedChatId !== previousSelectedChatId.current;
+    previousSelectedChatId.current = selectedChatId;
+    if (!selectedChatId) return;
+    // A remembered conversation can restore its window on desktop. On a
+    // covering layout only a selection made during this mounted visit counts
+    // as intent to open it.
+    if (isDesktop || changedDuringThisVisit) showAssistant();
+  }, [isDesktop, selectedChatId, showAssistant]);
 
   // Opening the assistant puts the caret where the author is about to type.
   // Skipped on mount: a panel that was already open when the page loaded has
   // no claim on focus, and taking it would drag the view off the document.
-  const wasExpanded = useRef(expanded);
+  const wasExpanded = useRef(panelOpen);
   useEffect(() => {
-    if (expanded && !wasExpanded.current) inputHostRef.current?.focus();
-    wasExpanded.current = expanded;
-  }, [expanded]);
+    if (panelOpen && !wasExpanded.current) inputHostRef.current?.focus();
+    wasExpanded.current = panelOpen;
+  }, [panelOpen]);
 
   const { conversationNotice, reloadConversation } = useConversationLoader({
     documentId,
@@ -258,17 +332,18 @@ function DocumentChatAssistant() {
     }
     if (input.trim()) return;
     event.preventDefault();
-    setExpanded(false);
+    hideAssistant();
   };
 
   // Anchored inside the canvas (`main` is the positioned ancestor) rather than
   // to the viewport, so it no longer floats on top of the tools panel.
-  if (!expanded) {
+  if (!panelOpen) {
     return (
       <Button
+        ref={bindAssistantTrigger}
         variant="outline"
         className="absolute bottom-4 right-4 shadow-lg z-[var(--z-floating)]"
-        onClick={() => setExpanded(true)}
+        onClick={showAssistant}
         aria-expanded={false}
         // Hover only. Overriding the accessible name to carry the document
         // would make it stop matching the word on the button, which is what
@@ -286,33 +361,30 @@ function DocumentChatAssistant() {
     );
   }
 
-  const geometry: CSSProperties = floating
+  const geometry: CSSProperties | undefined = floating
     ? { right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height }
-    : // Maximised on desktop fills the whole window (`fixed` against the
-      // viewport); on mobile it fills the canvas (`absolute` inside `main`).
-      { inset: CHAT_MARGIN };
+    : undefined;
 
   const overLimit = input.length > MAX_MESSAGE_LENGTH;
   const nearLimit = input.length > MAX_MESSAGE_LENGTH * 0.8;
 
   const panel = (
     <div
-      role="complementary"
+      role={floating ? 'complementary' : undefined}
       // Naming the document in the region label is how this reaches a screen
       // reader: the line in the header is small, muted, and not focusable, so
       // it would otherwise only be discovered by reading the whole panel.
-      aria-label={attachment.regionLabel}
-      onKeyDown={onPanelKeyDown}
+      aria-label={floating ? attachment.regionLabel : undefined}
+      onKeyDown={floating ? onPanelKeyDown : undefined}
       style={geometry}
       className={cn(
         // Fixed on desktop: portaled to <body> below, so the window can travel
-        // over the sidebar, tools panel and topbar. Inside `main` it stayed
-        // `absolute`, and `main`'s rounded, overflow-hidden frame clipped it
-        // at the canvas edge — the old "can't drag past the canvas" behaviour.
-        isDesktop ? 'fixed' : 'absolute',
-        'z-[var(--z-floating)] flex flex-col overflow-hidden rounded-xl',
-        'border border-border bg-card shadow-xl',
-        'animate-in fade-in-0 zoom-in-95',
+        // over the sidebar and topbar without being clipped. Its hook retains
+        // the canvas's right edge as a practical boundary so it stays clear of
+        // docked tools when there is room.
+        floating ? 'fixed z-[var(--z-floating)]' : 'h-full w-full',
+        'flex flex-col overflow-hidden rounded-xl bg-card',
+        floating && 'border border-border shadow-xl animate-in fade-in-0 zoom-in-95',
         // A drag that selects the header text as it goes looks broken.
         dragging && 'select-none',
       )}
@@ -322,7 +394,7 @@ function DocumentChatAssistant() {
       {/* ---- Title bar: the drag surface ---- */}
       <header
         onPointerDown={(event) => beginDrag(event, 'move')}
-        onDoubleClick={() => setMaximized((value) => !value)}
+        onDoubleClick={isDesktop ? () => setMaximized((value) => !value) : undefined}
         className={cn(
           'flex h-11 flex-shrink-0 items-center gap-1.5 border-b border-border/70 px-1.5',
           'bg-gradient-to-b from-card to-card/60',
@@ -402,21 +474,23 @@ function DocumentChatAssistant() {
           >
             <MessageSquarePlus className="h-4 w-4" />
           </Button>
+          {isDesktop && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setMaximized((value) => !value)}
+              onDoubleClick={(event) => event.stopPropagation()}
+              aria-label={maximized ? 'Restore assistant size' : 'Maximise assistant'}
+              aria-pressed={maximized}
+              title={maximized ? 'Restore' : 'Maximise'}
+            >
+              {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => setMaximized((value) => !value)}
-            onDoubleClick={(event) => event.stopPropagation()}
-            aria-label={maximized ? 'Restore assistant size' : 'Maximise assistant'}
-            aria-pressed={maximized}
-            title={maximized ? 'Restore' : 'Maximise'}
-          >
-            {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setExpanded(false)}
+            onClick={hideAssistant}
             aria-label="Hide assistant"
             title="Hide assistant · Esc"
           >
@@ -680,8 +754,42 @@ function DocumentChatAssistant() {
     </div>
   );
 
-  // Out of `main` and into <body>: the canvas frame clips its absolutely
-  // positioned children, which is what used to keep the window inside the
-  // canvas. Contexts survive the portal, so nothing below the shell notices.
-  return isDesktop ? createPortal(panel, document.body) : panel;
+  if (floating) {
+    // Out of `main` and into <body>: the canvas frame clips its absolutely
+    // positioned children, which is what used to keep the window inside the
+    // canvas. Contexts survive the portal, so nothing below the shell notices.
+    return createPortal(panel, document.body);
+  }
+
+  // Mobile and maximised layouts visually cover the editor. Making those
+  // layouts a real modal sheet supplies focus containment, outside-content
+  // hiding, scroll locking and Escape dismissal rather than leaving obscured
+  // editor controls in the tab order.
+  return (
+    <Sheet open onOpenChange={(open) => !open && hideAssistant()}>
+      <SheetContent
+        side="right"
+        title={attachment.regionLabel}
+        aria-modal="true"
+        className="max-w-none rounded-xl border p-0"
+        style={{ inset: CHAT_MARGIN, width: 'auto', height: 'auto' }}
+        onEscapeKeyDown={(event) => {
+          if (refPickerRef.current?.isOpen() || input.trim()) {
+            event.preventDefault();
+            return;
+          }
+          if (isStreaming) {
+            event.preventDefault();
+            onStop();
+          }
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          requestAnimationFrame(() => assistantTriggerRef.current?.focus());
+        }}
+      >
+        {panel}
+      </SheetContent>
+    </Sheet>
+  );
 }

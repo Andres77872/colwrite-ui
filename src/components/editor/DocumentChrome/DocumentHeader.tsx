@@ -6,7 +6,18 @@ import { Spinner } from '@/components/ui/spinner';
 import { useConfirm } from '@/components/ui/confirmContext';
 import { useToast } from '@/components/ui/toastContext';
 import { useEditor } from '@/editor';
-import { AlertCircle, Check, Cloud, CloudOff, Download, FilePlus, Save, Trash2 } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  Cloud,
+  CloudOff,
+  Download,
+  FilePlus,
+  Redo2,
+  Save,
+  Trash2,
+  Undo2,
+} from 'lucide-react';
 import { DocumentExportDialog } from './DocumentExportDialog';
 
 const DEFAULT_TITLE = 'Untitled document';
@@ -23,6 +34,11 @@ export function DocumentHeader() {
     isAutoSaving,
     lastSaveSource,
     saveError,
+    canUndo,
+    canRedo,
+    undo,
+    redo,
+    hasPendingEdits,
   } = useEditor();
   const confirm = useConfirm();
   const { toast } = useToast();
@@ -57,6 +73,11 @@ export function DocumentHeader() {
   };
 
   const onNew = async () => {
+    if (!hasPendingEdits()) {
+      newLocal();
+      return;
+    }
+
     const ok = await confirm({
       title: 'Start a new document?',
       description: 'Unsaved changes to the current document will be lost.',
@@ -128,13 +149,28 @@ export function DocumentHeader() {
     // entirely, so a document that had silently stopped saving looked exactly
     // like one that was saving fine.
     if (saveError) {
-      return { icon: AlertCircle, text: 'Not saved', tone: 'text-destructive' };
+      return {
+        icon: AlertCircle,
+        text: 'Not saved',
+        compactText: 'Not saved',
+        tone: 'text-destructive',
+      };
     }
     if (busy === 'save' || isAutoSaving) {
-      return { icon: Spinner, text: 'Saving…', tone: 'text-muted-foreground' };
+      return {
+        icon: Spinner,
+        text: 'Saving…',
+        compactText: 'Saving…',
+        tone: 'text-muted-foreground',
+      };
     }
     if (!documentId) {
-      return { icon: CloudOff, text: 'Not saved to the server yet', tone: 'text-muted-foreground' };
+      return {
+        icon: CloudOff,
+        text: 'Not saved to the server yet',
+        compactText: 'Local draft',
+        tone: 'text-muted-foreground',
+      };
     }
     if (lastSavedAt) {
       const time = new Date(lastSavedAt).toLocaleTimeString([], {
@@ -144,10 +180,16 @@ export function DocumentHeader() {
       return {
         icon: Check,
         text: `${lastSaveSource === 'auto' ? 'Autosaved' : 'Saved'} ${time}`,
+        compactText: lastSaveSource === 'auto' ? 'Autosaved' : 'Saved',
         tone: 'text-muted-foreground',
       };
     }
-    return { icon: Cloud, text: 'Synced', tone: 'text-muted-foreground' };
+    return {
+      icon: Cloud,
+      text: 'Synced',
+      compactText: 'Synced',
+      tone: 'text-muted-foreground',
+    };
   })();
 
   const StatusIcon = status.icon;
@@ -157,15 +199,18 @@ export function DocumentHeader() {
       className={cn(
         // Stickiness belongs to the wrapper in Canvas, which pins this and the
         // review bar as one stack instead of letting them overlap.
+        // Wrap from the space the canvas actually has, not the viewport: wide
+        // persisted side panels can leave a desktop-width window with only a
+        // 512px editor, where forcing one row would crush the title again.
         'flex flex-wrap items-center justify-between gap-x-3 gap-y-2',
         'border-b border-border bg-card/95 px-4 py-2.5 backdrop-blur-sm',
       )}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+      <div className="flex min-w-64 flex-1 basis-64 items-center gap-2">
         {editing ? (
           <Input
             ref={inputRef}
-            className="h-8 max-w-sm text-xl font-semibold"
+            className="h-8 min-w-0 max-w-sm flex-1 text-xl font-semibold"
             aria-label="Document title"
             defaultValue={title}
             onBlur={(event) => commitTitle(event.currentTarget.value)}
@@ -183,7 +228,7 @@ export function DocumentHeader() {
         ) : (
           <button
             type="button"
-            className="min-w-0 truncate rounded-sm text-left text-xl font-semibold decoration-primary/40 underline-offset-4 hover:underline"
+            className="min-w-0 flex-1 truncate rounded-sm text-left text-xl font-semibold decoration-primary/40 underline-offset-4 hover:underline"
             title="Rename document"
             onClick={() => setEditing(true)}
           >
@@ -191,41 +236,91 @@ export function DocumentHeader() {
             <span className="sr-only"> — click to rename</span>
           </button>
         )}
-      </div>
-
-      <div className="flex flex-shrink-0 items-center gap-2">
         <span
-          className={cn('hidden items-center gap-1.5 text-xs sm:flex', status.tone)}
+          className={cn('flex shrink-0 items-center gap-1.5 text-xs', status.tone)}
           aria-live="polite"
-          title={saveError ?? undefined}
+          title={saveError ?? status.text}
         >
           <StatusIcon aria-hidden="true" className="h-3.5 w-3.5" />
-          {status.text}
+          <span className="sm:hidden">{status.compactText}</span>
+          <span className="hidden sm:inline">{status.text}</span>
         </span>
+      </div>
 
-        <Button variant="ghost" size="sm" onClick={onNew} disabled={busy !== null}>
-          <FilePlus className="h-3.5 w-3.5" />
-          New
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setExportOpen(true)} disabled={busy !== null}>
-          <Download className="h-3.5 w-3.5" />
-          Export
-        </Button>
-        <Button size="sm" onClick={onSave} disabled={busy !== null}>
-          {busy === 'save' ? <Spinner /> : <Save className="h-3.5 w-3.5" />}
-          Save
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-          onClick={onDelete}
-          disabled={!documentId || busy !== null}
-          aria-label="Delete document"
-          title="Delete document"
-        >
-          {busy === 'delete' ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" />}
-        </Button>
+      <div className="flex min-w-[16.5rem] flex-1 basis-[22.5rem] items-center justify-between gap-2">
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="h-10 w-10 sm:h-8 sm:w-8"
+            onClick={undo}
+            disabled={busy !== null || !canUndo}
+            aria-label="Undo"
+            title="Undo"
+          >
+            <Undo2 aria-hidden="true" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="h-10 w-10 sm:h-8 sm:w-8"
+            onClick={redo}
+            disabled={busy !== null || !canRedo}
+            aria-label="Redo"
+            title="Redo"
+          >
+            <Redo2 aria-hidden="true" />
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-1 sm:gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-10 w-10 px-0 sm:h-8 sm:w-auto sm:px-3"
+            onClick={onNew}
+            disabled={busy !== null}
+            aria-label="New document"
+            title="New document"
+          >
+            <FilePlus aria-hidden="true" />
+            <span className="hidden sm:inline">New</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-10 w-10 px-0 sm:h-8 sm:w-auto sm:px-3"
+            onClick={() => setExportOpen(true)}
+            disabled={busy !== null}
+            aria-label="Export document"
+            title="Export document"
+          >
+            <Download aria-hidden="true" />
+            <span className="hidden sm:inline">Export</span>
+          </Button>
+          <Button
+            size="sm"
+            className="h-10 w-10 px-0 sm:h-8 sm:w-auto sm:px-3"
+            onClick={onSave}
+            disabled={busy !== null}
+            aria-label="Save document"
+            title="Save document"
+          >
+            {busy === 'save' ? <Spinner /> : <Save aria-hidden="true" />}
+            <span className="hidden sm:inline">Save</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="h-10 w-10 text-muted-foreground hover:bg-destructive/10 hover:text-destructive sm:h-8 sm:w-8"
+            onClick={onDelete}
+            disabled={!documentId || busy !== null}
+            aria-label="Delete document"
+            title="Delete document"
+          >
+            {busy === 'delete' ? <Spinner /> : <Trash2 aria-hidden="true" />}
+          </Button>
+        </div>
       </div>
       <DocumentExportDialog open={exportOpen} onOpenChange={setExportOpen} />
     </div>

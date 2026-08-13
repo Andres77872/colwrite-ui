@@ -79,6 +79,7 @@ export const ParagraphBlock = memo(function ParagraphBlock({ block, documentId }
         id={block.id}
         html={block.html}
         locked={block.locked === true}
+        ariaLabel="Paragraph"
         placeholder="Type something, or press '/' for commands…"
         style={editableStyle}
         slashEnabled

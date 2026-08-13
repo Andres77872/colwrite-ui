@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createRef, useImperativeHandle } from 'react';
 import type { Block } from '@/editor/types';
 
@@ -56,6 +56,36 @@ function editableDiv(id: string): HTMLDivElement {
   if (!el) throw new Error(`Editable ${id} not rendered`);
   return el;
 }
+
+describe('Editable accessibility', () => {
+  it('exposes an explicitly named multiline textbox', () => {
+    seedLocal([{ id: 'p1', type: 'paragraph', html: 'Accessible prose', children: [] }]);
+    render(
+      <EditorProvider>
+        <Editable id="p1" html="Accessible prose" ariaLabel="Paragraph" />
+      </EditorProvider>,
+    );
+
+    const field = screen.getByRole('textbox', { name: 'Paragraph' });
+    expect(field.getAttribute('contenteditable')).toBe('true');
+    expect(field.getAttribute('aria-multiline')).toBe('true');
+    expect(field.hasAttribute('aria-readonly')).toBe(false);
+  });
+
+  it('keeps a locked textbox focusable and announces it as read-only', () => {
+    seedLocal([{ id: 'p1', type: 'paragraph', html: 'Locked prose', children: [], locked: true }]);
+    render(
+      <EditorProvider>
+        <Editable id="p1" html="Locked prose" ariaLabel="Paragraph" locked />
+      </EditorProvider>,
+    );
+
+    const field = screen.getByRole('textbox', { name: 'Paragraph' });
+    expect(field.getAttribute('contenteditable')).toBe('false');
+    expect(field.getAttribute('aria-readonly')).toBe('true');
+    expect(field.tabIndex).toBe(0);
+  });
+});
 
 describe('Editable active-block synchronization', () => {
   // M2: an external state change (agent accept, restore, undo) used to be

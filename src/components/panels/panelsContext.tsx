@@ -36,7 +36,9 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   // the single most repeated interaction in the app.
   const [activeTool, setActiveTool] = usePersistentState<ToolId | null>(
     'panels.activeTool',
-    'json',
+    // A fresh workspace starts as a writing surface, not a raw JSON inspector.
+    // Choosing a rail item records the author's preferred tool from then on.
+    null,
     isToolId,
   );
   // Two separate notions of "the tools panel is showing":
@@ -45,7 +47,9 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   //     load or the document is covered before the user has asked for anything.
   const [desktopToolsOpen, setDesktopToolsOpen] = usePersistentState<boolean>(
     'panels.rightOpen',
-    true,
+    // Secondary tools are opt-in on a new account so the document owns the
+    // initial visual hierarchy. Existing preferences still restore normally.
+    false,
     isBoolean,
   );
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);

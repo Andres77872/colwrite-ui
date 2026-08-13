@@ -83,8 +83,8 @@ export function Topbar({ onOpenShortcuts }: { onOpenShortcuts: () => void }) {
           <Keyboard className="h-4 w-4" />
         </Button>
 
-        {/* The only route to the tools below md: the rail that normally holds
-            this control is desktop-only, and the panel it opens is a sheet. */}
+        {/* The only route to tools while the workspace uses drawers: the rail
+            is absent there, and this control opens the panel as a sheet. */}
         {!isDesktop && view === 'workspace' && (
           <Button
             variant="ghost"

@@ -6,7 +6,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { SHORTCUTS, modifierLabel } from './shortcuts';
+import { SHORTCUTS, modifierLabel, shortcutBindingKey } from './shortcuts';
 
 /**
  * ShortcutsDialog — the reference for the bindings, reachable from Mod+/.
@@ -34,7 +34,10 @@ export function ShortcutsDialog({
         </DialogHeader>
         <ul className="mt-4 divide-y divide-border/50">
           {SHORTCUTS.map((shortcut) => (
-            <li key={shortcut.id} className="flex items-center justify-between gap-4 py-2">
+            <li
+              key={shortcutBindingKey(shortcut)}
+              className="flex items-center justify-between gap-4 py-2"
+            >
               <span className="min-w-0 text-sm">{shortcut.label}</span>
               <span className="flex shrink-0 items-center gap-1">
                 {shortcut.keys.map((part) => (

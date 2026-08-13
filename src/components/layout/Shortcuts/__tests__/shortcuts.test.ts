@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SHORTCUTS, matchShortcut } from '../shortcuts';
+import { SHORTCUTS, matchShortcut, shortcutBindingKey } from '../shortcuts';
 
 /** A KeyboardEvent without needing a DOM target. */
 function key(init: KeyboardEventInit): KeyboardEvent {
@@ -55,5 +55,20 @@ describe('matchShortcut', () => {
       expect(shortcut.keys[0]).toBe('Mod');
       expect(shortcut.label.length).toBeGreaterThan(0);
     }
+  });
+
+  it('keeps displayed bindings distinct while preserving both redo variants', () => {
+    const rowKeys = SHORTCUTS.map(shortcutBindingKey);
+    expect(new Set(rowKeys).size).toBe(SHORTCUTS.length);
+
+    expect(
+      SHORTCUTS.filter((shortcut) => shortcut.id === 'redo').map((shortcut) => ({
+        key: shortcut.key,
+        shift: Boolean(shortcut.shift),
+      })),
+    ).toEqual([
+      { key: 'z', shift: true },
+      { key: 'y', shift: false },
+    ]);
   });
 });

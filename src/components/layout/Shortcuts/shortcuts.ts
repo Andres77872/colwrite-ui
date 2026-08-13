@@ -45,6 +45,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: 'help', key: '/', keys: ['Mod', '/'], label: 'Show keyboard shortcuts' },
 ];
 
+/** Stable identity for one physical binding, distinct from its shared action. */
+export function shortcutBindingKey(shortcut: Shortcut): string {
+  return `${shortcut.id}:${shortcut.key}:${shortcut.shift ? 'shift' : 'plain'}`;
+}
+
 /** `⌘` on Apple platforms, `Ctrl` everywhere else. */
 export function modifierLabel(): string {
   if (typeof navigator === 'undefined') return 'Ctrl';

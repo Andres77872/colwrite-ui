@@ -840,15 +840,23 @@ describe('undo/redo', () => {
   it('walks back and re-applies structural edits', async () => {
     mountLocal();
     await waitFor(() => expect(editorRef.current).not.toBeNull());
+    expect(currentEditor().canUndo).toBe(false);
+    expect(currentEditor().canRedo).toBe(false);
 
     act(() => currentEditor().removeBlock('p2'));
     expect(currentEditor().blocks.map(b => b.id)).toEqual(['p1']);
+    expect(currentEditor().canUndo).toBe(true);
+    expect(currentEditor().canRedo).toBe(false);
 
     act(() => currentEditor().undo());
     expect(currentEditor().blocks.map(b => b.id)).toEqual(['p1', 'p2']);
+    expect(currentEditor().canUndo).toBe(false);
+    expect(currentEditor().canRedo).toBe(true);
 
     act(() => currentEditor().redo());
     expect(currentEditor().blocks.map(b => b.id)).toEqual(['p1']);
+    expect(currentEditor().canUndo).toBe(true);
+    expect(currentEditor().canRedo).toBe(false);
   });
 
   it('coalesces a typing burst in one block into a single step', async () => {

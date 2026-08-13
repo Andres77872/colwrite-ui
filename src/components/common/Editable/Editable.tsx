@@ -82,6 +82,7 @@ export function Editable({
   id,
   html,
   placeholder,
+  ariaLabel,
   className,
   style,
   slashEnabled = false,
@@ -90,6 +91,8 @@ export function Editable({
   id: string;
   html: string;
   placeholder?: string;
+  /** Accessible name for the document field, such as "Paragraph". */
+  ariaLabel?: string;
   className?: string;
   style?: CSSProperties;
   slashEnabled?: boolean;
@@ -193,6 +196,12 @@ export function Editable({
         registerEditable(id, element);
       }}
       contentEditable={!locked}
+      // A contenteditable div has inconsistent implicit semantics across
+      // browser/assistive-technology pairs. Expose the editing contract
+      // explicitly so every prose block is discoverable as a document field.
+      role="textbox"
+      aria-label={ariaLabel ?? placeholder ?? 'Document text'}
+      aria-multiline="true"
       // A non-editable div is not in the tab order, and `refs.current[id].focus()`
       // on one does nothing — which would strand arrow-key navigation on the
       // block before a locked one.

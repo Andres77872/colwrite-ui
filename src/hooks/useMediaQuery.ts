@@ -22,7 +22,14 @@ export function useMediaQuery(query: string): boolean {
   return useSyncExternalStore(subscribe, getSnapshot, () => false);
 }
 
-/** Tailwind's `md` breakpoint: below this the shell switches to overlay panels. */
+/**
+ * Width at which the complete four-column workspace can actually fit.
+ *
+ * The old 768px cutoff was a CSS breakpoint, not a layout constraint: the
+ * sidebar, canvas, tools panel, and rail need roughly 1100px even at their
+ * minimum useful widths. Treating a tablet as a desktop collapsed the canvas
+ * to a sliver instead of moving the secondary surfaces into drawers.
+ */
 export function useIsDesktop(): boolean {
-  return useMediaQuery('(min-width: 768px)');
+  return useMediaQuery('(min-width: 1100px)');
 }

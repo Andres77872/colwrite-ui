@@ -14,7 +14,7 @@ interface AppShellProps {
 }
 
 /** Every gutter in the shell — handles and plain spacers alike — is this wide. */
-const GUTTER = 'w-3';
+const GUTTER = 'w-3 shrink-0';
 
 /** Shared surface treatment so all four regions read as one system. */
 const PANEL_SURFACE = 'bg-card border border-border/60 rounded-xl overflow-hidden';
@@ -22,9 +22,10 @@ const PANEL_SURFACE = 'bg-card border border-border/60 rounded-xl overflow-hidde
 /**
  * AppShell — the application frame: header, sidebar, canvas, tools panel, rail.
  *
- * Below `md` the sidebar and tools panel become overlay drawers. They used to
- * be `hidden md:flex`, which meant that on a phone there was no route to the
- * document list, the tools, or the assistant — only the bare canvas.
+ * Below the minimum viable four-column width the sidebar and tools panel become
+ * overlay drawers. This is deliberately a workspace constraint rather than a
+ * framework breakpoint: at tablet widths the fixed panels left no editor at
+ * all even though `md` had technically been reached.
  */
 export function AppShell({ header, main, left, right, aside }: AppShellProps) {
   const {
@@ -66,12 +67,15 @@ export function AppShell({ header, main, left, right, aside }: AppShellProps) {
       {header && <header className="w-full z-[var(--z-chrome)]">{header}</header>}
 
       <div className="flex min-h-0 flex-1">
-        {/* Left sidebar — a column on desktop, a drawer below md */}
+        {/* Left sidebar — a column when the full workspace fits, otherwise a drawer. */}
         {left && isDesktop && (
           <>
             <nav
-              className={cn(PANEL_SURFACE, 'flex flex-col transition-[width] duration-200 ease-out')}
-              style={{ width: 'var(--left-width)' }}
+              className={cn(PANEL_SURFACE, 'flex shrink flex-col transition-[width] duration-200 ease-out')}
+              style={{
+                width: 'var(--left-width)',
+                minWidth: leftCollapsed ? PANEL_CONFIG.left.collapsed : PANEL_CONFIG.left.min,
+              }}
               aria-label="Workspace navigation"
             >
               {left}
@@ -94,9 +98,20 @@ export function AppShell({ header, main, left, right, aside }: AppShellProps) {
         {/* Canvas. A flex column so the document scrolls independently of the
             status footer, instead of the footer bleeding out with negative
             margins that had to match this element's padding exactly. */}
-        <main className={cn(PANEL_SURFACE, 'relative flex min-w-0 flex-1 flex-col')}>{main}</main>
+        <main
+          className={cn(
+            PANEL_SURFACE,
+            'relative flex flex-1 flex-col',
+            // Once the docked layout is active, protect a readable writing
+            // measure and let the side panels shrink toward their own minima.
+            // In drawer mode the canvas must be allowed to fit a phone.
+            isDesktop ? 'min-w-[32rem]' : 'min-w-0',
+          )}
+        >
+          {main}
+        </main>
 
-        {/* Tools panel — a column on desktop, an overlay sheet below md */}
+        {/* Tools panel — a column when the full workspace fits, otherwise an overlay sheet. */}
         {showAside && isDesktop && (
           <>
             <ResizeHandle
@@ -108,8 +123,8 @@ export function AppShell({ header, main, left, right, aside }: AppShellProps) {
               max={PANEL_CONFIG.right.max}
             />
             <aside
-              className={cn(PANEL_SURFACE, 'flex flex-col transition-[width] duration-200 ease-out')}
-              style={{ width: 'var(--right-width)' }}
+              className={cn(PANEL_SURFACE, 'flex shrink flex-col transition-[width] duration-200 ease-out')}
+              style={{ width: 'var(--right-width)', minWidth: PANEL_CONFIG.right.min }}
               aria-label="Tools"
             >
               {aside}
@@ -125,8 +140,8 @@ export function AppShell({ header, main, left, right, aside }: AppShellProps) {
             overlay sheet reachable from the topbar. */}
         {right && isDesktop && (
           <nav
-            className={cn(PANEL_SURFACE, 'ml-2 overflow-y-auto p-1.5 transition-all duration-200 ease-out')}
-            style={{ width: 'var(--rail-width)' }}
+            className={cn(PANEL_SURFACE, 'ml-2 shrink-0 overflow-y-auto p-1.5 transition-all duration-200 ease-out')}
+            style={{ width: 'var(--rail-width)', minWidth: PANEL_CONFIG.rail.width }}
             aria-label="Tools"
           >
             {right}
@@ -147,8 +162,27 @@ export function AppShell({ header, main, left, right, aside }: AppShellProps) {
 
       {!isDesktop && aside && (
         <Sheet open={isOpen} onOpenChange={(next) => !next && close()}>
-          <SheetContent side="right" title="Tools">
-            {aside}
+          <SheetContent
+            side="right"
+            title="Tools"
+            className="w-[min(28rem,92vw)]"
+          >
+            <div className="flex min-h-0 flex-1">
+              {/* With no default tool selected, drawer layouts need their own
+                  chooser—the desktop rail is intentionally absent outside the
+                  full workspace. Keeping it inside the sheet also makes every
+                  tool reachable without spending canvas width while writing. */}
+              {right && (
+                <nav
+                  className="shrink-0 overflow-y-auto border-r border-border/60 p-1.5"
+                  style={{ width: 'var(--rail-width)' }}
+                  aria-label="Tool chooser"
+                >
+                  {right}
+                </nav>
+              )}
+              <div className="min-w-0 flex-1">{aside}</div>
+            </div>
           </SheetContent>
         </Sheet>
       )}

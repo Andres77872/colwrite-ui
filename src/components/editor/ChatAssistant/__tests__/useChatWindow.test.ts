@@ -102,4 +102,22 @@ describe('a canvas that changed size under a stored window', () => {
   it('leaves the window alone when the canvas has not been measured', () => {
     expect(clampRect(RECT, 0, 0)).toEqual(RECT);
   });
+
+  it('moves remembered geometry clear of a docked surface on the right', () => {
+    const clamped = clampRect(RECT, CANVAS.width, CANVAS.height, 300);
+
+    expect(clamped.right).toBe(300 + CHAT_MARGIN);
+    expect(CANVAS.width - clamped.right).toBeLessThanOrEqual(700 - CHAT_MARGIN);
+  });
+
+  it('keeps pointer movement clear of the docked surface', () => {
+    const fitted = clampRect(RECT, CANVAS.width, CANVAS.height, 300);
+    const moved = applyDrag(fitted, 'move', 5000, 0, CANVAS.width, CANVAS.height, 300);
+
+    expect(moved.right).toBe(300 + CHAT_MARGIN);
+  });
+
+  it('allows overlap when avoiding chrome would make the assistant unreadable', () => {
+    expect(clampRect(RECT, CANVAS.width, CANVAS.height, 700)).toEqual(RECT);
+  });
 });

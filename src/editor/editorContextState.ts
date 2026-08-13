@@ -37,6 +37,10 @@ export type EditorStateContextValue = {
   isAutoSaving: boolean;
   lastSaveSource: 'auto' | 'manual' | null;
   saveError: string | null;
+  /** Whether the open document has a previous local edit state to restore. */
+  canUndo: boolean;
+  /** Whether an undone local edit can be re-applied. */
+  canRedo: boolean;
   documentLoadNotice: {
     id: number;
     title: string;

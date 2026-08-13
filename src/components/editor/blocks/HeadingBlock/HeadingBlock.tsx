@@ -5,14 +5,15 @@ import { cn } from '@/lib/utils';
 
 export const HeadingBlock = memo(function HeadingBlock({ block }: { block: H }) {
   return (
-    // The contenteditable inside cannot take the role (Editable owns that
-    // element), so the wrapper carries it — without it a screen reader sees
-    // prose where the document outline should be.
+    // Heading and textbox are two distinct accessibility concepts and one
+    // element cannot expose both roles. The wrapper keeps this block in the
+    // document outline while Editable exposes the nested editing field.
     <div className="heading-block w-full" role="heading" aria-level={block.level}>
       <Editable
         id={block.id}
         html={block.html}
         locked={block.locked === true}
+        ariaLabel={`Heading level ${block.level}`}
         placeholder="Heading"
         className={cn(
           "font-semibold leading-tight tracking-tight",

@@ -48,6 +48,16 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
+ * Honour a docked surface on the right only while doing so leaves a readable
+ * assistant. On exceptionally cramped layouts it is better for the floating
+ * window to overlap chrome than to collapse below its minimum width.
+ */
+function practicalRightInset(rightInset: number, viewportWidth: number): number {
+  const inset = clamp(rightInset, 0, viewportWidth);
+  return viewportWidth - inset >= CHAT_MIN_WIDTH + CHAT_MARGIN * 2 ? inset : 0;
+}
+
+/**
  * Apply a pointer or keyboard delta to the window.
  *
  * Works in viewport coordinates (the four edges) rather than in the stored
@@ -62,24 +72,27 @@ export function applyDrag(
   dy: number,
   viewportWidth: number,
   viewportHeight: number,
+  rightInset = 0,
 ): ChatRect {
   // No measured viewport (first paint, or jsdom) — moving blind would throw the
   // window somewhere the author did not ask for.
   if (viewportWidth <= 0 || viewportHeight <= 0) return rect;
 
+  const avoidedRight = practicalRightInset(rightInset, viewportWidth);
+  const usableRight = viewportWidth - avoidedRight;
   let left = viewportWidth - rect.right - rect.width;
   let top = viewportHeight - rect.bottom - rect.height;
   let right = viewportWidth - rect.right;
   let bottom = viewportHeight - rect.bottom;
 
   if (mode === 'move') {
-    left = clamp(left + dx, CHAT_MARGIN, viewportWidth - rect.width - CHAT_MARGIN);
+    left = clamp(left + dx, CHAT_MARGIN, usableRight - rect.width - CHAT_MARGIN);
     top = clamp(top + dy, CHAT_MARGIN, viewportHeight - rect.height - CHAT_MARGIN);
     right = left + rect.width;
     bottom = top + rect.height;
   } else {
     if (mode.includes('w')) left = clamp(left + dx, CHAT_MARGIN, right - CHAT_MIN_WIDTH);
-    if (mode.includes('e')) right = clamp(right + dx, left + CHAT_MIN_WIDTH, viewportWidth - CHAT_MARGIN);
+    if (mode.includes('e')) right = clamp(right + dx, left + CHAT_MIN_WIDTH, usableRight - CHAT_MARGIN);
     if (mode.includes('n')) top = clamp(top + dy, CHAT_MARGIN, bottom - CHAT_MIN_HEIGHT);
     if (mode.includes('s')) bottom = clamp(bottom + dy, top + CHAT_MIN_HEIGHT, viewportHeight - CHAT_MARGIN);
   }
@@ -98,10 +111,17 @@ export function applyDrag(
  * Making the browser smaller can leave a remembered window half outside the
  * viewport — or, on a narrow laptop, larger than the viewport itself.
  */
-export function clampRect(rect: ChatRect, viewportWidth: number, viewportHeight: number): ChatRect {
+export function clampRect(
+  rect: ChatRect,
+  viewportWidth: number,
+  viewportHeight: number,
+  rightInset = 0,
+): ChatRect {
   if (viewportWidth <= 0 || viewportHeight <= 0) return rect;
 
-  const maxWidth = Math.max(viewportWidth - CHAT_MARGIN * 2, 0);
+  const avoidedRight = practicalRightInset(rightInset, viewportWidth);
+  const usableRight = viewportWidth - avoidedRight;
+  const maxWidth = Math.max(usableRight - CHAT_MARGIN * 2, 0);
   const maxHeight = Math.max(viewportHeight - CHAT_MARGIN * 2, 0);
   const width = clamp(rect.width, Math.min(CHAT_MIN_WIDTH, maxWidth), maxWidth);
   const height = clamp(rect.height, Math.min(CHAT_MIN_HEIGHT, maxHeight), maxHeight);
@@ -109,7 +129,11 @@ export function clampRect(rect: ChatRect, viewportWidth: number, viewportHeight:
   return {
     width,
     height,
-    right: clamp(rect.right, CHAT_MARGIN, viewportWidth - width - CHAT_MARGIN),
+    right: clamp(
+      rect.right,
+      avoidedRight + CHAT_MARGIN,
+      viewportWidth - width - CHAT_MARGIN,
+    ),
     bottom: clamp(rect.bottom, CHAT_MARGIN, viewportHeight - height - CHAT_MARGIN),
   };
 }
@@ -152,15 +176,23 @@ export function useChatWindow({ enabled }: { enabled: boolean }): ChatWindow {
    * The bounds the window travels in: the whole viewport, not the canvas.
    * The panel is fixed-positioned (portaled out of `main`, whose
    * `overflow-hidden` would otherwise clip it), so it can be dragged over the
-   * sidebar, the tools panel and the topbar alike.
+   * sidebar and topbar. The canvas's right edge is retained as a practical
+   * boundary so the window does not default onto docked tools.
    */
-  const bounds = useCallback(
-    (): { width: number; height: number } => ({
-      width: window.innerWidth,
+  const bounds = useCallback((): { width: number; height: number; rightInset: number } => {
+    const width = window.innerWidth;
+    const workspace = document.querySelector('main');
+    const workspaceRight = workspace?.getBoundingClientRect().right ?? width;
+
+    return {
+      width,
       height: window.innerHeight,
-    }),
-    [],
-  );
+      // The assistant is portaled to <body>, but its default corner is still
+      // the author's canvas corner. Reserving the space to the right of main
+      // keeps both remembered and default positions off a docked tools panel.
+      rightInset: Math.max(0, width - workspaceRight),
+    };
+  }, []);
 
   const beginDrag = useCallback(
     (event: ReactPointerEvent, mode: DragMode) => {
@@ -179,10 +211,20 @@ export function useChatWindow({ enabled }: { enabled: boolean }): ChatWindow {
       const startX = event.clientX;
       const startY = event.clientY;
       const startRect = rectRef.current;
-      const { width, height } = bounds();
+      const { width, height, rightInset } = bounds();
 
       const onMove = (move: PointerEvent) => {
-        setRect(applyDrag(startRect, mode, move.clientX - startX, move.clientY - startY, width, height));
+        setRect(
+          applyDrag(
+            startRect,
+            mode,
+            move.clientX - startX,
+            move.clientY - startY,
+            width,
+            height,
+            rightInset,
+          ),
+        );
       };
 
       const onEnd = () => {
@@ -212,28 +254,40 @@ export function useChatWindow({ enabled }: { enabled: boolean }): ChatWindow {
       const move = delta[event.key];
       if (!move) return false;
 
-      const { width, height } = bounds();
-      setRect((prev) => applyDrag(prev, mode, move[0], move[1], width, height));
+      const { width, height, rightInset } = bounds();
+      setRect((prev) => applyDrag(prev, mode, move[0], move[1], width, height, rightInset));
       return true;
     },
     [bounds, enabled, setRect],
   );
 
-  const reset = useCallback(() => setRect(DEFAULT_CHAT_RECT), [setRect]);
+  const reset = useCallback(() => {
+    const { width, height, rightInset } = bounds();
+    setRect(clampRect(DEFAULT_CHAT_RECT, width, height, rightInset));
+  }, [bounds, setRect]);
 
   // Keep the window inside a viewport that changed size under it.
   useEffect(() => {
     if (!enabled) return;
 
     const fit = () => {
-      const { width, height } = bounds();
-      const next = clampRect(rectRef.current, width, height);
+      const { width, height, rightInset } = bounds();
+      const next = clampRect(rectRef.current, width, height, rightInset);
       if (!sameRect(next, rectRef.current)) setRect(next);
     };
 
     fit();
     window.addEventListener('resize', fit);
-    return () => window.removeEventListener('resize', fit);
+    const workspace = document.querySelector('main');
+    const observer = workspace && typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(fit)
+      : null;
+    if (workspace) observer?.observe(workspace);
+
+    return () => {
+      window.removeEventListener('resize', fit);
+      observer?.disconnect();
+    };
   }, [bounds, enabled, setRect]);
 
   return { rect, dragging, beginDrag, nudge, reset };

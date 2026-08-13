@@ -132,7 +132,9 @@ async function renderAssistant({ strict = false }: { strict?: boolean } = {}) {
         <ChatSessionsProvider>
           <CaptureChats />
           <PanelsProvider>
-            <ChatAssistant />
+            <main>
+              <ChatAssistant />
+            </main>
           </PanelsProvider>
         </ChatSessionsProvider>
       </ProposalsProvider>
@@ -205,22 +207,32 @@ const acceptAll = async () => {
   });
 };
 
+let desktopViewport = true;
+const mediaListeners = new Set<() => void>();
+
+function setDesktopViewport(desktop: boolean) {
+  desktopViewport = desktop;
+  mediaListeners.forEach((listener) => listener());
+}
+
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  desktopViewport = true;
+  mediaListeners.clear();
   listDocuments.mockResolvedValue({ documents: [{}], count: 1, status: 'ok', message: '' });
 
   // jsdom ships no `matchMedia`, so every media query reads as false and the
   // assistant renders its small-screen layout — the one without a window to
   // move. Answer width queries the way a desktop would.
   vi.stubGlobal('matchMedia', (query: string) => ({
-    matches: /min-width/.test(query),
+    matches: /min-width/.test(query) && desktopViewport,
     media: query,
     onchange: null,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    addListener: () => {},
-    removeListener: () => {},
+    addEventListener: (_type: string, listener: () => void) => mediaListeners.add(listener),
+    removeEventListener: (_type: string, listener: () => void) => mediaListeners.delete(listener),
+    addListener: (listener: () => void) => mediaListeners.add(listener),
+    removeListener: (listener: () => void) => mediaListeners.delete(listener),
     dispatchEvent: () => false,
   }));
 });
@@ -229,6 +241,8 @@ afterEach(() => {
   // vitest is not running with `globals`, so RTL's auto-cleanup never fires.
   cleanup();
   localStorage.clear();
+  mediaListeners.clear();
+  vi.unstubAllGlobals();
 });
 
 // ── Tests ──
@@ -644,6 +658,90 @@ describe('the assistant window', () => {
     expect(JSON.parse(localStorage.getItem('chat.rect') ?? '{}')).toMatchObject({
       width: expect.any(Number),
       height: expect.any(Number),
+    });
+  });
+
+  it('does not restore a desktop-open assistant over the mobile canvas', async () => {
+    setDesktopViewport(false);
+    localStorage.setItem('chat.expanded', 'true');
+
+    await mount();
+
+    expect(screen.getByRole('button', { name: /^assistant$/i })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: /writing assistant/i })).toBeNull();
+  });
+
+  it('closes an open floating window when the layout becomes mobile', async () => {
+    await mount();
+    await compose('');
+    expect(screen.getByRole('complementary', { name: /writing assistant/i })).toBeTruthy();
+
+    await act(async () => setDesktopViewport(false));
+
+    expect(screen.getByRole('button', { name: /^assistant$/i })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: /writing assistant/i })).toBeNull();
+  });
+
+  it('uses a modal, focus-contained sheet when explicitly opened on mobile', async () => {
+    setDesktopViewport(false);
+    await mount();
+    await compose('');
+
+    const dialog = screen.getByRole('dialog', { name: 'Writing assistant for Doc' });
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(screen.queryByRole('complementary', { name: /writing assistant/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /maximise assistant/i })).toBeNull();
+
+    const outside = document.createElement('button');
+    outside.textContent = 'Editor action';
+    document.body.appendChild(outside);
+    outside.focus();
+    fireEvent.focusIn(outside);
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    outside.remove();
+
+    fireEvent.click(screen.getByRole('button', { name: /hide assistant/i }));
+    const trigger = await screen.findByRole('button', { name: /^assistant$/i });
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it('makes the maximised desktop assistant modal, then restores floating controls', async () => {
+    await mount();
+    await compose('');
+
+    await act(async () => {
+      screen.getByRole('button', { name: /maximise assistant/i }).click();
+    });
+
+    const dialog = screen.getByRole('dialog', { name: 'Writing assistant for Doc' });
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(screen.queryByRole('complementary', { name: /writing assistant/i })).toBeNull();
+
+    await act(async () => {
+      screen.getByRole('button', { name: /restore assistant size/i }).click();
+    });
+
+    expect(screen.getByRole('complementary', { name: /writing assistant/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /move assistant/i })).toBeTruthy();
+    expect(screen.getByRole('separator', { name: /resize assistant/i })).toBeTruthy();
+  });
+
+  it('fits default geometry to the canvas edge instead of the docked tools area', async () => {
+    vi.stubGlobal('innerWidth', 1000);
+    vi.stubGlobal('innerHeight', 800);
+    await mount();
+    await compose('');
+
+    const main = document.querySelector('main');
+    if (!main) throw new Error('Expected the editor canvas');
+    vi.spyOn(main, 'getBoundingClientRect').mockReturnValue({ right: 700 } as DOMRect);
+
+    await act(async () => window.dispatchEvent(new Event('resize')));
+
+    await waitFor(() => {
+      expect(screen.getByRole('complementary', { name: /writing assistant/i }).style.right).toBe(
+        '312px',
+      );
     });
   });
 });

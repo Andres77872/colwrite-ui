@@ -5,8 +5,26 @@ import { cleanup, render, screen } from '@testing-library/react';
 // the wrapper this component renders, so a passthrough stand-in keeps the test
 // about them and nothing else.
 vi.mock('@/components/common/Editable', () => ({
-  Editable: ({ id, html }: { id: string; html: string }) => (
-    <div data-testid={`editable-${id}`}>{html}</div>
+  Editable: ({
+    id,
+    html,
+    ariaLabel,
+    locked,
+  }: {
+    id: string;
+    html: string;
+    ariaLabel: string;
+    locked?: boolean;
+  }) => (
+    <div
+      data-testid={`editable-${id}`}
+      role="textbox"
+      aria-label={ariaLabel}
+      aria-multiline="true"
+      aria-readonly={locked || undefined}
+    >
+      {html}
+    </div>
   ),
 }));
 
@@ -20,8 +38,9 @@ describe('HeadingBlock', () => {
 
     // A bare contenteditable div has no outline entry — the role is what puts
     // this block into a screen reader's heading navigation.
-    const heading = screen.getByRole('heading', { level: 2 });
+    const heading = screen.getByRole('heading', { level: 2, name: 'Results' });
     expect(heading.textContent).toContain('Results');
+    expect(screen.getByRole('textbox', { name: 'Heading level 2' })).toBeTruthy();
   });
 
   it('maps every block level to aria-level', () => {
@@ -34,5 +53,16 @@ describe('HeadingBlock', () => {
 
     expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.getByRole('heading', { level: 3 })).toBeTruthy();
+  });
+
+  it('passes the locked state to the named heading editor', () => {
+    render(
+      <HeadingBlock
+        block={{ id: 'h1', type: 'heading', level: 1, html: 'Locked', locked: true }}
+      />,
+    );
+
+    const textbox = screen.getByRole('textbox', { name: 'Heading level 1' });
+    expect(textbox.getAttribute('aria-readonly')).toBe('true');
   });
 });
