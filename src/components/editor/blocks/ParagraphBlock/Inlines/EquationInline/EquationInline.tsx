@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { EquationChild } from '@/editor';
 import type { InlineWidgetProps } from '../types';
-import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useEditor } from '@/editor';
 import { katexStatus, onKatexStatus, renderLatex, type KatexStatus } from '@/lib/katex';
 import {
-  InlinePill,
+  InlineTrigger,
   InlinePopover,
   SettingsCheck,
   SettingsFooter,
@@ -110,20 +109,20 @@ function EquationInlineContent(props: InlineWidgetProps<EquationChild>) {
     });
   };
 
-  const preview = (className?: string) => {
+  const preview = () => {
     if (!latex.trim()) {
       return <span className="text-sm text-muted-foreground">Empty equation</span>;
     }
     if (status === 'loading') {
-      return <code className={cn('font-mono text-sm opacity-60', className)}>{latex}</code>;
+      return <code className="font-mono text-[0.85em] opacity-60">{latex}</code>;
     }
     if (rendered?.ok) {
       // KaTeX output is markup it generated from the author's own LaTeX, and
       // the source never leaves this editor — but it is still the one place
       // markup is injected, so it is confined to this branch.
-      return <span className={className} dangerouslySetInnerHTML={{ __html: rendered.html }} />;
+      return <span dangerouslySetInnerHTML={{ __html: rendered.html }} />;
     }
-    return <code className={cn('font-mono text-sm', className)}>{latex}</code>;
+    return <code className="font-mono text-[0.85em]">{latex}</code>;
   };
 
   const editor = (close: () => void) => (
@@ -217,8 +216,8 @@ function EquationInlineContent(props: InlineWidgetProps<EquationChild>) {
   );
 
   /* ----------------------------------------
-     One popover, two triggers: inline maths sits in the run of text as a
-     pill; display maths takes a centred line of its own with a right-aligned
+     One popover, two triggers: inline maths sits in the run of text as
+     text; display maths takes a centred line of its own with a right-aligned
      number, the way it appears in a paper.
      ---------------------------------------- */
 
@@ -226,27 +225,28 @@ function EquationInlineContent(props: InlineWidgetProps<EquationChild>) {
     <button
       type="button"
       aria-label={latex || 'Empty equation'}
-      className="grid w-full grid-cols-[1fr_auto] items-center gap-2 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-border hover:bg-card"
+      className="grid w-full grid-cols-[1fr_auto] items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       title="Edit equation"
     >
-      <span className="overflow-x-auto text-center">{preview('text-base')}</span>
+      <span className="overflow-x-auto text-center">{preview()}</span>
       {child.numbered && (
-        <span className="shrink-0 tabular-nums text-sm text-muted-foreground">({number})</span>
+        <span className="shrink-0 tabular-nums text-muted-foreground">({number})</span>
       )}
     </button>
   ) : (
-    <InlinePill
+    <InlineTrigger
+      look="math"
       aria-label={latex || 'Empty equation'}
       tone={hasError ? 'error' : 'default'}
       title={hasError ? rendered.error : 'Edit equation'}
     >
-      {preview('text-sm')}
-    </InlinePill>
+      {preview()}
+    </InlineTrigger>
   );
 
   return (
     <span
-      className={display ? 'equation-inline my-3 block' : 'equation-inline relative inline-block align-baseline'}
+      className={display ? 'equation-inline my-2 block' : 'equation-inline relative inline align-baseline'}
       role="group"
       aria-label={display ? 'Display equation' : 'Equation'}
       contentEditable={false}

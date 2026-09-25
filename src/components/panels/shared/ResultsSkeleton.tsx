@@ -1,17 +1,14 @@
 import { Skeleton } from '@/components/ui/spinner';
 
 /**
- * Placeholder cards for a search that has not returned yet.
- *
- * The research panels previously showed nothing at all on a first search —
- * only the submit button's label changed to "Searching…" — so the panel looked
- * idle while a request was in flight.
+ * Placeholder rows for a search that has not returned yet, so a first search
+ * does not look idle while the request is in flight.
  */
 export function ResultsSkeleton({ count = 3 }: { count?: number }) {
   return (
-    <div aria-hidden="true" className="space-y-3">
+    <div aria-hidden="true" className="space-y-1">
       {Array.from({ length: count }).map((_, index) => (
-        <div key={index} className="rounded-lg border border-border p-3">
+        <div key={index} className="px-2 py-2.5">
           <Skeleton className="mb-2 h-4 w-4/5" />
           <Skeleton className="mb-2 h-3 w-2/5" />
           <Skeleton className="h-3 w-full" />

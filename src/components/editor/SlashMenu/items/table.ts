@@ -5,12 +5,12 @@ import { insertInlineChild } from './insertChild';
 export const tableItem: SlashItem = {
   id: 'table',
   label: 'Table',
-  desc: 'Rows and columns you can type straight into',
+  desc: 'Rows and columns',
   icon: Table,
   keywords: ['grid', 'rows', 'columns', 'spreadsheet', 'tabular'],
   group: 'insert',
   onSelect: (ctx) =>
-    insertInlineChild(ctx, (id) => ({
+    void insertInlineChild(ctx, (id) => ({
       id,
       type: 'table',
       // A header plus two body rows: enough shape to show what the table is

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createRef, useImperativeHandle } from 'react';
 import type { Doc, ParagraphBlock as ParagraphBlockType, ParagraphChild } from '@/editor/types';
 import type { SlashContext, SlashItem } from '../types';
@@ -130,16 +130,45 @@ function putSelection(
   return range;
 }
 
-async function openMenuAt(editable: HTMLDivElement, start: number, end: number = start) {
+/** Type text at the caret the way the browser would, then fire `input`. */
+function typeAtCaret(editable: HTMLDivElement, text: string) {
+  act(() => {
+    const selection = document.getSelection();
+    if (!selection || selection.rangeCount === 0) throw new Error('No caret');
+    let node = selection.anchorNode;
+    let offset = selection.anchorOffset;
+    if (!node || node.nodeType !== Node.TEXT_NODE) {
+      const created = document.createTextNode('');
+      editable.appendChild(created);
+      node = created;
+      offset = 0;
+    }
+    const textNode = node as Text;
+    textNode.insertData(offset, text);
+    const caret = document.createRange();
+    caret.setStart(textNode, offset + text.length);
+    caret.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(caret);
+    fireEvent.input(editable);
+  });
+}
+
+/** Press "/" at `offset` and let it land in the text, as a browser does. */
+async function typeSlash(editable: HTMLDivElement, offset: number) {
   act(() => {
     editable.focus();
-    putSelection(editable, start, end);
+    if (editable.firstChild) putSelection(editable, offset);
   });
-  fireEvent.keyDown(editable, { key: '/' });
+  const notPrevented = fireEvent.keyDown(editable, { key: '/' });
+  expect(notPrevented).toBe(true);
+  typeAtCaret(editable, '/');
+  await act(async () => {});
+}
 
-  const search = await screen.findByRole('combobox', { name: 'Search commands' });
-  await waitFor(() => expect(document.activeElement).toBe(search));
-  return search as HTMLInputElement;
+async function openMenuAt(editable: HTMLDivElement, offset: number) {
+  await typeSlash(editable, offset);
+  return screen.findByRole('listbox', { name: 'Commands' });
 }
 
 function paragraph(): ParagraphBlockType {
@@ -159,126 +188,181 @@ afterEach(() => {
   document.getSelection()?.removeAllRanges();
 });
 
-describe('SlashMenu insertion', () => {
-  it('inserts a table at the bookmarked caret after search takes focus', async () => {
+describe('SlashMenu inline commands', () => {
+  it('opens on a typed slash without taking focus from the paragraph', async () => {
     const { editable } = await mountEditor();
-    const search = await openMenuAt(editable, 6);
-
-    expect(editable.contains(document.getSelection()?.anchorNode ?? null)).toBe(false);
-    expect(document.activeElement).toBe(search);
-
-    fireEvent.mouseDown(screen.getByRole('option', { name: /Table/ }));
-
-    await waitFor(() => expect(screen.getByRole('group', { name: 'Table' })).toBeTruthy());
-
-    const block = paragraph();
-    const child = block.children?.[0];
-    expect(child).toMatchObject({
-      type: 'table',
-      rows: 3,
-      cols: 3,
-      header: true,
-      align: ['left', 'left', 'left'],
-    });
-
-    const placeholder = editable.querySelector<HTMLElement>(`[data-child-id="${child?.id}"]`);
-    expect(placeholder).toBeTruthy();
-    expect(block.html).toContain(`data-child-id="${child?.id}"`);
-    expect(block.html).not.toContain('<table');
-    expect(placeholder?.previousSibling?.textContent).toBe('alpha ');
+    await openMenuAt(editable, 6);
 
     expect(document.activeElement).toBe(editable);
-    const selection = document.getSelection();
-    expect(selection?.anchorNode?.previousSibling).toBe(placeholder);
-    // The active-block rebase round-trips the html, so the placeholder's
-    // caret-landing spacer (nbsp) merges into the following text node; the
-    // caret still lands immediately after the spacer.
-    expect(selection?.anchorNode?.textContent).toBe('\u00a0omega');
-    expect(selection?.anchorOffset).toBe(1);
+    expect(editable.textContent).toBe('alpha /omega');
+    expect(editable.getAttribute('aria-controls')).toBeTruthy();
+    expect(editable.getAttribute('aria-activedescendant')).toBeTruthy();
   });
 
-  it('filters with the keyboard, replaces selected text, and inserts the active command', async () => {
+  it('groups commands, leads with Ask AI and shows markdown shortcuts as hints', async () => {
     const { editable } = await mountEditor();
-    const search = await openMenuAt(editable, 6, 11);
+    const listbox = await openMenuAt(editable, 6);
 
-    fireEvent.change(search, { target: { value: 'display equation' } });
-    fireEvent.keyDown(search, { key: 'Enter' });
+    const groups = within(listbox).getAllByRole('group').map((group) => group.getAttribute('aria-label'));
+    expect(groups).toEqual(['AI', 'Basic blocks', 'Insert']);
+    expect(within(listbox).getAllByRole('option')[0].textContent).toMatch(/^Ask AI/);
+    // The shortcut sits at the end of the row, no longer folded into the
+    // description where a long one was truncated away.
+    const heading = within(listbox).getByRole('option', { name: /^Heading 2/ });
+    expect(heading.textContent).toMatch(/Section heading##$/);
+  });
+
+  it('inserts a table where the slash was and removes the slash', async () => {
+    const { editable } = await mountEditor();
+    await openMenuAt(editable, 6);
+
+    fireEvent.mouseDown(screen.getByRole('option', { name: /^Table/ }));
+
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Table' })).toBeTruthy());
+    const block = paragraph();
+    const child = block.children?.[0];
+    expect(child).toMatchObject({ type: 'table', rows: 3, cols: 3, header: true });
+    const placeholder = editable.querySelector<HTMLElement>(`[data-child-id="${child?.id}"]`);
+    expect(placeholder?.previousSibling?.textContent).toBe('alpha ');
+    expect(editable.textContent).not.toContain('/');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull();
+  });
+
+  it('filters on the text typed after the slash and runs the top match on Enter', async () => {
+    const { editable } = await mountEditor();
+    await openMenuAt(editable, 6);
+    typeAtCaret(editable, 'disp');
+
+    await waitFor(() => {
+      const options = screen.getAllByRole('option');
+      expect(options[0].textContent).toMatch(/Display equation/);
+    });
+    fireEvent.keyDown(editable, { key: 'Enter' });
 
     await waitFor(() =>
       expect(screen.getByRole('group', { name: 'Display equation' })).toBeTruthy(),
     );
-
     const block = paragraph();
-    expect(block.children).toHaveLength(1);
-    expect(block.children?.[0]).toMatchObject({
-      type: 'equation',
-      latex: '',
-      display: true,
-      numbered: true,
+    expect(block.children?.[0]).toMatchObject({ type: 'equation', display: true });
+    expect(block.html).not.toContain('/disp');
+    expect(editable.textContent).toContain('alpha ');
+    expect(editable.textContent).toContain('omega');
+  });
+
+  it('opens the equation editor at once and drops the equation if it closes empty', async () => {
+    const { editable } = await mountEditor();
+    await openMenuAt(editable, 6);
+    typeAtCaret(editable, 'equation');
+    await waitFor(() => expect(screen.getAllByRole('option')[0].textContent).toMatch(/^Equation/));
+    fireEvent.keyDown(editable, { key: 'Enter' });
+
+    const latex = await waitFor(() => {
+      const field = screen.getByLabelText('LaTeX');
+      expect(document.activeElement).toBe(field);
+      return field;
     });
-    expect(block.html).not.toContain('omega');
-    expect(document.activeElement).toBe(editable);
+    expect(paragraph().children).toHaveLength(1);
+
+    fireEvent.keyDown(latex, { key: 'Enter' });
+
+    await waitFor(() => expect(paragraph().children ?? []).toHaveLength(0));
+    expect(editable.querySelector('[data-child-id]')).toBeNull();
+    expect(paragraph().html).not.toContain('data-child-id');
+  });
+
+  it('keeps an equation that was given LaTeX', async () => {
+    const { editable } = await mountEditor();
+    await openMenuAt(editable, 6);
+    typeAtCaret(editable, 'equation');
+    await waitFor(() => expect(screen.getAllByRole('option')[0].textContent).toMatch(/^Equation/));
+    fireEvent.keyDown(editable, { key: 'Enter' });
+
+    const latex = await waitFor(() => {
+      const field = screen.getByLabelText('LaTeX');
+      expect(document.activeElement).toBe(field);
+      return field;
+    });
+    fireEvent.change(latex, { target: { value: 'x^2' } });
+    fireEvent.keyDown(latex, { key: 'Enter' });
+
+    await waitFor(() => expect(screen.queryByLabelText('LaTeX')).toBeNull());
+    expect(paragraph().children?.[0]).toMatchObject({ type: 'equation', latex: 'x^2' });
+  });
+
+  it('turns an empty line into the chosen block kind', async () => {
+    const { editable } = await mountEditor('');
+    await openMenuAt(editable, 0);
+    typeAtCaret(editable, 'h2');
+    await waitFor(() => expect(screen.getAllByRole('option')[0].textContent).toMatch(/Heading 2/));
+
+    fireEvent.keyDown(editable, { key: 'Enter' });
+
+    await waitFor(() => {
+      const [block] = harness.editor.blocks;
+      expect(block).toMatchObject({ id: 'p1', type: 'heading', level: 2, html: '' });
+    });
+  });
+
+  it('adds the block below when the line already holds text', async () => {
+    // After a space: a slash straight after a word is literal text.
+    const { editable } = await mountEditor('alpha omega ');
+    await openMenuAt(editable, 12);
+    typeAtCaret(editable, 'todo');
+    await waitFor(() => expect(screen.getAllByRole('option')[0].textContent).toMatch(/To-do/));
+
+    fireEvent.keyDown(editable, { key: 'Enter' });
+
+    await waitFor(() => expect(harness.editor.blocks).toHaveLength(2));
+    expect(harness.editor.blocks[0]).toMatchObject({ id: 'p1', type: 'paragraph', html: 'alpha omega ' });
+    expect(harness.editor.blocks[1]).toMatchObject({ type: 'paragraph', variant: 'todo', checked: false });
   });
 
   it('types a literal slash mid-word instead of opening the menu', async () => {
-    // DOIs, URLs and "and/or" all carry a slash inside a word; the menu must
-    // not eat it.
+    // DOIs, URLs and "and/or" all carry a slash inside a word.
     const { editable } = await mountEditor();
     act(() => {
       editable.focus();
       putSelection(editable, 3);
     });
-
-    // fireEvent returns false when the handler called preventDefault.
     const notPrevented = fireEvent.keyDown(editable, { key: '/' });
+    typeAtCaret(editable, '/');
+    await act(async () => {});
 
     expect(notPrevented).toBe(true);
-    expect(screen.queryByRole('combobox', { name: 'Search commands' })).toBeNull();
-    expect(paragraph().html).toBe('alpha omega');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull();
+    expect(paragraph().html).toBe('alp/ha omega');
   });
 
-  it('puts the slash back when Escape declines every command', async () => {
+  it('closes on Escape and leaves what was typed', async () => {
     const { editable } = await mountEditor();
-    const search = await openMenuAt(editable, 6);
+    await openMenuAt(editable, 6);
+    typeAtCaret(editable, 'x');
 
-    fireEvent.keyDown(search, { key: 'Escape' });
+    fireEvent.keyDown(editable, { key: 'Escape' });
 
-    await waitFor(() => {
-      expect(screen.queryByRole('combobox', { name: 'Search commands' })).toBeNull();
-      expect(editable.textContent).toBe('alpha /omega');
-      expect(document.activeElement).toBe(editable);
-      expect(document.getSelection()?.anchorNode).toBe(editable.firstChild);
-      expect(document.getSelection()?.anchorOffset).toBe(7);
-    });
-    expect(paragraph().html).toContain('alpha /omega');
+    await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull());
+    expect(editable.textContent).toBe('alpha /xomega');
     expect(paragraph().children).toEqual([]);
+    expect(editable.hasAttribute('aria-activedescendant')).toBe(false);
   });
 
-  it('restores the exact caret on Escape at the start of the block', async () => {
+  it('closes when a space follows the slash straight away', async () => {
     const { editable } = await mountEditor();
-    const search = await openMenuAt(editable, 0);
+    await openMenuAt(editable, 6);
+    typeAtCaret(editable, ' ');
 
-    fireEvent.keyDown(search, { key: 'Escape' });
-
-    await waitFor(() => {
-      expect(screen.queryByRole('combobox', { name: 'Search commands' })).toBeNull();
-      expect(editable.textContent).toBe('/alpha omega');
-    });
+    await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull());
   });
 
-  it('does not type the slash back after an outside dismissal', async () => {
+  it('closes on an outside click without touching the text', async () => {
     const { editable } = await mountEditor();
     await openMenuAt(editable, 6);
     const outside = screen.getByRole('button', { name: 'Outside target' });
 
     fireEvent.mouseDown(outside);
-    act(() => outside.focus());
 
-    await waitFor(() =>
-      expect(screen.queryByRole('combobox', { name: 'Search commands' })).toBeNull(),
-    );
-    expect(document.activeElement).toBe(outside);
-    expect(editable.textContent).toBe('alpha omega');
+    await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull());
+    expect(editable.textContent).toBe('alpha /omega');
     expect(paragraph().children).toEqual([]);
   });
 });
@@ -353,7 +437,7 @@ function commandContext(
     // These two serve the "Basic blocks" commands, which operate on the block
     // list rather than on the caret's range; the payload tests here cover the
     // inline-widget commands.
-    replaceOrInsertBlock: vi.fn(() => 'p1'),
+    applyKind: vi.fn(() => 'p1'),
     focusBlock: vi.fn(),
     documentId: null,
     createRemote: vi.fn(async () => 'created-doc'),

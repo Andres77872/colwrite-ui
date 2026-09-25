@@ -1,7 +1,7 @@
 export function DividerBlock() {
   return (
-    <div className="divider-block w-full py-3">
-      <hr className="border-0 h-px bg-border/60" />
+    <div className="divider-block flex h-[18px] w-full items-center">
+      <hr className="h-px w-full border-0 bg-border-strong" />
     </div>
   );
 }

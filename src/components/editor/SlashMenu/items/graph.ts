@@ -4,13 +4,15 @@ import { insertInlineChild } from './insertChild';
 
 export const graphItem: SlashItem = {
   id: 'graph',
-  label: 'Figure',
+  // "Chart", not "Figure": the structured-figure block owns that word, and
+  // two menu rows both called Figure made the author guess.
+  label: 'Chart',
   desc: 'A bar, line, area or pie chart',
   icon: ChartColumn,
-  keywords: ['graph', 'chart', 'plot', 'bar', 'line', 'pie', 'data', 'image'],
+  keywords: ['graph', 'chart', 'plot', 'bar', 'line', 'pie', 'data', 'image', 'figure'],
   group: 'insert',
   onSelect: (ctx) =>
-    insertInlineChild(ctx, (id) => ({
+    void insertInlineChild(ctx, (id) => ({
       id,
       type: 'graph',
       kind: 'bar',

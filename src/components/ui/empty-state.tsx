@@ -39,14 +39,14 @@ export function EmptyState({
         <div
           aria-hidden="true"
           className={cn(
-            'grid place-items-center rounded-xl border border-border/50 bg-muted/30 text-muted-foreground/70',
+            'grid place-items-center rounded-lg bg-subtle text-muted-foreground',
             size === 'panel' ? 'mb-1 h-10 w-10' : 'mb-1 h-12 w-12',
           )}
         >
           <Icon className={size === 'panel' ? 'h-4.5 w-4.5' : 'h-5 w-5'} />
         </div>
       )}
-      <p className={cn('font-medium text-foreground/90', size === 'page' && 'text-lg')}>{title}</p>
+      <p className={cn('text-sm font-medium text-foreground', size === 'page' && 'text-lg')}>{title}</p>
       {description && (
         <p className="max-w-[38ch] text-sm text-muted-foreground text-balance">{description}</p>
       )}

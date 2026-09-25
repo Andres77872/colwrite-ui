@@ -1,64 +1,68 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useEditor } from '@/editor';
-import { createChat, deleteChat, listChats, updateChatTitle, type ChatItem } from '@/services/chats';
-import { describeApiError } from '@/services/contracts';
-import { isRetryableProblem } from '@/services/retry';
+import { useMemo, useState } from 'react';
+import type { ChatItem } from '@/services/chats';
 import { useChatSessions } from '@/components/chat/chatSessionsState';
 import { cn } from '@/lib/utils';
 import { formatDateTime } from '@/lib/text';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton, Spinner } from '@/components/ui/spinner';
-import { useConfirm } from '@/components/ui/confirmContext';
-import { useToast } from '@/components/ui/toastContext';
+import { menuItem, menuLabel } from '@/components/ui/menuStyles';
 import {
   AlertCircle,
+  Check,
   ChevronLeft,
   ChevronRight,
   Clock,
   MessageSquare,
   Pencil,
   Plus,
-  RefreshCw,
-  Save,
+  Search,
   Trash2,
 } from 'lucide-react';
+import { CHATS_PAGE_SIZE, chatLabel, type ChatHistory } from './useChatHistory';
 
-const PAGE_SIZE = 10;
-
-function chatLabel(chat: ChatItem): string {
-  return chat.title?.trim() || `Untitled chat · ${chat.chat_id.slice(0, 8)}`;
+/** "now", "5m", "3h", "Yesterday", "Sep 20" — the list has room for one word. */
+function relativeTime(value: string | null): string {
+  if (!value) return '';
+  const then = new Date(value);
+  const ms = Date.now() - then.getTime();
+  if (Number.isNaN(ms)) return '';
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  if (hours < 48) return 'Yesterday';
+  return then.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/** A thumb-sized rename/delete where there is no hover to reveal them. */
+const TOUCH_ACTION = '[@media(hover:none)]:h-9 [@media(hover:none)]:w-9 [@media(hover:none)]:[&_svg]:size-4';
+
+type ChatsPanelProps = {
+  /** The list, loaded by whoever shows the conversation (`useChatHistory`). */
+  history: ChatHistory;
+  onNewChat: () => void;
+  onSelect: (chat: ChatItem) => void;
+  /** Told after a conversation is deleted. */
+  onDeleted?: (chat: ChatItem) => void;
+  className?: string;
+};
+
 /**
- * Chats are stored against the document id, so the list can only be read once
- * the document has one. A server that is still catching up says so with a
- * retryable problem — a wait, not a failure, and worth saying so.
+ * The document's conversations: search, pick, rename, delete, start another.
+ *
+ * The list inside the assistant's chat switcher. Rows are quiet menu rows —
+ * title, a one-word time, and rename/delete on hover or focus. Touch screens
+ * have no hover, so there rename/delete are always shown instead of the time.
  */
-type ListError = { message: string; preparing: boolean };
+export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, className }: ChatsPanelProps) {
+  const { selectedChatId } = useChatSessions();
 
-export function ChatsPanel() {
-  const { documentId, ensureRemoteDocument } = useEditor();
-  const { selectedChatId, setSelectedChatId, setSelectedThreadId } = useChatSessions();
-  const confirm = useConfirm();
-  const { toast } = useToast();
-
-  const [items, setItems] = useState<ChatItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  // Background list loads report in place; toasts are reserved for actions the
-  // user actually initiated (create, delete, rename).
-  const [listError, setListError] = useState<ListError | null>(null);
   const [query, setQuery] = useState('');
-  const [page, setPage] = useState(1);
-  const [count, setCount] = useState(0);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
-  /** Bumped to re-run the load effect — the single way the list is fetched. */
-  const [refreshTick, setRefreshTick] = useState(0);
-  const reload = useCallback(() => setRefreshTick((tick) => tick + 1), []);
 
-  const totalPages = useMemo(() => Math.max(1, Math.ceil(count / PAGE_SIZE)), [count]);
+  const { items, loading, listError, page, totalPages, count } = chats;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -68,204 +72,50 @@ export function ChatsPanel() {
     );
   }, [items, query]);
 
-  // One loader. There used to be a second, callable copy for the action
-  // buttons; it shared no cancellation with this one, so the two could race
-  // and the earlier `finally` would clear the later request's loading state.
-  // Everything now goes through `reload()`.
-  useEffect(() => {
-    const controller = new AbortController();
-
-    (async () => {
-      if (!documentId) {
-        setItems([]);
-        setCount(0);
-        return;
-      }
-      setLoading(true);
-      try {
-        // Keep the request on the asynchronous side of the effect boundary:
-        // StrictMode sets up, tears down and sets up again inside one commit,
-        // and a request sent synchronously would go out before its own cleanup
-        // could abort it — two real requests, each amplified by the transport's
-        // retry ladder.
-        await Promise.resolve();
-        if (controller.signal.aborted) return;
-
-        const res = await listChats(documentId, PAGE_SIZE, (page - 1) * PAGE_SIZE, {
-          signal: controller.signal,
-        });
-        if (controller.signal.aborted) return;
-        setItems(res.chats ?? []);
-        setCount(res.count ?? 0);
-        setListError(null);
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setListError({
-          message: describeApiError(error, 'Request failed'),
-          preparing: isRetryableProblem(error),
-        });
-        setItems([]);
-        setCount(0);
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    })();
-
-    return () => {
-      // Also aborts the api layer's backoff sleep, which used to run on past
-      // a document switch with nothing left to receive it.
-      controller.abort();
-    };
-  }, [documentId, page, refreshTick]);
-
-  const selectChat = (chat: ChatItem) => {
-    setSelectedChatId(chat.chat_id);
-    setSelectedThreadId(typeof chat.last_thread_id === 'number' ? chat.last_thread_id : null);
-  };
-
-  async function onCreate() {
-    setLoading(true);
-    try {
-      // A chat is stored against a document, so an unsaved draft has nothing to
-      // attach to. Saving it here is what makes the conversation belong to the
-      // document the author is looking at rather than to nothing at all.
-      const attachedId = documentId ?? (await ensureRemoteDocument());
-      if (!attachedId) {
-        toast({
-          title: 'Could not save this document',
-          description: 'A conversation is kept with a document, so it has to be saved first.',
-          variant: 'error',
-        });
-        return;
-      }
-      const res = await createChat(attachedId);
-      // The effect reads the current `documentId`, which `ensureRemoteDocument`
-      // has just set, so the id no longer has to be threaded through by hand.
-      reload();
-      setSelectedChatId(res.chat_id);
-      setSelectedThreadId(null);
-    } catch (error) {
-      toast({
-        title: 'Could not create chat',
-        description: error instanceof Error ? error.message : undefined,
-        variant: 'error',
-      });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function onDelete(chat: ChatItem) {
-    if (!documentId) return;
-    const ok = await confirm({
-      title: `Delete “${chatLabel(chat)}”?`,
-      description: 'The conversation and its messages are removed permanently.',
-      confirmLabel: 'Delete',
-      destructive: true,
-    });
-    if (!ok) return;
-
-    setLoading(true);
-    try {
-      await deleteChat(documentId, chat.chat_id);
-      if (selectedChatId === chat.chat_id) {
-        setSelectedChatId(null);
-        setSelectedThreadId(null);
-      }
-      const nextPage = Math.min(page, Math.max(1, Math.ceil(Math.max(0, count - 1) / PAGE_SIZE)));
-      setPage(nextPage);
-      reload();
-    } catch (error) {
-      toast({
-        title: 'Could not delete chat',
-        description: error instanceof Error ? error.message : undefined,
-        variant: 'error',
-      });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function commitRename(chatId: string) {
-    if (!documentId || renamingId !== chatId) return;
-    const nextTitle = renameValue.trim();
+  function commitRename(chatId: string) {
+    if (renamingId !== chatId) return;
+    const next = renameValue;
     setRenamingId(null);
     setRenameValue('');
-    try {
-      await updateChatTitle(documentId, chatId, nextTitle);
-      reload();
-    } catch (error) {
-      toast({
-        title: 'Could not rename chat',
-        description: error instanceof Error ? error.message : undefined,
-        variant: 'error',
-      });
-    }
-  }
-
-  function cancelRename() {
-    setRenamingId(null);
-    setRenameValue('');
-  }
-
-  if (!documentId) {
-    return (
-      <EmptyState
-        icon={MessageSquare}
-        title="Not saved yet"
-        description="A conversation is kept with a document. Starting one saves this document and attaches the chat to it."
-        className="h-full"
-        action={
-          <Button size="sm" onClick={onCreate} disabled={loading}>
-            {loading ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
-            Save and start a chat
-          </Button>
-        }
-      />
-    );
+    void chats.rename(chatId, next);
   }
 
   const showSkeleton = loading && items.length === 0;
 
   return (
-    <div className="flex h-full flex-col gap-3" aria-busy={loading}>
-      <div className="flex items-center gap-1.5">
-        <Input
+    <div className={cn('flex min-h-0 flex-col', className)} aria-busy={loading}>
+      <div className="flex items-center gap-2 border-b border-border px-3">
+        <Search aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <input
           type="search"
-          className="h-8 flex-1"
-          placeholder="Filter chats…"
-          aria-label="Filter chats"
+          className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-placeholder"
+          placeholder="Search chats…"
+          aria-label="Search chats"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={reload}
-          disabled={loading}
-          aria-label="Refresh chat list"
-          title="Refresh"
-        >
-          <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-        </Button>
+        {loading && <Spinner className="h-3.5 w-3.5 text-muted-foreground" />}
       </div>
 
-      <Button size="sm" onClick={onCreate} disabled={loading} className="w-full">
-        {loading ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
-        New chat
-      </Button>
-
       {/* The scroll region is the wrapper, not the list: the error and empty
-          states are not list items, and hanging them off `<ul>` put non-`<li>`
-          children in a list — invalid, and it makes the list announce a phantom
-          entry. `DocumentsMenu` already keeps them outside. */}
-      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
-        <ul className="space-y-1.5">
+          states are not list items, and hanging them off `<ul>` would put
+          non-`<li>` children in a list. */}
+      <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+        <button type="button" className={cn(menuItem, 'w-full text-left')} onClick={onNewChat}>
+          <Plus aria-hidden="true" />
+          New chat
+        </button>
+
+        {chats.documentId && (items.length > 0 || showSkeleton) && (
+          <p className={menuLabel}>Recent</p>
+        )}
+
+        <ul>
           {showSkeleton &&
             Array.from({ length: 3 }).map((_, index) => (
-              <li key={index} className="rounded-lg border border-border p-3">
-                <Skeleton className="mb-2 h-3.5 w-2/3" />
-                <Skeleton className="h-3 w-1/3" />
+              <li key={index} className="flex h-8 items-center gap-2 px-2">
+                <Skeleton className="h-3.5 w-3.5 rounded-sm" />
+                <Skeleton className="h-3 flex-1" />
               </li>
             ))}
 
@@ -273,99 +123,97 @@ export function ChatsPanel() {
             filtered.map((chat) => {
               const isSelected = chat.chat_id === selectedChatId;
               const isRenaming = renamingId === chat.chat_id;
+              const label = chatLabel(chat);
+
+              if (isRenaming) {
+                return (
+                  <li key={chat.chat_id} className="flex items-center gap-1 px-1 py-0.5">
+                    <input
+                      autoFocus
+                      className="h-7 min-w-0 flex-1 rounded-md bg-subtle px-2 text-sm outline-none ring-1 ring-inset ring-border-strong focus:ring-2 focus:ring-primary"
+                      aria-label="Chat title"
+                      value={renameValue}
+                      onChange={(event) => setRenameValue(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          commitRename(chat.chat_id);
+                        }
+                        if (event.key === 'Escape') {
+                          event.preventDefault();
+                          setRenamingId(null);
+                          setRenameValue('');
+                        }
+                      }}
+                      onBlur={() => commitRename(chat.chat_id)}
+                    />
+                    <Button
+                      variant="icon"
+                      size="icon-xs"
+                      // Without this, blur fires first and commits the rename
+                      // before the click ever reaches the button.
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => commitRename(chat.chat_id)}
+                      aria-label="Save chat title"
+                    >
+                      <Check />
+                    </Button>
+                  </li>
+                );
+              }
 
               return (
-                <li key={chat.chat_id}>
-                  <div
+                <li
+                  key={chat.chat_id}
+                  className={cn(
+                    'group relative flex items-center rounded-md transition-colors duration-120',
+                    isSelected ? 'bg-active' : 'hover:bg-hover',
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => onSelect(chat)}
+                    aria-current={isSelected ? 'true' : undefined}
+                    title={formatDateTime(chat.updated_at) || undefined}
                     className={cn(
-                      'group flex items-center gap-1 rounded-lg border transition-colors',
-                      isSelected ? 'border-primary bg-primary/10' : 'border-border bg-card hover:bg-accent',
+                      'flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      // Touch has no hover: the actions stay shown in place of
+                      // the date, so the title stops short of them.
+                      '[@media(hover:none)]:min-h-11 [@media(hover:none)]:pr-20',
                     )}
                   >
-                    {isRenaming ? (
-                      <div className="flex flex-1 items-center gap-1 p-2">
-                        <Input
-                          autoFocus
-                          className="h-7 flex-1"
-                          aria-label="Chat title"
-                          value={renameValue}
-                          onChange={(event) => setRenameValue(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault();
-                              commitRename(chat.chat_id);
-                            }
-                            if (event.key === 'Escape') {
-                              event.preventDefault();
-                              cancelRename();
-                            }
-                          }}
-                          onBlur={() => commitRename(chat.chat_id)}
-                        />
-                        <Button
-                          size="icon-sm"
-                          // Without this, blur fires first and commits the rename
-                          // before the click ever reaches the button.
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => commitRename(chat.chat_id)}
-                          aria-label="Save chat title"
-                        >
-                          <Save className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => selectChat(chat)}
-                          aria-current={isSelected ? 'true' : undefined}
-                          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-2.5 text-left"
-                        >
-                          <MessageSquare
-                            aria-hidden="true"
-                            className={cn(
-                              'h-4 w-4 shrink-0',
-                              isSelected ? 'text-primary' : 'text-muted-foreground',
-                            )}
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span
-                              className={cn(
-                                'block truncate text-sm font-medium',
-                                !chat.title?.trim() && 'text-muted-foreground',
-                              )}
-                            >
-                              {chatLabel(chat)}
-                            </span>
-                            <span className="block truncate text-xs text-muted-foreground">
-                              {formatDateTime(chat.updated_at) || 'No activity yet'}
-                            </span>
-                          </span>
-                        </button>
-                        <div className="mr-1.5 flex flex-shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-                          <Button
-                            variant="ghost"
-                            size="icon-xs"
-                            onClick={() => {
-                              setRenamingId(chat.chat_id);
-                              setRenameValue(chat.title ?? '');
-                            }}
-                            aria-label={`Rename ${chatLabel(chat)}`}
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon-xs"
-                            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                            onClick={() => onDelete(chat)}
-                            aria-label={`Delete ${chatLabel(chat)}`}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </>
-                    )}
+                    <MessageSquare aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className={cn('min-w-0 flex-1 truncate', !chat.title?.trim() && 'text-muted-foreground')}>
+                      {label}
+                    </span>
+                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums group-focus-within:invisible group-hover:invisible [@media(hover:none)]:hidden">
+                      {relativeTime(chat.updated_at)}
+                    </span>
+                  </button>
+                  <div className="absolute right-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+                    <Button
+                      variant="icon"
+                      size="icon-xs"
+                      className={TOUCH_ACTION}
+                      onClick={() => {
+                        setRenamingId(chat.chat_id);
+                        setRenameValue(chat.title ?? '');
+                      }}
+                      aria-label={`Rename ${label}`}
+                    >
+                      <Pencil />
+                    </Button>
+                    <Button
+                      variant="icon"
+                      size="icon-xs"
+                      className={cn(TOUCH_ACTION, 'hover:bg-destructive/10 hover:text-destructive')}
+                      onClick={async () => {
+                        if (await chats.remove(chat)) onDeleted?.(chat);
+                      }}
+                      aria-label={`Delete ${label}`}
+                    >
+                      <Trash2 />
+                    </Button>
                   </div>
                 </li>
               );
@@ -373,23 +221,15 @@ export function ChatsPanel() {
         </ul>
 
         {!loading && listError && (
-          <div
-            role={listError.preparing ? 'status' : 'alert'}
-            className={cn(
-              'rounded-lg border p-3 text-center',
-              listError.preparing
-                ? 'border-border bg-muted/40'
-                : 'border-destructive/40 bg-destructive/10',
-            )}
-          >
+          <div role={listError.preparing ? 'status' : 'alert'} className="px-2 py-3 text-center">
             <p
               className={cn(
                 'flex items-center justify-center gap-1.5 text-sm font-medium',
                 listError.preparing ? 'text-foreground' : 'text-destructive',
               )}
             >
-              {/* A spinner here used to advertise a background poll. Nothing
-                  is running now — this state waits for the author. */}
+              {/* Nothing is polling behind the author's back — this state
+                  waits for them. */}
               {listError.preparing ? (
                 <Clock aria-hidden="true" className="h-3.5 w-3.5" />
               ) : (
@@ -398,47 +238,51 @@ export function ChatsPanel() {
               {listError.preparing ? 'Getting your chats ready' : 'Could not load chats'}
             </p>
             <p className="mt-1 break-words text-xs text-muted-foreground">{listError.message}</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={reload}>
+            <Button variant="outline" size="xs" className="mt-2" onClick={chats.reload}>
               Retry
             </Button>
           </div>
         )}
 
-        {!loading && !listError && items.length === 0 && (
-          <EmptyState
-            icon={MessageSquare}
-            title="No chats yet"
-            description="Start a conversation to keep a history of your assistant sessions."
-          />
+        {chats.documentId && !loading && !listError && items.length === 0 && (
+          <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+            No chats yet. Conversations about this document are kept here.
+          </p>
+        )}
+
+        {!chats.documentId && (
+          <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+            A conversation is kept with a document. Asking saves this document first.
+          </p>
         )}
 
         {!loading && items.length > 0 && filtered.length === 0 && (
-          <EmptyState icon={MessageSquare} title="No matches" description="Try a different filter." />
+          <p className="px-2 py-3 text-center text-xs text-muted-foreground">No chats match.</p>
         )}
       </div>
 
       {totalPages > 1 && (
-        <div className="flex flex-shrink-0 items-center justify-between border-t border-border pt-2">
+        <div className="flex flex-shrink-0 items-center justify-between border-t border-border px-1.5 py-1">
           <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            variant="icon"
+            size="icon-xs"
+            onClick={() => chats.setPage(Math.max(1, page - 1))}
             disabled={page <= 1 || loading}
             aria-label="Previous page"
           >
-            <ChevronLeft className="h-3.5 w-3.5" />
+            <ChevronLeft />
           </Button>
-          <span className="text-2xs tabular-nums text-muted-foreground">
-            {Math.min(count, (page - 1) * PAGE_SIZE + 1)}–{Math.min(page * PAGE_SIZE, count)} of {count}
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {Math.min(count, (page - 1) * CHATS_PAGE_SIZE + 1)}–{Math.min(page * CHATS_PAGE_SIZE, count)} of {count}
           </span>
           <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            variant="icon"
+            size="icon-xs"
+            onClick={() => chats.setPage(Math.min(totalPages, page + 1))}
             disabled={page >= totalPages || loading}
             aria-label="Next page"
           >
-            <ChevronRight className="h-3.5 w-3.5" />
+            <ChevronRight />
           </Button>
         </div>
       )}

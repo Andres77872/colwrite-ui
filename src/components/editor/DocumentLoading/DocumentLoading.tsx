@@ -141,14 +141,18 @@ export function DocumentLoadingBoundary({
   );
 }
 
-/** Layout-matched, deterministic document chrome and prose placeholder. */
+/**
+ * Layout-matched, deterministic placeholder: the page topbar, the 40px page
+ * title and a prose silhouette in the same column the page uses — so the
+ * text lands where the skeleton was instead of jumping.
+ */
 export function DocumentSkeleton() {
   const rows = [
-    { kind: 'heading', width: '58%' },
+    { kind: 'heading', width: '46%' },
     { kind: 'prose', width: '96%' },
     { kind: 'prose', width: '88%' },
     { kind: 'prose', width: '72%' },
-    { kind: 'heading', width: '42%' },
+    { kind: 'heading', width: '38%' },
     { kind: 'prose', width: '93%' },
     { kind: 'prose', width: '81%' },
     { kind: 'prose', width: '64%' },
@@ -156,40 +160,39 @@ export function DocumentSkeleton() {
 
   return (
     <div
-      className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
       aria-hidden="true"
       data-testid="document-skeleton"
     >
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border bg-card/95 px-4 py-2.5">
-        <Skeleton className="h-7 w-44 sm:w-64" />
-        <div className="flex items-center gap-2">
-          <Skeleton className="hidden h-4 w-20 sm:block" />
-          <Skeleton className="h-8 w-14" />
-          <Skeleton className="hidden h-8 w-16 sm:block" />
-          <Skeleton className="h-8 w-16" />
-          <Skeleton className="h-8 w-8" />
+      <div className="flex h-11 shrink-0 items-center gap-2 px-3">
+        <Skeleton className="size-4" />
+        <Skeleton className="h-3.5 w-40 sm:w-56" />
+        <div className="ml-auto flex items-center gap-1.5">
+          <Skeleton className="h-6 w-16" />
+          <Skeleton className="hidden size-6 sm:block" />
+          <Skeleton className="hidden size-6 sm:block" />
+          <Skeleton className="size-6" />
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden">
-        <div className="mx-auto w-full max-w-[var(--doc-measure)] px-4 py-4">
-          <div className="space-y-5" style={{ paddingLeft: 'var(--doc-gutter)' }}>
+      {/* Named like the canvas so the page's container queries size the
+          column exactly as they will once the document is in. */}
+      <div className="@container/canvas min-h-0 flex-1 overflow-hidden">
+        <div className="document-container">
+          <div className="page-title">
+            <Skeleton className="h-[0.9em] w-3/5 rounded-md" />
+          </div>
+          <div className="mt-6 space-y-5">
             {rows.map((row, index) => (
               <Skeleton
                 key={`${row.kind}-${index}`}
-                className={row.kind === 'heading' ? 'h-7' : 'h-4'}
+                className={row.kind === 'heading' ? 'h-6' : 'h-4'}
                 // Fixed widths keep the document silhouette stable between runs.
                 style={{ width: row.width }}
               />
             ))}
           </div>
         </div>
-      </div>
-
-      <div className="flex h-[33px] flex-shrink-0 items-center gap-4 border-t border-border/50 bg-card px-4 py-2">
-        <Skeleton className="h-3 w-16" />
-        <Skeleton className="h-3 w-20" />
-        <Skeleton className="h-3 w-14" />
       </div>
     </div>
   );

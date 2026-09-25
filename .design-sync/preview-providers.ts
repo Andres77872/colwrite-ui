@@ -26,7 +26,15 @@
 // components and they get no card, no .d.ts and no doc — they are bundle
 // exports and nothing more.
 
+import { createElement, type ReactNode } from 'react';
 import type { AgentToolsContextValue } from '../src/components/preferences/agentToolsContextState';
+import {
+  EditorActionsContext,
+  EditorActiveBlockContext,
+  EditorContext as EditorStateContext,
+  type EditorActionsContextValue,
+  type EditorStateContextValue,
+} from '../src/editor/editorContextState';
 
 export { PanelsProvider } from '../src/components/panels';
 export { ViewProvider } from '../src/components/layout/ViewContext';
@@ -43,6 +51,42 @@ export { AuthContext } from '../src/components/auth/authContextState';
 // preview must be able to hand a component a document, a pending proposal or a
 // chat session outright, since none of that state is reachable offline.
 export { EditorContext } from '../src/editor/editorContextState';
+// The editor now publishes three contexts — state (`useEditorState`), actions
+// (`useEditorActions`) and the active block (`useActiveBlock`) — so an
+// editable re-renders on focus moves without re-rendering on every keystroke.
+// A preview that supplied only `EditorContext` stopped rendering anything
+// under an `Editable`, a `CodeEditable` or a paragraph: the other two hooks
+// throw without their provider. `LiteralEditor` hands one literal value to all
+// three; every editor preview goes through it.
+export { EditorActionsContext, EditorActiveBlockContext } from '../src/editor/editorContextState';
+
+const noop = () => {};
+
+/**
+ * One literal editor for a preview — the state, the actions and the active
+ * block, from a single object. `value` is the same partial, cast literal the
+ * previews always built (see NOTES.md "Editor previews"); `activeId` is which
+ * block, if any, reads as focused.
+ */
+export function LiteralEditor({
+  value,
+  activeId = null,
+  children,
+}: {
+  value: unknown;
+  activeId?: string | null;
+  children?: ReactNode;
+}) {
+  return createElement(
+    EditorStateContext.Provider,
+    { value: value as EditorStateContextValue },
+    createElement(
+      EditorActionsContext.Provider,
+      { value: value as EditorActionsContextValue },
+      createElement(EditorActiveBlockContext.Provider, { value: { activeId, setActive: noop } }, children),
+    ),
+  );
+}
 // Citation numbering is a property of the whole document, so `CitationInline`
 // reads the bibliography rather than counting for itself. A preview supplying a
 // literal `EditorContext` gets no bibliography with it — the real one is built

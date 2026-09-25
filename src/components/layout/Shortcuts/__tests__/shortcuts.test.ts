@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SHORTCUTS, matchShortcut, shortcutBindingKey } from '../shortcuts';
+import { SHORTCUTS, matchShortcut, shortcutBindingKey, shortcutReference } from '../shortcuts';
 
 /** A KeyboardEvent without needing a DOM target. */
 function key(init: KeyboardEventInit): KeyboardEvent {
@@ -21,15 +21,34 @@ describe('matchShortcut', () => {
   });
 
   it('keeps the shifted and unshifted backslash bindings distinct', () => {
-    // Compared strictly, or the tools-panel binding swallows the sidebar one.
-    expect(matchShortcut(key({ key: '\\', ctrlKey: true }))?.id).toBe('toggle-tools');
+    // Compared strictly, or the sidebar binding swallows the right sidebar's.
+    // Mod+\ is the sidebar, as in Notion.
+    expect(matchShortcut(key({ key: '\\', ctrlKey: true }))?.id).toBe('toggle-sidebar');
     expect(matchShortcut(key({ key: '\\', ctrlKey: true, shiftKey: true }))?.id).toBe(
-      'toggle-sidebar',
+      'toggle-tools',
+    );
+  });
+
+  it('matches Mod+Shift+\\ on the physical key, since Shift turns the key into |', () => {
+    expect(
+      matchShortcut(key({ key: '|', code: 'Backslash', shiftKey: true, ctrlKey: true }))?.id,
+    ).toBe('toggle-tools');
+    expect(matchShortcut(key({ key: '|', code: 'Backslash', shiftKey: true, metaKey: true }))?.id).toBe(
+      'toggle-tools',
     );
   });
 
   it('ignores a shifted variant of an unshifted binding', () => {
-    expect(matchShortcut(key({ key: 'j', ctrlKey: true, shiftKey: true }))).toBeNull();
+    expect(matchShortcut(key({ key: 's', ctrlKey: true, shiftKey: true }))).toBeNull();
+  });
+
+  it('reaches the assistant with Mod+Shift+J as well, since Mod+J is Ask AI inside a block', () => {
+    expect(matchShortcut(key({ key: 'j', ctrlKey: true, shiftKey: true }))?.id).toBe('toggle-assistant');
+  });
+
+  it('opens the command palette with Mod+K and Mod+P', () => {
+    expect(matchShortcut(key({ key: 'k', metaKey: true }))?.id).toBe('command-palette');
+    expect(matchShortcut(key({ key: 'p', ctrlKey: true }))?.id).toBe('command-palette');
   });
 
   it('ignores Alt combinations, which belong to the platform', () => {
@@ -70,5 +89,23 @@ describe('matchShortcut', () => {
       { key: 'z', shift: true },
       { key: 'y', shift: false },
     ]);
+  });
+});
+
+describe('shortcutReference', () => {
+  it('groups rows and merges alternate bindings of one action into a single row', () => {
+    const sections = shortcutReference();
+    expect(sections.map((section) => section.group)).toEqual(['General', 'Navigation', 'AI', 'Editing']);
+    const labels = sections.flatMap((section) => section.rows.map((row) => row.label));
+    expect(new Set(labels).size).toBe(labels.length);
+    const search = sections[0].rows.find((row) => row.label === 'Search documents and commands');
+    expect(search?.bindings).toEqual([
+      ['Mod', 'K'],
+      ['Mod', 'P'],
+    ]);
+    const redo = sections[0].rows.find((row) => row.label === 'Redo');
+    expect(redo?.bindings).toHaveLength(2);
+    expect(labels).toContain('Ask AI on the current block');
+    expect(labels).toContain('Duplicate the block');
   });
 });

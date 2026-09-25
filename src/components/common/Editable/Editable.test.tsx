@@ -325,3 +325,236 @@ describe('Editable IME composition', () => {
     expect(currentEditor().blocks[0]).toMatchObject({ html: 'にほんご' });
   });
 });
+
+describe('Editable block model (Notion-style keys)', () => {
+  function renderBlocks(blocks: Block[]) {
+    seedLocal(blocks);
+    render(
+      <EditorProvider>
+        <CaptureEditor />
+        {blocks.map(b => (
+          <BlockEditable key={b.id} id={b.id} />
+        ))}
+      </EditorProvider>,
+    );
+  }
+
+  function editableFor(index: number): HTMLDivElement {
+    const el = document.querySelectorAll<HTMLDivElement>('.editable')[index];
+    if (!el) throw new Error(`Editable ${index} not rendered`);
+    return el;
+  }
+
+  function setCaret(el: HTMLElement, offset: number) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let remaining = offset;
+    let node = walker.nextNode() as Text | null;
+    while (node && remaining > node.data.length) {
+      remaining -= node.data.length;
+      node = walker.nextNode() as Text | null;
+    }
+    const range = document.createRange();
+    if (node) range.setStart(node, remaining);
+    else { range.selectNodeContents(el); range.collapse(false); }
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }
+
+  function block(id: string) {
+    const found = currentEditor().blocks.find(b => b.id === id);
+    if (!found) throw new Error(`Block ${id} missing`);
+    return found;
+  }
+
+  it.each([
+    ['##', { type: 'heading', level: 2, html: '' }],
+    ['-', { type: 'paragraph', variant: 'bullet', html: '' }],
+    ['1.', { type: 'paragraph', variant: 'numbered', html: '' }],
+    ['[]', { type: 'paragraph', variant: 'todo', checked: false, html: '' }],
+    ['>', { type: 'paragraph', variant: 'quote', html: '' }],
+  ])('turns "%s " at the start of a line into its block', (prefix, expected) => {
+    renderBlocks([{ id: 'p1', type: 'paragraph', html: prefix, children: [] }]);
+    const el = editableFor(0);
+    act(() => currentEditor().setActive('p1'));
+    setCaret(el, prefix.length);
+
+    let notPrevented: boolean | undefined;
+    act(() => {
+      notPrevented = fireEvent.keyDown(el, { key: ' ' });
+    });
+
+    expect(notPrevented).toBe(false);
+    expect(block('p1')).toMatchObject(expected);
+  });
+
+  it('keeps the text after the caret when a shortcut converts the line', () => {
+    renderBlocks([{ id: 'p1', type: 'paragraph', html: '-Item text', children: [] }]);
+    const el = editableFor(0);
+    act(() => currentEditor().setActive('p1'));
+    setCaret(el, 1);
+    act(() => {
+      fireEvent.keyDown(el, { key: ' ' });
+    });
+    expect(block('p1')).toMatchObject({ variant: 'bullet', html: 'Item text' });
+  });
+
+  it('does not treat a space mid-sentence as a shortcut', () => {
+    renderBlocks([{ id: 'p1', type: 'paragraph', html: 'Plan - done', children: [] }]);
+    const el = editableFor(0);
+    act(() => currentEditor().setActive('p1'));
+    setCaret(el, 6);
+    let notPrevented: boolean | undefined;
+    act(() => {
+      notPrevented = fireEvent.keyDown(el, { key: ' ' });
+    });
+    expect(notPrevented).toBe(true);
+    expect(block('p1')).not.toHaveProperty('variant');
+  });
+
+  it('continues a list on Enter and leaves it on Enter in an empty item', () => {
+    renderBlocks([{ id: 'p1', type: 'paragraph', html: 'Item', children: [], variant: 'bullet' } as Block]);
+    const el = editableFor(0);
+    act(() => currentEditor().setActive('p1'));
+    setCaret(el, 4);
+    act(() => {
+      fireEvent.keyDown(el, { key: 'Enter' });
+    });
+    const [, next] = currentEditor().blocks;
+    expect(next).toMatchObject({ type: 'paragraph', variant: 'bullet', html: '' });
+
+    // Now Enter in that empty item turns it back into body text.
+    cleanup();
+    renderBlocks([{ id: 'e1', type: 'paragraph', html: '', children: [], variant: 'bullet' } as Block]);
+    const empty = editableFor(0);
+    act(() => currentEditor().setActive('e1'));
+    setCaret(empty, 0);
+    act(() => {
+      fireEvent.keyDown(empty, { key: 'Enter' });
+    });
+    expect(block('e1')).not.toHaveProperty('variant');
+  });
+
+  it('outdents an empty nested item on Enter before leaving the list', () => {
+    renderBlocks([
+      { id: 'p1', type: 'paragraph', html: 'Parent', children: [], variant: 'bullet' } as Block,
+      { id: 'p2', type: 'paragraph', html: '', children: [], variant: 'bullet', indent: 1 } as Block,
+    ]);
+    const el = editableFor(1);
+    act(() => currentEditor().setActive('p2'));
+    setCaret(el, 0);
+    act(() => {
+      fireEvent.keyDown(el, { key: 'Enter' });
+    });
+    expect(block('p2')).toMatchObject({ variant: 'bullet' });
+    expect(block('p2')).not.toHaveProperty('indent');
+  });
+
+  it('nests with Tab under an item and never deeper than one level past it', () => {
+    renderBlocks([
+      { id: 'p1', type: 'paragraph', html: 'Parent', children: [], variant: 'bullet' } as Block,
+      { id: 'p2', type: 'paragraph', html: 'Child', children: [], variant: 'bullet' } as Block,
+    ]);
+    const first = editableFor(0);
+    act(() => currentEditor().setActive('p1'));
+    setCaret(first, 0);
+    let notPrevented: boolean | undefined;
+    act(() => {
+      notPrevented = fireEvent.keyDown(first, { key: 'Tab' });
+    });
+    // Consumed (focus stays in the document) but the first item cannot nest.
+    expect(notPrevented).toBe(false);
+    expect(block('p1')).not.toHaveProperty('indent');
+
+    const second = editableFor(1);
+    act(() => currentEditor().setActive('p2'));
+    setCaret(second, 0);
+    act(() => {
+      fireEvent.keyDown(second, { key: 'Tab' });
+    });
+    act(() => {
+      fireEvent.keyDown(second, { key: 'Tab' });
+    });
+    expect(block('p2')).toMatchObject({ indent: 1 });
+
+    act(() => {
+      fireEvent.keyDown(second, { key: 'Tab', shiftKey: true });
+    });
+    expect(block('p2')).not.toHaveProperty('indent');
+  });
+
+  it('turns a list item back into text on Backspace at its start', () => {
+    renderBlocks([
+      { id: 'p0', type: 'paragraph', html: 'Above', children: [] },
+      { id: 'p1', type: 'paragraph', html: 'Item', children: [], variant: 'todo', checked: true } as Block,
+    ]);
+    const el = editableFor(1);
+    act(() => currentEditor().setActive('p1'));
+    setCaret(el, 0);
+    act(() => {
+      fireEvent.keyDown(el, { key: 'Backspace' });
+    });
+    expect(currentEditor().blocks).toHaveLength(2);
+    expect(block('p1')).toMatchObject({ html: 'Item' });
+    expect(block('p1')).not.toHaveProperty('variant');
+    expect(block('p1')).not.toHaveProperty('checked');
+  });
+
+  it('opens a line above on Enter at the start of a heading, leaving the heading intact', () => {
+    renderBlocks([{ id: 'h1', type: 'heading', level: 1, html: 'Title' }]);
+    const el = editableFor(0);
+    act(() => currentEditor().setActive('h1'));
+    setCaret(el, 0);
+    act(() => {
+      fireEvent.keyDown(el, { key: 'Enter' });
+    });
+    const blocks = currentEditor().blocks;
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toMatchObject({ type: 'paragraph', html: '' });
+    expect(blocks[1]).toMatchObject({ id: 'h1', type: 'heading', html: 'Title' });
+  });
+
+  it('selects the block on Escape', () => {
+    renderBlocks([{ id: 'p1', type: 'paragraph', html: 'Text', children: [] }]);
+    const el = editableFor(0);
+    act(() => {
+      el.focus();
+      currentEditor().setActive('p1');
+    });
+    act(() => {
+      fireEvent.keyDown(el, { key: 'Escape' });
+    });
+    expect(currentEditor().selectedBlockIds).toEqual(['p1']);
+  });
+
+  it('does not merge into a locked block above', () => {
+    renderBlocks([
+      { id: 'p1', type: 'paragraph', html: 'Locked', children: [], locked: true },
+      { id: 'p2', type: 'paragraph', html: 'Free', children: [] },
+    ]);
+    const el = editableFor(1);
+    act(() => currentEditor().setActive('p2'));
+    setCaret(el, 0);
+    act(() => {
+      fireEvent.keyDown(el, { key: 'Backspace' });
+    });
+    expect(currentEditor().blocks.map(b => b.id)).toEqual(['p1', 'p2']);
+    expect(block('p1')).toMatchObject({ html: 'Locked' });
+  });
+
+  it('pulls the next block up on Delete at the end', () => {
+    renderBlocks([
+      { id: 'p1', type: 'paragraph', html: 'One', children: [] },
+      { id: 'p2', type: 'paragraph', html: 'Two', children: [] },
+    ]);
+    const el = editableFor(0);
+    act(() => currentEditor().setActive('p1'));
+    setCaret(el, 3);
+    act(() => {
+      fireEvent.keyDown(el, { key: 'Delete' });
+    });
+    expect(currentEditor().blocks).toHaveLength(1);
+    expect(block('p1')).toMatchObject({ html: 'OneTwo' });
+  });
+});

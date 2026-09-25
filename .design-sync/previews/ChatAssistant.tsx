@@ -1,27 +1,23 @@
 import {
   ChatAssistant,
   ChatSessionsContext,
+  ConfirmProvider,
   EditorContext,
-  PanelsContext,
-  PanelsProvider,
+  LiteralEditor,
   ProposalsContext,
+  ToastProvider,
+  TooltipProvider,
 } from 'colwrite-ui';
 
-// ChatAssistant is the whole assistant panel: the message list, the agent
-// activity strip, the composer with its reference picker, and the collapsed
-// rail state.
+// ChatAssistant is the content of the right sidebar's AI tab: the chat
+// switcher, the transcript, and the composer with its context chips and
+// reference picker. It owns no window — it fills the column it is given, so
+// the card gives it a 420px sidebar-sized column.
 //
-// Open/closed is SHELL state, not local state — `assistantOpen` comes from
-// PanelsContext so the Mod+J shortcut can toggle it from outside. That is what
-// makes both states previewable: PanelsProvider supplies real values (it
-// derives from matchMedia and needs nothing else) and the cells override
-// `assistantOpen` through the context, the same way the AppShell preview forces
-// `isOpen`.
-//
-// The conversation itself is local state seeded empty, so these cards show the
-// panel before a turn has been sent. A populated transcript is not reachable
-// from props — the messages arrive from a live stream — so the pieces that
-// render one are covered by their own cards: ChatMarkdown, AgentActivity,
+// The conversation itself is local state seeded empty, so this card shows the
+// panel's home before a turn has been sent. A populated transcript is not
+// reachable from props — the messages arrive from a live stream — so the pieces
+// that render one are covered by their own cards: ChatMarkdown, AgentActivity,
 // ChatRefTags and ChatTaggedInput.
 
 type ECtx = React.ContextType<typeof EditorContext>;
@@ -74,44 +70,28 @@ const SESSIONS = {
   setSelectedThreadId: noop,
 };
 
-function Frame({ open, children }: { open: boolean; children: React.ReactNode }) {
+function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <PanelsProvider>
-      <PanelsContext.Consumer>
-        {(panels) =>
-          panels ? (
-            <PanelsContext.Provider
-              value={{ ...panels, isDesktop: true, assistantOpen: open }}
-            >
-              <EditorContext.Provider value={EDITOR as unknown as ECtx}>
-                <ProposalsContext.Provider value={PROPOSALS as unknown as PCtx}>
-                  <ChatSessionsContext.Provider value={SESSIONS as unknown as SCtx}>
-                    {children}
-                  </ChatSessionsContext.Provider>
-                </ProposalsContext.Provider>
-              </EditorContext.Provider>
-            </PanelsContext.Provider>
-          ) : null
-        }
-      </PanelsContext.Consumer>
-    </PanelsProvider>
+    <ToastProvider>
+      <ConfirmProvider>
+        <TooltipProvider>
+          <LiteralEditor value={EDITOR as unknown as ECtx}>
+            <ProposalsContext.Provider value={PROPOSALS as unknown as PCtx}>
+              <ChatSessionsContext.Provider value={SESSIONS as unknown as SCtx}>
+                {children}
+              </ChatSessionsContext.Provider>
+            </ProposalsContext.Provider>
+          </LiteralEditor>
+        </TooltipProvider>
+      </ConfirmProvider>
+    </ToastProvider>
   );
 }
 
-export function Open() {
+export function Docked() {
   return (
-    <Frame open>
-      <div className="h-[36rem] w-[24rem]">
-        <ChatAssistant />
-      </div>
-    </Frame>
-  );
-}
-
-export function Collapsed() {
-  return (
-    <Frame open={false}>
-      <div className="h-[36rem] w-[24rem]">
+    <Frame>
+      <div className="h-[40rem] w-[26rem] border-l border-border bg-background">
         <ChatAssistant />
       </div>
     </Frame>

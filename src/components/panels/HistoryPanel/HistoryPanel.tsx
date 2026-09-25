@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useEditor } from '@/editor';
 import type { Block, Doc } from '@/editor';
-import { blockText } from '@/editor/proposals';
 import { formatDateTime } from '@/lib/text';
 import { describeApiError } from '@/services/contracts';
 import { isRetryableProblem } from '@/services/retry';
@@ -20,7 +19,9 @@ import {
 import {
   ProposedBlockView,
   ProposedRewriteView,
+  WidgetChip,
 } from '@/components/editor/Review/ProposedBlockView';
+import { createWidgetTable, diffPieces, diffableText, type DiffPiece } from '@/components/editor/Review/diffText';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -30,13 +31,14 @@ import { useToast } from '@/components/ui/toastContext';
 import {
   AlertCircle,
   ArrowDownUp,
-  Bot,
   GitBranch,
   History,
   RotateCcw,
+  Sparkles,
   Trash2,
 } from 'lucide-react';
 import { buildVersionGraph, type VersionGraphRow } from './versionGraph';
+import { distinctSummary, kindLabel, revisionTime } from './revisionLabels';
 import { RAIL_ROW_HEIGHT, VersionGraphRail, VersionGraphTail } from './VersionGraphRail';
 
 /**
@@ -55,16 +57,6 @@ import { RAIL_ROW_HEIGHT, VersionGraphRail, VersionGraphTail } from './VersionGr
 
 const PAGE_SIZE = 30;
 
-const KIND_LABELS: Record<string, string> = {
-  create: 'Created',
-  save: 'Saved',
-  semantic_edit: 'Edited',
-  restore: 'Restored',
-  delete: 'Moved to trash',
-  migration: 'Migrated',
-  history_backfill: 'Imported',
-};
-
 const CHILD_LABELS: Record<string, string> = {
   citation: 'Citation',
   equation: 'Equation',
@@ -72,10 +64,6 @@ const CHILD_LABELS: Record<string, string> = {
   graph: 'Chart',
   aiBeat: 'AI passage',
 };
-
-function kindLabel(revision: RevisionSummary): string {
-  return KIND_LABELS[revision.kind] ?? revision.kind.replace(/_/g, ' ');
-}
 
 function entityLabel(change: RevisionChange): string {
   if (change.entity === 'child') {
@@ -356,13 +344,13 @@ export function HistoryPanel() {
     // by their own padding instead of a break in the lanes.
     <div className="flex flex-col">
       {!currentPointerLoaded && (
-        <div className="mb-1.5 flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2">
+        <div className="mb-2 flex items-center justify-between gap-2 rounded-md bg-subtle px-2.5 py-2">
           <p className="text-xs text-muted-foreground">
             The document is on an older version that isn&apos;t shown yet.
           </p>
           <Button
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="xs"
             className="shrink-0"
             onClick={revealCurrent}
             disabled={revealingCurrent}
@@ -442,6 +430,7 @@ function RevisionRow({
   isExpanded: boolean;
   onToggle: () => void;
 }) {
+  const summary = distinctSummary(revision);
   return (
     <button
       type="button"
@@ -451,46 +440,44 @@ function RevisionRow({
       // rows they belong to.
       style={{ minHeight: RAIL_ROW_HEIGHT }}
       className={cn(
-        'w-full rounded-md border px-2.5 py-2 text-left transition-colors hover:bg-muted/60',
-        isExpanded ? 'border-border bg-muted/40' : 'border-transparent',
+        'w-full rounded-md px-2 py-1.5 text-left transition-colors duration-150 hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        isExpanded && 'bg-active hover:bg-active',
       )}
     >
-      <div className="flex items-center gap-2">
-        <span className="font-mono text-2xs text-muted-foreground">
-          v{revision.revisionNo}
-        </span>
-        <span className="text-sm font-medium">
+      <div className="flex items-center gap-1.5">
+        <span className="min-w-0 truncate text-sm font-medium">
           {kindLabel(revision)}
           {revision.kind === 'delete' && (
             <Trash2 aria-hidden="true" className="ml-1 inline h-3 w-3 align-[-1px]" />
           )}
         </span>
         {revision.origin === 'agent' && (
-          <Badge variant="info" className="gap-1 px-1.5 py-0 text-2xs font-medium">
-            <Bot aria-hidden="true" className="h-3 w-3" />
-            Assistant
-          </Badge>
+          <span className="inline-flex shrink-0 items-center gap-0.5 text-xs font-medium text-ai">
+            <Sparkles aria-hidden="true" className="h-3 w-3" />
+            AI
+          </span>
         )}
         {isCurrent && (
-          <Badge variant="secondary" className="px-1.5 py-0 text-2xs font-medium">
+          <Badge variant="info" className="shrink-0 px-1.5 py-0 text-2xs font-medium">
             Current
           </Badge>
         )}
+        <span className="ml-auto shrink-0 font-mono text-2xs text-muted-foreground">v{revision.revisionNo}</span>
       </div>
       <div className="mt-0.5 flex items-baseline gap-2 text-xs text-muted-foreground">
-        <time dateTime={revision.createdAt}>{formatDateTime(revision.createdAt)}</time>
+        <time className="shrink-0" dateTime={revision.createdAt} title={formatDateTime(revision.createdAt)}>
+          {revisionTime(revision.createdAt)}
+        </time>
         {node?.isFork && (
           <span
-            className="flex shrink-0 items-center gap-0.5 self-center text-2xs"
+            className="flex shrink-0 items-center gap-0.5 self-center"
             title="Later versions branch away from this one."
           >
             <GitBranch aria-hidden="true" className="h-3 w-3" />
             {node.childCount} branches
           </span>
         )}
-        {revision.summary && (
-          <span className="min-w-0 truncate italic">{revision.summary}</span>
-        )}
+        {summary && <span className="min-w-0 truncate" title={summary}>{summary}</span>}
       </div>
     </button>
   );
@@ -605,13 +592,13 @@ function RevisionInspector({
   }, [documentId, revision.revisionId, revision.parentRevisionId, mode]);
 
   return (
-    <div className="mt-1 rounded-md border bg-muted/20 p-2.5">
+    // No card: an indented rail under the selected row, on the same surface.
+    <div className="ml-2 mt-1 border-l border-border pb-1 pl-3 pt-0.5">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1" role="group" aria-label="Comparison">
           <Button
             variant={mode === 'change' ? 'secondary' : 'ghost'}
-            size="sm"
-            className="h-6 px-2 text-xs"
+            size="xs"
             onClick={() => setMode('change')}
             aria-pressed={mode === 'change'}
           >
@@ -619,8 +606,7 @@ function RevisionInspector({
           </Button>
           <Button
             variant={mode === 'current' ? 'secondary' : 'ghost'}
-            size="sm"
-            className="h-6 px-2 text-xs"
+            size="xs"
             onClick={() => setMode('current')}
             aria-pressed={mode === 'current'}
             disabled={isCurrent}
@@ -636,14 +622,13 @@ function RevisionInspector({
           </span>
         ) : (
           <Button
-            size="sm"
+            size="xs"
             variant="outline"
-            className="h-6 px-2 text-xs"
             onClick={onRestore}
             disabled={restoring}
             title="Switch the document to this version"
           >
-            {restoring ? <Spinner /> : <RotateCcw aria-hidden="true" className="h-3 w-3" />}
+            {restoring ? <Spinner /> : <RotateCcw aria-hidden="true" />}
             Restore
           </Button>
         )}
@@ -711,6 +696,35 @@ function ComparisonView({ data, mode }: { data: InspectorData; mode: CompareMode
   );
 }
 
+/**
+ * The diff reuses the review views, which set page typography (16px body,
+ * 20–30px headings). Inside a 13–14px sidebar that shouts, so scale it to UI
+ * size: 14px text, headings a step above.
+ */
+const DIFF_TEXT =
+  'text-sm [&_.text-md]:text-sm [&_.text-md]:leading-6 [&_.text-xl]:text-md [&_.text-2xl]:text-md [&_.text-3xl]:text-lg';
+
+/** Field names are the document's JSON keys; say what they mean instead. */
+const CHILD_FIELD_WORDS: Record<string, string> = {
+  keys: 'sources',
+  sources: 'sources',
+  style: 'style',
+  latex: 'formula',
+  display: 'layout',
+  numbered: 'numbering',
+  rows: 'cells',
+  columns: 'columns',
+  caption: 'caption',
+  spec: 'data',
+  data: 'data',
+};
+
+function childChangeWording(change: RevisionChange, verb: string): string {
+  if (change.change !== 'changed' || change.fields.length === 0) return `${verb}.`;
+  const words = [...new Set(change.fields.map((field) => CHILD_FIELD_WORDS[field] ?? 'details'))];
+  return `${words.join(' and ')} changed.`;
+}
+
 function ChangeView({
   change,
   base,
@@ -730,24 +744,20 @@ function ChangeView({
       : 'updated';
     return (
       <p className="text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">{label}</span> {verb} inside a paragraph
-        {change.change === 'changed' && change.fields.length > 0 && (
-          <> ({change.fields.join(', ')})</>
-        )}
-        .
+        <span className="font-medium text-foreground">{label}</span> {childChangeWording(change, verb)}
       </p>
     );
   }
 
   if (change.change === 'moved') {
-    const snippet = blockText(target ?? base);
+    const snippet = target ?? base;
     return (
       <p className="flex items-baseline gap-1.5 text-xs text-muted-foreground">
         <ArrowDownUp aria-hidden="true" className="h-3 w-3 shrink-0 self-center" />
         <span className="min-w-0">
           <span className="font-medium text-foreground">{label}</span> moved from position{' '}
           {(change.fromIndex ?? 0) + 1} to {(change.toIndex ?? 0) + 1}
-          {snippet && <> — “{snippet.length > 60 ? `${snippet.slice(0, 60)}…` : snippet}”</>}
+          <BlockSnippet block={snippet} />
         </span>
       </p>
     );
@@ -755,11 +765,11 @@ function ChangeView({
 
   if (change.change === 'inserted') {
     return (
-      <div className="border-l-2 border-success/60 pl-2">
-        <p className="mb-0.5 text-2xs font-medium uppercase tracking-wide text-success">
+      <div className="border-l-2 border-diff-add-border pl-2.5">
+        <p className="mb-0.5 text-xs font-medium text-success">
           {label} added
         </p>
-        <div className="text-sm">
+        <div className={DIFF_TEXT}>
           <ProposedBlockView block={target} />
         </div>
       </div>
@@ -768,11 +778,11 @@ function ChangeView({
 
   if (change.change === 'deleted') {
     return (
-      <div className="border-l-2 border-destructive/60 pl-2">
-        <p className="mb-0.5 text-2xs font-medium uppercase tracking-wide text-destructive">
+      <div className="border-l-2 border-diff-remove-border pl-2.5">
+        <p className="mb-0.5 text-xs font-medium text-destructive">
           {label} removed
         </p>
-        <div className="text-sm opacity-70">
+        <div className={cn(DIFF_TEXT, 'opacity-70')}>
           <ProposedBlockView block={base} />
         </div>
       </div>
@@ -783,15 +793,15 @@ function ChangeView({
   // else (level, columns, locked …) is named instead of rendered.
   const nonTextFields = change.fields.filter((field) => field !== 'html');
   return (
-    <div className="border-l-2 border-info/60 pl-2">
-      <p className="mb-0.5 text-2xs font-medium uppercase tracking-wide text-info">
+    <div className="border-l-2 border-info pl-2.5">
+      <p className="mb-0.5 text-xs font-medium text-info">
         {label} changed
       </p>
       {change.fields.includes('html') && (
-        <div className="text-sm">
+        <div className={DIFF_TEXT}>
           <ProposedRewriteView
-            before={blockText(base)}
-            after={blockText(target)}
+            before={base}
+            after={target}
             block={target ?? base}
           />
         </div>
@@ -802,5 +812,47 @@ function ChangeView({
         </p>
       )}
     </div>
+  );
+}
+
+/** Characters of prose a moved block's snippet keeps; a widget counts as a few. */
+const SNIPPET_CHARS = 60;
+const WIDGET_CHARS = 4;
+
+/**
+ * The start of a block, for a one-line "moved" summary, with its equations and
+ * citations drawn as the page draws them rather than flattened to `▦`.
+ */
+function BlockSnippet({ block }: { block: Block | null }) {
+  const { pieces, cut } = useMemo(() => {
+    const table = createWidgetTable();
+    const all = diffPieces(diffableText(block, table).replace(/\s+/g, ' '), table);
+    const kept: DiffPiece[] = [];
+    let left = SNIPPET_CHARS;
+    for (const piece of all) {
+      if (left <= 0) return { pieces: kept, cut: true };
+      if (piece.kind === 'widget') {
+        kept.push(piece);
+        left -= WIDGET_CHARS;
+      } else if (piece.text.length > left) {
+        kept.push({ kind: 'text', text: piece.text.slice(0, left).trimEnd() });
+        return { pieces: kept, cut: true };
+      } else {
+        kept.push(piece);
+        left -= piece.text.length;
+      }
+    }
+    return { pieces: kept, cut: false };
+  }, [block]);
+  if (!pieces.length) return null;
+  return (
+    <>
+      {' — “'}
+      {pieces.map((piece, index) =>
+        piece.kind === 'text' ? piece.text : <WidgetChip key={index} child={piece.child} />,
+      )}
+      {cut && '…'}
+      {'”'}
+    </>
   );
 }

@@ -125,8 +125,8 @@ export function JsonPanel() {
 
       <Textarea
         className={cn(
-          'min-h-[200px] flex-1 resize-none border-muted bg-muted/30 font-mono text-xs focus:bg-background',
-          parseError && 'border-destructive/60',
+          'min-h-[200px] flex-1 resize-none font-mono text-xs leading-relaxed',
+          parseError && 'ring-destructive',
         )}
         value={text}
         spellCheck={false}

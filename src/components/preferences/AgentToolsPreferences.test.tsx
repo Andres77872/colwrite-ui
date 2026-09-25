@@ -31,6 +31,7 @@ function tool(
       options.effective_enabled ?? options.enabled ?? options.default_enabled ?? true,
     modes: options.modes ?? ['assistant', 'rewrite'],
     requires_sources: options.requires_sources ?? [],
+    requires_tools: options.requires_tools ?? [],
     source_policy: options.source_policy ?? 'all',
   };
 }
@@ -128,9 +129,10 @@ const SETTINGS: AgentToolSettings = {
 
 function renderPreferences(
   updateSettings: AgentToolsContextValue['updateSettings'] = async () => SETTINGS,
+  catalog: AgentToolSettings = SETTINGS,
 ) {
   const value: AgentToolsContextValue = {
-    settings: SETTINGS,
+    settings: catalog,
     loading: false,
     loaded: true,
     error: null,
@@ -169,12 +171,15 @@ describe('AgentToolsPreferences', () => {
     ]) {
       expect(screen.getByRole('heading', { name: category })).toBeTruthy();
     }
-    expect(screen.getAllByRole('checkbox')).toHaveLength(19);
-    const semanticSource = screen.getByRole('checkbox', {
+    expect(screen.getAllByRole('switch')).toHaveLength(19);
+    const semanticSource = screen.getByRole('switch', {
       name: /^Semantic Scholar Opt-in/,
     }) as HTMLButtonElement;
     expect(semanticSource.dataset.state).toBe('unchecked');
     expect(screen.getByText(/not a document-privacy switch/i)).toBeTruthy();
+    // Exceptions only: no per-row "Available to agent" and no account chip.
+    expect(screen.queryByText('Available to agent')).toBeNull();
+    expect(screen.queryByText('Account-wide')).toBeNull();
   });
 
   it('saves source and individual research-tool selections', async () => {
@@ -182,10 +187,10 @@ describe('AgentToolsPreferences', () => {
     renderPreferences(updateSettings);
 
     fireEvent.click(
-      screen.getByRole('checkbox', { name: /^Semantic Scholar Opt-in/ }),
+      screen.getByRole('switch', { name: /^Semantic Scholar Opt-in/ }),
     );
     fireEvent.click(
-      screen.getByRole('checkbox', { name: /^Search Semantic ScholarSearch/ }),
+      screen.getByRole('switch', { name: /^Search Semantic ScholarSearch/ }),
     );
     fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
 
@@ -205,7 +210,7 @@ describe('AgentToolsPreferences', () => {
     });
     renderPreferences(updateSettings);
 
-    const semantic = screen.getByRole('checkbox', {
+    const semantic = screen.getByRole('switch', {
       name: /^Semantic Scholar Opt-in/,
     });
     fireEvent.click(semantic);
@@ -213,5 +218,101 @@ describe('AgentToolsPreferences', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain('Storage unavailable');
     expect((semantic as HTMLButtonElement).dataset.state).toBe('checked');
+  });
+});
+
+const CAPABILITY_SETTINGS: AgentToolSettings = {
+  ...SETTINGS,
+  skills: [{ id: 'editor-tools', label: 'Editor tools', description: 'Use structured editing safely.',
+    default_enabled: true, enabled: true, available: true, effective_enabled: true,
+    requires_tools: ['doc_read', 'doc_edit'], modes: ['assistant'], unavailable_reason: null }],
+  features: [{ id: 'subagents', label: 'Research subagents', description: 'Delegate independent research.',
+    default_enabled: false, enabled: false, available: true, effective_enabled: false,
+    requires_tools: [], modes: ['assistant'], unavailable_reason: null }],
+};
+
+describe('skills and planning preferences', () => {
+  it('saves explicit opt-out and opt-in selections with the tool draft', async () => {
+    const update = vi.fn(async () => CAPABILITY_SETTINGS);
+    renderPreferences(update, CAPABILITY_SETTINGS);
+    fireEvent.click(screen.getByRole('switch', { name: /^Editor tools/ }));
+    fireEvent.click(screen.getByRole('switch', { name: /^Research subagents/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      skills: { 'editor-tools': false }, features: { subagents: true },
+    })));
+  });
+  it('shows unmet tool dependencies immediately and resets feature defaults', () => {
+    renderPreferences(undefined, CAPABILITY_SETTINGS);
+    fireEvent.click(screen.getByRole('switch', { name: /^Reload document snapshot/ }));
+    expect(screen.getByText('Needs Reload document snapshot')).toBeTruthy();
+    fireEvent.click(screen.getByRole('switch', { name: /^Research subagents/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }));
+    expect(screen.getByRole('switch', { name: /^Research subagents/ }).getAttribute('aria-checked')).toBe('false');
+    expect(screen.queryByText('Needs Reload document snapshot')).toBeNull();
+  });
+});
+
+
+describe('dependency availability', () => {
+  const researchSettings: AgentToolSettings = {
+    ...SETTINGS,
+    categories: [{ id: 'research', label: 'Research tools', description: 'Research', tools: [
+      tool('web_search', 'Search the web', 'research', {
+        enabled: false, requires_sources: ['arxiv', 'semantic_scholar'], source_policy: 'any',
+      }),
+      tool('web_read', 'Read web pages', 'research', { requires_tools: ['web_search'] }),
+    ] }],
+    skills: [{ id: 'research', label: 'Research guide', description: 'Guide a research task.',
+      default_enabled: true, enabled: true, available: true, effective_enabled: false,
+      requires_tools: ['web_read'], modes: ['assistant'], unavailable_reason: null }],
+  };
+
+  it('propagates draft tool and source dependencies through tools and skills', () => {
+    renderPreferences(undefined, researchSettings);
+    expect(screen.getByText('Needs Search the web')).toBeTruthy();
+    expect(screen.getByText('Needs Read web pages')).toBeTruthy();
+    expect(screen.getByText('Enable Search the web and their dependencies below.')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('switch', { name: /^Search the web/ }));
+    expect(screen.queryByText(/^Needs /)).toBeNull();
+
+    fireEvent.click(screen.getByRole('switch', { name: /^arXiv/ }));
+    expect(screen.getByText('Needs arXiv or Semantic Scholar')).toBeTruthy();
+    expect(screen.getByText('Needs Search the web')).toBeTruthy();
+    expect(screen.getByText('Needs Read web pages')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('switch', { name: /^Semantic Scholar Opt-in/ }));
+    expect(screen.queryByText(/^Needs /)).toBeNull();
+    expect(screen.getByRole('switch', { name: /^Research guide/ }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('keeps a selected skill ineffective when a required tool is unavailable', () => {
+    const catalog = structuredClone(researchSettings);
+    catalog.categories[0].tools[0].enabled = true;
+    catalog.categories[0].tools[0].available = false;
+    renderPreferences(undefined, catalog);
+    expect((screen.getByRole('switch', { name: /^Search the web/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Needs Search the web')).toBeTruthy();
+    expect(screen.getByText('Needs Read web pages')).toBeTruthy();
+  });
+
+  it.each(['skills', 'features'] as const)('makes unavailable %s explanations visible and linked to the disabled switch', (kind) => {
+    const reason = 'Web research is not configured on this server.';
+    const catalog: AgentToolSettings = { ...SETTINGS, [kind]: [{
+      id: 'unavailable', label: 'Research capability', description: 'Research the public web.',
+      default_enabled: true, enabled: true, available: false, effective_enabled: false,
+      requires_tools: ['web_search'], modes: ['assistant'], unavailable_reason: reason,
+    }] };
+    renderPreferences(undefined, catalog);
+    const control = screen.getByRole('switch', { name: /^Research capability/ }) as HTMLButtonElement;
+    const explanation = screen.getByText(reason);
+    expect(control.disabled).toBe(true);
+    expect(control.getAttribute('aria-describedby')?.split(' ')).toContain(explanation.id);
+    expect(explanation.className).not.toContain('line-clamp');
+    expect(explanation.hidden).toBe(false);
+    expect(screen.queryByText(/^Needs /)).toBeNull();
+    fireEvent.click(control);
+    expect(control.getAttribute('aria-checked')).toBe('true');
   });
 });

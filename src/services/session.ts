@@ -11,23 +11,6 @@ const REASON_MESSAGES: Record<UnauthorizedReason, string> = {
   forbidden: 'This account does not have access to this workspace.',
 };
 
-/**
- * Purge a `session_token` cookie written by an older build of this app.
- *
- * The real session cookie is HttpOnly and set by the server — JavaScript can
- * neither read nor delete it. This only removes the non-HttpOnly cookie of the
- * same name that we used to write ourselves. Leaving one behind is not
- * harmless: the browser would send both on every request and the server keeps
- * whichever it parses last, so a stale value can shadow the live session.
- */
-export function clearLegacySessionCookie(): void {
-  try {
-    document.cookie = 'session_token=; Path=/; Max-Age=0; SameSite=Lax';
-  } catch {
-    // no-op
-  }
-}
-
 // Throttle unauthorized prompts to avoid spamming the UI multiple times in quick succession
 let lastUnauthorizedAt = 0;
 const UNAUTHORIZED_THROTTLE_MS = 1500;

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { EditorContext, SlashMenu } from 'colwrite-ui';
+import { EditorContext, LiteralEditor, SlashMenu } from 'colwrite-ui';
 
 // SlashMenu is the "/" insert menu: block types, then the inline widgets
 // (citation, equation, table, chart, AI passage), filtered as you type.
@@ -45,17 +45,26 @@ function Opened({ text, place = 'top' }: { text: string; place?: 'top' | 'bottom
     return () => cancelAnimationFrame(raf);
   }, [text]);
 
+  const blocks = [{ id: 'p1', type: 'paragraph' as const, html: text, children: [], columns: 1 }];
   const editor = {
-    refs: { current: refs.current },
+    // The ref object itself: effects fill it after render.
+    refs,
     updateHtml: noop,
     addParagraphChild: () => 'new-child',
+    removeParagraphChild: noop,
+    setBlockKind: noop,
+    insertBlocksAfter: (_after: string, inserted: Array<{ id: string }>) => inserted.map((block) => block.id),
+    // The menu opens only on a paragraph, and checks by looking the block up —
+    // so this must find it, or the open event is ignored and the card is empty.
+    getBlock: (id: string) => blocks.find((block) => block.id === id),
     documentId: 'doc-1',
+    loadingDocumentId: null,
     createRemote: () => Promise.reject(new Error('not reachable from a preview')),
-    blocks: [{ id: 'p1', type: 'paragraph' as const, html: text }],
+    blocks,
   };
 
   return (
-    <EditorContext.Provider value={editor as unknown as Ctx}>
+    <LiteralEditor value={editor as unknown as Ctx}>
       <div className="w-full p-4">
         {/* Named scale steps only — an arbitrary value like pt-[34rem] is not in
             the prebuilt stylesheet unless some source already used that exact
@@ -76,7 +85,7 @@ function Opened({ text, place = 'top' }: { text: string; place?: 'top' | 'bottom
         </div>
         <SlashMenu />
       </div>
-    </EditorContext.Provider>
+    </LiteralEditor>
   );
 }
 
@@ -88,10 +97,12 @@ export function Open() {
 // clamps to the viewport so it is never partly off-screen. Driving that with a
 // caret near the bottom is the only way to see it — there is no prop.
 //
-// Note there is deliberately no "filtering" cell: the query lives in the menu's
-// OWN search field (it is reset to '' on every open), not in the block text, so
-// a cell that types "/tab" into the paragraph renders exactly the same list as
-// this one. That cell existed and was removed for being a duplicate.
+// There is no "filtering" cell. One existed and was removed when the query
+// lived in the menu's own search field, because typing "/tab" into the
+// paragraph left the list unchanged. The menu now filters on the text after the
+// slash (`/h2`, `/cite`), re-reading it on `input` and `selectionchange`, so a
+// cell that opens on "/" and then appends a query to the same text node would
+// show a filtered list. It has not been added yet.
 export function FlipsAboveTheCaret() {
   return <Opened text="/" place="bottom" />;
 }

@@ -19,8 +19,22 @@ vi.mock('@/services/semanticScholar', async (importOriginal) => {
   };
 });
 
+vi.mock('@/components/preferences', () => ({
+  useAgentTools: () => ({ isSourceEnabled: () => true }),
+}));
+
+// Only the open document's id is read here; a real EditorProvider would drag
+// the whole document-loading stack into a test about a search panel.
+vi.mock('@/editor', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/editor')>()),
+  useEditor: () => ({ documentId: null }),
+}));
+
 import type { ClaimAssessment, ClaimVerdict } from '@/services/semanticScholar';
-import { SemanticScholarPanel } from './SemanticScholarPanel';
+import { ToastProvider } from '@/components/ui/toast';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { PanelsProvider } from '../panelsContext';
+import { ResearchPanel } from '../ResearchPanel';
 import { TOOLS } from '../toolsConfig';
 
 const paper = {
@@ -85,7 +99,33 @@ function claimAssessment(overrides: Partial<ClaimAssessment> = {}): ClaimAssessm
   };
 }
 
+function renderPanel() {
+  return render(
+    <ToastProvider>
+      <TooltipProvider>
+        <PanelsProvider>
+          <ResearchPanel />
+        </PanelsProvider>
+      </TooltipProvider>
+    </ToastProvider>,
+  );
+}
+
+/** Radix menus open on pointer down, not click. */
+function openMenu(title: string) {
+  fireEvent.pointerDown(screen.getByRole('button', { name: `More actions for ${title}` }), {
+    button: 0,
+    ctrlKey: false,
+  });
+}
+
+function switchToClaims() {
+  fireEvent.click(screen.getByRole('radio', { name: 'Check a claim' }));
+}
+
 beforeEach(() => {
+  localStorage.clear();
+  localStorage.setItem('panels.researchSource', JSON.stringify('semantic-scholar'));
   serviceMocks.search.mockReset();
   serviceMocks.graph.mockReset();
   serviceMocks.recommendations.mockReset();
@@ -126,7 +166,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 async function runSearch() {
-  render(<SemanticScholarPanel />);
+  renderPanel();
   fireEvent.change(screen.getByPlaceholderText('Search Semantic Scholar…'), {
     target: { value: 'evidence retrieval' },
   });
@@ -135,15 +175,16 @@ async function runSearch() {
 }
 
 async function runAssessment(claim = 'The intervention improves outcomes.') {
-  render(<SemanticScholarPanel />);
-  fireEvent.change(screen.getByPlaceholderText('Search Semantic Scholar…'), {
+  renderPanel();
+  switchToClaims();
+  fireEvent.change(screen.getByPlaceholderText('State one claim to check…'), {
     target: { value: claim },
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Assess the search text as a claim' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Check claim' }));
   await screen.findByRole('region', { name: 'Claim assessment' });
 }
 
-describe('SemanticScholarPanel', () => {
+describe('Research on Semantic Scholar', () => {
   it('is registered as a first-class tool', () => {
     expect(TOOLS.find((tool) => tool.id === 'semantic-scholar')).toMatchObject({
       label: 'Semantic Scholar',
@@ -151,7 +192,7 @@ describe('SemanticScholarPanel', () => {
   });
 
   it('uses a bundled provider mark and the required attributed backlink', () => {
-    const { container } = render(<SemanticScholarPanel />);
+    const { container } = renderPanel();
 
     expect(
       screen.getByRole('link', { name: 'Provider attribution' }).getAttribute('href'),
@@ -169,21 +210,23 @@ describe('SemanticScholarPanel', () => {
       limit: 20,
     });
     expect(
-      screen.getByRole('link', { name: /Semantic Scholar/ }).getAttribute('href'),
-    ).toBe(paper.url);
-    expect(
       screen.getByText(
         'Semantic Scholar TLDR: Fallback summary when the abstract is unavailable.',
       ),
     ).toBeTruthy();
-    expect(screen.getByRole('link', { name: /DOI/ }).getAttribute('href')).toBe(
+    // Links out of the app live behind the row's "…" menu.
+    openMenu('Semantic evidence');
+    expect(
+      screen.getByRole('menuitem', { name: /Open on Semantic Scholar/ }).getAttribute('href'),
+    ).toBe(paper.url);
+    expect(screen.getByRole('menuitem', { name: /DOI/ }).getAttribute('href')).toBe(
       'https://doi.org/10.1000/panel',
     );
   });
 
   it('sends compact search filters through the typed service contract', async () => {
-    render(<SemanticScholarPanel />);
-    fireEvent.click(screen.getByText('Search filters'));
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Search filters' }));
     fireEvent.change(screen.getByLabelText('Publication year filter'), {
       target: { value: '2020-2026' },
     });
@@ -213,7 +256,8 @@ describe('SemanticScholarPanel', () => {
   it('loads citation graph evidence and recommendations from paper actions', async () => {
     await runSearch();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show citations for Semantic evidence' }));
+    openMenu('Semantic evidence');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Papers citing this' }));
     await screen.findByText('Citing work');
     expect(serviceMocks.graph).toHaveBeenCalledWith({
       paperId: paper.paper_id,
@@ -227,9 +271,12 @@ describe('SemanticScholarPanel', () => {
     expect(screen.getByText(/Evidence candidate:.*candidate passage/)).toBeTruthy();
     expect(screen.getByText(/Evidence candidate:.*second source-provided/)).toBeTruthy();
 
+    // The graph is a drill-in: back to the results, then on to related work.
     fireEvent.click(
-      screen.getByRole('button', { name: 'Show related papers for Semantic evidence' }),
+      screen.getByRole('button', { name: 'Close Papers that cite this work for Semantic evidence' }),
     );
+    openMenu('Semantic evidence');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Related papers' }));
     await screen.findByText('Related work');
     expect(serviceMocks.recommendations).toHaveBeenCalledWith({
       paperId: paper.paper_id,
@@ -327,7 +374,8 @@ describe('SemanticScholarPanel', () => {
     serviceMocks.graph.mockRejectedValueOnce(new Error('Graph rate limited'));
     await runSearch();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show references for Semantic evidence' }));
+    openMenu('Semantic evidence');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Its references' }));
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Graph rate limited'));
     expect(screen.getAllByText('Semantic evidence').length).toBeGreaterThan(0);
   });
@@ -390,14 +438,16 @@ describe('SemanticScholarPanel', () => {
   });
 
   it('uses a separate optional year filter for claim assessment', async () => {
-    render(<SemanticScholarPanel />);
-    fireEvent.change(screen.getByPlaceholderText('Search Semantic Scholar…'), {
+    renderPanel();
+    switchToClaims();
+    fireEvent.change(screen.getByPlaceholderText('State one claim to check…'), {
       target: { value: 'A time-bounded claim' },
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Search filters' }));
     fireEvent.change(screen.getByLabelText('Limit claim sources to year'), {
       target: { value: '2021-2025' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Assess the search text as a claim' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check claim' }));
     await screen.findByRole('region', { name: 'Claim assessment' });
 
     expect(serviceMocks.assessment).toHaveBeenCalledWith({
@@ -445,9 +495,10 @@ describe('SemanticScholarPanel', () => {
         }),
       );
 
-    render(<SemanticScholarPanel />);
-    const field = screen.getByPlaceholderText('Search Semantic Scholar…');
-    const assess = screen.getByRole('button', { name: 'Assess the search text as a claim' });
+    renderPanel();
+    switchToClaims();
+    const field = screen.getByPlaceholderText('State one claim to check…');
+    const assess = screen.getByRole('button', { name: 'Check claim' });
     fireEvent.change(field, { target: { value: 'First claim' } });
     fireEvent.click(assess);
     fireEvent.change(field, { target: { value: 'Second claim' } });
@@ -462,21 +513,28 @@ describe('SemanticScholarPanel', () => {
       resolveFirst(claimAssessment({ claim: 'First claim', rationale: 'Stale rationale.' }));
     });
     expect(screen.queryByText('Stale rationale.')).toBeNull();
-    expect(screen.getByText('Second claim')).toBeTruthy();
+    // The claim box is a textarea now, and holds the same words.
+    expect(screen.getByText('Second claim', { ignore: 'script, style, textarea' })).toBeTruthy();
   });
 
   it('shows claim-assessment failures without discarding paper search controls', async () => {
     serviceMocks.assessment.mockRejectedValueOnce(new Error('Assessment provider unavailable'));
-    render(<SemanticScholarPanel />);
-    fireEvent.change(screen.getByPlaceholderText('Search Semantic Scholar…'), {
+    renderPanel();
+    switchToClaims();
+    fireEvent.change(screen.getByPlaceholderText('State one claim to check…'), {
       target: { value: 'A precise claim' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Assess the search text as a claim' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check claim' }));
 
     expect((await screen.findByRole('alert')).textContent).toContain(
       'Assessment provider unavailable',
     );
+    // Paper search is one switch away, with the claim still in the box.
+    fireEvent.click(screen.getByRole('radio', { name: 'Find papers' }));
     expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy();
+    expect((screen.getByPlaceholderText('Search Semantic Scholar…') as HTMLInputElement).value).toBe(
+      'A precise claim',
+    );
   });
 
   it('shows open-access license and disclaimer on paper cards', async () => {

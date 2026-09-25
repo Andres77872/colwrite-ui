@@ -15,7 +15,9 @@ npm ci
 
 ## Scripts
 
-- `npm run dev` — start the Vite development server with HMR.
+- `npm run dev` — start the Vite development server with HMR. It listens on every interface, so it
+  opens on this machine (`http://localhost:5173`) and from other devices on the local network
+  (the `Network:` URL Vite prints). Use `npm run dev -- --host 127.0.0.1` to keep it local-only.
 - `npm run typecheck` — typecheck the application, Vite/Vitest configuration, and test setup.
 - `npm run lint -- --max-warnings=0` — run ESLint 10 with zero warnings allowed.
 - `npm test` — run the Vitest suite once.
@@ -39,7 +41,9 @@ The project uses Vite 8’s default Rolldown/Oxc toolchain, Lightning CSS proces
 or legacy browser target is configured.
 
 The development proxy keeps `/api/agent` unchanged and rewrites other `/api` requests by removing
-the `/api` prefix. Environment variables supplied by the OS take precedence, while `.env` provides
+the `/api` prefix. Signing in from another device over plain HTTP needs the API's `DEV_MODE=true`; browsers
+only keep its `Secure` session cookies on HTTPS or `localhost`. Local agent engines (Claude Code,
+Codex) stay available only from this machine. Environment variables supplied by the OS take precedence, while `.env` provides
 local fallback values. Copy `.env.example` to `.env` when local overrides are needed; the supported
 variables, defaults, and browser-exposure notes are documented in
 [`.env.example`](./.env.example).

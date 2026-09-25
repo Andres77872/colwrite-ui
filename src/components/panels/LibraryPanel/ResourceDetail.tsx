@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { ChatMarkdown } from '@/components/editor/ChatAssistant/ChatMarkdown';
 import { Alert } from '@/components/ui/alert';
 import { Spinner } from '@/components/ui/spinner';
 import { useConfirm } from '@/components/ui/confirmContext';
@@ -23,6 +30,7 @@ import {
   FolderInput,
   Link2,
   Link2Off,
+  MoreHorizontal,
   RefreshCw,
   Trash2,
 } from 'lucide-react';
@@ -70,6 +78,7 @@ export function ResourceDetail({
   highlight,
   jumpToOffset,
   onBack,
+  backLabel = 'Back to the file list',
   onOpenMove,
   moveButtonRef,
   onMove,
@@ -84,6 +93,8 @@ export function ResourceDetail({
   /** Character offset to open at, when arrived at from a match. */
   jumpToOffset?: number;
   onBack: () => void;
+  /** Where the back arrow goes, as its accessible name. */
+  backLabel?: string;
   onOpenMove: () => void;
   moveButtonRef?: RefObject<HTMLButtonElement | null>;
   onMove: (resourceId: number, target?: ResourceAttachmentTarget) => Promise<ResourceItem>;
@@ -266,93 +277,97 @@ export function ResourceDetail({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2.5">
-      <div className="flex items-start gap-1.5">
+      {/* One header row: the way back and the file's title. */}
+      <div className="-ml-1 flex items-start gap-1 pt-1.5">
         <Button
           ref={backRef}
-          variant="ghost"
+          variant="icon"
           size="icon-sm"
-          className="mt-0.5 shrink-0"
+          className="shrink-0"
           onClick={onBack}
-          aria-label="Back to the file list"
+          aria-label={backLabel}
         >
-          <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+          <ArrowLeft aria-hidden="true" />
         </Button>
-        <div className="min-w-0 flex-1">
-          {/* A heading, not a paragraph: this is the title of the view, and the
-              panel's own <h2> is the only other heading above it. */}
+        <div className="min-w-0 flex-1 pt-1">
+          {/* A heading, not a paragraph: this is the title of the view. */}
           <h3 className="text-sm font-semibold leading-snug break-words">
             {resource.title || resource.filename}
           </h3>
           {resource.title && (
-            <p className="truncate text-2xs text-muted-foreground">{resource.filename}</p>
+            <p className="truncate text-xs text-muted-foreground">{resource.filename}</p>
           )}
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
         <ExtractionBadge
           status={resource.extraction_status}
           error={resource.extraction_error}
           describe
         />
-        <p className="text-2xs text-muted-foreground">{facts.join(' · ')}</p>
+        <span>{facts.join(' · ')}</span>
+        <span aria-hidden="true">·</span>
+        <span>
+          {resource.collection_name ? (
+            <>
+              In <span className="text-foreground">{resource.collection_name}</span>
+            </>
+          ) : resource.document_name ? (
+            <>
+              Attached to <span className="text-foreground">{resource.document_name}</span>
+            </>
+          ) : (
+            'Unfiled'
+          )}
+        </span>
       </div>
 
-      <p className="text-2xs text-muted-foreground">
-        {resource.collection_name ? (
-          <>
-            Folder: <span className="font-medium text-foreground">{resource.collection_name}</span>
-          </>
-        ) : resource.document_name ? (
-          <>
-            Attached to: <span className="font-medium text-foreground">{resource.document_name}</span>
-          </>
-        ) : (
-          <span className="font-medium text-foreground">Unfiled</span>
-        )}
-      </p>
-
-      <div className="flex flex-wrap gap-1.5">
-        <Button variant="outline" size="sm" asChild>
+      {/* A quiet action row: the everyday actions as ghost buttons, the
+          destructive one behind "…" where it cannot be hit by accident. */}
+      <div className="-ml-2 flex flex-wrap items-center gap-0.5">
+        <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" asChild>
           <a href={resourceContentUrl(resource.id)} target="_blank" rel="noreferrer noopener">
             <ExternalLink aria-hidden="true" />
             Open PDF
           </a>
         </Button>
+        {documentId && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+            disabled={busy}
+            onClick={() => void onAttach(!attachedHere)}
+          >
+            {attachedHere ? <Link2Off aria-hidden="true" /> : <Link2 aria-hidden="true" />}
+            {attachedHere ? 'Detach to Unfiled' : 'Attach to page'}
+          </Button>
+        )}
         <Button
           ref={moveButtonRef}
-          variant="outline"
+          variant="ghost"
           size="sm"
+          className="text-muted-foreground hover:text-foreground"
           disabled={busy}
           onClick={onOpenMove}
         >
           <FolderInput aria-hidden="true" />
           Move…
         </Button>
-        {documentId && (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => void onAttach(!attachedHere)}
-          >
-            {attachedHere ? <Link2Off aria-hidden="true" /> : <Link2 aria-hidden="true" />}
-            {attachedHere ? 'Detach to Unfiled' : 'Attach to current document'}
-          </Button>
-        )}
-        {/* Pushed to its own end of the row and destructive at rest. It used to
-            be a ghost button among three neutral ones that only turned red on
-            hover, so the one irreversible action here read as the mildest. */}
-        <Button
-          variant="outline"
-          size="sm"
-          className="ml-auto border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-          disabled={busy}
-          onClick={() => void onDelete()}
-        >
-          <Trash2 aria-hidden="true" />
-          Delete
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="icon" size="icon-sm" disabled={busy} aria-label={`More actions for ${resource.filename}`}>
+              <MoreHorizontal aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem destructive onSelect={() => void onDelete()}>
+              <Trash2 aria-hidden="true" />
+              Delete file
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {!readable && (
@@ -380,9 +395,9 @@ export function ResourceDetail({
       )}
 
       {readable && (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border">
-          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-border bg-muted/30 px-2.5 py-1.5">
-            <p className="text-2xs font-medium text-muted-foreground">
+        <div className="flex min-h-0 flex-1 flex-col pt-1">
+          <div className="flex min-h-7 flex-wrap items-center justify-between gap-x-2 gap-y-1">
+            <p className="text-xs font-medium text-muted-foreground">
               Extracted text
               {/* A reader has no use for a character offset. What they want to
                   know is whether they are looking at the start of the file. */}
@@ -391,11 +406,11 @@ export function ResourceDetail({
             <div className="flex items-center gap-1">
               {matches.length > 0 && (
                 <>
-                  <span className="text-2xs tabular-nums text-muted-foreground">
+                  <span className="text-xs tabular-nums text-muted-foreground">
                     {activeMatch + 1} of {matches.length}
                   </span>
                   <Button
-                    variant="ghost"
+                    variant="icon"
                     size="icon-xs"
                     onClick={() => stepMatch(-1)}
                     aria-label="Previous match"
@@ -403,7 +418,7 @@ export function ResourceDetail({
                     <ChevronUp aria-hidden="true" />
                   </Button>
                   <Button
-                    variant="ghost"
+                    variant="icon"
                     size="icon-xs"
                     onClick={() => stepMatch(1)}
                     aria-label="Next match"
@@ -422,19 +437,28 @@ export function ResourceDetail({
 
           <div
             ref={textPaneRef}
-            className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2"
+            className="-mr-2 min-h-0 flex-1 overflow-y-auto py-1 pr-2"
             aria-busy={text.loading}
           >
             {text.error ? (
               <Alert variant="destructive">{text.error}</Alert>
             ) : text.text ? (
-              <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/90">
-                <Highlighted
+              matches.length > 0 ? (
+                // Arrived from a search: the plain text, so every match can be
+                // marked and stepped through.
+                <p className="whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">
+                  <Highlighted
+                    text={text.text}
+                    needle={highlight ?? ''}
+                    activeIndex={activeMatch}
+                  />
+                </p>
+              ) : (
+                <ChatMarkdown
                   text={text.text}
-                  needle={highlight ?? ''}
-                  activeIndex={activeMatch}
+                  className="break-words text-sm leading-6 text-muted-foreground [&_h3]:text-md [&_h4]:text-sm [&_h5]:text-sm"
                 />
-              </p>
+              )
             ) : text.loading ? (
               // The one announcement of this. There used to be a second,
               // sr-only copy alongside it, so a screen reader said it twice.
@@ -461,7 +485,6 @@ export function ResourceDetail({
           </div>
         </div>
       )}
-
     </div>
   );
 }

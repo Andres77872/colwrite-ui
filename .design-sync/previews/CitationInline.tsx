@@ -3,6 +3,7 @@ import {
   BibliographyContext,
   CitationInline,
   EditorContext,
+  LiteralEditor,
   agentToolsAllEnabled,
   buildBibliography,
 } from 'colwrite-ui';
@@ -57,13 +58,13 @@ function Sentence({ children, cites }: { children: React.ReactNode; cites: Child
   ];
 
   return (
-    <EditorContext.Provider value={{ blocks, documentId: 'doc-1', refs } as unknown as Ctx}>
+    <LiteralEditor value={{ blocks, documentId: 'doc-1', refs } as unknown as Ctx}>
       <BibliographyContext.Provider value={buildBibliography(blocks)}>
         <AgentToolsContext.Provider value={agentToolsAllEnabled}>
           <p className="max-w-[40rem] text-sm leading-relaxed text-muted-foreground">{children}</p>
         </AgentToolsContext.Provider>
       </BibliographyContext.Provider>
-    </EditorContext.Provider>
+    </LiteralEditor>
   );
 }
 

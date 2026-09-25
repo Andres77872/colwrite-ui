@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { serializeEditableHtml } from './editableHtml';
+import { hideFigureGaps, normalizeEditableHtml, serializeEditableHtml } from './editableHtml';
 
 function rootWith(innerHTML: string): HTMLDivElement {
   const root = document.createElement('div');
@@ -8,51 +8,54 @@ function rootWith(innerHTML: string): HTMLDivElement {
 }
 
 describe('serializeEditableHtml', () => {
-  it('persists the struck-through original of a pending suggestion, not the suggestion UI', () => {
-    // Typing elsewhere in the paragraph while the toolbar streams a
-    // suggestion serializes through here; the ✓/✕/■ buttons must not reach
-    // the document.
-    const root = rootWith(
-      'before <span class="ai-suggest">' +
-        '<span class="ai-original">old text</span>' +
-        '<span class="ai-generated">streamed new text</span>' +
-        '<span class="ai-controls"><button>✓</button><button>✕</button></span>' +
-        '</span> after',
-    );
-    expect(serializeEditableHtml(root)).toBe('before old text after');
-  });
-
-  it('keeps markup nested inside the original', () => {
-    const root = rootWith(
-      '<span class="ai-suggest">' +
-        '<span class="ai-original">a <strong>bold</strong> phrase</span>' +
-        '<span class="ai-generated">replacement</span>' +
-        '</span>',
-    );
-    expect(serializeEditableHtml(root)).toBe('a <strong>bold</strong> phrase');
-  });
-
-  it('drops a suggestion whose original is already gone', () => {
-    const root = rootWith(
-      'keep <span class="ai-suggest"><span class="ai-generated">orphan</span></span> text',
-    );
-    expect(serializeEditableHtml(root)).toBe('keep  text');
-  });
-
-  it('leaves the live DOM untouched while it serializes', () => {
-    const root = rootWith(
-      '<span class="ai-suggest"><span class="ai-original">old</span></span>',
-    );
-    serializeEditableHtml(root);
-    expect(root.querySelector('.ai-suggest')).not.toBeNull();
-  });
-
-  it('still empties widget placeholders alongside the suggestion handling', () => {
+  it('empties widget placeholders, keeping only the placeholder span', () => {
     const root = rootWith(
       '<span data-child-id="c1"><button>widget chrome</button></span>',
     );
     expect(serializeEditableHtml(root)).toBe(
       '<span data-child-id="c1" contenteditable="false"></span>',
+    );
+  });
+
+  it('keeps the text and markup around a widget', () => {
+    const root = rootWith(
+      'a <strong>bold</strong> <span data-child-id="c1">[1]</span> phrase',
+    );
+    expect(serializeEditableHtml(root)).toBe(
+      'a <strong>bold</strong> <span data-child-id="c1" contenteditable="false"></span> phrase',
+    );
+  });
+
+  it('leaves the live DOM untouched while it serializes', () => {
+    const root = rootWith('<span data-child-id="c1"><button>widget chrome</button></span>');
+    serializeEditableHtml(root);
+    expect(root.querySelector('button')).not.toBeNull();
+  });
+
+  it('hides the space after a figure without changing the text or the html', () => {
+    const html = 'Table <span data-child-id="t1" contenteditable="false"></span> compares perplexity.';
+    const root = rootWith(html);
+    root.querySelector('[data-child-id]')!.innerHTML = '<div class="inline-figure">table</div>';
+    const text = root.textContent;
+
+    hideFigureGaps(root);
+
+    expect(root.querySelector('[data-figure-gap]')?.textContent).toBe(' ');
+    expect(root.textContent).toBe(text);
+    expect(serializeEditableHtml(root)).toBe(html);
+  });
+
+  it('leaves the space after an inline widget alone', () => {
+    const root = rootWith('as shown <span data-child-id="c1">[1]</span> here');
+    hideFigureGaps(root);
+    expect(root.querySelector('[data-figure-gap]')).toBeNull();
+  });
+});
+
+describe('normalizeEditableHtml', () => {
+  it('writes html the way serialization would', () => {
+    expect(normalizeEditableHtml("a <span data-child-id='c1'></span>&amp; b")).toBe(
+      'a <span data-child-id="c1" contenteditable="false"></span>&amp; b',
     );
   });
 });

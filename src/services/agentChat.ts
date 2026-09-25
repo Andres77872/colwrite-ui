@@ -1,4 +1,6 @@
-import { buildUrl, ensureRefreshed } from './api';
+import { streamAgentSession, type ResumeAgentRun } from './agentSessionChat';
+import type { AgentEngineId } from './agentEngines';
+import { buildUrl, ensureRefreshed, getRefreshGeneration } from './api';
 import { ApiError, problemRetryAfter } from './contracts';
 import { abortableSleep, isRetryableProblem, retryDelayMs } from './retry';
 import { emitRequireLogin } from './session';
@@ -23,13 +25,40 @@ import { parseSSEStream, type SSEEventHandlers } from './streamParser';
  */
 export type AgentChatMode = 'assistant' | 'rewrite';
 
+/**
+ * Where the author is working, sent next to the message rather than pasted
+ * into it. The server keeps only blocks the model can see.
+ */
+export type AgentChatContext = {
+  /** The block the caret was in. */
+  block_id?: string;
+  /** Text the author had selected (at most 4,000 characters). */
+  selection?: { block_id: string; text: string };
+  /** Blocks referenced in the message as `#this/<id>` (at most 20). */
+  block_ids?: string[];
+};
+
 export type AgentChatParams = {
   message: string;
   document_id: string;
   chat_id?: string | null;
   thread_id?: number | null;
   model?: string | null;
+  /**
+   * Which backend runs the turn. Omitted means the server default
+   * (`legacy`). `claude` / `codex` exist only on a local API reached from
+   * the same machine; the server rejects them otherwise with an `ENGINE_*`
+   * error and never falls back to another engine.
+   */
+  engine?: AgentEngineId | null;
   mode?: AgentChatMode;
+  /**
+   * One-shot run with no chat behind it (rewrite mode only). The editor's
+   * inline AI uses this: each rewrite used to become a single-message chat
+   * cluttering the document's chat list.
+   */
+  ephemeral?: boolean;
+  context?: AgentChatContext;
 };
 
 export type AgentChatResult = {
@@ -45,19 +74,22 @@ export type AgentChatResult = {
 };
 
 export type AgentChatRetryOptions = {
-  /** Total attempts including the first one. Default 3. */
+  /** Total attempts including the first one. Default 8 for WS; 3 for legacy SSE. */
   maxAttempts?: number;
-  /** First backoff delay; later attempts triple it. Default 500 ms. */
+  /** First backoff delay. Default 500 ms; WS doubles it up to 10 seconds. */
   baseDelayMs?: number;
 };
 
 export type AgentChatOptions = {
   signal?: AbortSignal;
+  /** Detach on navigation; explicit Stop uses signal.reason === 'cancel'. */
+  abortBehavior?: 'cancel' | 'detach';
+  resume?: ResumeAgentRun;
+  onRunStarted?: (run: ResumeAgentRun) => void;
   /**
-   * Backoff policy for the retryable problems the endpoint rejects with before
-   * the stream opens (rate limiting, history still being prepared). Applied by
-   * default; pass `{maxAttempts: 1}` to disable. Once the stream is open the
-   * turn is never replayed, so a reply cannot be delivered twice.
+   * WebSocket reconnect policy. The saved event cursor and idempotent start
+   * key prevent duplicate generation. Legacy SSE retries only retryable HTTP
+   * failures before its response stream opens. `{maxAttempts: 1}` disables retry.
    */
   retry?: AgentChatRetryOptions;
 };
@@ -98,7 +130,7 @@ async function apiErrorFromResponse(res: Response): Promise<ApiError> {
  * Returns an `AgentChatResult` with the `chatId`, `threadId`, and `usage`
  * captured from the terminal `event: done` SSE payload.
  */
-export async function streamAgentChat(
+export async function streamAgentChatSSE(
   params: AgentChatParams,
   handlers: SSEEventHandlers,
   opts?: AgentChatOptions,
@@ -116,8 +148,17 @@ export async function streamAgentChat(
   if (params.model != null) {
     body.model = params.model;
   }
+  if (params.engine != null) {
+    body.engine = params.engine;
+  }
   if (params.mode != null) {
     body.mode = params.mode;
+  }
+  if (params.ephemeral) {
+    body.ephemeral = true;
+  }
+  if (params.context) {
+    body.context = params.context;
   }
 
   // This endpoint streams, so it cannot go through `request()` in api.ts —
@@ -138,8 +179,9 @@ export async function streamAgentChat(
   const baseDelayMs = opts?.retry?.baseDelayMs ?? 500;
 
   for (let attempt = 1; ; attempt += 1) {
+    const observedGeneration = getRefreshGeneration();
     let res = await send();
-    if (res.status === 401 && (await ensureRefreshed())) {
+    if (res.status === 401 && (await ensureRefreshed(observedGeneration))) {
       res = await send();
     }
 
@@ -185,4 +227,13 @@ export async function streamAgentChat(
 
     return { ...capturedResult, terminal: parsed.terminal };
   }
+}
+
+/** The application's default transport is a durable WebSocket session. */
+export function streamAgentChat(
+  params: AgentChatParams,
+  handlers: SSEEventHandlers,
+  opts?: AgentChatOptions,
+): Promise<AgentChatResult> {
+  return streamAgentSession(params, handlers, opts);
 }

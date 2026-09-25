@@ -15,17 +15,18 @@ AgentActivity({ runs, live }: { runs: ToolRun[]; live: boolean })
 type ToolRun = {
   id: string
   tool: string                          // key into TOOL_META
-  state: 'running' | 'done' | 'error'
+  state: 'running' | 'done' | 'error' | 'interrupted'
   durationMs?: number
   detail?: string                       // one line about what the call did
 }
 ```
 
-`live` is true while the turn is still running: it forces the list open and
-shows the running verb of the **last** run. Once the turn finishes it collapses
-to a single "N steps" line — the detail matters while you are waiting and becomes
-noise once the answer is there. That collapsed line is the resting state, not a
-truncated render.
+One quiet line per call — state icon, the tool's label, its duration — that
+opens onto the call's query, input and output. `live` is true while the turn is
+still running: every line stays in view and the running one names what it is
+doing ("Searching Semantic Scholar…") in a shimmer. Once the turn finishes, more
+than three steps fold under a single "Used N tools" line. A failed call's cause
+is always printed under its line, never behind a click.
 
 Returns `null` for an empty `runs` array.
 

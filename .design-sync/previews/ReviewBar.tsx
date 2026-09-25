@@ -1,4 +1,4 @@
-import { ConfirmProvider, EditorContext, ProposalsContext, ReviewBar } from 'colwrite-ui';
+import { ConfirmProvider, EditorContext, LiteralEditor, ProposalsContext, ReviewBar } from 'colwrite-ui';
 
 // ReviewBar is the sticky summary of everything the assistant is waiting on.
 // Individual changes are reviewed in place (see ChangeCard), but a batch can
@@ -55,13 +55,13 @@ const BASE = {
 function Frame({ proposals, children }: { proposals?: Record<string, unknown>; children: React.ReactNode }) {
   return (
     <ConfirmProvider>
-      <EditorContext.Provider
+      <LiteralEditor
         value={{ blocks: BLOCKS, switchTo: () => Promise.resolve() } as unknown as ECtx}
       >
         <ProposalsContext.Provider value={{ ...BASE, ...proposals } as unknown as PCtx}>
           <div className="w-[46rem]">{children}</div>
         </ProposalsContext.Provider>
-      </EditorContext.Provider>
+      </LiteralEditor>
     </ConfirmProvider>
   );
 }

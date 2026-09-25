@@ -79,11 +79,11 @@ export function StatTiles({ summary }: { summary: UsageSummary }) {
     <section aria-label="Usage summary">
       {/* Six across from `lg`, not `xl`: the page is capped at max-w-5xl, so the
           whole lg range was rendering a 3×2 block with room for one row. */}
-      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {tiles(summary).map((tile) => (
           <li
             key={tile.label}
-            className="rounded-xl border border-border/60 bg-card p-3"
+            className="rounded-lg bg-subtle p-3"
           >
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <tile.icon aria-hidden="true" className="h-3.5 w-3.5" />

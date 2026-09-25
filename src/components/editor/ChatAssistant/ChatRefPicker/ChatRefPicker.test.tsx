@@ -33,6 +33,12 @@ function PickerHarness() {
       <button type="button" onClick={() => pickerRef.current?.openAt(0)}>
         Open picker
       </button>
+      <button type="button" onClick={() => setInput((value) => `${value}${'hel'}`)}>
+        Type hel
+      </button>
+      <button type="button" onClick={() => setInput((value) => `${value}${'zzz'}`)}>
+        Type zzz
+      </button>
       <ChatRefPicker
         ref={pickerRef}
         getHost={() => hostRef.current}
@@ -66,7 +72,7 @@ describe('ChatRefPicker callbacks', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open picker' }));
     // The picker is a listbox, not a menu: focus stays in the composer and the
     // highlight is virtual, so its entries are options.
-    fireEvent.click(screen.getByRole('option', { name: /reference current document/i }));
+    fireEvent.click(screen.getByRole('option', { name: /this document/i }));
     fireEvent.click(screen.getByRole('option', { name: /hello paragraph/i }));
 
     await act(async () => {
@@ -74,5 +80,55 @@ describe('ChatRefPicker callbacks', () => {
     });
     await waitFor(() => expect(screen.getByLabelText('input value').textContent).toBe('#this/p1 '));
     expect(screen.getByLabelText('caret index').textContent).toBe('9');
+  });
+
+  it('filters this page by what is typed after the #, and picks with Enter', async () => {
+    localStorage.setItem(
+      'colwrite:doc:local',
+      JSON.stringify({
+        documentId: null,
+        doc: {
+          version: 1,
+          blocks: [
+            { id: 'h1', type: 'heading', level: 1, html: 'Introduction', children: [] },
+            { id: 'p1', type: 'paragraph', html: 'Hello paragraph', children: [] },
+            { id: 'p2', type: 'paragraph', html: 'Another one', children: [] },
+          ],
+        },
+      }),
+    );
+    render(
+      <EditorProvider>
+        <PickerHarness />
+      </EditorProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open picker' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Type hel' }));
+
+    // One flat list of matches: typing did not close the picker.
+    const options = await screen.findAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual(['Hello paragraphText']);
+    expect(screen.getByText('This page')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: 'Enter' });
+      await new Promise(requestAnimationFrame);
+    });
+    // The reference replaces the `#` and the query typed after it.
+    await waitFor(() => expect(screen.getByLabelText('input value').textContent).toBe('#this/p1 '));
+  });
+
+  it('lets go when nothing matches, so the text stays ordinary', async () => {
+    render(
+      <EditorProvider>
+        <PickerHarness />
+      </EditorProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open picker' }));
+    expect(screen.getByRole('option', { name: /this document/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Type zzz' }));
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+    expect(screen.getByLabelText('input value').textContent).toBe('#zzz');
   });
 });

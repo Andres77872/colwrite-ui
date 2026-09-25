@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/editor', () => ({
+  DEFAULT_DOCUMENT_TITLE: 'Untitled document',
+  focusPageTitle: () => true,
   useEditor: () => ({
     listRemote: mocks.listRemote,
     switchTo: mocks.switchTo,
@@ -84,8 +86,13 @@ afterEach(() => {
   cleanup();
 });
 
+/** Radix menus open on pointerdown, not click. */
+function openMenu(name: string) {
+  fireEvent.pointerDown(screen.getByRole('button', { name }), { button: 0, ctrlKey: false });
+}
+
 describe('DocumentsMenu listing controls', () => {
-  it('defaults to last-updated newest, renders all six sorts, and shows the update time', async () => {
+  it('defaults to last-updated newest and offers all six sorts in the section menu', async () => {
     render(<DocumentsMenu />);
 
     await waitFor(() => expect(mocks.listRemote).toHaveBeenCalledTimes(1));
@@ -100,9 +107,9 @@ describe('DocumentsMenu listing controls', () => {
       { signal: expect.any(AbortSignal) },
     );
 
-    const sort = screen.getByRole('combobox', { name: 'Sort documents' });
-    expect((sort as HTMLSelectElement).value).toBe('updated_at:desc');
-    expect(within(sort).getAllByRole('option').map((option) => option.textContent)).toEqual([
+    openMenu('Document list options');
+    const sorts = screen.getAllByRole('menuitemradio');
+    expect(sorts.map((option) => option.textContent)).toEqual([
       'Last updated — newest',
       'Last updated — oldest',
       'Date created — newest',
@@ -110,35 +117,41 @@ describe('DocumentsMenu listing controls', () => {
       'Title — A–Z',
       'Title — Z–A',
     ]);
-
-    expect(await screen.findByText('Research notes')).toBeTruthy();
-    const timestamp = screen.getByText(/^Updated /);
-    expect(timestamp.tagName).toBe('TIME');
-    expect(timestamp.getAttribute('datetime')).toBe(updatedAt);
+    expect(sorts[0].getAttribute('aria-checked')).toBe('true');
   });
 
-  it('resets pagination when sort or debounced search changes', async () => {
+  it('keeps each row to its title, with the update time in its tooltip', async () => {
+    render(<DocumentsMenu />);
+
+    const row = (await screen.findByText('Research notes')).closest('button')!;
+    expect(row.getAttribute('title')).toMatch(/Edited /);
+    expect(screen.queryByText(/^Edited /)).toBeNull();
+  });
+
+  it('loads more rows in place and resets to one page when sort or filter changes', async () => {
     mocks.listRemote.mockResolvedValue(listResult([documentSummary('One')], 12));
     render(<DocumentsMenu />);
 
-    await screen.findByText(/Page 1 of 2/);
-    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
     await waitFor(() => {
-      expect(mocks.listRemote.mock.calls.at(-1)?.[0]).toMatchObject({ page: 2 });
+      // Every loaded page in one request, so a refetch never drops rows.
+      expect(mocks.listRemote.mock.calls.at(-1)?.[0]).toMatchObject({ page: 1, limit: 20 });
     });
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Sort documents' }), {
-      target: { value: 'name:asc' },
-    });
+    openMenu('Document list options');
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Title — A–Z' }));
     await waitFor(() => {
       expect(mocks.listRemote.mock.calls.at(-1)?.[0]).toMatchObject({
         page: 1,
+        limit: 10,
         sortBy: 'name',
         sortOrder: 'asc',
       });
     });
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Search documents' }), {
+    openMenu('Document list options');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Filter documents' }));
+    fireEvent.change(await screen.findByRole('searchbox', { name: 'Search documents' }), {
       target: { value: '  chapter  ' },
     });
     await waitFor(() => {
@@ -149,6 +162,39 @@ describe('DocumentsMenu listing controls', () => {
         sortOrder: 'asc',
       });
     });
+  });
+
+  it('moves focus into the filter it reveals, so typing goes there', async () => {
+    render(<DocumentsMenu />);
+    await screen.findByText('Research notes');
+
+    openMenu('Document list options');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Filter documents' }));
+    const field = await screen.findByRole('searchbox', { name: 'Search documents' });
+    await waitFor(() => expect(document.activeElement).toBe(field));
+  });
+
+  it('shows a page with no name of its own as a muted "Untitled"', async () => {
+    mocks.listRemote.mockResolvedValue(listResult([documentSummary('Untitled document', 'blank')]));
+    render(<DocumentsMenu />);
+
+    const label = await screen.findByText('Untitled');
+    expect(label.className).toContain('text-muted-foreground');
+    expect(screen.queryByText('Untitled document')).toBeNull();
+  });
+
+  it('offers the filter on its own once the list is long', async () => {
+    mocks.listRemote.mockResolvedValue(listResult([documentSummary('One')], 9));
+    render(<DocumentsMenu />);
+
+    expect(await screen.findByRole('searchbox', { name: 'Search documents' })).toBeTruthy();
+  });
+
+  it('hides the filter while the list is short', async () => {
+    render(<DocumentsMenu />);
+
+    await screen.findByText('Research notes');
+    expect(screen.queryByRole('searchbox', { name: 'Search documents' })).toBeNull();
   });
 
   it('aborts superseded requests and ignores a stale response that resolves last', async () => {
@@ -164,9 +210,8 @@ describe('DocumentsMenu listing controls', () => {
     await waitFor(() => expect(mocks.listRemote).toHaveBeenCalledTimes(1));
     const firstSignal = mocks.listRemote.mock.calls[0][1].signal as AbortSignal;
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Sort documents' }), {
-      target: { value: 'created_at:asc' },
-    });
+    openMenu('Document list options');
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Date created — oldest' }));
 
     expect(await screen.findByText('Newest result')).toBeTruthy();
     expect(firstSignal.aborted).toBe(true);
@@ -183,14 +228,10 @@ describe('DocumentsMenu listing controls', () => {
     await screen.findByText('Research notes');
     mocks.listRemote.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh document list' }));
+    openMenu('Document list options');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh' }));
     await waitFor(() => expect(mocks.listRemote).toHaveBeenCalledTimes(1));
 
-    await waitFor(() => {
-      expect(
-        (screen.getByRole('button', { name: 'Refresh document list' }) as HTMLButtonElement).disabled,
-      ).toBe(false);
-    });
     mocks.editorState.documentListRevision += 1;
     view.rerender(<DocumentsMenu />);
     await waitFor(() => expect(mocks.listRemote).toHaveBeenCalledTimes(2));
@@ -209,9 +250,21 @@ describe('DocumentsMenu listing controls', () => {
         blocks: [],
       });
     });
-    expect(mocks.toast).toHaveBeenCalledWith({
-      title: 'Document created',
-      variant: 'success',
+  });
+
+  it('reports a failed create instead of failing silently', async () => {
+    mocks.createAndSwitch.mockRejectedValueOnce(new Error('Quota reached'));
+    render(<DocumentsMenu />);
+    await screen.findByText('Research notes');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New document' }));
+
+    await waitFor(() => {
+      expect(mocks.toast).toHaveBeenCalledWith({
+        title: 'Could not create document',
+        description: 'Quota reached',
+        variant: 'error',
+      });
     });
   });
 
@@ -230,14 +283,29 @@ describe('DocumentsMenu listing controls', () => {
     const pending = screen.getByText('Pending').closest('button');
     expect(current?.getAttribute('aria-current')).toBe('true');
     expect(pending?.getAttribute('aria-current')).toBeNull();
-    expect(screen.getByText('Opening…')).toBeTruthy();
+    expect(within(pending!).getByText('Opening…')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'New document' }).hasAttribute('disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: 'Delete Current' }).hasAttribute('disabled')).toBe(true);
+
+    openMenu('Actions for Current');
+    expect(screen.getByRole('menuitem', { name: 'Delete' }).getAttribute('aria-disabled')).toBe('true');
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
 
     fireEvent.click(pending!);
     expect(mocks.switchTo).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Other').closest('button')!);
     expect(mocks.switchTo).toHaveBeenCalledWith('other');
+  });
+
+  it('deletes from the row menu after confirming', async () => {
+    mocks.confirm.mockResolvedValueOnce(true);
+    render(<DocumentsMenu />);
+    await screen.findByText('Research notes');
+
+    openMenu('Actions for Research notes');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
+
+    await waitFor(() => expect(mocks.deleteRemote).toHaveBeenCalledWith('research-notes'));
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ destructive: true }));
   });
 
   it('dismisses a mobile drawer callback only after the requested document commits', async () => {

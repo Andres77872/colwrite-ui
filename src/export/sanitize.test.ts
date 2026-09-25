@@ -41,9 +41,11 @@ describe('sanitizeEditableHtml', () => {
     );
   });
 
-  it('preserves widget placeholder spans by default', () => {
+  it('preserves widget placeholder spans by default, in the canonical non-editable form', () => {
+    // The API's sanitizer writes the same shape; without the attribute a
+    // loaded placeholder was editable until its paragraph was re-serialized.
     expect(sanitizeEditableHtml('x<span data-child-id="abc123"></span>y')).toBe(
-      'x<span data-child-id="abc123"></span>y',
+      'x<span data-child-id="abc123" contenteditable="false"></span>y',
     );
   });
 

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useEditor } from '@/editor';
 import { APP_NAME } from '@/components/common/Brand';
 import type { AppView } from './viewContextState';
+import { displayTitle } from './displayTitle';
 
 /**
  * Keep the tab title describing what is on screen.
@@ -12,11 +13,12 @@ import type { AppView } from './viewContextState';
  */
 export function useDocumentTitle(view: AppView) {
   const { doc } = useEditor();
-  const name = doc?.name?.trim();
+  // "Untitled", as the sidebar and breadcrumb call a page with no name.
+  const name = doc ? displayTitle(doc.name) : '';
 
   useEffect(() => {
     if (view === 'profile') {
-      document.title = `Profile and usage — ${APP_NAME}`;
+      document.title = `Settings — ${APP_NAME}`;
       return;
     }
     document.title = name ? `${name} — ${APP_NAME}` : APP_NAME;

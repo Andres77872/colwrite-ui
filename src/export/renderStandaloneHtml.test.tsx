@@ -192,6 +192,31 @@ describe('renderStandaloneHtml', () => {
     expect(html.match(/class="reference-item"/g)).toHaveLength(1);
   });
 
+  it('sets an author–year citation off from the word before it, as the page does', () => {
+    const doc: Doc = {
+      version: 1,
+      name: 'Spacing',
+      citationStyle: 'author-year',
+      blocks: [
+        {
+          id: 'p',
+          type: 'paragraph',
+          html: 'lengths<span data-child-id="c1"></span> and (<span data-child-id="c2"></span>)',
+          children: [
+            { id: 'c1', type: 'citation', keys: ['k1'], sources: [{ key: 'k1', authors: 'Ashish Vaswani', year: '2017' }] },
+            { id: 'c2', type: 'citation', keys: ['k1'], sources: [{ key: 'k1', authors: 'Ashish Vaswani', year: '2017' }] },
+          ],
+        },
+      ],
+    };
+
+    const text = renderStandaloneHtml(doc, options, snapshot).replace(/<[^>]*>/g, '');
+
+    expect(text).toContain('lengths (Vaswani');
+    // Already opened by a bracket: no gap forced inside it.
+    expect(text).toContain('and ((Vaswani');
+  });
+
   it('omits the reference list, and every link into it, when asked to', () => {
     const html = renderStandaloneHtml(
       kitchenSink(),
@@ -248,5 +273,131 @@ describe('sanitizeInlineFragment', () => {
     expect(result.html).not.toContain('javascript:');
     expect(result.html).not.toContain('evil.test');
     expect(result.html).not.toContain('color:red');
+  });
+});
+
+describe('structured figures', () => {
+  const spec = (caption: string | null) =>
+    JSON.stringify({
+      ...(caption ? { caption } : {}),
+      nodes: [
+        { id: 'q', label: 'Q', role: 'input' },
+        { id: 'attn', label: 'Attention $\\alpha$', role: 'attention' },
+      ],
+      edges: ['q -> attn'],
+    });
+
+  function figureDoc(): Doc {
+    return {
+      version: 1,
+      name: 'Figures',
+      blocks: [
+        { id: 'f1', type: 'code', language: 'figure', text: spec('The first figure.') },
+        { id: 'f2', type: 'code', language: 'figure', text: spec(null) },
+        { id: 'f3', type: 'code', language: 'figure', text: spec('The second figure, $x^2$.') },
+        { id: 'bad', type: 'code', language: 'figure', text: '{"nodes": [' },
+      ],
+    };
+  }
+
+  it('draws figures as SVG with numbered captions, and prints a broken spec as code', () => {
+    const html = renderStandaloneHtml(figureDoc(), options, snapshot);
+    expect(html.match(/<figure class="export-block export-figure"/g)).toHaveLength(3);
+    expect(html).toContain('Figure 1.');
+    expect(html).toContain('Figure 2.');
+    // The uncaptioned figure is not numbered, so the third one is Figure 2.
+    expect(html).not.toContain('Figure 3.');
+    expect(html).toContain('The second figure,');
+    expect(html).toContain('class="katex"');
+    // Nothing the author wrote goes missing: the broken spec is printed.
+    expect(html).toContain('<pre class="export-block export-code" data-language="figure"><code>{&quot;nodes&quot;: [</code></pre>');
+    // Pattern ids are unique per figure on the page.
+    expect(html).toContain('cwfig-f1');
+    expect(html).toContain('cwfig-f3');
+  });
+
+  it('sizes only the figure\'s own svg, never the KaTeX glyphs drawn inside it', () => {
+    const doc: Doc = {
+      version: 1,
+      blocks: [
+        {
+          id: 'f',
+          type: 'code',
+          language: 'figure',
+          text: JSON.stringify({
+            caption: 'Root $\\sqrt{d_k}$ and $\\overrightarrow{AB}$',
+            nodes: [{ id: 's', label: 'Scale $\\frac{1}{\\sqrt{d_k}}$' }],
+          }),
+        },
+      ],
+    };
+    for (const profile of ['paper', 'editor-faithful'] as const) {
+      const page = new DOMParser().parseFromString(
+        renderStandaloneHtml(doc, { ...options, profile }, snapshot),
+        'text/html',
+      );
+      const figure = page.querySelector('figure.export-figure')!;
+      const root = figure.querySelector('.figure-canvas > svg')!;
+      // Radicals and over-arrows are inner <svg>s with viewBoxes like
+      // 400000×1080: any `height:auto` on them collapses them to a hairline.
+      const glyphs = [...figure.querySelectorAll('.katex svg')];
+      expect(glyphs.length).toBeGreaterThanOrEqual(3);
+      expect(figure.querySelector('figcaption .katex svg')).not.toBeNull();
+      expect(figure.querySelector('foreignObject .katex svg')).not.toBeNull();
+      // A parsed document has no style sheets in jsdom; the live one does.
+      const style = document.createElement('style');
+      style.textContent = page.querySelector('style')!.textContent;
+      document.head.append(style);
+      try {
+        const sizing = [...style.sheet!.cssRules]
+          .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule)
+          .filter((rule) => !/\.katex/.test(rule.selectorText) && (rule.style.height || rule.style.width));
+        expect(sizing.some((rule) => root.matches(rule.selectorText))).toBe(true);
+        for (const glyph of glyphs) {
+          expect(sizing.filter((rule) => glyph.matches(rule.selectorText)).map((rule) => rule.selectorText)).toEqual([]);
+        }
+      } finally {
+        style.remove();
+      }
+    }
+  });
+
+  it('never loads a remote image, which the page\'s CSP would block anyway', () => {
+    const doc: Doc = {
+      version: 1,
+      blocks: [
+        {
+          id: 'f',
+          type: 'code',
+          language: 'figure',
+          text: JSON.stringify({
+            nodes: [{ id: 'i', shape: 'image', src: 'https://example.com/a.png?leak=1', label: 'photo' }, 'b'],
+            edges: ['i -> b'],
+          }),
+        },
+      ],
+    };
+    const html = renderStandaloneHtml(doc, options, snapshot);
+    expect(html).toContain('img-src data:;');
+    expect(html).toContain('<figure class="export-block export-figure"');
+    expect(html).not.toMatch(/<image\b/);
+    expect(html).not.toContain('leak=1');
+  });
+
+  it('never lets markup in a label reach the page', () => {
+    const doc: Doc = {
+      version: 1,
+      blocks: [
+        {
+          id: 'x',
+          type: 'code',
+          language: 'figure',
+          text: JSON.stringify({ nodes: [{ id: 'a', label: '<img src=x onerror=alert(1)>' }] }),
+        },
+      ],
+    };
+    const html = renderStandaloneHtml(doc, options, snapshot);
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });
 });

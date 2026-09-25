@@ -1,4 +1,4 @@
-import { ConfirmProvider, DocumentsMenu, EditorContext, ToastProvider } from 'colwrite-ui';
+import { ConfirmProvider, DocumentsMenu, EditorContext, LiteralEditor, ToastProvider } from 'colwrite-ui';
 
 // DocumentsMenu is the document list: search, sort, paging, open, create and
 // delete. Everything it shows comes from `listRemote`, which is an editor
@@ -78,9 +78,9 @@ function Frame({ value, children }: { value?: Record<string, unknown>; children:
   return (
     <ToastProvider>
       <ConfirmProvider>
-        <EditorContext.Provider value={{ ...BASE, ...value } as unknown as Ctx}>
+        <LiteralEditor value={{ ...BASE, ...value } as unknown as Ctx}>
           <div className="w-[26rem]">{children}</div>
-        </EditorContext.Provider>
+        </LiteralEditor>
       </ConfirmProvider>
     </ToastProvider>
   );

@@ -5,7 +5,8 @@ import type {
   DocumentListResult,
 } from '../services';
 import type { ApplyPatchResult } from './docOps';
-import type { Block, Doc, ParagraphChild, ToolOperation } from './types';
+import type { Block, CitationSource, Doc, ParagraphChild, ToolOperation } from './types';
+import type { BlockKindId } from './blockKinds';
 
 /**
  * State slices of the editor. A keystroke replaces `doc`/`blocks`, so this
@@ -55,6 +56,8 @@ export type EditorStateContextValue = {
   restoreEpoch: number;
   hasAnyRemoteDocs: boolean | null;
   recentlyChanged: ReadonlySet<string>;
+  /** Blocks selected as whole blocks, in document order. */
+  selectedBlockIds: readonly string[];
 };
 
 /**
@@ -91,6 +94,45 @@ export type EditorActionsContextValue = {
   updateParagraphChild: (blockId: string, childId: string, next: Partial<ParagraphChild>) => void;
   removeParagraphChild: (blockId: string, childId: string) => void;
   setHeadingLevel: (id: string, level: 1 | 2 | 3) => void;
+  /**
+   * Turn a block into another kind in place, keeping its id and text. `html`
+   * replaces the text in the same undo step.
+   */
+  setBlockKind: (id: string, kind: BlockKindId, options?: { html?: string }) => void;
+  /** A block as it is now, read at call time without subscribing to state. */
+  getBlock: (id: string) => Block | undefined;
+  /** Add sources to the library, or refresh entries with the same key. */
+  upsertSources: (sources: readonly CitationSource[]) => void;
+  /** Edit a library entry's metadata. */
+  updateSource: (key: string, patch: Partial<CitationSource>) => void;
+  /** Remove a library entry; citations keep their own copies. */
+  removeSource: (key: string) => void;
+  /** Set (or clear, with null) the document's citation style. */
+  setCitationStyle: (style: Doc['citationStyle'] | null) => void;
+  /** Tick or untick a to-do item. */
+  setChecked: (id: string, checked: boolean) => void;
+  /** Nest (+1) or un-nest (-1) a list item. Returns whether it moved. */
+  indentBlock: (id: string, delta: 1 | -1) => boolean;
+  updateCodeText: (id: string, text: string) => void;
+  setCodeLanguage: (id: string, language: string | null) => void;
+  /** Copy a block (and its widgets) below itself; returns the copy's id. */
+  duplicateBlock: (id: string) => string | null;
+  /**
+   * Replace blocks with others as one undo step; the new ones land where the
+   * first replaced block was. Locked blocks are kept. Returns inserted ids.
+   */
+  replaceBlocks: (ids: readonly string[], blocks: readonly Block[]) => string[];
+  /** Delete several blocks as one undo step. Locked blocks are kept. */
+  removeBlocks: (ids: readonly string[]) => void;
+  /**
+   * Insert ready-made blocks after `afterId` (at the start when null) as one
+   * undo step. Returns the inserted ids.
+   */
+  insertBlocksAfter: (
+    afterId: string | null,
+    blocks: readonly Block[],
+    options?: { replaceAnchor?: boolean },
+  ) => string[];
   exec: (cmd: string, value?: string) => void;
   /**
    * Block order at call time, without subscribing to `blocks`. Arrow-key
@@ -155,6 +197,9 @@ export type EditorActionsContextValue = {
     options?: { persist?: boolean; base?: Block[] },
   ) => ApplyPatchResult;
   markRecentlyChanged: (ids: string[]) => void;
+  /** Select whole blocks (replaces the current block selection). */
+  selectBlocks: (ids: readonly string[]) => void;
+  clearBlockSelection: () => void;
 };
 
 export type EditorContextValue = EditorStateContextValue & EditorActionsContextValue;
@@ -183,6 +228,11 @@ export function useEditorActions(): EditorActionsContextValue {
   const context = useContext(EditorActionsContext);
   if (!context) throw new Error('useEditorActions must be used within EditorProvider');
   return context;
+}
+
+/** The editor's actions, or null outside an editor (a panel rendered on its own). */
+export function useOptionalEditorActions(): EditorActionsContextValue | null {
+  return useContext(EditorActionsContext);
 }
 
 export function useActiveBlock(): EditorActiveBlockContextValue {

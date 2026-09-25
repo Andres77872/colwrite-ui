@@ -86,6 +86,27 @@ export function safeChartColors(colors: string[] | undefined): string[] | undefi
   return safe.some(Boolean) ? safe : undefined;
 }
 
+/**
+ * A drawn diagram, accepted into an export only if it still looks like
+ * Mermaid's strict-mode output.
+ *
+ * Mermaid already runs its SVG through DOMPurify, and the exported page's CSP
+ * forbids scripts; this is the third line, and it fails closed — anything
+ * that is not a lone `<svg>` or that carries a script, an event handler or a
+ * `javascript:` URL is dropped, and the export prints the source instead.
+ */
+export function safeDiagramSvg(svg: string | undefined): string | null {
+  if (!svg) return null;
+  const trimmed = svg.trim();
+  if (!/^<svg\b/i.test(trimmed) || !/<\/svg>$/i.test(trimmed)) return null;
+  if (/<\s*(?:script|iframe|object|embed)\b/i.test(trimmed)) return null;
+  // Inside a tag only: a label reading "online = true" or "javascript: the
+  // good parts" is text between tags and must not reject the drawing.
+  if (/<[^>]*\son[a-z]+\s*=/i.test(trimmed)) return null;
+  if (/<[^>]*=\s*["']?\s*(?:java|vb)script\s*:/i.test(trimmed)) return null;
+  return trimmed;
+}
+
 function attributes(node: ParseNode): Map<string, string> {
   return new Map((node.attrs ?? []).map((attribute) => [attribute.name.toLowerCase(), attribute.value]));
 }
@@ -126,7 +147,12 @@ function renderSanitized(input: string, mode: PlaceholderMode): SanitizedFragmen
       const childId = (attrs.get('data-child-id') ?? '').trim();
       if (!childId || childId.length > 128) return '';
       if (mode === 'drop') return '';
-      if (mode === 'preserve') return `<span data-child-id="${escapeAttribute(childId)}"></span>`;
+      // Same canonical form the API's sanitizer writes. Without the
+      // attribute a loaded placeholder was editable until its paragraph was
+      // next serialized, and text typed into it was then silently erased.
+      if (mode === 'preserve') {
+        return `<span data-child-id="${escapeAttribute(childId)}" contenteditable="false"></span>`;
+      }
       const index = placeholderIds.push(childId) - 1;
       return `\uE000${index}\uE001`;
     }

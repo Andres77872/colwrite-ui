@@ -1,7 +1,7 @@
 import { Textarea } from 'colwrite-ui';
 import { AlertCircle } from 'lucide-react';
 
-// Ported from ProfileHeader's About field, CollectionDialogs' Description,
+// Ported from the Settings About field, CollectionDialogs' Description,
 // AiBeatInline's prompt box and JsonPanel's editor — the four shapes this
 // takes in the app: prose with a counter, an optional field, a mono editor,
 // and the invalid state JsonPanel writes with aria-invalid.

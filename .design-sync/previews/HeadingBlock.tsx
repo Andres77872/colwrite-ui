@@ -1,4 +1,4 @@
-import { EditorContext, HeadingBlock } from 'colwrite-ui';
+import { EditorContext, HeadingBlock, LiteralEditor } from 'colwrite-ui';
 
 // HeadingBlock renders one heading block of the document.
 //
@@ -30,9 +30,9 @@ const EDITOR = {
 
 function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <EditorContext.Provider value={EDITOR as unknown as Ctx}>
+    <LiteralEditor value={EDITOR as unknown as Ctx}>
       <div className="mx-auto w-full max-w-[var(--doc-measure)] px-6">{children}</div>
-    </EditorContext.Provider>
+    </LiteralEditor>
   );
 }
 

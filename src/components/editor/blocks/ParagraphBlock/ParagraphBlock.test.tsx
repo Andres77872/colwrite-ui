@@ -24,16 +24,22 @@ vi.mock('../../../common/Editable', () => ({
     html,
     ariaLabel,
     locked,
+    placeholder,
+    placeholderWhen,
   }: {
     html: string;
     ariaLabel: string;
     locked?: boolean;
+    placeholder?: string;
+    placeholderWhen?: string;
   }) => (
     <div
       role="textbox"
       aria-label={ariaLabel}
       aria-multiline="true"
       aria-readonly={locked || undefined}
+      data-placeholder={placeholder}
+      data-placeholder-when={placeholderWhen}
     >
       {html}
     </div>
@@ -66,5 +72,31 @@ describe('ParagraphBlock accessibility', () => {
 
     const textbox = screen.getByRole('textbox', { name: 'Paragraph' });
     expect(textbox.getAttribute('aria-readonly')).toBe('true');
+  });
+});
+
+describe('ParagraphBlock placeholders', () => {
+  const placeholderOf = (variant?: 'bullet' | 'todo' | 'quote' | 'callout') => {
+    render(
+      <ParagraphBlock
+        block={{ id: 'p1', type: 'paragraph', html: '', children: [], ...(variant ? { variant } : {}) }}
+        documentId={null}
+      />,
+    );
+    const field = screen.getByRole('textbox');
+    const hint = [field.getAttribute('data-placeholder'), field.getAttribute('data-placeholder-when')];
+    cleanup();
+    return hint;
+  };
+
+  it('hints at AI and commands only on the line being written', () => {
+    expect(placeholderOf()).toEqual(["Write, press 'space' for AI, '/' for commands…", 'focus']);
+  });
+
+  it('names what each empty list item, quote and callout is', () => {
+    expect(placeholderOf('bullet')).toEqual(['List', 'always']);
+    expect(placeholderOf('todo')).toEqual(['To-do', 'always']);
+    expect(placeholderOf('quote')).toEqual(['Empty quote', 'always']);
+    expect(placeholderOf('callout')).toEqual(['Type something…', 'always']);
   });
 });

@@ -1,6 +1,7 @@
 import * as React from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { cn } from "@/lib/utils"
+import { quietCloseAutoFocus, quietOpenAutoFocus, useTriggerCapture } from "./quietFocus"
 
 /**
  * Sheet — a dialog anchored to an edge rather than centred.
@@ -28,25 +29,35 @@ interface SheetContentProps
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ className, children, side = "left", title, ...props }, ref) => (
+>(({ className, children, side = "left", title, onOpenAutoFocus, onCloseAutoFocus, ...props }, ref) => {
+  const [getTrigger, setRefs] = useTriggerCapture(ref)
+  return (
   <DialogPrimitive.Portal>
     <DialogPrimitive.Overlay
       className={cn(
-        "fixed inset-0 bg-black/60 z-[var(--z-modal-backdrop)]",
+        "fixed inset-0 bg-scrim z-[var(--z-modal-backdrop)]",
         "data-[state=open]:animate-in data-[state=open]:fade-in-0",
         "data-[state=closed]:animate-out data-[state=closed]:fade-out-0"
       )}
     />
     <DialogPrimitive.Content
-      ref={ref}
+      ref={setRefs}
+      onOpenAutoFocus={(event) => {
+        onOpenAutoFocus?.(event)
+        quietOpenAutoFocus(event)
+      }}
+      onCloseAutoFocus={(event) => {
+        onCloseAutoFocus?.(event)
+        quietCloseAutoFocus(event, getTrigger())
+      }}
       className={cn(
-        "fixed inset-y-0 flex w-[min(20rem,85vw)] flex-col border-border bg-card shadow-xl outline-none",
+        "fixed inset-y-0 flex w-[min(20rem,85vw)] flex-col bg-card text-card-foreground shadow-xl outline-none forced-colors:border",
         "z-[var(--z-modal)]",
         "data-[state=open]:animate-in data-[state=open]:fade-in-0",
         "data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
         side === "left"
-          ? "left-0 border-r data-[state=open]:slide-in-from-left-2"
-          : "right-0 border-l data-[state=open]:slide-in-from-right-2",
+          ? "left-0 data-[state=open]:slide-in-from-left-2"
+          : "right-0 data-[state=open]:slide-in-from-right-2",
         className
       )}
       {...props}
@@ -55,7 +66,8 @@ const SheetContent = React.forwardRef<
       {children}
     </DialogPrimitive.Content>
   </DialogPrimitive.Portal>
-))
+  )
+})
 SheetContent.displayName = "SheetContent"
 
 export { Sheet, SheetTrigger, SheetClose, SheetContent }

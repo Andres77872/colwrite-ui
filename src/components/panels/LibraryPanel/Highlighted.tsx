@@ -38,8 +38,9 @@ export function Highlighted({
         key={at}
         {...(active ? { 'data-active-match': 'true' } : {})}
         className={cn(
-          'rounded-sm px-0.5 text-foreground',
-          active ? 'bg-warning ring-1 ring-warning' : 'bg-warning/40',
+          // Notion's yellow highlight; the match being stepped to is orange.
+          'rounded-xs px-0.5 text-foreground',
+          active ? 'bg-tint-orange ring-1 ring-tint-orange-fg/40' : 'bg-tint-yellow',
         )}
       >
         {text.slice(at, at + term.length)}

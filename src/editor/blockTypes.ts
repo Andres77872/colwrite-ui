@@ -25,6 +25,7 @@ const BLOCK_TYPE_LABELS: Record<Block['type'], string> = {
   paragraph: 'Paragraph',
   heading: 'Heading',
   divider: 'Divider',
+  code: 'Code',
 };
 
 export function blockTypeLabel(type: Block['type']): string {

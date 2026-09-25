@@ -23,11 +23,12 @@ interface ToastRecord extends Required<Pick<ToastOptions, 'title' | 'variant'>> 
   duration: number;
 }
 
-const VARIANT_META: Record<ToastVariant, { icon: typeof Info; accent: string; iconColor: string }> = {
-  default: { icon: Info, accent: 'border-border', iconColor: 'text-muted-foreground' },
-  success: { icon: CheckCircle2, accent: 'border-success/40', iconColor: 'text-success' },
-  error: { icon: XCircle, accent: 'border-destructive/40', iconColor: 'text-destructive' },
-  warning: { icon: AlertTriangle, accent: 'border-warning/40', iconColor: 'text-warning' },
+// The icon carries the variant; the card itself stays one neutral surface.
+const VARIANT_META: Record<ToastVariant, { icon: typeof Info; iconColor: string }> = {
+  default: { icon: Info, iconColor: 'text-muted-foreground' },
+  success: { icon: CheckCircle2, iconColor: 'text-success' },
+  error: { icon: XCircle, iconColor: 'text-destructive' },
+  warning: { icon: AlertTriangle, iconColor: 'text-warning' },
 };
 
 /**
@@ -107,16 +108,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 function ToastCard({ toast, onDismiss }: { toast: ToastRecord; onDismiss: () => void }) {
-  const { icon: Icon, accent, iconColor } = VARIANT_META[toast.variant];
+  const { icon: Icon, iconColor } = VARIANT_META[toast.variant];
   return (
     <div
       // Errors interrupt; everything else waits for a pause in speech.
       role={toast.variant === 'error' ? 'alert' : 'status'}
       aria-live={toast.variant === 'error' ? 'assertive' : 'polite'}
       className={cn(
-        'pointer-events-auto flex items-start gap-3 rounded-lg border bg-popover px-3 py-2.5 shadow-lg',
+        'pointer-events-auto flex items-start gap-2.5 rounded-lg bg-popover px-3 py-2.5 text-popover-foreground shadow-lg',
         'animate-in fade-in-0 slide-in-from-bottom-2',
-        accent,
       )}
     >
       <Icon aria-hidden="true" className={cn('mt-0.5 h-4 w-4 shrink-0', iconColor)} />
@@ -130,7 +130,7 @@ function ToastCard({ toast, onDismiss }: { toast: ToastRecord; onDismiss: () => 
         type="button"
         onClick={onDismiss}
         aria-label="Dismiss notification"
-        className="-mr-1 shrink-0 rounded-sm p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="-mr-1 shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
       >
         <X aria-hidden="true" className="h-3.5 w-3.5" />
       </button>

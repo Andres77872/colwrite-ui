@@ -8,6 +8,7 @@ import sourceSerif600 from '@fontsource/source-serif-4/files/source-serif-4-lati
 import sourceSerif700 from '@fontsource/source-serif-4/files/source-serif-4-latin-700-normal.woff2?inline';
 import type { DocumentExportOptions } from './types';
 import { katexOfflineCss } from './katexOfflineCss';
+import { FIGURE_MATH_CSS } from '@/lib/figure/constants';
 
 function pageDimensions(options: DocumentExportOptions): string {
   return `${options.page_size} ${options.orientation}`;
@@ -38,16 +39,17 @@ ${katexOfflineCss}
 :root{
   color-scheme:light;
   --color-card:#ffffff;
-  --color-chart-grid:#d8dee8;
+  --color-chart-grid:#e9e9e7;
   --color-chart-axis:#8994a3;
-  --color-series-1:#2563eb;
-  --color-series-2:#db2777;
-  --color-series-3:#059669;
-  --color-series-4:#d97706;
-  --color-series-5:#7c3aed;
-  --color-series-6:#0891b2;
-  --color-series-7:#dc2626;
-  --color-series-8:#4f46e5;
+  /* The app's light series, same order: a category keeps its colour between editor and export. */
+  --color-series-1:#2f78d4;
+  --color-series-2:#c9501f;
+  --color-series-3:#12875f;
+  --color-series-4:#a86e00;
+  --color-series-5:#c2466f;
+  --color-series-6:#067306;
+  --color-series-7:#7466d9;
+  --color-series-8:#cf4c4c;
   --text-2xs:10px;
 }
 *{box-sizing:border-box}
@@ -94,7 +96,20 @@ body{margin:0;color:#172033;background:#f3f4f6}
 a{color:#2563eb;text-decoration:underline;text-underline-offset:.13em}
 code,kbd{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.9em}
 mark{background:#fef3c7;color:inherit}
-.export-divider{border:0;border-top:1px solid currentColor;opacity:.28;margin:1.7em 0}
+.export-list{margin:.4em 0 .9em;padding-left:1.6em}.export-list .export-list{margin:.2em 0}.export-list li{margin:.18em 0}.export-list li>.paragraph-run{margin:0}.todo-list{list-style:none;padding-left:.4em}.todo-item{display:flex;gap:.55em;align-items:baseline}.todo-item>.todo-box{flex:none}.todo-item.is-checked>.paragraph-run{opacity:.6;text-decoration:line-through}.list-spacer{list-style:none}.export-quote{margin:1em 0;padding:.1em 0 .1em 1.1em;border-left:3px solid currentColor;border-left-color:rgba(127,137,155,.55)}.export-callout{margin:1em 0;padding:.75em 1em;border:1px solid rgba(127,137,155,.35);border-radius:8px;background:rgba(127,137,155,.08)}.export-code{margin:1em 0;padding:.85em 1em;border-radius:8px;background:rgba(127,137,155,.12);overflow-x:auto;white-space:pre;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.86em;line-height:1.55;tab-size:4}.export-divider{border:0;border-top:1px solid currentColor;opacity:.28;margin:1.7em 0}
+/* Drawings are sized by their root <svg> only (child selectors): KaTeX draws
+   radicals, over-arrows and wide accents as inner <svg>s with extreme
+   viewBoxes, which height:auto flattens to nothing. */
+.export-diagram{margin:1.3em 0;display:flex;justify-content:center;break-inside:avoid-page}.export-diagram>svg{max-width:100%;height:auto}
+/* Structured figures: drawn at natural size, shrunk only to fit the column;
+   the caption centres when short and justifies when long (LaTeX's rule). */
+.export-figure{margin:1.4em 0;break-inside:avoid-page}
+.export-figure .figure-canvas{margin:0 auto;max-width:100%}
+.export-figure .figure-canvas>svg{display:block;width:100%;height:auto}
+.figure-caption{display:table;max-width:100%;margin:.65em auto 0;text-align:justify;hyphens:auto;font-size:.86em;line-height:1.45}
+.figure-caption-number{font-weight:600}
+.profile-paper .figure-caption{font-family:"CW Source Serif",serif}
+${FIGURE_MATH_CSS}
 .citation{white-space:normal}
 /* A citation number is a link but reads as body text: underlining every one of
    them turns a cited paragraph into a rash of blue. */

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { AuthProvider } from '@/components/auth/AuthContext';
-import { AI_ACTION_REGISTRY } from '@/config/aiActions';
+import { ASK_AI_PRESETS } from '@/components/editor/AskAi/presets';
 import { LandingPage } from '../LandingPage';
 
 function renderLanding() {
@@ -30,18 +30,37 @@ describe('LandingPage', () => {
     expect(screen.getAllByRole('button', { name: /sign in/i }).length).toBeGreaterThan(1);
   });
 
-  it('lists every AI action from the registry', () => {
+  it('lists every Ask AI action a selection offers', () => {
     renderLanding();
-    for (const action of Object.values(AI_ACTION_REGISTRY)) {
-      expect(screen.getAllByText(action.label).length).toBeGreaterThan(0);
+    const presets = ASK_AI_PRESETS.filter((preset) => preset.applies.includes('selection'));
+    expect(presets.length).toBeGreaterThan(5);
+    for (const preset of presets) {
+      expect(screen.getAllByText(preset.label).length).toBeGreaterThan(0);
     }
   });
 
   it('surfaces the real tool panels', () => {
     renderLanding();
-    for (const label of ['arXiv Search', 'ColPali Search', 'Library', 'Document JSON']) {
+    for (const label of ['Search arXiv', 'Search pages', 'My PDFs', 'Document JSON']) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
+  });
+
+  it('uses the landing artwork to explain the evidence workflow', () => {
+    renderLanding();
+
+    expect(
+      screen
+        .getByRole('img', { name: /manuscript connected to abstract charts/i })
+        .getAttribute('src'),
+    ).toBe('/images/colwrite-hero-manuscript.webp');
+    expect(
+      screen
+        .getByRole('img', { name: /research papers and data streams/i })
+        .getAttribute('src'),
+    ).toBe('/images/colwrite-research-flow.webp');
+    expect(screen.getByText('Find relevant papers')).not.toBeNull();
+    expect(screen.getByText('Write with the evidence in view')).not.toBeNull();
   });
 
   it('states the alpha terms honestly', () => {

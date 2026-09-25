@@ -1,5 +1,6 @@
 import type { ElementType, ReactNode } from 'react';
 import {
+  ArrowRight,
   ChartColumn,
   Check,
   Columns2,
@@ -19,15 +20,17 @@ import { APP_TAGLINE } from '@/components/common/Brand';
 import { toolMeta } from '@/components/panels/toolsConfig';
 import {
   AiActionMenuMock,
+  AskAiResultMock,
   ArxivResultMock,
   ChangeCardMock,
   CitationPill,
   ColpaliResultMock,
   EditorMock,
   EquationChip,
-  InlineSuggestMock,
   LibraryMock,
+  ReviewPillMock,
   RewriteDiffBody,
+  SidebarTabsMock,
 } from './mocks';
 
 /* ----------------------------------------
@@ -49,7 +52,7 @@ function Section({
     <section
       id={id}
       aria-labelledby={labelledBy}
-      className={cn('scroll-mt-16 border-t border-border/50', className)}
+      className={cn('scroll-mt-16 border-t border-border', className)}
     >
       <div className="mx-auto max-w-6xl px-6 py-16 sm:py-20">{children}</div>
     </section>
@@ -120,6 +123,42 @@ function FeatureCard({
    Hero
    ---------------------------------------- */
 
+function HeroVisual() {
+  return (
+    <figure className="relative mx-auto aspect-[4/5] w-full max-w-[680px] overflow-hidden rounded-2xl border border-border bg-card shadow-xl sm:aspect-[6/5]">
+      <img
+        src="/images/colwrite-hero-manuscript.webp"
+        alt="A manuscript connected to abstract charts, evidence and citation nodes"
+        width="1440"
+        height="960"
+        fetchPriority="high"
+        className="absolute inset-0 h-full w-full object-cover object-[62%_center]"
+      />
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 bg-[linear-gradient(180deg,transparent_35%,var(--color-background)_100%)] opacity-75"
+      />
+
+      <div
+        aria-hidden="true"
+        className="absolute left-4 top-4 flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1.5 text-xs text-foreground/80 shadow-md backdrop-blur-sm sm:left-6 sm:top-6"
+      >
+        <span>Evidence</span>
+        <ArrowRight className="h-3.5 w-3.5 text-primary" />
+        <span>Manuscript</span>
+      </div>
+
+      <div className="absolute bottom-4 left-4 w-[178%] origin-bottom-left scale-[0.54] sm:bottom-6 sm:left-6 sm:w-[142%] sm:scale-[0.68]">
+        <EditorMock />
+      </div>
+      <figcaption className="sr-only">
+        ColWrite keeps evidence, writing and review together while every AI edit remains a
+        suggestion.
+      </figcaption>
+    </figure>
+  );
+}
+
 export function HeroSection({ onSignIn }: { onSignIn: () => void }) {
   return (
     <section className="relative overflow-hidden">
@@ -155,7 +194,7 @@ export function HeroSection({ onSignIn }: { onSignIn: () => void }) {
         </div>
 
         <div className="animate-slide-in-up [animation-delay:120ms] [animation-fill-mode:both]">
-          <EditorMock />
+          <HeroVisual />
         </div>
       </div>
     </section>
@@ -169,13 +208,13 @@ export function HeroSection({ onSignIn }: { onSignIn: () => void }) {
 function MiniTable() {
   const cells = ['Model', 'Active', 'Score', 'MoE-8×7B', '12.9B', '81.4', 'Dense-34B', '34B', '80.1'];
   return (
-    <div className="grid w-44 grid-cols-3 overflow-hidden rounded-md border border-border/60 text-2xs">
+    <div className="grid w-44 grid-cols-3 overflow-hidden rounded-md border border-border text-2xs">
       {cells.map((cell, index) => (
         <span
           key={index}
           className={cn(
-            'border-b border-r border-border/40 px-1.5 py-1',
-            index < 3 && 'bg-muted/50 font-medium',
+            'border-b border-r border-border px-1.5 py-1',
+            index < 3 && 'bg-subtle font-medium',
             index % 3 === 2 && 'border-r-0',
             index >= 6 && 'border-b-0',
           )}
@@ -235,7 +274,7 @@ const WIDGETS = [
     title: 'AI Beat',
     description: 'Generate content in place from a prompt, then accept it into the text.',
     demo: (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-indigo-500/30 bg-gradient-to-br from-violet-950/30 to-indigo-950/30 px-2 py-1.5 text-xs text-primary">
+      <span className="inline-flex items-center gap-1.5 rounded-md bg-tint-purple px-2 py-1.5 text-xs text-tint-purple-fg">
         <Sparkles aria-hidden="true" className="h-3.5 w-3.5" />
         “Summarize the ablation in one sentence”
       </span>
@@ -255,7 +294,7 @@ export function InlineWidgetsSection() {
       <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {WIDGETS.map((widget) => (
           <FeatureCard key={widget.title} icon={widget.icon} title={widget.title} description={widget.description}>
-            <div className="mt-3 flex min-h-16 items-center rounded-md border border-border/40 bg-background/40 p-3">
+            <div className="mt-3 flex min-h-16 items-center rounded-md border border-border bg-background/40 p-3">
               {widget.demo}
             </div>
           </FeatureCard>
@@ -266,12 +305,12 @@ export function InlineWidgetsSection() {
           description="Paragraphs reflow into up to four columns, so methods and results can sit side by side."
         >
           <div aria-hidden="true" className="mt-3 grid grid-cols-2 gap-2">
-            <div className="space-y-1 rounded-md border border-border/40 bg-background/40 p-2">
+            <div className="space-y-1 rounded-md border border-border bg-background/40 p-2">
               <div className="h-1 w-full rounded-sm bg-border/70" />
               <div className="h-1 w-5/6 rounded-sm bg-border/70" />
               <div className="h-1 w-full rounded-sm bg-border/70" />
             </div>
-            <div className="space-y-1 rounded-md border border-border/40 bg-background/40 p-2">
+            <div className="space-y-1 rounded-md border border-border bg-background/40 p-2">
               <div className="h-1 w-full rounded-sm bg-border/70" />
               <div className="h-1 w-4/6 rounded-sm bg-border/70" />
               <div className="h-1 w-5/6 rounded-sm bg-border/70" />
@@ -290,29 +329,32 @@ export function InlineWidgetsSection() {
 export function AiActionsSection() {
   return (
     <Section id="ai-actions" labelledBy="ai-actions-heading">
-      <div className="grid items-center gap-10 lg:grid-cols-2">
+      <div className="grid items-center gap-10 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
         <div>
           <SectionHeading
             id="ai-actions-heading"
             eyebrow="Inline AI"
-            title="Select text. Pick an action."
-            lead="The floating toolbar turns any selection into a rewriting task — and streams the suggestion right next to your words."
+            title="Select text. Ask AI."
+            lead="Ask AI leads the selection toolbar. It opens a prompt right under your words: pick an action or type your own, and the result appears in place as a word-level diff."
           />
           <div className="mt-6">
             <BulletList
               items={[
-                'Ten built-in actions — improve, grammar, continue, rephrase, shorten, expand, add details, make concise, translate, and reference search.',
-                'Suggestions stream into the paragraph beside the original, with accept, reject, stop and regenerate controls.',
-                'Nothing is written to the document until you approve the suggestion.',
+                'Built-in actions to edit, explain and research a passage — improve, fix grammar, shorten, lengthen, simplify, change tone, translate, find citations, check claims.',
+                'The result streams in under the original. Replace the selection, insert it below, try again, or type a follow-up in the same bar.',
+                'Nothing is written to the document until you choose to keep it.',
               ]}
             />
           </div>
         </div>
-        <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-start">
-          <AiActionMenuMock />
-          <div className="min-w-0 flex-1 space-y-3">
-            <p className="text-xs font-medium text-muted-foreground">What a suggestion looks like</p>
-            <InlineSuggestMock />
+        <div className="grid items-start gap-5 sm:grid-cols-[minmax(0,17rem)_minmax(0,1fr)]">
+          <div className="min-w-0 space-y-3">
+            <p className="text-xs font-medium text-muted-foreground">On a selection</p>
+            <AiActionMenuMock />
+          </div>
+          <div className="min-w-0 space-y-3">
+            <p className="text-xs font-medium text-muted-foreground">After a run</p>
+            <AskAiResultMock />
           </div>
         </div>
       </div>
@@ -328,16 +370,13 @@ export function ReviewSection() {
   return (
     <Section id="review" labelledBy="review-heading">
       <div className="grid items-center gap-10 lg:grid-cols-2">
-        <div className="order-last lg:order-first">
+        <div className="order-last flex flex-col gap-4 lg:order-first">
+          <ReviewPillMock className="self-end" />
           <div className="space-y-3">
-            <ChangeCardMock kind="replace" description="Rewrite paragraph in “Introduction”">
+            <ChangeCardMock kind="replace">
               <RewriteDiffBody />
             </ChangeCardMock>
-            <ChangeCardMock
-              kind="insert"
-              description="Insert paragraph after “Introduction”"
-              locked
-            >
+            <ChangeCardMock kind="insert" locked>
               <p className="whitespace-pre-wrap text-sm leading-relaxed text-diff-add-fg">
                 We release code and routing traces to support reproduction of every result.
               </p>
@@ -355,7 +394,7 @@ export function ReviewSection() {
             <BulletList
               items={[
                 'Word-level diffs show exactly what moved — additions, rewrites, deletions, moves and title changes.',
-                'Accept or reject each change where it lands, or work through the batch from the review bar.',
+                'Accept or reject each change where it lands, or step through the batch from the suggestions pill in the top bar.',
                 'Dependent changes stay locked until the change they build on is accepted.',
                 'Chat with the document: reference it with #, then ask for suggestions, rewrites, structure, summaries or references.',
               ]}
@@ -382,8 +421,40 @@ export function ResearchSection() {
         id="research-heading"
         eyebrow="Research tools"
         title="Literature work without leaving the document"
-        lead="Three panels sit a keystroke away from the text — find papers, find the exact page that answers a question, and keep your PDFs at hand."
+        lead="The right sidebar keeps the assistant, research, your sources and the document's history one click from the text. Find papers, pull up the exact page that answers a question, and keep your PDFs at hand."
       />
+      <SidebarTabsMock className="mt-6" />
+
+      <figure className="relative mt-8 min-h-64 overflow-hidden rounded-xl border border-border bg-card shadow-lg sm:aspect-[21/9] sm:min-h-0">
+        <img
+          src="/images/colwrite-research-flow.webp"
+          alt="Research papers and data streams converging into a finished manuscript"
+          width="1600"
+          height="758"
+          loading="lazy"
+          className="absolute inset-0 h-full w-full object-cover object-center"
+        />
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-[linear-gradient(180deg,transparent_35%,var(--color-background)_100%)] opacity-80"
+        />
+        <figcaption className="absolute inset-x-4 bottom-4 grid gap-2 sm:inset-x-6 sm:bottom-6 sm:grid-cols-3">
+          {[
+            ['01', 'Find relevant papers'],
+            ['02', 'Retrieve the exact page'],
+            ['03', 'Write with the evidence in view'],
+          ].map(([step, label]) => (
+            <span
+              key={step}
+              className="flex items-center gap-2 rounded-md border border-border bg-background/75 px-3 py-2 text-xs text-foreground/80 shadow-sm backdrop-blur-sm"
+            >
+              <span className="font-mono text-primary">{step}</span>
+              {label}
+            </span>
+          ))}
+        </figcaption>
+      </figure>
+
       <div className="mt-8 grid gap-3 lg:grid-cols-3">
         <FeatureCard icon={arxiv.icon} title={arxiv.label} description={arxiv.description}>
           <ArxivResultMock />

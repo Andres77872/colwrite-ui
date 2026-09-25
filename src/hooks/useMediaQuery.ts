@@ -23,13 +23,13 @@ export function useMediaQuery(query: string): boolean {
 }
 
 /**
- * Width at which the complete four-column workspace can actually fit.
+ * Width from which the right sidebar docks beside the page instead of
+ * opening as a modal sheet over it (spec: desktop is 1024px and up).
  *
- * The old 768px cutoff was a CSS breakpoint, not a layout constraint: the
- * sidebar, canvas, tools panel, and rail need roughly 1100px even at their
- * minimum useful widths. Treating a tablet as a desktop collapsed the canvas
- * to a sliver instead of moving the secondary surfaces into drawers.
+ * Between 1024px and roughly 1220px there is no room for both sidebars and a
+ * readable page; the shell then hides the left sidebar while the right one
+ * is open (`useLeftSidebarAutoHidden`) rather than covering the page.
  */
 export function useIsDesktop(): boolean {
-  return useMediaQuery('(min-width: 1100px)');
+  return useMediaQuery('(min-width: 1024px)');
 }

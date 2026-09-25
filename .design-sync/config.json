@@ -158,9 +158,6 @@
     "Canvas": {
       "cardMode": "single"
     },
-    "AIActionMenu": {
-      "cardMode": "single"
-    },
     "InlinePopover": {
       "cardMode": "single"
     },
@@ -170,18 +167,17 @@
     "ChatTaggedInput": {
       "cardMode": "column"
     },
-    "DocumentFooter": {
-      "cardMode": "column"
-    },
     "DocumentsMenu": {
       "cardMode": "column"
     },
     "ReviewBar": {
       "cardMode": "column"
     },
-    "DocumentHeader": {
-      "cardMode": "single",
-      "primaryStory": "Saved"
+    "MermaidDiagram": {
+      "cardMode": "column"
+    },
+    "DiagramBlock": {
+      "cardMode": "column"
     }
   },
   "dtsPropsFor": {
@@ -189,8 +185,7 @@
     "EmptyState": "  /** Presentational only — hidden from the a11y tree. */\n  icon?: React.ElementType;\n  title: string;\n  description?: React.ReactNode;\n  action?: React.ReactNode;\n  /** `panel` suits narrow side panels; `page` suits the main canvas. */\n  size?: \"panel\" | \"page\";\n  className?: string;",
     "ErrorBoundary": "  children: React.ReactNode;\n  /** Named in the fallback copy, e.g. \"the editor\". */\n  label: string;",
     "ExtractionBadge": "  status: \"pending\" | \"running\" | \"ready\" | \"failed\" | \"unsupported\" | null;\n  error?: string | null;\n  /** Add the state hint to the accessible name. Off by default. */\n  describe?: boolean;\n  className?: string;",
-    "Sidebar": "  /** Takes no props — reads the app's view and panel context. */\n  children?: never;",
-    "Topbar": "  /** Takes no props — reads the app's view, panel and auth context. */\n  children?: never;"
+    "Sidebar": "  /** Opens the command palette (the sidebar's Search row). */\n  onOpenPalette: () => void;\n  /** Opens the keyboard-shortcuts dialog (from the account menu). */\n  onShowShortcuts: () => void;"
   },
   "extraFonts": [
     "../node_modules/@fontsource/inter/400.css",

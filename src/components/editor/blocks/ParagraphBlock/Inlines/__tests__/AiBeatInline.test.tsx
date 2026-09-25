@@ -173,4 +173,45 @@ describe('AiBeatInline', () => {
     expect(host.textContent).toBe('Generated prose.');
     expect(onRemoveChild).toHaveBeenCalled();
   });
+
+  it('says what the engine is doing while nothing has been written', async () => {
+    let handlers!: SSEEventHandlers;
+    let finish!: () => void;
+    streamAgentChat.mockImplementation((_params: unknown, next: SSEEventHandlers) => {
+      handlers = next;
+      return new Promise((resolve) => {
+        finish = () => resolve({ chatId: null, threadId: null, usage: null, terminal: 'done' });
+      });
+    });
+    render(<Harness initial={{ message: 'write' }} />);
+    await act(async () => {
+      generateButton().click();
+    });
+    await waitFor(() => expect(streamAgentChat).toHaveBeenCalled());
+
+    expect(screen.getByRole('status').textContent).toContain('Thinking…');
+    act(() => handlers.onStatus?.('starting', 'Starting Claude Code…'));
+    expect(screen.getByRole('status').textContent).toContain('Starting Claude Code…');
+    // Rendered inside inline markup, where a paragraph may not nest.
+    expect(screen.getByRole('status').tagName).toBe('SPAN');
+
+    await act(async () => {
+      handlers.onToken?.('Draft.');
+      finish();
+    });
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('says so when the stream closed before finishing', async () => {
+    streamAgentChat.mockImplementation(async (_params: unknown, handlers: SSEEventHandlers) => {
+      handlers.onToken?.('Half a sent');
+      return { chatId: null, threadId: null, usage: null, terminal: null };
+    });
+    render(<Harness initial={{ message: 'write' }} />);
+    await act(async () => {
+      generateButton().click();
+    });
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('may be incomplete'));
+  });
 });

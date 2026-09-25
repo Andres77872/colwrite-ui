@@ -9,62 +9,34 @@ import {
   proposedBlock,
   type ProposedChange,
 } from '@/editor/proposals';
-import { ProposedBlockView, ProposedRewriteView } from './ProposedBlockView';
+import { ProposedBlockView, ProposedRewriteView, STRIKE_WIDGETS } from './ProposedBlockView';
+import { previewBibliography } from './diffText';
 import { ArrowDownUp, Check, Lock, Pencil, Plus, TextCursorInput, Trash2, X } from 'lucide-react';
 
 /**
  * One proposed change, rendered in the document at the position it would take.
  *
- * This used to be a bordered card in panel typography, indented by its own
- * margin, showing the block as stripped plain text. It read as a notification
- * that had landed on the page rather than as a change to the page — and
- * because the accept path applied the operation literally, the position it
- * showed was not reliably the position the block would end up in.
- *
- * Now the row lines up with `.block-row`: same gutter, same measure, same
- * prose size, so the proposed paragraph sits in the column of text it is
- * joining. The only chrome is a coloured rail and one line of controls.
+ * The row lines up with `.block-row`: same gutter, same measure, same prose
+ * size, so the proposed paragraph sits in the column of text it is joining.
+ * The chrome is deliberately small — a 2px rail in the change's colour, one
+ * quiet line naming the change, and two icon buttons whose labels appear on
+ * hover or focus. The diff colours on the text are what carry the change.
  */
 
 const KIND: Record<
   ProposedChange['kind'],
-  { label: string; rail: string; tint: string; badge: string; icon: typeof Plus }
+  { label: string; rail: string; tint?: string; icon: typeof Plus }
 > = {
-  insert: {
-    label: 'Addition',
-    rail: 'border-l-diff-add-border',
-    tint: 'bg-diff-add/30',
-    badge: 'text-diff-add-fg',
-    icon: Plus,
-  },
-  replace: {
-    label: 'Rewrite',
-    rail: 'border-l-primary',
-    tint: 'bg-primary/5',
-    badge: 'text-primary',
-    icon: Pencil,
-  },
+  insert: { label: 'Suggested addition', rail: 'bg-diff-add-border', tint: 'bg-diff-add/60', icon: Plus },
+  replace: { label: 'Suggested rewrite', rail: 'bg-ai/60', icon: Pencil },
   delete: {
-    label: 'Deletion',
-    rail: 'border-l-diff-remove-border',
-    tint: 'bg-diff-remove/25',
-    badge: 'text-diff-remove-fg',
+    label: 'Suggested deletion',
+    rail: 'bg-diff-remove-border',
+    tint: 'bg-diff-remove/60',
     icon: Trash2,
   },
-  reorder: {
-    label: 'Move',
-    rail: 'border-l-primary',
-    tint: 'bg-primary/5',
-    badge: 'text-primary',
-    icon: ArrowDownUp,
-  },
-  rename: {
-    label: 'Title',
-    rail: 'border-l-primary',
-    tint: 'bg-primary/5',
-    badge: 'text-primary',
-    icon: TextCursorInput,
-  },
+  reorder: { label: 'Suggested move', rail: 'bg-ai/60', icon: ArrowDownUp },
+  rename: { label: 'Suggested title', rail: 'bg-ai/60', icon: TextCursorInput },
 };
 
 /** One-line preview of a block, for naming a move's destination. */
@@ -75,7 +47,7 @@ function shortText(text: string, max = 42): string {
 }
 
 function ChangeBody({ change }: { change: ProposedChange }) {
-  const { blocks } = useEditor();
+  const { blocks, doc } = useEditor();
 
   if (change.kind === 'rename') {
     const next = change.op.op === 'update_meta' ? change.op.meta?.name?.trim() : undefined;
@@ -115,27 +87,57 @@ function ChangeBody({ change }: { change: ProposedChange }) {
   }
 
   if (change.kind === 'delete') {
-    // The block itself is struck through in place, so repeating its text here
-    // would be the second copy of something the author is already looking at.
+    // Shown in the block's place, struck through, in the same card as every
+    // other suggestion: the block row itself is hidden while the deletion is
+    // pending (see `.review-change` in globals.css), so the label sits above
+    // the text it names rather than under it, next to the following block.
     return (
-      <p className="text-sm text-muted-foreground">
-        Remove this block from the document.
-      </p>
+      <ProposedBlockView
+        block={current ?? null}
+        className={cn('text-diff-remove-fg line-through decoration-1', STRIKE_WIDGETS)}
+      />
     );
   }
 
+  const options = { library: doc?.sources, style: doc?.citationStyle ?? null };
+
   if (change.kind === 'insert') {
-    return <ProposedBlockView block={proposedBlock(change)} />;
+    const block = proposedBlock(change);
+    // Where the block would land, as "after this id" (null: the very top).
+    const anchorIndex = blocks.findIndex((candidate) => candidate.id === change.anchorBlockId);
+    const after =
+      change.placement === 'start'
+        ? null
+        : change.placement === 'end'
+          ? blocks[blocks.length - 1]?.id ?? null
+          : change.placement === 'before'
+            ? blocks[anchorIndex - 1]?.id ?? null
+            : change.anchorBlockId;
+    return (
+      <ProposedBlockView
+        block={block}
+        bibliography={previewBibliography(blocks, [block], { after }, options)}
+      />
+    );
   }
 
   const merged = mergedBlock(change, current);
   return (
     <ProposedRewriteView
-      before={blockText(current)}
-      after={blockText(merged)}
+      before={current ?? null}
+      after={merged}
       block={merged}
+      bibliography={previewBibliography(blocks, [merged], { replace: current ? [current.id] : [] }, options)}
     />
   );
+}
+
+/**
+ * A button's word, shown on hover or focus: icons at rest keep the row quiet
+ * while reading, and the label says what the button does once it is reached.
+ */
+function HoverLabel({ children }: { children: string }) {
+  return <span className="hidden group-hover/change:inline group-focus-within/change:inline">{children}</span>;
 }
 
 export function ChangeCard({ change }: { change: ProposedChange }) {
@@ -168,89 +170,71 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
   return (
     <div
       data-change-id={change.id}
-      // ReviewBar's Next/Previous puts DOM focus here (see `focusChange`), so
+      // A pending rewrite takes its block's place on the page (see
+      // `.review-change` in globals.css), so the text appears once, as a diff.
+      data-change-kind={change.kind}
+      // The review menu's Next/Previous puts DOM focus here (see `focusChange`), so
       // the card must be focusable — but as a target only, never a tab stop.
       tabIndex={-1}
       // Deliberately not `.block-row`: the canvas measures those to place the
       // drag indicator, and a proposal is not a drop target.
       className={cn(
-        'review-change group/change relative my-1 rounded-r-md border-l-2 py-1.5 pr-3 transition-colors',
-        style.rail,
+        'review-change group/change relative my-0.5 rounded-md py-1 pr-2 outline-none transition-colors',
         style.tint,
-        isFocused && 'ring-1 ring-primary/50',
+        isFocused && !style.tint && 'bg-hover',
+        'focus-visible:ring-2 focus-visible:ring-ring/40',
       )}
       style={{ paddingLeft: 'var(--doc-gutter)' }}
       // Read as one thing rather than as loose text followed by two buttons.
       role="group"
       aria-label={summary}
     >
-      {/* Every kind shares this header: what the change is, what it touches,
-          and — when this card can be decided on its own — the decision.
-          Naming the kind in text is the difference between reviewing and
-          decoding: the old gutter column showed three unlabeled glyphs
-          (kind, accept, reject) stacked in 14px, and with 48 cards on screen
-          the author could not tell what any of them meant. */}
-      <div className="mb-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <span
-          className={cn(
-            'inline-flex shrink-0 items-center gap-1 text-2xs font-semibold uppercase tracking-wide',
-            style.badge,
-          )}
-        >
-          <Icon aria-hidden="true" className="h-3 w-3" />
-          {style.label}
-        </span>
+      <span
+        aria-hidden="true"
+        className={cn('absolute bottom-1 top-1 w-0.5 rounded-full', style.rail)}
+        style={{ left: 'calc(var(--doc-gutter) - 10px)' }}
+      />
+      <div className="flex min-h-6 min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+        <span className="shrink-0">{style.label}</span>
+        {!isReady && (
+          <span className="flex min-w-0 items-center gap-1 truncate">
+            <span aria-hidden="true">·</span>
+            <Lock aria-hidden="true" className="h-3 w-3 shrink-0" />
+            <span className="truncate">{blockedReason}</span>
+          </span>
+        )}
 
-        <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">
-          {summary}
-        </span>
-
-        {/* Immediately after the label, on the left half of the measure —
-            `ml-auto` put them at the right edge of the prose column, which is
-            exactly where the floating assistant rests, so the panel covered
-            the buttons it was telling the author to press. Dimmed rather than
-            hover-only, which would be unreachable on touch. */}
-        <span
-          className={cn(
-            'flex shrink-0 items-center gap-1 transition-opacity',
-            'focus-within:opacity-100 group-hover/change:opacity-100',
-            isFocused ? 'opacity-100' : 'opacity-80',
-          )}
-        >
+        <span className="ml-auto flex shrink-0 items-center gap-0.5">
           {isReady && (
             <Button
-              size="sm"
+              size="xs"
               variant="ghost"
-              className="h-6 gap-1 px-1.5 text-xs text-diff-add-fg hover:bg-diff-add"
+              className="font-normal text-diff-add-fg hover:bg-diff-add hover:text-diff-add-fg"
               onClick={() => accept(change.id)}
               aria-label={`Accept: ${summary}`}
+              title="Accept"
             >
-              <Check className="h-3 w-3" />
-              Accept
+              <Check />
+              <HoverLabel>Accept</HoverLabel>
             </Button>
           )}
           {/* Always available. A blocked change previously offered neither
               button, so a batch whose first change the author did not want
               could not be cleared from the document at all. */}
           <Button
-            size="sm"
+            size="xs"
             variant="ghost"
-            className="h-6 gap-1 px-1.5 text-xs text-muted-foreground hover:text-destructive"
+            className="font-normal text-muted-foreground hover:text-foreground"
             onClick={() => reject(change.id)}
             aria-label={`Reject: ${summary}`}
+            title="Reject"
           >
-            <X className="h-3 w-3" />
-            Reject
+            <X />
+            <HoverLabel>Reject</HoverLabel>
           </Button>
         </span>
       </div>
-
-      {!isReady && (
-        <p className="mb-0.5 flex items-center gap-1 text-2xs text-muted-foreground">
-          <Lock aria-hidden="true" className="h-3 w-3 shrink-0" />
-          {blockedReason}
-        </p>
-      )}
 
       <ChangeBody change={change} />
     </div>

@@ -1,3 +1,2 @@
-export * from './DocumentHeader';
-export * from './DocumentFooter';
-
+export { PageTopbar } from './PageTopbar';
+export { DocumentExportDialog } from './DocumentExportDialog';

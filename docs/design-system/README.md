@@ -30,6 +30,10 @@ have to cascade after the rules they override.
 
 ## Source of truth
 
+The app is light by default with a dark theme behind `data-theme="dark"`;
+`tokens.css` carries both sets, while the component and view mockups were
+drawn against the earlier dark-only palette and have not been redrawn.
+
 The tokens and component styles are a **reproduction** of the app, not its
 source. When they diverge, the app wins:
 

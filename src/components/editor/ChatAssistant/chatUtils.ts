@@ -1,5 +1,9 @@
 import { uid } from '@/lib/uid';
 import type { ToolRun } from './AgentActivity';
+import type { AgentTodo, AgentWorker, AgentSource } from '@/services/streamParser';
+import type { AgentChatContext } from '@/services/agentChat';
+import type { EditorFocus } from '@/components/editor/References';
+import { extractRefSpans } from './ChatRefTags/refTags';
 
 export type ChatMessage = {
   id: string;
@@ -19,6 +23,25 @@ export type ChatMessage = {
   applied: number;
   /** Token usage the server reported for this reply, once it completed. */
   usage?: { promptTokens: number; completionTokens: number };
+  /**
+   * Sources the assistant's research tools returned while writing this
+   * reply. Claims in the reply point at them as `[S3]`; the list under the
+   * reply offers to cite or save each one.
+   */
+  sources?: AgentSource[];
+  todos?: AgentTodo[];
+  workers?: AgentWorker[];
+  /**
+   * What the model reasoned while it worked, as the engine streamed it (a
+   * gateway model's thinking, Claude Code's thinking blocks, Codex's
+   * summaries). Shown folded above the answer; never part of it, and not
+   * saved with the conversation.
+   */
+  reasoning?: string;
+  /** Time spent reasoning in finished stretches, measured in this browser. */
+  thinkingMs?: number;
+  /** When the stretch of reasoning under way began; unset between them. */
+  thinkingSince?: number;
 };
 
 /**
@@ -36,9 +59,37 @@ export type ChatError = {
 /** The transcript rows a failed turn owns, so retry removes exactly those. */
 export type LastExchange = {
   text: string;
+  /** Sent again as it was: a retry is about the same place in the text. */
+  context?: AgentChatContext;
   userMessageId: string;
   assistantMessageId: string;
+  run?: import('@/services/agentSessionChat').ResumeAgentRun;
 };
+
+/** The server keeps at most this many referenced blocks. */
+const MAX_CONTEXT_BLOCK_IDS = 20;
+
+/**
+ * What the assistant should know about where the author is working: the
+ * caret's block, the selection, and the blocks the message references as
+ * `#this/<id>`. Undefined when there is nothing to say.
+ */
+export function agentContext(text: string, focus: EditorFocus | null): AgentChatContext | undefined {
+  const referenced = [
+    ...new Set(
+      extractRefSpans(text)
+        .filter((ref) => ref.kind === 'block' && ref.source === 'this' && ref.blockId)
+        .map((ref) => ref.blockId as string),
+    ),
+  ].slice(0, MAX_CONTEXT_BLOCK_IDS);
+  const context: AgentChatContext = {};
+  if (focus) {
+    context.block_id = focus.blockId;
+    if (focus.selection) context.selection = { block_id: focus.blockId, text: focus.selection };
+  }
+  if (referenced.length) context.block_ids = referenced;
+  return Object.keys(context).length ? context : undefined;
+}
 
 export function friendlyStreamError(code: string, message: string): ChatError {
   switch (code) {
@@ -54,6 +105,25 @@ export function friendlyStreamError(code: string, message: string): ChatError {
         message: 'The assistant could not find this document on the server.',
         detail: message || code,
         retryable: false,
+      };
+    // The local Claude Code / Codex engines. The server's message says what
+    // to do (which login command to run, for instance); repeating the same
+    // request cannot help until the author has done it.
+    case 'ENGINE_AUTH_REQUIRED':
+    case 'ENGINE_LOCAL_ONLY':
+    case 'ENGINE_NOT_INSTALLED':
+    case 'ENGINE_INVALID_MODEL':
+    case 'ENGINE_UNSAFE_TOOLS':
+      return {
+        message: `${message || 'The selected agent engine cannot run.'} You can switch engines from the menu next to the # button, or in Settings → AI & tools.`,
+        detail: code,
+        retryable: false,
+      };
+    case 'ENGINE_RATE_LIMITED':
+      return {
+        message: message || 'The selected engine reached its plan’s usage limit.',
+        detail: code,
+        retryable: true,
       };
     default:
       return {

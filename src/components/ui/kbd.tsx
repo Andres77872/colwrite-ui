@@ -13,7 +13,7 @@ const Kbd = React.forwardRef<HTMLElement, React.HTMLAttributes<HTMLElement>>(
     <kbd
       ref={ref}
       className={cn(
-        "inline-flex min-w-[1.25em] items-center justify-center rounded-sm bg-secondary px-1 py-0.5 font-sans text-2xs text-secondary-foreground",
+        "inline-flex min-w-[1.5em] items-center justify-center rounded-xs bg-secondary px-1 py-px font-sans text-2xs font-medium text-secondary-foreground",
         className
       )}
       {...props}

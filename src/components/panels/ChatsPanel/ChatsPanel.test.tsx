@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { StrictMode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ChatsPanel } from './ChatsPanel';
+import { useChatHistory } from './useChatHistory';
 import { EditorActionsContext, EditorContext, type EditorContextValue } from '@/editor/editorContextState';
 import { ConfirmContext, type ConfirmOptions } from '@/components/ui/confirmContext';
 import { ToastContext } from '@/components/ui/toastContext';
@@ -10,6 +11,8 @@ import { ApiError } from '@/services/contracts';
 import * as chatsService from '@/services/chats';
 
 /**
+ * The chat list inside the assistant's switcher, with the hook that loads it.
+ *
  * Chats are stored against the document id, so the list is read as soon as the
  * document has one. A server that is still catching up answers with a
  * retryable problem — a wait, not a failure. These tests pin that the panel
@@ -35,6 +38,14 @@ function editorValue(): EditorContextValue {
 }
 
 const confirm = vi.fn(async (_options: ConfirmOptions) => true);
+const onNewChat = vi.fn();
+const onSelect = vi.fn();
+
+/** What the assistant does: load the list, hand it to the panel. */
+function Switcher() {
+  const history = useChatHistory();
+  return <ChatsPanel history={history} onNewChat={onNewChat} onSelect={onSelect} />;
+}
 const toast = vi.fn(() => 'toast-1');
 
 const CHAT = {
@@ -64,7 +75,7 @@ function renderPanel({ strict = false }: { strict?: boolean } = {}) {
         >
           <ConfirmContext.Provider value={confirm}>
             <ToastContext.Provider value={{ toast, dismiss: () => {} }}>
-              <ChatsPanel />
+              <Switcher />
             </ToastContext.Provider>
           </ConfirmContext.Provider>
         </ChatSessionsContext.Provider>
@@ -159,5 +170,53 @@ describe('ChatsPanel while the server catches up', () => {
       await vi.advanceTimersByTimeAsync(100);
     });
     expect(mocked.listChats).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ChatsPanel rows', () => {
+  beforeEach(() => {
+    mocked.listChats.mockResolvedValue({ chats: [CHAT], count: 1, status: 'ok', message: '' });
+    mocked.deleteChat.mockResolvedValue({ status: 'ok', message: '' });
+    mocked.updateChatTitle.mockResolvedValue({ status: 'ok', message: '' } as never);
+  });
+
+  it('renames a chat in place', async () => {
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename Outline review' }));
+    const field = screen.getByRole('textbox', { name: 'Chat title' });
+    fireEvent.change(field, { target: { value: 'Method review' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+
+    await waitFor(() =>
+      expect(mocked.updateChatTitle).toHaveBeenCalledWith(DOC_ID, 'chat-1', 'Method review'),
+    );
+  });
+
+  it('asks before deleting a chat', async () => {
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Outline review' }));
+
+    await waitFor(() => expect(mocked.deleteChat).toHaveBeenCalledWith(DOC_ID, 'chat-1'));
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Delete “Outline review”?', destructive: true }),
+    );
+  });
+
+  it('hands a picked chat and New chat back to the assistant', async () => {
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Outline review' }));
+    expect(onSelect).toHaveBeenCalledWith(CHAT);
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    expect(onNewChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('filters the list by title', async () => {
+    renderPanel();
+    await screen.findByRole('button', { name: 'Outline review' });
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search chats' }), {
+      target: { value: 'budget' },
+    });
+    expect(screen.queryByRole('button', { name: 'Outline review' })).toBeNull();
+    expect(screen.getByText('No chats match.')).toBeTruthy();
   });
 });

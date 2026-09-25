@@ -14,15 +14,20 @@ const hasClass = (c) => css.includes(esc(c) + ',') || css.includes(esc(c) + ' ')
 const hasToken = (t) => css.includes(t + ':');
 
 const CLASSES = {
-  Surfaces: ['bg-background', 'bg-card', 'bg-popover', 'bg-muted', 'bg-accent', 'bg-secondary'],
-  Text: ['text-foreground', 'text-muted-foreground', 'text-primary', 'text-destructive'],
-  'Strong fills': ['bg-primary-strong', 'bg-destructive-strong'],
+  Surfaces: ['bg-background', 'bg-card', 'bg-popover', 'bg-sidebar', 'bg-muted', 'bg-secondary', 'bg-code-bg'],
+  'Interaction fills': ['bg-hover', 'bg-active', 'bg-subtle', 'bg-accent'],
+  Text: ['text-foreground', 'text-muted-foreground', 'text-placeholder', 'text-sidebar-foreground', 'text-link', 'text-destructive'],
+  'Strong fills': ['bg-primary-strong', 'bg-destructive-strong', 'bg-ai-strong'],
+  AI: ['text-ai', 'bg-ai/10', 'text-ai-foreground'],
+  Tints: ['gray', 'brown', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'red']
+    .flatMap((t) => [`bg-tint-${t}`, `text-tint-${t}-fg`]),
+  Overlays: ['bg-scrim', 'bg-tooltip', 'text-tooltip-foreground', 'bg-selection', 'bg-block-selection'],
   Status: ['bg-success', 'bg-warning', 'bg-info', 'bg-destructive',
     'text-success-foreground', 'text-warning-foreground', 'text-info-foreground', 'text-destructive-foreground'],
-  'Borders/focus': ['border-border', 'border-input', 'ring-ring', 'outline-ring'],
+  'Borders/focus': ['border-border', 'border-divider', 'border-border-strong', 'border-input', 'ring-ring', 'outline-ring'],
   'Type scale': ['text-2xs', 'text-xs', 'text-sm', 'text-base', 'text-md', 'text-lg', 'text-xl', 'text-2xl', 'text-3xl', 'text-4xl'],
   Fonts: ['font-sans', 'font-mono'],
-  Radius: ['rounded-sm', 'rounded-md', 'rounded-lg', 'rounded-xl', 'rounded-full'],
+  Radius: ['rounded-xs', 'rounded-sm', 'rounded-md', 'rounded-lg', 'rounded-xl', 'rounded-2xl', 'rounded-full'],
   Shadow: ['shadow-sm', 'shadow-md', 'shadow-lg', 'shadow-xl'],
   Motion: ['animate-spin', 'animate-shimmer', 'animate-slide-in-up', 'animate-in', 'animate-out',
     'fade-in-0', 'zoom-in-95', 'slide-in-from-top-2', 'slide-in-from-bottom-2', 'slide-in-from-left-2', 'slide-in-from-right-2'],
@@ -48,7 +53,7 @@ const root = 'ds-bundle/components';
 if (existsSync(root)) for (const g of readdirSync(root)) {
   for (const n of readdirSync(join(root, g))) compDirs.add(n);
 }
-const COMPONENTS = ['TooltipProvider', 'ToastProvider', 'ConfirmProvider', 'AppShell', 'Sidebar', 'Topbar',
+const COMPONENTS = ['TooltipProvider', 'ToastProvider', 'ConfirmProvider', 'AppShell', 'Sidebar',
   'Card', 'CardHeader', 'CardTitle', 'CardDescription', 'CardContent', 'Badge', 'Button', 'Input'];
 const BUNDLE_ONLY = ['PanelsProvider', 'AuthProvider', 'ViewProvider', 'useToast', 'useConfirm'];
 

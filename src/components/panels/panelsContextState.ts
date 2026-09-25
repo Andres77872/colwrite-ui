@@ -1,11 +1,43 @@
 import { createContext, useContext } from 'react';
 
-export type ToolId = 'json' | 'arxiv' | 'semantic-scholar' | 'colpali' | 'library' | 'chats' | 'history';
+/**
+ * The right sidebar's tabs. `json` is transient: it only shows while it is
+ * the active tab, and choosing any other tab dismisses it.
+ */
+export type SidebarTab = 'assistant' | 'research' | 'sources' | 'history' | 'json';
+
+/** Where the Research tab searches. `library` is the account's own PDFs. */
+export type ResearchSourceId = 'arxiv' | 'semantic-scholar' | 'colpali' | 'library';
+
+/**
+ * Everything `setTool` accepts: a tab, or a research source (which opens the
+ * Research tab on that source). `chats` is the assistant's chat list, which
+ * lives inside the Assistant tab. The source ids are also the ids the old
+ * tool rail persisted, so saved preferences keep meaning something.
+ */
+export type ToolId = SidebarTab | ResearchSourceId | 'chats';
+
+/** Context for opening the sidebar on a specific thing, not just a tab. */
+export type SidebarIntent =
+  | { tab: 'research'; query: string }
+  | { tab: 'sources'; sourceKey: string };
+
 type SetStateAction<T> = T | ((previous: T) => T);
 
 export type PanelsContextValue = {
-  activeTool: ToolId | null;
+  /** The sidebar's current tab. There is always one, open or not. */
+  activeTool: SidebarTab;
+  /** Open the sidebar on a tab or research source; `null` closes it. */
   setTool: (tool: ToolId | null) => void;
+  researchSource: ResearchSourceId;
+  setResearchSource: (source: ResearchSourceId) => void;
+  /**
+   * Open a tab and hand it something to act on: a query for Research (run on
+   * the current source), a source key for Sources (scrolled to and marked).
+   */
+  openSidebar: (tab: SidebarTab, intent?: SidebarIntent) => void;
+  /** The last intent, for the tab it names to consume. `id` changes per call. */
+  intent: (SidebarIntent & { id: number }) | null;
   isOpen: boolean;
   open: () => void;
   close: () => void;
@@ -21,12 +53,11 @@ export type PanelsContextValue = {
   mobileNavOpen: boolean;
   setMobileNavOpen: (open: boolean) => void;
   /**
-   * Whether the assistant window is showing.
+   * Whether the sidebar is open on the Assistant tab.
    *
-   * Lives here rather than inside ChatAssistant because it is shell state with
-   * a second owner: the keyboard shortcut has to toggle it, and two
-   * `usePersistentState` hooks on the same key are two independent useStates
-   * that happen to write to the same place.
+   * Kept as its own name because the shortcut, the topbar and the assistant
+   * all speak in terms of "the assistant is showing"; setting it opens (or
+   * closes) the sidebar on that tab.
    */
   assistantOpen: boolean;
   setAssistantOpen: (open: SetStateAction<boolean>) => void;

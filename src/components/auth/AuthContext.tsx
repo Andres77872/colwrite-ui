@@ -3,7 +3,6 @@ import {
   login,
   logout as logoutApi,
   getProfile,
-  clearLegacySessionCookie,
   UNAUTHORIZED_EVENT,
   type UnauthorizedDetail,
 } from '@/services';
@@ -74,7 +73,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     setUser(null);
     setStatus('anonymous');
-    clearLegacySessionCookie();
   }, []);
 
   // Confirm the cached identity against the server before trusting it.

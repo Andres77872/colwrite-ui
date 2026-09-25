@@ -1,5 +1,7 @@
 <!doctype html>
-<html lang="en">
+<!-- Rendered in the dark theme: the mockups below were drawn against it.
+     Remove data-theme to see the light default tokens. -->
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -156,17 +158,17 @@
   <p class="eyebrow">Reference</p>
   <h1 class="h1">ColWrite design system</h1>
   <p class="lead">
-    A dark-first system for a scientific block editor with an AI assistant. Every token, primitive
-    and screen below is a faithful reproduction of the shipping app: surfaces tuned against
-    <code>#0a0a0f</code>, one filled-accent split for contrast, and a review-first interaction model
+    A light-by-default system, with a dark theme, for a scientific block editor with an AI assistant.
+    Every token, primitive and screen below is a reproduction of the shipping app (shown here in
+    its dark theme), one filled-accent split for contrast, and a review-first interaction model
     where nothing the assistant writes reaches the document without an explicit accept.
   </p>
 
   <div class="grid-3" style="margin-top:24px">
     <div class="card" style="padding:16px">
       <p class="t-xs muted">Principle 01</p>
-      <p class="medium" style="margin:6px 0 4px">Single-mode dark</p>
-      <p class="t-sm muted">No light palette. Shadows, scrollbars, scrims and the eight chart series are validated against one background; a palette flip alone would not produce a working theme.</p>
+      <p class="medium" style="margin:6px 0 4px">Light and dark</p>
+      <p class="t-sm muted">Light is the default; <code>data-theme="dark"</code> switches every token. Shadows, scrollbars, scrims and the eight chart series have their own value in each theme.</p>
     </div>
     <div class="card" style="padding:16px">
       <p class="t-xs muted">Principle 02</p>
@@ -755,7 +757,7 @@
 <!-- ---------- BLOCKS ---------- -->
 <section id="blocks" class="sec">
   <h2 class="h2">Blocks &amp; controls</h2>
-  <p class="lead">The document is a flat list of blocks — paragraph, heading, divider — rendered into an 800&nbsp;px measure with a 40&nbsp;px gutter. Controls live in that gutter so they never displace the prose.</p>
+  <p class="lead">The document is a flat list of blocks — paragraph, heading, divider, code — rendered into an 800&nbsp;px measure with a 40&nbsp;px gutter. Controls live in that gutter so they never displace the prose. A diagram is a code block whose language is <code>mermaid</code>, drawn instead of shown as source.</p>
 
   <div class="spec">
     <div class="spec-label">Block types</div>
@@ -769,6 +771,37 @@
       <hr class="b" />
       <h3 class="b">1.1 Notation</h3>
       <p class="b">We write the gating function as <span class="equation-chip">g(x) = softmax(W_g x)</span> throughout.</p>
+    </div>
+  </div>
+
+  <div class="spec">
+    <div class="spec-label">Diagram block — Mermaid, drawn in the token palette</div>
+    <div class="grid-2">
+      <div class="card doc" style="padding:16px">
+        <svg viewBox="0 0 260 156" role="img" aria-label="Flowchart: token, router, expert or dropped" style="display:block;width:100%;max-width:320px;margin:0 auto;font:12px var(--font-sans, sans-serif)">
+          <defs><marker id="dg-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 8 4 0 8z" fill="var(--muted-foreground)"/></marker></defs>
+          <g fill="color-mix(in oklab, var(--series-1) 14%, var(--background))" stroke="var(--series-1)" stroke-width="1.2">
+            <rect x="95" y="4" width="70" height="26" rx="3"/>
+            <path d="M130 40 176 64 130 88 84 64z"/>
+            <rect x="30" y="120" width="80" height="26" rx="3"/>
+            <rect x="150" y="120" width="80" height="26" rx="3"/>
+          </g>
+          <g fill="none" stroke="var(--muted-foreground)" stroke-width="1.2">
+            <path d="M130 30v8" marker-end="url(#dg-arrow)"/>
+            <path d="M107 76 72 118" marker-end="url(#dg-arrow)"/>
+            <path d="M153 76 188 118" stroke-dasharray="3 3" marker-end="url(#dg-arrow)"/>
+          </g>
+          <g fill="var(--foreground)" text-anchor="middle">
+            <text x="130" y="21">Token</text><text x="130" y="68">Router</text>
+            <text x="70" y="137">Expert</text><text x="190" y="137">Dropped</text>
+          </g>
+          <g fill="var(--muted-foreground)" font-size="10"><text x="74" y="98" text-anchor="end">top-1</text><text x="178" y="98">over capacity</text></g>
+        </svg>
+      </div>
+      <div class="card" style="padding:14px">
+        <p class="t-sm muted" style="margin:0 0 8px">Inserted with <code>/diagram</code> or <em>Turn into → Diagram</em>. At rest the block is the drawing, with <em>Edit</em>, <em>open larger</em>, <em>copy source</em> and <em>download SVG</em> on hover. Editing opens the source on <code>code-bg</code> above a live preview that redraws after a 300&nbsp;ms pause.</p>
+        <p class="t-sm muted" style="margin:0">Nodes are a <code>series-1</code> wash with a <code>series-1</code> edge, lines <code>muted-foreground</code>, pie slices <code>series-1…8</code> — read from the tokens, so the drawing follows the theme. Stored as <code>{ type: "code", language: "mermaid" }</code>, so the API and exports carry it unchanged. The same renderer draws <code>```mermaid</code> fences in assistant replies.</p>
+      </div>
     </div>
   </div>
 
@@ -1886,7 +1919,7 @@
 </section>
 
 <footer class="sec" style="padding-bottom:0">
-  <p class="t-xs muted">ColWrite design system · dark-first · generated from <code>src/styles/globals.css</code>, <code>src/components/ui</code> and the shipping views.</p>
+  <p class="t-xs muted">ColWrite design system · light default, dark theme · generated from <code>src/styles/globals.css</code>, <code>src/components/ui</code> and the shipping views.</p>
 </footer>
 
 </main>

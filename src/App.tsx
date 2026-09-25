@@ -3,24 +3,23 @@ import { EditorProvider, useEditor } from './editor'
 import { ProposalsProvider } from './editor/ProposalsContext'
 import { AppShell } from './components/layout/AppShell'
 import { Canvas } from './components/editor/Canvas'
-import { ChatAssistant } from './components/editor/ChatAssistant'
-import { DocumentFooter } from './components/editor/DocumentChrome'
+import { PageTopbar } from './components/editor/DocumentChrome'
 import { FloatingToolbar } from './components/editor/FloatingToolbar'
 import { SlashMenu } from './components/editor/SlashMenu'
-import { PanelsProvider, ToolsRail, ToolsAside } from './components/panels'
+import { PanelsProvider, ToolsAside } from './components/panels'
 import { Sidebar } from './components/layout/Sidebar'
-import { Topbar } from './components/layout/Topbar'
 import { ViewProvider } from './components/layout/ViewContext'
 import { useDocumentTitle, useUnsavedGuard } from './components/layout/useAppChrome'
-import { useView, type AppView } from './components/layout/viewContextState'
+import { useView } from './components/layout/viewContextState'
 import { ShortcutsDialog, useAppShortcuts } from './components/layout/Shortcuts'
+import { CommandPalette } from './components/layout/CommandPalette'
 import { ChatSessionsProvider } from './components/chat/ChatSessionsContext'
 import { useAuth } from './components/auth/authContextState'
 import { LandingPage } from './components/landing'
-import { ProfileView } from './components/profile'
+import { SettingsDialog } from './components/profile'
 import { Spinner } from './components/ui/spinner'
 import { ErrorBoundary } from './components/common/ErrorBoundary'
-import { AgentToolsProvider } from './components/preferences'
+import { AgentEngineProvider, AgentToolsProvider } from './components/preferences'
 import { DocumentLoadingBoundary } from './components/editor/DocumentLoading'
 import { useToast } from './components/ui/toastContext'
 
@@ -47,129 +46,94 @@ function App() {
 
   return (
     <AgentToolsProvider key={`${user.email}\u0000${user.name}`}>
-      <EditorProvider>
-        {/* Navigation must outlive every document-scoped provider. In particular,
-            it needs to update ?doc= after a switch without being remounted by
-            that same switch and re-reading the previous URL. */}
-        <ViewProvider>
-          {/* Pending agent changes are applied through the editor's own patch path
-              once the author accepts them. These providers reset their tagged
-              document state without remounting the workspace. */}
-          <ProposalsProvider>
-            <ChatSessionsProvider>
-              <PanelsProvider>
-                <Surface />
-              </PanelsProvider>
-            </ChatSessionsProvider>
-          </ProposalsProvider>
-        </ViewProvider>
-      </EditorProvider>
+      {/* The engines a local API offers (Claude Code, Codex) and which one each
+          surface uses; a deployed API offers only the gateway. */}
+      <AgentEngineProvider>
+        <EditorProvider>
+          {/* Navigation must outlive every document-scoped provider. In particular,
+              it needs to update ?doc= after a switch without being remounted by
+              that same switch and re-reading the previous URL. */}
+          <ViewProvider>
+            {/* Pending agent changes are applied through the editor's own patch path
+                once the author accepts them. These providers reset their tagged
+                document state without remounting the workspace. */}
+            <ProposalsProvider>
+              <ChatSessionsProvider>
+                <PanelsProvider>
+                  <Surface />
+                </PanelsProvider>
+              </ChatSessionsProvider>
+            </ProposalsProvider>
+          </ViewProvider>
+        </EditorProvider>
+      </AgentEngineProvider>
     </AgentToolsProvider>
   )
 }
 
 /**
- * Move focus to the new surface and say which one it is.
+ * The signed-in surface: the workspace, always, with Settings as a dialog
+ * over it when the URL says `?view=profile`.
  *
- * Switching between the editor and the account page left focus wherever it
- * happened to be — usually on a menu item that no longer existed — and
- * announced nothing, so a screen reader gave no sign the page had changed. The
- * mobile drawers get this for free from Radix; the desktop surfaces did not.
- */
-function useSurfaceChange(view: AppView) {
-  const regionRef = useRef<HTMLDivElement>(null);
-  const [announcement, setAnnouncement] = useState('');
-  const firstRender = useRef(true);
-
-  useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false;
-      return;
-    }
-    setAnnouncement(view === 'profile' ? 'Profile and preferences' : 'Editor');
-    regionRef.current?.focus();
-  }, [view]);
-
-  return { regionRef, announcement };
-}
-
-/**
- * The signed-in surface: the editor workspace, or the account dashboard.
- *
- * The profile view drops the sidebar, tools rail, and tools panel — they all
- * act on the open document, and none of them has anything to say about an
- * account page. The topbar stays, because it is the way back.
+ * Frame: the sidebar on the left, the page (its topbar, then the canvas) in
+ * the middle, and the right sidebar — the assistant and the page tools —
+ * docked on the right when it is open.
  */
 function Surface() {
-  const { view } = useView();
+  const { view, setView } = useView();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const { regionRef, announcement } = useSurfaceChange(view);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const regionRef = useRef<HTMLDivElement>(null);
 
   useDocumentTitle(view);
   useUnsavedGuard();
-  useAppShortcuts({ onShowHelp: () => setShortcutsOpen(true) });
-
-  const chrome = (
-    <>
-      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
-      {/* One region for the whole app. Focus lands on the surface container
-          below; this is what says where it landed. */}
-      <p className="sr-only" role="status">
-        {announcement}
-      </p>
-    </>
-  );
+  useAppShortcuts({
+    onShowHelp: () => setShortcutsOpen(true),
+    onOpenPalette: () => setPaletteOpen(true),
+  });
 
   return (
     <>
       <DocumentLoadNotice />
-      {view === 'profile' ? (
-        <AppShell
-          header={
-            <ErrorBoundary label="the toolbar">
-              <Topbar onOpenShortcuts={() => setShortcutsOpen(true)} />
-            </ErrorBoundary>
-          }
-          main={
-            <ErrorBoundary label="your profile">
-              <div ref={regionRef} tabIndex={-1} className="flex min-h-0 flex-1 flex-col outline-none">
-                <ProfileView />
-              </div>
-            </ErrorBoundary>
-          }
+      <AppShell
+        left={
+          <ErrorBoundary label="the sidebar">
+            <Sidebar
+              onOpenPalette={() => setPaletteOpen(true)}
+              onShowShortcuts={() => setShortcutsOpen(true)}
+            />
+          </ErrorBoundary>
+        }
+        main={
+          <ErrorBoundary label="the editor">
+            <DocumentLoadingBoundary regionRef={regionRef}>
+              <PageTopbar />
+              <Canvas />
+              <FloatingToolbar />
+              <SlashMenu />
+            </DocumentLoadingBoundary>
+          </ErrorBoundary>
+        }
+        aside={
+          <ErrorBoundary label="this panel">
+            <DocumentToolBoundary>
+              <ToolsAside />
+            </DocumentToolBoundary>
+          </ErrorBoundary>
+        }
+      />
+      <ErrorBoundary label="settings">
+        <SettingsDialog
+          open={view === 'profile'}
+          onOpenChange={(open) => setView(open ? 'profile' : 'workspace')}
         />
-      ) : (
-        <AppShell
-          header={
-            <ErrorBoundary label="the toolbar">
-              <Topbar onOpenShortcuts={() => setShortcutsOpen(true)} />
-            </ErrorBoundary>
-          }
-          left={
-            <ErrorBoundary label="the sidebar">
-              <Sidebar />
-            </ErrorBoundary>
-          }
-          main={
-            <ErrorBoundary label="the editor">
-              <DocumentLoadingBoundary regionRef={regionRef}>
-                <Canvas />
-                <ChatAssistant />
-                <DocumentFooter />
-                <FloatingToolbar />
-                <SlashMenu />
-              </DocumentLoadingBoundary>
-            </ErrorBoundary>
-          }
-          right={
-            <ErrorBoundary label="the tools rail">
-              <ToolsRail />
-            </ErrorBoundary>
-          }
-          aside={<ErrorBoundary label="this panel"><DocumentToolBoundary><ToolsAside /></DocumentToolBoundary></ErrorBoundary>}
-        />
-      )}
-      {chrome}
+      </ErrorBoundary>
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onShowShortcuts={() => setShortcutsOpen(true)}
+      />
     </>
   )
 }

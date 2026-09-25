@@ -19,10 +19,10 @@ import type { SlashContext } from '../types';
 export function insertInlineChild(
   ctx: SlashContext,
   build: (id: string) => ParagraphChild,
-): void {
+): string | null {
   const { blockId, insertionRange, refs, updateHtml, addParagraphChild } = ctx;
   const editable = refs.current[blockId];
-  if (!editable) return;
+  if (!editable) return null;
 
   const range = insertionRange.cloneRange();
   // Never fall back to the live document selection: the command search owns
@@ -34,7 +34,7 @@ export function insertInlineChild(
     !editable.contains(range.startContainer) ||
     !editable.contains(range.endContainer)
   ) {
-    return;
+    return null;
   }
 
   const childId = uid();
@@ -66,4 +66,20 @@ export function insertInlineChild(
 
   addParagraphChild(blockId, build(childId));
   updateHtml(blockId, serializeEditableHtml(editable));
+  return childId;
+}
+
+/**
+ * Insert a widget that is useless until it has content — an equation with
+ * no LaTeX, a citation with no source — and open its editor straight away,
+ * the way Notion's /equation does. Left empty, it is taken back out again.
+ */
+export function insertAndEditInlineChild(
+  ctx: SlashContext,
+  build: (id: string) => ParagraphChild,
+  isEmpty: (child: ParagraphChild) => boolean,
+): string | null {
+  const childId = insertInlineChild(ctx, build);
+  if (childId) ctx.editInline?.(childId, isEmpty);
+  return childId;
 }

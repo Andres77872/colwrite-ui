@@ -1,4 +1,4 @@
-import { ChangeCard, EditorContext, ProposalsContext } from 'colwrite-ui';
+import { ChangeCard, EditorContext, LiteralEditor, ProposalsContext } from 'colwrite-ui';
 
 // ChangeCard is one proposed change, rendered where it would land in the
 // document. The accept and reject controls live here rather than in the chat
@@ -44,13 +44,13 @@ function Frame({
   children: React.ReactNode;
 }) {
   return (
-    <EditorContext.Provider value={{ blocks: BLOCKS } as unknown as ECtx}>
+    <LiteralEditor value={{ blocks: BLOCKS } as unknown as ECtx}>
       <ProposalsContext.Provider
         value={{ ...PROPOSALS, ...proposals } as unknown as PCtx}
       >
         <div className="mx-auto w-full max-w-[var(--doc-measure)] px-6">{children}</div>
       </ProposalsContext.Provider>
-    </EditorContext.Provider>
+    </LiteralEditor>
   );
 }
 
@@ -135,6 +135,37 @@ export function BlockedByADependency() {
           placement: null,
           producesBlockId: null,
           dependsOn: ['ch1'],
+          status: 'pending',
+        }}
+      />
+    </Frame>
+  );
+}
+
+// A proposed diagram is reviewed as a drawing, not as Mermaid source: the card
+// draws it with MermaidDiagram.
+export function InsertingADiagram() {
+  return (
+    <Frame>
+      <ChangeCard
+        change={{
+          id: 'ch5',
+          order: 4,
+          kind: 'insert',
+          op: {
+            op: 'insert_block_after',
+            referenceId: 'p3',
+            block: {
+              id: 'fig1',
+              type: 'code',
+              language: 'mermaid',
+              text: 'flowchart LR\n  B[Batch] --> S[Schedule]\n  S --> F[Fit exponent]',
+            },
+          },
+          anchorBlockId: 'p3',
+          placement: 'after',
+          producesBlockId: 'fig1',
+          dependsOn: [],
           status: 'pending',
         }}
       />

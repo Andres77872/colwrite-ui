@@ -2,6 +2,7 @@ import {
   AgentToolsContext,
   BibliographyContext,
   EditorContext,
+  LiteralEditor,
   ParagraphBlock,
   agentToolsAllEnabled,
   buildBibliography,
@@ -55,13 +56,13 @@ const editorValue = (blocks: unknown[]) => ({
 
 function Frame({ children, blocks = [] }: { children: React.ReactNode; blocks?: unknown[] }) {
   return (
-    <EditorContext.Provider value={editorValue(blocks) as unknown as Ctx}>
+    <LiteralEditor value={editorValue(blocks) as unknown as Ctx}>
       <BibliographyContext.Provider value={buildBibliography(blocks as never)}>
         <AgentToolsContext.Provider value={agentToolsAllEnabled}>
           <div className="mx-auto w-full max-w-[var(--doc-measure)] px-6">{children}</div>
         </AgentToolsContext.Provider>
       </BibliographyContext.Provider>
-    </EditorContext.Provider>
+    </LiteralEditor>
   );
 }
 

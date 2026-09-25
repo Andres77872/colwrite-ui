@@ -132,7 +132,7 @@ export function ActivityChart({
 
   if (max === 0) {
     return (
-      <section className="rounded-xl border border-border/60 bg-card p-4">
+      <section className="border-t border-border pt-6">
         {heading}
         <EmptyState
           icon={Activity}
@@ -146,7 +146,7 @@ export function ActivityChart({
   }
 
   return (
-    <section className="rounded-xl border border-border/60 bg-card p-4">
+    <section className="border-t border-border pt-6">
       {heading}
 
       {/* Legend is always present for more than one series: identity must
@@ -345,7 +345,7 @@ function ActivityTable({ series }: { series: DenseDay[] }) {
         </thead>
         <tbody>
           {rows.map((day) => (
-            <tr key={day.key} className="border-t border-border/50">
+            <tr key={day.key} className="border-t border-border">
               <th scope="row" className="py-1.5 pr-2 font-normal">
                 {shortDate(day.date)}
               </th>

@@ -5,8 +5,15 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Spinner } from '@/components/ui/spinner';
 import { streamAgentChat } from '@/services/agentChat';
+import { useAgentEngine } from '@/components/preferences/agentEngineContextState';
+import {
+  AgentStatusLine,
+  advanceProgress,
+  progressForStatus,
+  type AgentProgress,
+} from '@/components/editor/AgentProgress';
+import { toolRunningLabel } from '@/components/editor/ChatAssistant/AgentActivity/toolMeta';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import { stopEditorEvents, useInlineChild } from '../shared';
 import { AlertCircle, ChevronDown, ChevronRight, Sparkles, Square, Trash2 } from 'lucide-react';
@@ -27,6 +34,7 @@ export function AiBeatInline({ child, ...rest }: AiBeatWidgetProps) {
 function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
   const { blockId, child, updateHtml, refs, documentId, ensureRemoteDocument } = props;
   const { patch, remove } = useInlineChild(props);
+  const engines = useAgentEngine();
 
   // Only the streamed output is local: it arrives token by token, and writing
   // every token into the document would put thousands of entries through the
@@ -34,6 +42,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
   // stream ends.
   const [streamed, setStreamed] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [progress, setProgress] = useState<AgentProgress | null>(null);
   const [error, setError] = useState('');
   const abortRef = useRef<AbortController | null>(null);
 
@@ -52,10 +61,15 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
     const controller = new AbortController();
     abortRef.current = controller;
     setGenerating(true);
+    setProgress({ phase: 'thinking', label: 'Thinking…', since: Date.now() });
     setError('');
     setStreamed('');
 
     let text = '';
+    let failed = false;
+    const moveTo = (next: Pick<AgentProgress, 'phase' | 'label'>) => {
+      if (!controller.signal.aborted) setProgress((current) => advanceProgress(current, next));
+    };
     try {
       // Shared with the assistant and the selection toolbar, so a draft that
       // several of them reach for at once is created exactly once.
@@ -64,7 +78,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
         setError('This document could not be saved, so nothing could be generated for it.');
         return;
       }
-      await streamAgentChat(
+      const outcome = await streamAgentChat(
         {
           message: `Use this prompt: ${prompt}\n\nGenerate response for: ${message}`,
           document_id: docId,
@@ -73,16 +87,34 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
           // text this widget is generating. AIBeat produces text; it does not
           // get to change anything.
           mode: 'rewrite',
+          // A draft, not a conversation: no chat is created for it.
+          ephemeral: true,
+          ...engines.requestFor('inline'),
         },
         {
           onToken: (content) => {
             text += content;
             setStreamed(text);
+            setProgress({ phase: 'writing', label: 'Writing…', since: Date.now() });
           },
-          onError: (_code, detail) => setError(detail),
+          onReasoning: () => moveTo({ phase: 'thinking', label: 'Thinking…' }),
+          onStatus: (state, detail) => {
+            const next = progressForStatus(state, detail);
+            if (next) moveTo(next);
+          },
+          onToolCallStart: (tool) => moveTo({ phase: 'tool', label: `${toolRunningLabel(tool)}…` }),
+          onError: (code, detail) => {
+            failed = true;
+            setError(detail);
+            engines.noteRunError(code);
+          },
         },
         { signal: controller.signal },
       );
+      // A stream that closed without finishing is not a finished draft.
+      if (!failed && outcome.terminal === null && !controller.signal.aborted) {
+        setError('The connection closed before the assistant finished; the text may be incomplete.');
+      }
       patch({ output: text });
     } catch (err) {
       if (!controller.signal.aborted) {
@@ -92,6 +124,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
       if (text) patch({ output: text });
     } finally {
       setGenerating(false);
+      setProgress(null);
       setStreamed(null);
       abortRef.current = null;
     }
@@ -129,30 +162,30 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
     return text.length > 72 ? `${text.slice(0, 72)}…` : text || 'Empty';
   }, [output, message]);
 
-  /* The block-level shell mirrors InlineFigureShell — same radius, same
-     header strip — but keeps the primary tint that marks AI-owned content,
-     and its header stays visible because it carries the collapse toggle. */
+  /* A quiet well rather than a tinted card: the violet sparkle is what marks
+     it as AI-owned, as it does everywhere else in the app. The header stays
+     visible because it carries the collapse toggle. */
   return (
     <span
-      className="ai-beat-widget my-2 block overflow-hidden rounded-lg border border-primary/30 bg-primary/5 transition-colors focus-within:border-primary/50"
+      className="ai-beat-widget my-3 block overflow-hidden rounded-lg bg-subtle ring-1 ring-inset ring-border transition-shadow focus-within:ring-ai/40"
       role="group"
       aria-label="AI passage"
       contentEditable={false}
       {...stopEditorEvents}
     >
-      <span className="flex items-center gap-1 border-b border-primary/20 px-2 py-1">
+      <span className="flex items-center gap-1 px-2 py-1">
         <button
           type="button"
           onClick={() => patch({ collapsed: !collapsed })}
           aria-expanded={!collapsed}
-          className="flex items-center gap-1 rounded-sm px-0.5 text-xs font-medium text-primary transition-colors hover:text-foreground"
+          className="flex h-6 items-center gap-1.5 rounded-sm px-1 text-sm font-medium text-foreground transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {collapsed ? (
-            <ChevronRight aria-hidden="true" className="h-3.5 w-3.5" />
+            <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground" />
           ) : (
-            <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" />
+            <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground" />
           )}
-          <Sparkles aria-hidden="true" className="h-3.5 w-3.5" />
+          <Sparkles aria-hidden="true" className="h-3.5 w-3.5 text-ai" />
           AI passage
         </button>
 
@@ -162,9 +195,9 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
 
         <Button
           type="button"
-          variant="ghost"
+          variant="icon"
           size="icon-xs"
-          className="ml-auto text-muted-foreground hover:text-destructive"
+          className="ml-auto hover:text-destructive"
           aria-label="Remove AI passage"
           title="Remove AI passage"
           onClick={remove}
@@ -174,12 +207,12 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
       </span>
 
       {!collapsed && (
-        <span className="block space-y-2.5 p-2.5">
+        <span className="block space-y-2.5 px-3 pb-3 pt-1">
           <span className="block">
             <span className="mb-1 flex items-baseline justify-between gap-2">
               <label
                 htmlFor={`aibeat-message-${child.id}`}
-                className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                className="text-xs font-medium text-muted-foreground"
               >
                 Message
               </label>
@@ -207,7 +240,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
             <span className="mb-1 flex items-baseline justify-between gap-2">
               <label
                 htmlFor={`aibeat-prompt-${child.id}`}
-                className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                className="text-xs font-medium text-muted-foreground"
               >
                 Style prompt
               </label>
@@ -226,14 +259,14 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
 
           {(output || generating) && (
             <span
-              className="block max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-card p-2 text-sm"
+              className="block max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-background p-2.5 text-sm ring-1 ring-inset ring-border"
               aria-live="polite"
             >
               {output}
               {generating && (
                 <span
                   aria-hidden="true"
-                  className="ml-0.5 inline-block h-4 w-1 animate-shimmer align-text-bottom bg-primary"
+                  className="ml-0.5 inline-block h-4 w-1 animate-shimmer align-text-bottom bg-ai"
                 />
               )}
             </span>
@@ -282,10 +315,14 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
             >
               Clear
             </Button>
-            {generating && !output ? (
-              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Spinner className="h-3 w-3" />
-                Thinking…
+            {generating && progress ? (
+              <span className="flex min-w-0 items-center">
+                <AgentStatusLine
+                  progress={progress}
+                  as="span"
+                  className="text-xs"
+                  whileWriting={<span className="text-xs text-muted-foreground animate-shimmer">Writing…</span>}
+                />
               </span>
             ) : (
               <span className="ml-auto text-xs text-muted-foreground">

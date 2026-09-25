@@ -1,5 +1,5 @@
 import { get, getWithHeaders, post, put, del, type ApiRequestInit } from './api';
-import type { Block, Doc } from '../editor/types';
+import type { Block, CitationSource, Doc } from '../editor/types';
 import { coerceBlock } from '../editor/docOps';
 import {
   type DocumentInput,
@@ -21,7 +21,36 @@ type BackendDocument = {
   blocks: Block[];
   name?: string;
   tags?: string[];
+  // Always sent — `null` clears — because a save merges over the stored
+  // document, and an omitted field would keep a library the author emptied.
+  sources: CitationSource[] | null;
+  citationStyle: CitationStyle | null;
 };
+
+const CITATION_STYLES = new Set(['numeric', 'author-year', 'ieee']);
+type CitationStyle = NonNullable<Doc['citationStyle']>;
+
+/**
+ * The library as the canonical model accepts it: objects with a non-empty
+ * key, one per key, and `null` rather than an empty list — an empty list
+ * would change the stored document's content hash for nothing.
+ */
+function normalizeLibrary(value: unknown): CitationSource[] | null {
+  if (!Array.isArray(value)) return null;
+  const seen = new Set<string>();
+  const out: CitationSource[] = [];
+  for (const entry of value) {
+    if (!isUnknownRecord(entry) || typeof entry.key !== 'string' || !entry.key.trim()) continue;
+    if (seen.has(entry.key)) continue;
+    seen.add(entry.key);
+    out.push(entry as CitationSource);
+  }
+  return out.length ? out : null;
+}
+
+function normalizeStyle(value: unknown): CitationStyle | null {
+  return typeof value === 'string' && CITATION_STYLES.has(value) ? (value as CitationStyle) : null;
+}
 
 function normalizeBlocks(value: unknown): Block[] {
   if (!Array.isArray(value)) return [];
@@ -42,7 +71,12 @@ function normalizeBlock(value: unknown): Block | null {
       value.type === 'paragraph' &&
       typeof value.html === 'string' &&
       (value.children === undefined || Array.isArray(value.children)) &&
-      (value.columns === undefined || typeof value.columns === 'number')
+      (value.columns === undefined || typeof value.columns === 'number') &&
+      // Role fields need checking against the canonical rules (a stale
+      // `checked` on a bullet fails the save), so those take the slow path.
+      value.variant === undefined &&
+      value.checked === undefined &&
+      value.indent === undefined
     ) {
       return value as Block;
     }
@@ -51,7 +85,7 @@ function normalizeBlock(value: unknown): Block | null {
 }
 
 function toBackendDocument(input: unknown): BackendDocument {
-  if (Array.isArray(input)) return { version: 1, blocks: input };
+  if (Array.isArray(input)) return { version: 1, blocks: input, sources: null, citationStyle: null };
   if (isUnknownRecord(input)) {
     const version = typeof input.version === 'number' ? input.version : 1;
     const blocks = normalizeBlocks(input.blocks);
@@ -63,12 +97,17 @@ function toBackendDocument(input: unknown): BackendDocument {
     const tags = Array.isArray(input.tags)
       ? input.tags.filter((tag): tag is string => typeof tag === 'string')
       : undefined;
-    const out: BackendDocument = { version, blocks };
+    const out: BackendDocument = {
+      version,
+      blocks,
+      sources: normalizeLibrary(input.sources),
+      citationStyle: normalizeStyle(input.citationStyle),
+    };
     if (name !== undefined) out.name = name;
     if (tags !== undefined) out.tags = tags;
     return out;
   }
-  return { version: 1, blocks: [] };
+  return { version: 1, blocks: [], sources: null, citationStyle: null };
 }
 
 // Normalize backend payload to our internal Doc shape.
@@ -83,7 +122,12 @@ function toEditorDoc(payload: unknown): Doc {
       (typeof payload.title === 'string' && payload.title) ||
       undefined;
     const version = typeof payload.version === 'number' ? payload.version : 1;
-    return { version, blocks: normalizeBlocks(payload.blocks), name };
+    const doc: Doc = { version, blocks: normalizeBlocks(payload.blocks), name };
+    const sources = normalizeLibrary(payload.sources);
+    const citationStyle = normalizeStyle(payload.citationStyle);
+    if (sources) doc.sources = sources;
+    if (citationStyle) doc.citationStyle = citationStyle;
+    return doc;
   }
   // An empty blocks array is a valid blank document. A payload with no blocks
   // field at all is not: treating a malformed success as a blank document made

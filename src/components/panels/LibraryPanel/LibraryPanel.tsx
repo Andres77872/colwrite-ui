@@ -7,7 +7,7 @@ import {
   useState,
   type FormEvent,
 } from 'react';
-import { FolderPlus, RefreshCw, Search, X } from 'lucide-react';
+import { ArrowLeft, FolderPlus, RefreshCw, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -115,12 +115,24 @@ function loadedCollection(
   return null;
 }
 
-export function LibraryPanel() {
+/** A file to open straight away, optionally scrolled to a search match. */
+export type LibraryFocus = { resourceId: number; offset?: number; term?: string };
+
+export function LibraryPanel({
+  initialResource = null,
+  onExit,
+}: {
+  initialResource?: LibraryFocus | null;
+  /** Leave the file manager (back to Research). Adds the "← My PDFs" header. */
+  onExit?: () => void;
+}) {
   const { documentId } = useEditor();
   const { toast } = useToast();
   const [view, setView] = useState<LibraryView>({ kind: 'smart', scope: 'context' });
   const [jump, setJump] = useState<{ offset: number; term: string } | null>(null);
-  const [filter, setFilter] = useState('');
+  // Opened straight onto a file from a Research match: its back arrow returns
+  // to that search, not to a file list the author never saw.
+  const [directEntry, setDirectEntry] = useState(Boolean(initialResource && onExit));
   const [search, setSearch] = useState<SearchState>(NO_SEARCH);
   const [actionError, setActionError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<Partial<Record<ProblemSource, string>>>({});
@@ -184,7 +196,6 @@ export function LibraryPanel() {
   useEffect(() => {
     searchRequestRef.current += 1;
     setSearch(NO_SEARCH);
-    setFilter('');
     setJump(null);
     setActionError(null);
     setDismissed({});
@@ -192,6 +203,17 @@ export function LibraryPanel() {
       searchRequestRef.current += 1;
     };
   }, [locationKey]);
+
+  // Opened from a Research match: go straight to that file, at the match.
+  // Declared after the location reset above, which clears `jump` on mount;
+  // `select` is stable, so this runs again only for a new target.
+  const selectResource = library.select;
+  useEffect(() => {
+    if (!initialResource) return;
+    const { resourceId, offset, term } = initialResource;
+    if (offset !== undefined && term) setJump({ offset, term });
+    void selectResource(resourceId).catch(() => setJump(null));
+  }, [initialResource, selectResource]);
 
   // Announce a conversion finishing, once. Polling silently swapped a row's
   // badge from Converting to Ready, which is invisible to anyone not watching
@@ -538,7 +560,12 @@ export function LibraryPanel() {
           highlight={jump?.term}
           jumpToOffset={jump?.offset}
           moveButtonRef={resourceMoveRef}
+          backLabel={directEntry && onExit ? 'Back to search' : 'Back to the file list'}
           onBack={() => {
+            if (directEntry && onExit) {
+              onExit();
+              return;
+            }
             resourceReturnFocusIdRef.current = selectedResource.id;
             void library.select(null);
             setJump(null);
@@ -551,6 +578,7 @@ export function LibraryPanel() {
             return moved;
           }}
           onDeleted={async (id) => {
+            setDirectEntry(false);
             resourceReturnFocusIdRef.current = id;
             await library.remove(id);
             searchRequestRef.current += 1;
@@ -607,8 +635,10 @@ export function LibraryPanel() {
   // Shown as soon as more pages exist, not only once a page happens to push the
   // count past four — otherwise the control appears mid-scroll and shifts the
   // list under the pointer.
-  const showFilter =
-    library.resources.length > 4 || library.hasMore || filter.trim() !== '';
+  // One box: typing narrows the list by name at once, Enter searches inside
+  // the files. (It used to be a name filter plus a second search field with
+  // its own "Find" button.)
+  const filter = search.result ? '' : search.term;
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2.5">
@@ -618,17 +648,30 @@ export function LibraryPanel() {
         </Alert>
       )}
 
-      <div className="flex items-center gap-1" role="group" aria-label="Which files to show">
+      {onExit && (
+        <div className="-ml-1 flex h-10 shrink-0 items-center gap-1">
+          <Button variant="icon" size="icon-sm" onClick={onExit} aria-label="Back to search">
+            <ArrowLeft aria-hidden="true" />
+          </Button>
+          <h2 className="text-sm font-semibold">My PDFs</h2>
+        </div>
+      )}
+
+      <div className="flex items-center gap-0.5" role="group" aria-label="Which files to show">
         {SCOPES.map((option) => {
           const disabled = documentId === null && option.id !== 'library';
           const hint = disabled ? `${option.hint} ${NO_DOCUMENT_REASON}` : option.hint;
+          const active = activeScope === option.id;
           return (
-            <span key={option.id} className="min-w-0 flex-1">
-              <Button
-                variant={activeScope === option.id ? 'secondary' : 'ghost'}
-                size="sm"
-                className="w-full px-1 text-xs"
-                aria-pressed={activeScope === option.id}
+            <span key={option.id} className="shrink-0">
+              <button
+                type="button"
+                // Same quiet pills as the Research source switch.
+                className={cn(
+                  'inline-flex h-7 items-center whitespace-nowrap rounded-md px-2 text-sm transition-colors duration-120 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50',
+                  active ? 'bg-active font-medium text-foreground' : 'text-muted-foreground hover:bg-hover hover:text-foreground',
+                )}
+                aria-pressed={active}
                 // The hint is a description, not part of the name: these are
                 // one-word toggles and "All — Every PDF on your account" is a
                 // worse name than "All". It used to live only in `title`, which
@@ -639,7 +682,7 @@ export function LibraryPanel() {
                 onClick={() => openSmart(option.id)}
               >
                 {option.label}
-              </Button>
+              </button>
               <span id={`${folderHeadingId}-${option.id}-hint`} className="sr-only">
                 {hint}
               </span>
@@ -647,9 +690,9 @@ export function LibraryPanel() {
           );
         })}
         <Button
-          variant="ghost"
+          variant="icon"
           size="icon-sm"
-          className="shrink-0"
+          className="ml-auto shrink-0"
           disabled={library.refreshing}
           onClick={() => void refreshCanonical()}
           aria-label="Refresh library and folders"
@@ -658,12 +701,9 @@ export function LibraryPanel() {
         </Button>
       </div>
 
-      <section className="rounded-lg border border-border p-1.5" aria-labelledby={folderHeadingId}>
-        <div className="mb-1 flex items-center justify-between gap-2 px-1">
-          <h3
-            id={folderHeadingId}
-            className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
-          >
+      <section aria-labelledby={folderHeadingId}>
+        <div className="mb-0.5 flex items-center justify-between gap-2 pl-1">
+          <h3 id={folderHeadingId} className="text-xs font-medium text-muted-foreground">
             Folders
           </h3>
           <Button
@@ -720,42 +760,54 @@ export function LibraryPanel() {
         />
       )}
 
-      <form onSubmit={onSearch} className="flex items-center gap-1.5">
-        <div className="relative min-w-0 flex-1">
+      <form onSubmit={onSearch} className="relative">
+        {search.loading ? (
+          <Spinner className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2" />
+        ) : (
           <Search
             aria-hidden="true"
-            className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+            className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
           />
-          <Input
-            ref={searchInputRef}
-            type="search"
-            className="h-8 pl-7 text-xs"
-            placeholder={folderView ? 'Search this folder and subfolders…' : 'Search inside your PDFs…'}
-            // Tracks the scope, so the announced name and the visible
-            // placeholder cannot describe two different searches.
-            aria-label={
-              folderView ? 'Search this folder and its subfolders' : 'Search inside your PDFs'
-            }
-            value={search.term}
-            maxLength={MAX_SEARCH_QUERY_CHARS}
-            onChange={(event) => {
+        )}
+        <Input
+          ref={searchInputRef}
+          type="search"
+          enterKeyHint="search"
+          className="h-9 pl-8 pr-8 text-sm [&::-webkit-search-cancel-button]:appearance-none"
+          placeholder={folderView ? 'Filter, or press Enter to search this folder…' : 'Filter, or press Enter to search inside…'}
+          // Tracks the scope, so the announced name and the visible
+          // placeholder cannot describe two different searches.
+          aria-label={
+            folderView ? 'Search this folder and its subfolders' : 'Search inside your PDFs'
+          }
+          aria-busy={search.loading}
+          value={search.term}
+          maxLength={MAX_SEARCH_QUERY_CHARS}
+          onChange={(event) => {
+            searchRequestRef.current += 1;
+            setSearch({
+              term: event.target.value,
+              result: null,
+              loading: false,
+              loadingMore: false,
+              error: null,
+            });
+          }}
+        />
+        {search.term && (
+          <button
+            type="button"
+            aria-label="Clear the search"
+            onClick={() => {
               searchRequestRef.current += 1;
-              setSearch({
-                term: event.target.value,
-                result: null,
-                loading: false,
-                loadingMore: false,
-                error: null,
-              });
+              setSearch(NO_SEARCH);
+              searchInputRef.current?.focus();
             }}
-          />
-        </div>
-        <Button type="submit" size="sm" disabled={search.loading || !search.term.trim()}>
-          {/* The label stays put: swapping it for a bare spinner left the
-              button with no accessible name at all, and jumped its width. */}
-          {search.loading && <Spinner />}
-          {search.loading ? 'Finding…' : 'Find'}
-        </Button>
+            className="absolute right-2 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <X aria-hidden="true" className="h-3.5 w-3.5" />
+          </button>
+        )}
       </form>
 
       {visibleProblems.map((problem) => (
@@ -785,7 +837,6 @@ export function LibraryPanel() {
       {search.result ? (
         <SearchResults
           result={search.result}
-          onClear={() => setSearch(NO_SEARCH)}
           loadingMore={search.loadingMore}
           onLoadMore={() => void loadMoreSearch()}
           onOpen={(resourceId, offset, term) => {
@@ -817,17 +868,6 @@ export function LibraryPanel() {
             onFiles={(files) => void addFiles(files)}
           />
 
-          {showFilter && (
-            <Input
-              type="search"
-              className="h-8 text-xs"
-              placeholder="Filter by name…"
-              aria-label="Filter the list by file name"
-              value={filter}
-              onChange={(event) => setFilter(event.target.value)}
-            />
-          )}
-
           {/* A floor rather than pure `flex-1`: with eight fixed blocks stacked
               above it, a short window squeezed this to nothing instead of
               letting the panel scroll as a whole. */}
@@ -850,6 +890,7 @@ export function LibraryPanel() {
               <ResourceList
                 resources={library.resources}
                 filter={filter}
+                filterHint="Press Enter to search inside the files instead."
                 emptyTitle={
                   effectiveView.kind === 'collection'
                     ? 'No PDFs directly in this folder'

@@ -1,7 +1,7 @@
 import { Button, Input } from 'colwrite-ui';
 import { AlertCircle, Search } from 'lucide-react';
 
-// Ported from ProfileHeader's edit form, CollectionDialogs, panels/shared
+// Ported from the Settings account rows, CollectionDialogs, panels/shared
 // SearchForm and the LibraryPanel search row. The label pattern, the compact
 // h-8 text-xs panel size and the invalid treatment are all the app's own.
 

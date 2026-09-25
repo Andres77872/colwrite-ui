@@ -8,7 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import { cn } from '@/lib/utils';
-import { parseRefParts } from './refParts';
+import { parseRefParts, type RefPart } from './refParts';
 import {
   indexOfSelection,
   positionOfIndex,
@@ -37,6 +37,8 @@ type ChatTaggedInputProps = {
   onEditRef?: (start: number, refText: string) => void;
   onRemoveRef?: (start: number, refText: string) => void;
   onKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
+  /** What a reference chip says. Defaults to its kind and a shortened id. */
+  labelForRef?: (part: RefPart) => string;
   /**
    * Whether the reference picker owns the keyboard right now. Enter belongs to
    * the highlighted option then, not to the message.
@@ -73,6 +75,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
       onEditRef,
       onRemoveRef,
       onKeyDown,
+      labelForRef,
       isPickerOpen,
       maxLength = 2000,
       className,
@@ -172,7 +175,14 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
       renderedRef.current = text;
       onChange(text);
       setEmpty(text.length === 0);
-    }, [caretTo, getCaretRange, maxLength, onChange]);
+
+      // A '#' that was just typed opens the picker. Only on the edit that
+      // wrote it: this used to run on every keyup, so the arrow keys and Enter
+      // meant for the open picker reopened it at its root instead.
+      if (caret && text.length === value.length + 1 && text[caret.start - 1] === '#') {
+        onTriggerPicker?.(caret.start - 1);
+      }
+    }, [caretTo, getCaretRange, maxLength, onChange, onTriggerPicker, value]);
 
     const handleKeyDown = useCallback(
       (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -214,13 +224,6 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
       [caretTo, getCaretRange, insertText, isPickerOpen, onChange, onKeyDown, onRemoveRef, onSubmit, value],
     );
 
-    const handleKeyUp = useCallback(() => {
-      if (composingRef.current) return;
-      const caret = getCaretRange();
-      if (!caret) return;
-      if (value[caret.start - 1] === '#') onTriggerPicker?.(caret.start - 1);
-    }, [getCaretRange, onTriggerPicker, value]);
-
     useImperativeHandle(
       ref,
       () => ({
@@ -253,12 +256,11 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
 
         const label = document.createElement('span');
         label.className = 'ref-chip-label';
-        label.textContent =
-          part.kind === 'document'
+        label.textContent = labelForRef
+          ? labelForRef(part)
+          : part.kind === 'document'
             ? `Doc ${shorten(part.docId ?? '')}`
-            : part.source === 'this'
-              ? 'Block'
-              : `Block ${shorten(part.blockId ?? '')}`;
+            : `Block ${shorten(part.blockId ?? '')}`;
 
         const remove = document.createElement('button');
         remove.type = 'button';
@@ -290,14 +292,14 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
         pendingCaretRef.current = null;
         setCaretRange(caret.start, caret.end);
       }
-    }, [caretTo, onChange, onEditRef, onRemoveRef, setCaretRange, value]);
+    }, [caretTo, labelForRef, onChange, onEditRef, onRemoveRef, setCaretRange, value]);
 
     return (
       <div
         ref={hostRef}
         className={cn(
-          'chat-composer-input max-h-[10rem] min-h-[2.5rem] w-full overflow-y-auto whitespace-pre-wrap break-words',
-          'px-3 py-2 text-sm leading-relaxed outline-none',
+          'chat-composer-input max-h-[12rem] min-h-[2.75rem] w-full overflow-y-auto whitespace-pre-wrap break-words',
+          'px-3 py-1.5 text-[14.5px] leading-[1.6] outline-none',
           'text-foreground caret-primary',
           disabled && 'pointer-events-none opacity-60',
           className,
@@ -314,7 +316,6 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
         data-empty={empty || undefined}
         onInput={handleInput}
         onKeyDown={handleKeyDown}
-        onKeyUp={handleKeyUp}
         onCompositionStart={() => {
           composingRef.current = true;
         }}

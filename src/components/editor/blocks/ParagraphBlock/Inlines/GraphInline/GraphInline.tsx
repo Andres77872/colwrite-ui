@@ -89,20 +89,17 @@ function GraphInlineContent(props: InlineWidgetProps<GraphChild>) {
       onRemove={remove}
       controls={
         <>
-          <span className="mr-1 flex items-center gap-0.5">
+          <span className="flex items-center gap-0.5">
             {KINDS.map(({ value, label, icon: Icon, hint }) => (
               <Button
                 key={value}
                 type="button"
-                variant="ghost"
+                variant="icon"
                 size="icon-xs"
                 aria-label={label}
                 aria-pressed={kind === value}
                 title={`${label} — ${hint}`}
-                className={cn(
-                  'text-muted-foreground hover:text-foreground',
-                  kind === value && 'bg-accent text-foreground',
-                )}
+                className={cn(kind === value && 'bg-active text-foreground')}
                 onClick={() => patch({ kind: value })}
               >
                 <Icon className="h-3.5 w-3.5" />
@@ -213,16 +210,10 @@ function GraphInlineContent(props: InlineWidgetProps<GraphChild>) {
           </InlineSettings>
         </>
       }
-      caption={
-        child.caption ? (
-          <span className="block border-t border-border/60 px-3 py-1.5 text-xs text-muted-foreground">
-            {child.caption}
-          </span>
-        ) : undefined
-      }
+      caption={child.caption || undefined}
     >
       {child.title && (
-        <span className="block px-3 pt-2 text-sm font-medium text-foreground">{child.title}</span>
+        <span className="block text-center text-sm font-medium text-foreground">{child.title}</span>
       )}
       <ChartFigure
         kind={kind}
@@ -231,7 +222,7 @@ function GraphInlineContent(props: InlineWidgetProps<GraphChild>) {
         colors={colors}
         xLabel={child.xLabel}
         yLabel={child.yLabel}
-        className="px-1 py-2"
+        className="py-2"
       />
     </InlineFigureShell>
   );

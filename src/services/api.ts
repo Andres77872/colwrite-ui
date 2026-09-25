@@ -72,31 +72,124 @@ function apiError(res: Response, data: unknown): ApiError {
 }
 
 let refreshInFlight: Promise<boolean> | null = null;
+const SESSION_LOCK = `colwrite:session:${buildUrl('/auth/refresh')}`;
+const REFRESH_MARKER_KEY = `${SESSION_LOCK}:completion:v1`;
+const REFRESH_FRESHNESS_MS = 5_000;
+type RefreshMarker = { generation: string; completedAt: number; ok: boolean };
+
+function sessionLocks(): LockManager | undefined {
+  return typeof navigator !== 'undefined' ? navigator.locks : undefined;
+}
+
+function readRefreshMarker(): RefreshMarker | null {
+  try {
+    const raw = window.localStorage.getItem(REFRESH_MARKER_KEY);
+    const value: unknown = raw ? JSON.parse(raw) : null;
+    if (isUnknownRecord(value) && typeof value.generation === 'string' &&
+      value.generation.length > 0 && value.generation.length <= 100 &&
+      typeof value.completedAt === 'number' && Number.isFinite(value.completedAt) &&
+      typeof value.ok === 'boolean') {
+      return value as RefreshMarker;
+    }
+  } catch { /* Blocked storage does not prevent exclusive cookie rotation. */ }
+  return null;
+}
+
+/** Capture before an authenticated request so a late 401 can adopt a peer refresh. */
+export function getRefreshGeneration(): string | null {
+  return readRefreshMarker()?.generation ?? null;
+}
+
+function recordRefreshCompletion(ok: boolean): void {
+  // This is coordination metadata only. Credentials stay in HttpOnly cookies.
+  const marker: RefreshMarker = {
+    generation: typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+    completedAt: Date.now(),
+    ok,
+  };
+  try { window.localStorage.setItem(REFRESH_MARKER_KEY, JSON.stringify(marker)); }
+  catch { /* The Web Lock still prevents overlapping rotations. */ }
+}
+
+async function exclusiveSessionMutation<T>(mutate: () => Promise<T>): Promise<T> {
+  const locks = sessionLocks();
+  if (!locks) return mutate();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    // The signal only limits waiting for the lock. Once acquired, hold it
+    // until fetch settles; never release a still-running token rotation.
+    return await locks.request(SESSION_LOCK, {
+      mode: 'exclusive', signal: controller.signal,
+    }, mutate);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 /**
- * Rotate the access cookie, at most one rotation at a time.
+ * Single-flight in this context and exclusive across same-origin tabs.
  *
- * The app fires several requests the moment it mounts, and each rotation
- * invalidates the previous refresh token — firing them in parallel would look
- * like token reuse to the auth service and revoke the whole family. Everyone
- * who asks while a rotation is in flight waits on that same rotation.
- *
- * Uses a bare `fetch` rather than going through `request()` so a failing
- * refresh cannot recurse into another refresh.
+ * Web Locks (HTTPS or localhost) serialize cookie writes; the shared successful
+ * generation avoids repeating a rotation already completed by another tab.
+ * No access/refresh tokens are readable or persisted by this coordinator.
+ * Production without Web Locks fails closed to sign-in. Development retains
+ * one-context refresh support; concurrent tabs there require a secure context.
+ * See https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API.
  */
-export function ensureRefreshed(): Promise<boolean> {
+export function ensureRefreshed(
+  observedGeneration: string | null = getRefreshGeneration(),
+): Promise<boolean> {
   if (!refreshInFlight) {
-    refreshInFlight = fetch(buildUrl('/auth/refresh'), {
-      method: 'POST',
-      credentials: 'include',
-    })
-      .then((res) => res.ok)
-      .catch(() => false)
-      .finally(() => {
-        refreshInFlight = null;
+    const locks = sessionLocks();
+    refreshInFlight = (async () => {
+      if (!locks && import.meta.env.PROD) return false;
+      return exclusiveSessionMutation(async () => {
+        // Without shared locks keep the original development behavior. A
+        // localStorage timestamp alone is never a mutual-exclusion lock.
+        if (locks) {
+          const marker = readRefreshMarker();
+          const age = marker ? Date.now() - marker.completedAt : Infinity;
+          if (marker && (marker.generation !== observedGeneration ||
+            (age >= 0 && age <= REFRESH_FRESHNESS_MS))) return marker.ok;
+        }
+        try {
+          const response = await fetch(buildUrl('/auth/refresh'), {
+            method: 'POST', credentials: 'include',
+          });
+          if (locks) recordRefreshCompletion(response.ok);
+          return response.ok;
+        } catch {
+          if (locks) recordRefreshCompletion(false);
+          return false;
+        }
       });
+    })().catch(() => false).finally(() => { refreshInFlight = null; });
   }
   return refreshInFlight;
+}
+
+/** Serialize all cookie-changing endpoints with refresh, without recursion. */
+async function fetchWithSessionBoundary(
+  path: string, url: string, init: RequestInit,
+): Promise<Response> {
+  const endpoint = path.split('?')[0];
+  if (!['/auth/login', '/auth/register', '/auth/logout', '/auth/refresh'].includes(endpoint)) {
+    return fetch(url, init);
+  }
+  return exclusiveSessionMutation(async () => {
+    try {
+      const response = await fetch(url, init);
+      if (sessionLocks() && (response.ok || endpoint === '/auth/logout' || endpoint === '/auth/refresh')) {
+        recordRefreshCompletion(endpoint !== '/auth/logout' && response.ok);
+      }
+      return response;
+    } catch (error) {
+      if (sessionLocks() && endpoint === '/auth/logout') recordRefreshCompletion(false);
+      throw error;
+    }
+  });
 }
 
 /**
@@ -166,12 +259,13 @@ async function requestWithHeaders<T>(
   const baseDelayMs = retry?.baseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
 
   for (let attempt = 1; ; attempt += 1) {
-    let res = await fetch(url, requestInit);
+    const observedGeneration = getRefreshGeneration();
+    let res = await fetchWithSessionBoundary(path, url, requestInit);
 
     // The access cookie's lifetime tracks the short access-token TTL, so an
     // expired session mid-visit is routine. Rotate once and replay before
     // treating it as a real sign-out.
-    if (res.status === 401 && !isSelfReporting(path) && (await ensureRefreshed())) {
+    if (res.status === 401 && !isSelfReporting(path) && (await ensureRefreshed(observedGeneration))) {
       res = await fetch(url, requestInit);
     }
 

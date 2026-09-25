@@ -47,20 +47,50 @@ export type BibliographyEntry = {
   yearSuffix: string;
   /** Nothing beyond the bare key was ever attached — the entry cannot be read. */
   unresolved: boolean;
+  /**
+   * The metadata came from a record — a paper index, a DOI registry, a page
+   * the assistant read, one of the author's PDFs — rather than being typed.
+   * Hallucinated references are a desk-reject criterion at major venues, so
+   * the difference is shown wherever a source is.
+   */
+  verified: boolean;
   usages: CitationUsage[];
 };
+
+export type BibliographyOptions = {
+  /**
+   * The document's source library. An entry's metadata wins over the copies
+   * citations carry: the library is where the author corrects a source once
+   * for every place it is cited.
+   */
+  library?: readonly CitationSource[];
+  /** The document's chosen style; overrides the per-citation majority. */
+  style?: CitationStyle | null;
+};
+
+/** Whether a source's metadata came from a record rather than from typing. */
+export function isVerifiedSource(source: CitationSource | undefined): boolean {
+  return Boolean(source?.provider && source.provider !== 'manual' && source.title);
+}
 
 export type Bibliography = {
   entries: readonly BibliographyEntry[];
   byKey: ReadonlyMap<string, BibliographyEntry>;
   /** The document's prevailing style: the most used one, ties to the first. */
   style: CitationStyle;
+  /**
+   * The style the author chose for the whole document, when they chose one.
+   * It overrides every citation's own `style`, so switching the document to
+   * author–year relabels every citation at once.
+   */
+  documentStyle: CitationStyle | null;
 };
 
 export const EMPTY_BIBLIOGRAPHY: Bibliography = {
   entries: [],
   byKey: new Map(),
   style: 'numeric',
+  documentStyle: null,
 };
 
 /* ----------------------------------------
@@ -256,10 +286,15 @@ function sortKeyFor(entry: BibliographyEntry): string {
  * this in step with whatever `buildBibliography` reads; a field it consumes
  * that the fingerprint misses would serve a stale reference list.
  */
-export function citationFingerprint(blocks: readonly Block[]): string {
-  const parts: string[] = [];
+export function citationFingerprint(
+  blocks: readonly Block[],
+  options: BibliographyOptions = {},
+): string {
+  const parts: string[] = [options.style ?? '', JSON.stringify(options.library ?? null)];
   for (const block of blocks) {
     if (block.type !== 'paragraph') continue;
+    // Order matters: numbering follows the placeholders' order in the text.
+    parts.push(block.id, placeholderOrder(block.html).join(','));
     for (const child of block.children ?? []) {
       if (child.type !== 'citation') continue;
       parts.push(
@@ -282,7 +317,44 @@ export function citationFingerprint(blocks: readonly Block[]): string {
  * no way to tell it was one paper — the single most visible thing a numeric
  * citation style is responsible for.
  */
-export function buildBibliography(blocks: readonly Block[]): Bibliography {
+/** Ids of a paragraph's widget placeholders, in the order they appear in its text. */
+function placeholderOrder(html: string): string[] {
+  return Array.from(html.matchAll(/data-child-id="([^"]+)"/g), (match) => match[1]);
+}
+
+/**
+ * A paragraph's citation children in reading order.
+ *
+ * `children` is an array in insertion order; a citation added before an
+ * existing one in the same sentence was numbered after it, so the text read
+ * `[2] … [1]`. The placeholders' order in the html is the reading order.
+ */
+function citationsInTextOrder(block: Block): CitationChild[] {
+  if (block.type !== 'paragraph') return [];
+  const citations = (block.children ?? []).filter(
+    (child): child is CitationChild => child.type === 'citation',
+  );
+  if (citations.length < 2) return citations;
+  const position = new Map(placeholderOrder(block.html).map((id, index) => [id, index]));
+  return citations
+    .map((child, index) => ({ child, index }))
+    .sort(
+      (a, b) =>
+        (position.get(a.child.id) ?? Number.MAX_SAFE_INTEGER) -
+          (position.get(b.child.id) ?? Number.MAX_SAFE_INTEGER) || a.index - b.index,
+    )
+    .map((entry) => entry.child);
+}
+
+export function buildBibliography(
+  blocks: readonly Block[],
+  options: BibliographyOptions = {},
+): Bibliography {
+  const library = new Map<string, CitationSource>();
+  for (const source of options.library ?? []) {
+    const key = canonicalCitationKey(source.key);
+    if (key && !library.has(key)) library.set(key, source);
+  }
   const order: string[] = [];
   const collected = new Map<
     string,
@@ -293,9 +365,7 @@ export function buildBibliography(blocks: readonly Block[]): Bibliography {
 
   for (const block of blocks) {
     if (block.type !== 'paragraph') continue;
-    for (const child of block.children ?? []) {
-      if (child.type !== 'citation') continue;
-
+    for (const child of citationsInTextOrder(block)) {
       const style = child.style ?? 'numeric';
       styleCounts.set(style, (styleCounts.get(style) ?? 0) + 1);
       firstStyle ??= style;
@@ -333,14 +403,16 @@ export function buildBibliography(blocks: readonly Block[]): Bibliography {
     }
   }
 
+  const style = options.style ?? dominantStyle(styleCounts, firstStyle);
+  const documentStyle = options.style ?? null;
   if (order.length === 0) {
-    return { ...EMPTY_BIBLIOGRAPHY, style: dominantStyle(styleCounts, firstStyle) };
+    return { ...EMPTY_BIBLIOGRAPHY, style, documentStyle };
   }
 
-  const style = dominantStyle(styleCounts, firstStyle);
   const entries: BibliographyEntry[] = order.map((key) => {
     const bucket = collected.get(key)!;
-    const source = mergeSources(key, bucket.sources);
+    const fromLibrary = library.get(key);
+    const source = mergeSources(key, fromLibrary ? [fromLibrary, ...bucket.sources] : bucket.sources);
     return {
       key,
       displayKey: bucket.displayKey,
@@ -348,6 +420,7 @@ export function buildBibliography(blocks: readonly Block[]): Bibliography {
       source,
       yearSuffix: '',
       unresolved: !source.title && !source.authors,
+      verified: isVerifiedSource(fromLibrary) || bucket.sources.some(isVerifiedSource),
       usages: bucket.usages,
     };
   });
@@ -370,7 +443,7 @@ export function buildBibliography(blocks: readonly Block[]): Bibliography {
     byKey.set(entry.key, entry);
     for (const alias of collected.get(entry.key)!.aliases) byKey.set(alias, entry);
   }
-  return { entries, byKey, style };
+  return { entries, byKey, style, documentStyle };
 }
 
 function dominantStyle(
@@ -541,7 +614,7 @@ export function citationLabelParts(
     .map((part) => part?.trim())
     .filter(Boolean)
     .join(', ');
-  const style: CitationStyle = child.style ?? 'numeric';
+  const style: CitationStyle = bibliography.documentStyle ?? child.style ?? 'numeric';
   const parts: CitationLabelPart[] = [];
 
   if (style === 'author-year') {

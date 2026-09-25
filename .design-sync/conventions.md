@@ -20,13 +20,17 @@ without it:
 `PanelsProvider` / `AuthProvider` / `ViewProvider` (also on the global). Prefer
 composing your own frame out of `bg-card` regions over reaching for those three.
 
-## The theme is single-mode dark
+## Light by default, dark through `data-theme`
 
-There is no light palette and no `dark:` variant — `@custom-variant dark` is
-deliberately absent, so a `dark:` utility silently does nothing. The surface is
-`#0a0a0f` with near-white text; shadows, the scrim and the chart series are all
-tuned against it. Never write light-mode styles, and never set a white/light
-background on a container holding DS components.
+The default palette is light (a white page, `#37352f` text, a `#f7f7f5`
+sidebar). `data-theme="dark"` on `<html>` — or on any container, for a dark
+island — switches every token to the dark set (`#191919` page). The app sets
+it from the author's System / Light / Dark choice (`src/lib/theme.ts`).
+
+Style with the semantic tokens and both themes follow for free. `dark:` exists
+(`@custom-variant dark` keys it to `data-theme`, not the OS) but reach for it
+only for a true one-off: a `dark:` pair is a token that has not been named yet.
+Never hard-code a surface colour, `white/NN` or `black/NN`.
 
 ## Styling idiom: Tailwind CSS v4, with these token names
 
@@ -37,14 +41,18 @@ shipped stylesheet and will render as nothing.
 
 | Family | Class names |
 | --- | --- |
-| Surfaces | `bg-background` `bg-card` `bg-popover` `bg-muted` `bg-accent` `bg-secondary` |
-| Text | `text-foreground` `text-muted-foreground` `text-primary` `text-destructive` — plus the `-foreground` pair of any filled surface |
-| Fills that carry white text | `bg-primary-strong` `bg-destructive-strong` (the base `primary`/`destructive` hues do not reach 4.5:1 against white at button text sizes) |
+| Surfaces | `bg-background` `bg-card` `bg-popover` `bg-sidebar` `bg-muted` `bg-secondary` `bg-code-bg` |
+| Interaction fills | `bg-hover` (hover) `bg-active` (pressed/selected) `bg-subtle` (resting well, inputs) — translucent, so they work on any surface. `bg-accent` equals `bg-hover` |
+| Text | `text-foreground` `text-muted-foreground` `text-placeholder` `text-sidebar-foreground` `text-link` `text-destructive` — plus the `-foreground` pair of any filled surface |
+| Fills that carry white text | `bg-primary-strong` `bg-destructive-strong` `bg-ai-strong` (the base `primary`/`destructive` hues do not reach 4.5:1 against white at button text sizes) |
+| AI | `text-ai` `bg-ai/10` `bg-ai-strong text-ai-foreground` — the violet reserved for anything the model does |
 | Status | `success` `warning` `info` `destructive`, each with a `-foreground` pair |
-| Borders / focus | `border-border` `border-input` `ring-ring` `outline-ring` |
-| Type scale | `text-2xs`(10) `text-xs`(11) `text-sm`(13) `text-base`(14) `text-md`(15) `text-lg`(16) `text-xl`(20) `text-2xl`(28) `text-3xl`(36) `text-4xl`(48) |
+| Tints | `bg-tint-{gray,brown,orange,yellow,green,blue,purple,pink,red}` with `text-tint-*-fg` (each pair ≥4.5:1) — callouts, tags, badges |
+| Borders / focus | `border-border` (= `border-divider`, the hairline) `border-border-strong` / `border-input` (control edges) `ring-ring` `outline-ring` |
+| Overlays | `bg-scrim` `bg-tooltip text-tooltip-foreground` `bg-selection` `bg-block-selection` |
+| Type scale | `text-2xs`(11) `text-xs`(12) `text-sm`(14, chrome default) `text-base`(14) `text-md`(16, document body) `text-lg`(18) `text-xl`(20) `text-2xl`(24) `text-3xl`(30) `text-4xl`(40) |
 | Fonts | `font-sans` `font-mono` |
-| Radius | `rounded-sm`(6) `rounded-md`(10) `rounded-lg`(12) `rounded-xl`(16) `rounded-full` |
+| Radius | `rounded-xs`(3) `rounded-sm`(4) `rounded-md`(6) `rounded-lg`(8) `rounded-xl`(12) `rounded-2xl`(16) `rounded-full` |
 | Shadow | `shadow-sm` `shadow-md` `shadow-lg` `shadow-xl` |
 | Motion | `animate-spin` `animate-shimmer` `animate-slide-in-up`, and `animate-in`/`animate-out` with `fade-in-0` `zoom-in-95` `slide-in-from-{top,bottom,left,right}-2` |
 | Charts | `bg-series-1` … `bg-series-8` (a fixed categorical order — a hue belongs to a category), `border-chart-grid` `text-chart-axis` |

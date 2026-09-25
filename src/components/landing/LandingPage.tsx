@@ -1,4 +1,5 @@
 import { useAuth } from '@/components/auth/authContextState';
+import { useForcedTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
 import { BrandLockup } from '@/components/common/Brand';
 import {
@@ -21,7 +22,7 @@ const NAV_LINKS = [
 
 function LandingNav({ onSignIn }: { onSignIn: () => void }) {
   return (
-    <header className="sticky top-0 z-[var(--z-chrome)] border-b border-border/50 bg-background/80 backdrop-blur-sm">
+    <header className="sticky top-0 z-[var(--z-chrome)] border-b border-border bg-background/80 backdrop-blur-sm">
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-6">
         <a href="#top" className="rounded-md">
           <BrandLockup size="sm" />
@@ -47,7 +48,7 @@ function LandingNav({ onSignIn }: { onSignIn: () => void }) {
 
 function LandingFooter() {
   return (
-    <footer className="border-t border-border/50">
+    <footer className="border-t border-border">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-6">
         <BrandLockup size="sm" showTagline />
         <p className="text-2xs text-muted-foreground/60">
@@ -65,9 +66,13 @@ function LandingFooter() {
  */
 export function LandingPage() {
   const { openAuth } = useAuth();
+  // The landing keeps its dark art direction whatever the visitor's theme.
+  // Pinned on <html> as well as on the wrapper: the sign-in dialog and the
+  // tooltips portal into <body>, outside this subtree.
+  useForcedTheme('dark');
 
   return (
-    <div id="top" className="min-h-dvh bg-background text-foreground">
+    <div id="top" data-theme="dark" className="min-h-dvh bg-background text-foreground">
       <LandingNav onSignIn={openAuth} />
       <main>
         <HeroSection onSignIn={openAuth} />

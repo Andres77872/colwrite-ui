@@ -1,23 +1,14 @@
-import { ChatRefTags, EditorContext } from 'colwrite-ui';
+import { ChatRefTags, EditorContext, LiteralEditor } from 'colwrite-ui';
 
-// ChatRefTags renders a chat message's text with its `#doc/…` references shown
-// as chips rather than raw slugs. It is what makes a sent message readable
-// after the fact, and it is used on two different surfaces:
-//
-//   • surface="card"   — the default, on the assistant's own card background
-//   • surface="onfill" — on a filled user bubble, where the chip has to sit on
-//                        a tinted surface instead of the card
-//
-// `interactive` turns the chips into buttons (onTagClick / onTagRemove); left
-// off they are static text, which is what a sent message wants.
+// ChatRefTags renders a sent chat message's text with its `#doc/…` and
+// `#this/…` references shown as chips rather than raw slugs. It sits in the
+// user's muted bubble, so that is the surface these cards use.
 //
 // It reads the editor to resolve a reference to a document name, so a literal
 // context is supplied — never the real provider (Date.now()/uid() seeding and a
 // list request on mount; see .design-sync/NOTES.md).
 
 type Ctx = React.ContextType<typeof EditorContext>;
-
-const noop = () => {};
 
 const EDITOR = {
   documentId: 'doc-1',
@@ -27,7 +18,7 @@ const EDITOR = {
 
 function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <EditorContext.Provider value={EDITOR as unknown as Ctx}>{children}</EditorContext.Provider>
+    <LiteralEditor value={EDITOR as unknown as Ctx}>{children}</LiteralEditor>
   );
 }
 
@@ -36,21 +27,11 @@ const ONE_REF =
 const TWO_REFS =
   'Compare the results table in #doc/attention-revisited with the one in #doc/scaling-notes and tell me where they disagree.';
 
-export function OnACard() {
+export function InAMessage() {
   return (
     <Frame>
-      <div className="max-w-[34rem] rounded-lg border border-border bg-card p-3 text-sm">
+      <div className="max-w-[34rem] rounded-xl bg-subtle px-3 py-2 text-sm">
         <ChatRefTags text={ONE_REF} />
-      </div>
-    </Frame>
-  );
-}
-
-export function OnAFilledBubble() {
-  return (
-    <Frame>
-      <div className="max-w-[34rem] rounded-lg bg-primary p-3 text-sm text-primary-foreground">
-        <ChatRefTags text={ONE_REF} surface="onfill" />
       </div>
     </Frame>
   );
@@ -59,18 +40,8 @@ export function OnAFilledBubble() {
 export function SeveralReferences() {
   return (
     <Frame>
-      <div className="max-w-[34rem] rounded-lg border border-border bg-card p-3 text-sm">
+      <div className="max-w-[34rem] rounded-xl bg-subtle px-3 py-2 text-sm">
         <ChatRefTags text={TWO_REFS} />
-      </div>
-    </Frame>
-  );
-}
-
-export function Interactive() {
-  return (
-    <Frame>
-      <div className="max-w-[34rem] rounded-lg border border-border bg-card p-3 text-sm">
-        <ChatRefTags text={TWO_REFS} interactive onTagClick={noop} onTagRemove={noop} />
       </div>
     </Frame>
   );
@@ -79,7 +50,7 @@ export function Interactive() {
 export function WithoutAnyReferences() {
   return (
     <Frame>
-      <div className="max-w-[34rem] rounded-lg border border-border bg-card p-3 text-sm">
+      <div className="max-w-[34rem] rounded-xl bg-subtle px-3 py-2 text-sm">
         <ChatRefTags text="Which of these two scaling claims is better supported by the data in section 4?" />
       </div>
     </Frame>

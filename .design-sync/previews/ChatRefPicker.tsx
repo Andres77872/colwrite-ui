@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { ChatRefPicker, EditorContext } from 'colwrite-ui';
+import { ChatRefPicker, EditorContext, LiteralEditor } from 'colwrite-ui';
 
 // ChatRefPicker is the "#" document picker in the chat composer. It is
 // imperative by design: the composer owns the text, and tells the picker when
@@ -74,7 +74,7 @@ function Picker({ input, documents }: { input: string; documents: typeof DOCUMEN
   };
 
   return (
-    <EditorContext.Provider value={editor as unknown as Ctx}>
+    <LiteralEditor value={editor as unknown as Ctx}>
       {/* The list is `absolute bottom-full`, so it needs a POSITIONED ancestor
           wrapping the composer — without one it resolves against the root and
           lands at a negative top, off the card entirely. The assistant panel
@@ -97,7 +97,7 @@ function Picker({ input, documents }: { input: string; documents: typeof DOCUMEN
           />
         </div>
       </div>
-    </EditorContext.Provider>
+    </LiteralEditor>
   );
 }
 

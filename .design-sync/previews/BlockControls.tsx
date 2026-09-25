@@ -1,90 +1,124 @@
-import { BlockControls, EditorContext } from 'colwrite-ui';
+import { BlockControls, EditorContext, LiteralEditor, ToastProvider } from 'colwrite-ui';
 
-// BlockControls is the gutter affordance beside one block: an "add block" menu
-// and an options menu (move, lock, hide from the assistant, change level or
-// columns, delete).
+// BlockControls is the gutter beside one block: `+` (add a line below and open
+// the "/" menu on it), the `⋮⋮` handle (drag to move, click for the block
+// menu), and the author's marks — locked, hidden from the assistant,
+// collapsed — which stay visible while the controls are not.
 //
-// Both menus were hand-built portals once — no menu semantics, no arrow-key
-// navigation, no focus return, and a z-[9999] that put them above modal
-// dialogs. They are Radix menus now, which is also what makes them previewable:
-// open state lives in the EDITOR context (`openMenuBlockId` + `openMenuType`),
-// not inside the component, so a card can render either menu open by setting
-// those two fields.
+// The component takes the block and its menu state as props (`block`,
+// `isFirst`, `isLast`, `menuOpen`), which is what makes the menu previewable:
+// the menu is a controlled Radix menu, so `menuOpen` renders it open. There is
+// no separate "add" menu any more — `+` inserts a line and opens the "/" menu,
+// which is SlashMenu's card — so the old AddMenuOpen cell is gone.
+//
+// Placement comes from globals.css: the controls sit outside a `.block-row`
+// on its left, in the page padding of `.document-container`, revealed on
+// hover, focus or while the menu is open. So each cell renders that real
+// container and row, exactly as Canvas does — which is also where the block's
+// type size comes from. `useToast` (Copy link, Copy as Markdown) throws
+// without ToastProvider.
 //
 // Because an open menu portals to document.body, these cells are one-per-card
 // (cardMode "single" in .design-sync/config.json) — otherwise every open menu
 // in a grid lands on the same body and they paint over each other.
 
 type Ctx = React.ContextType<typeof EditorContext>;
+type Block = React.ComponentProps<typeof BlockControls>['block'];
 
 const refs = { current: {} as Record<string, HTMLDivElement | null> };
 const noop = () => {};
-const newId = () => 'new-block';
 
-const BLOCKS = [
-  { id: 'h1', type: 'heading' as const, level: 2, html: '3. Method' },
-  {
-    id: 'p1',
-    type: 'paragraph' as const,
-    html: 'We decouple the learning-rate schedule from the batch size and re-run the original sweep at three compute budgets.',
-  },
-];
+const HEADING = { id: 'h1', type: 'heading', level: 2, html: '3. Method' } as Block;
+const PARAGRAPH = {
+  id: 'p1',
+  type: 'paragraph',
+  html: 'We decouple the learning-rate schedule from the batch size and re-run the original sweep at three compute budgets.',
+  children: [],
+  columns: 1,
+} as Block;
 
-const BASE = {
-  blocks: BLOCKS,
+const EDITOR = {
   refs,
-  addBlockAfter: newId,
+  // The menu footer's "Page edited …" line is relative to now; null leaves it
+  // out, so the card does not change from one sync to the next.
+  lastSavedAt: null,
+  duplicateBlock: noop,
+  insertBlocksAfter: (_after: string, blocks: Array<{ id: string }>) => blocks.map((block) => block.id),
+  insertBlockBeforeExact: noop,
+  moveBlock: noop,
   removeBlock: noop,
-  toggleAiHidden: noop,
-  toggleLocked: noop,
-  toggleCollapsed: noop,
-  setParagraphColumns: noop,
-  setHeadingLevel: noop,
+  selectBlocks: noop,
+  setBlockKind: noop,
   setBlockMenu: noop,
-  openMenuBlockId: null,
-  openMenuType: null,
+  setHeadingLevel: noop,
+  setParagraphColumns: noop,
+  toggleAiHidden: noop,
+  toggleCollapsed: noop,
+  toggleLocked: noop,
 };
 
-function Frame({ value, children }: { value?: Record<string, unknown>; children: React.ReactNode }) {
+function Row({
+  block,
+  menuOpen = false,
+  isFirst = false,
+  isLast = false,
+  children,
+}: {
+  block: Block;
+  menuOpen?: boolean;
+  isFirst?: boolean;
+  isLast?: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <EditorContext.Provider value={{ ...BASE, ...value } as unknown as Ctx}>
-      <div className="flex min-h-[16rem] items-start gap-2 p-4">{children}</div>
-    </EditorContext.Provider>
+    <ToastProvider>
+      <LiteralEditor value={EDITOR as unknown as Ctx}>
+        <div className="min-h-[16rem] w-[40rem] py-4">
+          <div className="document-container">
+            <div
+              className="block-row group"
+              data-kind={block.type === 'heading' ? `h${block.level}` : 'text'}
+              data-block-id={block.id}
+            >
+              <BlockControls block={block} isFirst={isFirst} isLast={isLast} menuOpen={menuOpen} />
+              <div className="block-content w-full">{children}</div>
+            </div>
+          </div>
+        </div>
+      </LiteralEditor>
+    </ToastProvider>
   );
 }
 
-// There is deliberately no "resting" cell. The gutter affordances are
-// opacity-0 until the block row is hovered or a menu is open, so a resting cell
-// renders the paragraph and nothing of this component at all — an empty card
-// that looks broken rather than one that documents the quiet default.
-
-export function AddMenuOpen() {
+// There is deliberately no plain "resting" cell: the controls are opacity-0
+// until the row is hovered or the menu is open, so a resting block with no
+// marks renders nothing of this component. A block with marks does.
+export function MarksOnALockedHiddenBlock() {
   return (
-    <Frame value={{ openMenuBlockId: 'p1', openMenuType: 'add' }}>
-      <BlockControls id="p1" />
-      <p className="max-w-[32rem] text-sm leading-relaxed text-muted-foreground">
-        We decouple the learning-rate schedule from the batch size.
+    <Row block={{ ...PARAGRAPH, locked: true, aiHidden: true } as Block}>
+      <p>
+        We decouple the learning-rate schedule from the batch size and re-run the original sweep at
+        three compute budgets.
       </p>
-    </Frame>
+    </Row>
   );
 }
 
 export function OptionsMenuOnAParagraph() {
   return (
-    <Frame value={{ openMenuBlockId: 'p1', openMenuType: 'options' }}>
-      <BlockControls id="p1" />
-      <p className="max-w-[32rem] text-sm leading-relaxed text-muted-foreground">
-        We decouple the learning-rate schedule from the batch size.
+    <Row block={PARAGRAPH} menuOpen isLast>
+      <p>
+        We decouple the learning-rate schedule from the batch size and re-run the original sweep at
+        three compute budgets.
       </p>
-    </Frame>
+    </Row>
   );
 }
 
 export function OptionsMenuOnAHeading() {
   return (
-    <Frame value={{ openMenuBlockId: 'h1', openMenuType: 'options' }}>
-      <BlockControls id="h1" />
-      <h2 className="text-lg font-semibold">3. Method</h2>
-    </Frame>
+    <Row block={HEADING} menuOpen isFirst>
+      <h2>3. Method</h2>
+    </Row>
   );
 }

@@ -1,8 +1,26 @@
 @import "tailwindcss";
 
+/* `dark:` follows the app's appearance setting, not the OS. Tailwind's default
+   `dark:` is a `prefers-color-scheme` media query, which would disagree with
+   an author who forced Light on a dark OS. Prefer a semantic token over a
+   `dark:` pair; the variant is here for the rare one-off. */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
 /* ============================================
    COLWRITE DESIGN SYSTEM — TAILWIND CSS 4
-   Dark-first theme.
+   Light by default, dark through `data-theme="dark"`.
+
+   `@theme` holds the LIGHT values. The `[data-theme="dark"]` block after it
+   re-declares every colour for dark, on <html> (set by src/lib/theme.ts and
+   the pre-paint script in index.html) or on any element that wants to be a
+   dark island (the landing page). This must stay plain `@theme`, never
+   `@theme inline`: utilities have to compile to `var(--color-*)` so one
+   attribute switches them at runtime.
+
+   Every colour is a literal in both sets — no token is an alias of another.
+   A custom property that reads `var(--color-border)` resolves where it is
+   declared (:root), so an alias would keep its light value inside a dark
+   island.
 
    Token namespaces below are the ones Tailwind v4 actually reads
    (--color-*, --text-*, --radius-*, --shadow-*, --font-*, --animate-*).
@@ -12,145 +30,213 @@
 
 @theme {
   /* ----------------------------------------
-   * COLORS
+   * COLORS (light)
    * ---------------------------------------- */
 
-  /* Surfaces — deep dark with a subtle blue cast */
-  --color-background: #0a0a0f;
-  --color-foreground: #f0f2f5;
+  /* Surfaces. The page is white; chrome recedes onto a warm off-white
+     sidebar and is separated by hairlines, not boxes. */
+  --color-background: #ffffff;
+  --color-foreground: #2c2c2b;
 
-  --color-card: #12121a;
-  --color-card-foreground: #f0f2f5;
+  --color-card: #ffffff;
+  --color-card-foreground: #2c2c2b;
 
-  --color-popover: #16161f;
-  --color-popover-foreground: #f0f2f5;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #2c2c2b;
 
-  /* Primary accent.
-     `primary` is the brand hue for text, borders, rings and washes. `-strong`
-     is the one to fill a surface with when white text sits on top: #6366f1
-     against #ffffff measures 4.47:1, just under the 4.5:1 that 11–13px button
-     labels need, and every filled primary button in the app was failing on it.
-     #4f46e5 measures 6.3:1 and is the same hue one step down. */
-  --color-primary: #6366f1;
-  --color-primary-strong: #4f46e5;
+  --color-sidebar: #f9f8f7;
+  --color-sidebar-foreground: #5f5e59;
+
+  /* Interaction fills. Translucent on purpose: the same hover has to read on
+     the page, on the sidebar tint and inside a popover. */
+  --color-hover: rgb(55 53 47 / 0.06);
+  --color-active: rgb(55 53 47 / 0.1);
+  /* A resting fill a step off the surface: inputs, quiet wells, skeletons. */
+  --color-subtle: rgb(55 53 47 / 0.04);
+
+  /* Primary is the interactive blue: links, focus, selection, the one filled
+     call to action per view. `-strong` is what a surface is filled with when
+     white text sits on it (#2383e2 carries white at only 3.88:1; #0b6bcb at
+     5.28:1). `link` is the text-on-page step (5.14:1 on white). */
+  --color-primary: #2383e2;
+  --color-primary-strong: #0b6bcb;
   --color-primary-foreground: #ffffff;
-  --color-accent-dark: #4f46e5;
+  --color-link: #1f6fbf;
+  /* The brand mark's gradient end. */
+  --color-accent-dark: #5b4fd6;
 
-  /* Secondary / muted / accent surfaces */
-  --color-secondary: #1e1e2a;
-  --color-secondary-foreground: #e2e4e9;
-  --color-muted: #1a1a24;
-  --color-muted-foreground: #8b8b9a;
-  --color-accent: #1f1f2e;
-  --color-accent-foreground: #f0f2f5;
+  /* AI has its own hue so it never reads as "a link" or "a button": the
+     sparkle, Ask AI, proposals and the assistant. `ai` is text/icon-safe
+     (5.94:1 on white); `ai-strong` is the fill under white text. */
+  --color-ai: #5b4fd6;
+  --color-ai-strong: #5b4fd6;
+  --color-ai-foreground: #ffffff;
 
-  /* Status.
-     Same split as primary: #ef4444 carries white at only 3.76:1, so filled
-     destructive buttons use `-strong` (#dc2626, 4.8:1) while `text-destructive`
-     keeps the lighter hue, which it needs to stay legible on dark surfaces. */
-  --color-destructive: #ef4444;
-  --color-destructive-strong: #dc2626;
+  /* Secondary / muted / accent. `accent` is the hover fill the Radix-style
+     primitives use (`focus:bg-accent`), so it equals `hover`. */
+  --color-secondary: #f1f1ef;
+  --color-secondary-foreground: #2c2c2b;
+  --color-muted: #f1f1ef;
+  /* #65645f, not Notion's #73726e: secondary text also sits on the app's
+     own fills (selected rows, bg-muted, hover), and there #73726e fell to
+     3.8:1. This clears 4.5:1 on every one of them (5.9:1 on white). */
+  --color-muted-foreground: #65645f;
+  /* Tertiary text: placeholders and hints that are never the only carrier
+     of meaning. */
+  --color-placeholder: #9b9a97;
+  /* Tertiary controls: hover-revealed icons and unchecked boundaries (block
+     handle, to-do box). Unlike placeholder text these are the only thing
+     that shows the control, so they need 3:1 on the page and on the hover
+     fill (3.65:1 on white, 3.2:1 on hover). */
+  --color-icon-tertiary: #878681;
+  --color-accent: rgb(55 53 47 / 0.06);
+  --color-accent-foreground: #2c2c2b;
+
+  /* Status. Text-safe on white; filled destructive buttons use `-strong`. */
+  --color-destructive: #c4362f;
+  --color-destructive-strong: #a92b25;
   --color-destructive-foreground: #ffffff;
-  --color-success: #22c55e;
-  --color-success-foreground: #04140a;
-  --color-warning: #f59e0b;
-  --color-warning-foreground: #1a1204;
-  --color-info: #0ea5e9;
-  --color-info-foreground: #04121a;
+  --color-success: #2e7d4f;
+  --color-success-foreground: #ffffff;
+  --color-warning: #9a6b12;
+  --color-warning-foreground: #ffffff;
+  --color-info: #2f739a;
+  --color-info-foreground: #ffffff;
 
-  /* Borders / inputs / focus ring */
-  --color-border: #2a2a3a;
-  --color-input: #1e1e2a;
-  --color-ring: #6366f1;
+  /* Lines. `border`/`divider` is the hairline between regions and rows;
+     `border-strong`/`input` edges a control. */
+  --color-border: #e9e9e7;
+  --color-divider: #e9e9e7;
+  --color-border-strong: #dfdfde;
+  --color-input: #dfdfde;
+  --color-ring: #2383e2;
+
+  /* Chrome surfaces */
+  --color-scrim: rgb(15 15 15 / 0.6);
+  --color-tooltip: #1f1f1f;
+  --color-tooltip-foreground: #ffffff;
+  --color-selection: rgb(35 131 226 / 0.28);
+  --color-block-selection: rgb(35 131 226 / 0.14);
+  --color-scrollbar: rgb(55 53 47 / 0.2);
+  --color-scrollbar-hover: rgb(55 53 47 / 0.35);
+
+  /* Code */
+  --color-code-bg: #f7f6f3;
+  --color-inline-code-bg: rgb(135 131 120 / 0.15);
+  --color-inline-code-fg: #c4362f;
 
   /* Block editor state accents — semantic names instead of raw palette */
-  --color-block-hidden: #ec4899;
-  --color-block-locked: #f59e0b;
+  --color-block-hidden: #b0457e;
+  --color-block-locked: #916822;
 
-  /* Review of proposed agent changes. Backgrounds sit low enough in contrast
-     to read as a highlight over body text; the -fg pair is what carries the
-     meaning for anyone who cannot separate the two hues. */
-  --color-diff-add: rgb(34 197 94 / 0.18);
-  --color-diff-add-fg: #6ee7a8;
-  --color-diff-add-border: #22c55e;
-  --color-diff-remove: rgb(239 68 68 / 0.18);
-  --color-diff-remove-fg: #f4a3a3;
-  --color-diff-remove-border: #ef4444;
+  /* Review of proposed agent changes. The -fg pair is what carries the
+     meaning for anyone who cannot separate the two hues (≥5.3:1 on its own
+     background). */
+  --color-diff-add: #edf3ec;
+  --color-diff-add-fg: #2d6a45;
+  --color-diff-add-border: #448361;
+  --color-diff-remove: #fdebec;
+  --color-diff-remove-fg: #b3322c;
+  --color-diff-remove-border: #d44c47;
+
+  /* Colour palette for callouts, tags and highlights. Each `-fg` is tuned to
+     ≥4.5:1 on its own tint, so a tag can use the pair at 12px. */
+  --color-tint-gray: #f1f1ef;
+  --color-tint-gray-fg: #6e6d6a;
+  --color-tint-brown: #f4eeee;
+  --color-tint-brown-fg: #91624c;
+  --color-tint-orange: #fbecdd;
+  --color-tint-orange-fg: #a5570a;
+  --color-tint-yellow: #fbf3db;
+  --color-tint-yellow-fg: #916822;
+  --color-tint-green: #edf3ec;
+  --color-tint-green-fg: #3e7859;
+  --color-tint-blue: #e7f3f8;
+  --color-tint-blue-fg: #2f739a;
+  --color-tint-purple: #f6f3f9;
+  --color-tint-purple-fg: #875fa6;
+  --color-tint-pink: #faf1f5;
+  --color-tint-pink-fg: #b0457e;
+  --color-tint-red: #fdebec;
+  --color-tint-red-fg: #bc433f;
 
   /* ----------------------------------------
    * CHART SERIES
    * A fixed categorical order, not a cycling list: a hue belongs to a
-   * category, so adding or removing one must never repaint the others.
-   * These steps are chosen for the dark card surface (#12121a) and validated
-   * as a set — lightness band, chroma floor, adjacent-pair separation under
-   * simulated colour-vision deficiency, and 3:1 contrast against that
-   * surface. Re-validate against the new surface before adding a light theme;
-   * an automatic flip of these values does not hold.
+   * category, so adding or removing one must never repaint the others. Both
+   * themes keep the same hue order; the light steps are darker so every
+   * series clears 4.29:1 on white, the dark steps clear 3.56:1 on #191919.
    * ---------------------------------------- */
-  --color-series-1: #3987e5;
-  --color-series-2: #d95926;
-  --color-series-3: #199e70;
-  --color-series-4: #c98500;
-  --color-series-5: #d55181;
-  --color-series-6: #008300;
-  --color-series-7: #9085e9;
-  --color-series-8: #e66767;
+  --color-series-1: #2f78d4;
+  --color-series-2: #c9501f;
+  --color-series-3: #12875f;
+  --color-series-4: #a86e00;
+  --color-series-5: #c2466f;
+  --color-series-6: #067306;
+  --color-series-7: #7466d9;
+  --color-series-8: #cf4c4c;
 
   /* Chart chrome — one step off the surface, so it never competes with data */
-  --color-chart-grid: #23232f;
-  --color-chart-axis: #33334a;
+  --color-chart-grid: #e9e9e7;
+  --color-chart-axis: #d3d3d0;
 
   /* ----------------------------------------
    * TYPOGRAPHY
    * v4 reads --text-*; the paired --text-*--line-height sets leading.
+   * The chrome reads at 14px (`text-sm`), secondary text at 12px (`text-xs`);
+   * document body is `text-md` (16px).
    * ---------------------------------------- */
-  --font-sans: "Inter", ui-sans-serif, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 
-  --text-2xs: 10px;
-  --text-2xs--line-height: 14px;
-  --text-xs: 11px;
+  --text-2xs: 11px;
+  --text-2xs--line-height: 16px;
+  --text-xs: 12px;
   --text-xs--line-height: 16px;
-  --text-sm: 13px;
-  --text-sm--line-height: 18px;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
   --text-base: 14px;
   --text-base--line-height: 20px;
-  --text-md: 15px;
+  --text-md: 16px;
   --text-md--line-height: 24px;
-  --text-lg: 16px;
-  --text-lg--line-height: 24px;
+  --text-lg: 18px;
+  --text-lg--line-height: 28px;
   --text-xl: 20px;
   --text-xl--line-height: 28px;
-  --text-2xl: 28px;
-  --text-2xl--line-height: 36px;
-  --text-3xl: 36px;
-  --text-3xl--line-height: 44px;
-  /* Display size for the marketing hero. The scale used to stop at 3xl, so the
-     landing page reached for Tailwind's stock `text-4xl`/`text-5xl` — the first
-     of which resolves to 36px, silently duplicating 3xl under another name. */
-  --text-4xl: 48px;
-  --text-4xl--line-height: 56px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+  --text-3xl: 30px;
+  --text-3xl--line-height: 38px;
+  /* Page titles and the marketing hero. */
+  --text-4xl: 40px;
+  --text-4xl--line-height: 48px;
 
   /* ----------------------------------------
    * RADIUS
+   * Small and quiet: chips 3–4px, controls and rows 6px, menus 8px,
+   * dialogs 12px.
    * ---------------------------------------- */
   --radius-none: 0px;
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 24px;
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
   --radius-full: 9999px;
 
   /* ----------------------------------------
-   * SHADOWS — tuned for dark surfaces
-   * Every level embeds a hairline white inset ring: on a near-black surface a
-   * drop shadow alone reads as nothing, so the ring carries the edge.
+   * SHADOWS
+   * Tailwind bakes a shadow token's value into each utility at build time,
+   * so these cannot be re-declared per theme. They are written against the
+   * plain `--shadow-*-color` properties below instead, which do switch: in
+   * light a faint outline ring plus soft drops, in dark a white hairline
+   * (a drop shadow alone reads as nothing on #191919) plus deeper drops.
    * ---------------------------------------- */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(255 255 255 / 0.03);
-  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.03);
-  --shadow-lg: 0 10px 25px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.04);
-  --shadow-xl: 0 20px 40px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.05);
+  --shadow-sm: 0 1px 2px var(--shadow-near-color);
+  --shadow-md: 0 0 0 1px var(--shadow-ring-color), 0 3px 6px var(--shadow-near-color), 0 9px 24px var(--shadow-far-color);
+  --shadow-lg: 0 0 0 1px var(--shadow-ring-color), 0 5px 10px var(--shadow-near-color), 0 15px 40px var(--shadow-far-color);
+  --shadow-xl: 0 0 0 1px var(--shadow-ring-color), 0 8px 16px var(--shadow-near-color), 0 24px 56px var(--shadow-far-color);
 
   /* ----------------------------------------
    * NAMED ANIMATIONS
@@ -173,11 +259,12 @@
    ============================================ */
 
 :root {
-  /* Single-mode by design. There is no `@custom-variant dark` and no light
-     token set: the shadows, scrollbars, modal scrim and the eight chart series
-     are all tuned and validated against #0a0a0f, so a palette flip alone would
-     not produce a working light theme. */
-  color-scheme: dark;
+  color-scheme: light;
+
+  /* Shadow colours for the light theme; see SHADOWS above. */
+  --shadow-ring-color: rgb(15 15 15 / 0.05);
+  --shadow-near-color: rgb(15 15 15 / 0.1);
+  --shadow-far-color: rgb(15 15 15 / 0.2);
 
   /* MOTION. One duration scale so the named animations and the enter/exit
      keyframes agree. These live here rather than in `@theme` because
@@ -201,15 +288,131 @@
 
   /* Editor measurements shared between Canvas, chrome and gutters.
 
-     The gutter has to hold `BlockControls` — 4px of padding, two 24px buttons
-     and the 2px between them, 54px in all. At 40px the second button, which is
-     both the drag handle and the options trigger, overhung the text column by
-     14px: on hover or focus it landed on the first characters of the block, so
-     clicking to place the caret started a drag instead. The two numbers are
-     tied together now, and the control group is sized from this token rather
-     than laying itself out and hoping. */
-  --doc-measure: 800px;
-  --doc-gutter: 56px;
+     `--doc-measure` is the width of the text column. The block handles sit
+     outside it, in the page padding (see `.document-container`), so the text
+     box is the row box and nothing inside the column is indented for them.
+     `--doc-gutter` is therefore 0: it is the text's inset inside the column,
+     kept for the rows that align themselves with it (proposals, Ask AI, the
+     loading skeleton). */
+  --doc-measure: 708px;
+  --doc-gutter: 0px;
+}
+
+/* ============================================
+   DARK THEME
+   On <html> for the whole app, or on any element for a dark island.
+   Unlayered, so it wins over the `@theme` values in the theme layer, and
+   after :root, which it has to outrank at equal specificity.
+   ============================================ */
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-background: #191919;
+  --color-foreground: #d4d4d4;
+  --color-card: #202020;
+  --color-card-foreground: #d4d4d4;
+  --color-popover: #252525;
+  --color-popover-foreground: #d4d4d4;
+  --color-sidebar: #202020;
+  --color-sidebar-foreground: #a0a0a0;
+
+  --color-hover: rgb(255 255 255 / 0.055);
+  --color-active: rgb(255 255 255 / 0.09);
+  --color-subtle: rgb(255 255 255 / 0.04);
+
+  --color-primary: #2383e2;
+  --color-primary-strong: #0b6bcb;
+  --color-primary-foreground: #ffffff;
+  --color-link: #529cca;
+  --color-accent-dark: #6a5fe0;
+
+  /* #9d93ff clears 4.5:1 on a selected row (#343434), not just the page. */
+  --color-ai: #9d93ff;
+  --color-ai-strong: #5b4fd6;
+  --color-ai-foreground: #ffffff;
+
+  --color-secondary: #2f2f2f;
+  --color-secondary-foreground: #d4d4d4;
+  --color-muted: #2a2a2a;
+  /* #a0a0a0 rather than #9b9b9b: 4.7:1 on a selected row, 7:1 on the page. */
+  --color-muted-foreground: #a0a0a0;
+  --color-placeholder: #7f7f7f;
+  --color-icon-tertiary: #7f7f7f;
+  --color-accent: rgb(255 255 255 / 0.055);
+  --color-accent-foreground: #d4d4d4;
+
+  --color-destructive: #e5645f;
+  --color-destructive-strong: #c4362f;
+  --color-destructive-foreground: #ffffff;
+  --color-success: #529e72;
+  --color-success-foreground: #0d1a12;
+  --color-warning: #ca9849;
+  --color-warning-foreground: #1a1204;
+  --color-info: #379ad3;
+  --color-info-foreground: #04121a;
+
+  --color-border: #2f2f2f;
+  --color-divider: #2f2f2f;
+  --color-border-strong: #373737;
+  --color-input: #373737;
+  --color-ring: #2383e2;
+
+  --color-scrim: rgb(0 0 0 / 0.6);
+  --color-tooltip: #373737;
+  --color-tooltip-foreground: #f1f1f1;
+  --color-selection: rgb(35 131 226 / 0.35);
+  --color-block-selection: rgb(35 131 226 / 0.2);
+  --color-scrollbar: rgb(255 255 255 / 0.14);
+  --color-scrollbar-hover: rgb(255 255 255 / 0.24);
+
+  --color-code-bg: #202020;
+  --color-inline-code-bg: rgb(135 131 120 / 0.15);
+  --color-inline-code-fg: #ff7369;
+
+  --color-block-hidden: #de86b3;
+  --color-block-locked: #d6ae74;
+
+  --color-diff-add: #243d30;
+  --color-diff-add-fg: #7ec699;
+  --color-diff-add-border: #4dab7a;
+  --color-diff-remove: #522e2a;
+  --color-diff-remove-fg: #f0a39c;
+  --color-diff-remove-border: #e5645f;
+
+  --color-tint-gray: #2f2f2f;
+  --color-tint-gray-fg: #9b9b9b;
+  --color-tint-brown: #4a3228;
+  --color-tint-brown-fg: #c49785;
+  --color-tint-orange: #5c3b23;
+  --color-tint-orange-fg: #d8a580;
+  --color-tint-yellow: #564328;
+  --color-tint-yellow-fg: #d6ae74;
+  --color-tint-green: #243d30;
+  --color-tint-green-fg: #72b08c;
+  --color-tint-blue: #143a4e;
+  --color-tint-blue-fg: #55a9da;
+  --color-tint-purple: #3c2d49;
+  --color-tint-purple-fg: #b289dd;
+  --color-tint-pink: #4e2c3c;
+  --color-tint-pink-fg: #de86b3;
+  --color-tint-red: #522e2a;
+  --color-tint-red-fg: #e88482;
+
+  --color-series-1: #3987e5;
+  --color-series-2: #d95926;
+  --color-series-3: #199e70;
+  --color-series-4: #c98500;
+  --color-series-5: #d55181;
+  --color-series-6: #008300;
+  --color-series-7: #9085e9;
+  --color-series-8: #e66767;
+  --color-chart-grid: #2a2a2a;
+  --color-chart-axis: #3d3d3d;
+
+  --shadow-ring-color: rgb(255 255 255 / 0.07);
+  --shadow-near-color: rgb(0 0 0 / 0.3);
+  --shadow-far-color: rgb(0 0 0 / 0.4);
 }
 
 /* ============================================
@@ -237,6 +440,12 @@
     background-color: color-mix(in oklab, var(--color-primary) 26%, transparent);
     box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 26%, transparent);
   }
+}
+/* Moving a block (see "Moving a block" below). No `to` frame: the tint fades
+   into whatever the row already shows, selection wash included. */
+@keyframes drop-line-in { from { opacity: 0; scale: 0.6 1; } }
+@keyframes block-landed {
+  from { background-color: color-mix(in oklab, var(--color-primary) 14%, transparent); }
 }
 
 /* ============================================
@@ -308,7 +517,7 @@
   *::after {
     @apply border-border;
     /* Tailwind's ring-offset defaults to white, which halos every focused
-       control on a dark surface. Match the app background instead. */
+       control in the dark theme. Match the app background instead. */
     --tw-ring-offset-color: var(--color-background);
   }
 
@@ -344,22 +553,41 @@
 
      There are deliberately two mechanisms, and the rule between them is: this
      outline is the default, and anything that opts into a `focus-visible:ring`
-     must also declare `focus-visible:outline-none`. Otherwise the element
+     must also declare `focus-visible:outline-hidden`. Otherwise the element
      paints a ring AND an outline at two different offsets, which reads as a
      rendering bug. The `ui/` primitives all follow this; check it when adding
-     a ring to a hand-rolled control. */
+     a ring to a hand-rolled control.
+
+     Use `outline-hidden`, not `outline-none`: a ring is a box-shadow, which
+     forced-colors mode (Windows High Contrast) strips, and `outline-hidden`
+     turns back into a real outline there. */
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-ring;
   }
 
+  /* Forced colors: box-shadows are dropped, so rings and the shadow edge of
+     floating surfaces disappear. Every keyboard focus gets a system-coloured
+     outline instead (it beats a stray `outline-none`), and the text caret is
+     enough inside the editor's own blocks. */
+  @media (forced-colors: active) {
+    :focus-visible {
+      outline: 2px solid Highlight !important;
+      outline-offset: 2px;
+    }
+    [contenteditable]:not([contenteditable="false"]):focus-visible {
+      outline-width: 1px !important;
+      outline-offset: 0;
+    }
+  }
+
   ::selection {
-    @apply bg-primary/30;
+    @apply bg-selection;
   }
 
   /* Scrollbars — Firefox */
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgb(255 255 255 / 0.14) transparent;
+    scrollbar-color: var(--color-scrollbar) transparent;
   }
 
   /* Scrollbars — WebKit */
@@ -372,13 +600,13 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-white/10 rounded-full;
+    @apply bg-scrollbar rounded-full;
     border: 2px solid transparent;
     background-clip: content-box;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-white/20;
+    @apply bg-scrollbar-hover;
   }
 
   ::-webkit-scrollbar-corner {
@@ -410,13 +638,213 @@
      Block editor
      ---------------------------------------- */
 
-  .block-row {
-    @apply relative;
-    min-height: 1.5rem;
+  /* Page geometry. The canvas is a size container, so the page padding
+     follows the room the editor actually has (sidebars open or not) rather
+     than the window: 96px on a desktop page (76px beside the docked right
+     sidebar), a fluid 64–96px when the canvas is tablet-narrow, 20px on a
+     phone. The handles (a 47px column) live in that padding and always keep
+     some air from the sidebar hairline. */
+  .canvas {
+    container: canvas / inline-size;
   }
 
-  .block-row[data-selected="true"] {
-    @apply bg-primary/10;
+  .document-container {
+    --doc-pad: max(96px, 5cqi);
+    --doc-size: 16px;
+    width: 100%;
+    max-width: calc(var(--doc-measure) + 2 * var(--doc-pad));
+    margin-inline: auto;
+    padding-inline: var(--doc-pad);
+    font-size: var(--doc-size);
+    line-height: 1.5;
+  }
+
+  .document-container[data-full-width] {
+    --doc-pad: 96px;
+    max-width: none;
+  }
+
+  .document-container[data-small-text] {
+    --doc-size: 14px;
+  }
+
+  /* The docked right sidebar (AI, Research, Sources, History) is the
+     shell's `main + aside`. */
+  main:has(+ aside) .document-container,
+  main:has(+ aside) .document-container[data-full-width] {
+    --doc-pad: 76px;
+  }
+
+  @container canvas (width < 820px) {
+    .document-container,
+    .document-container[data-full-width] {
+      --doc-pad: clamp(64px, 10cqi, 96px);
+    }
+
+    main:has(+ aside) .document-container,
+    main:has(+ aside) .document-container[data-full-width] {
+      --doc-pad: clamp(60px, 9cqi, 76px);
+    }
+  }
+
+  @container canvas (width < 600px) {
+    .document-container,
+    .document-container[data-full-width] {
+      --doc-pad: 20px;
+    }
+
+    /* A desktop with both sidebars docked, not a phone: keep a margin the
+       handle fits in rather than running the text into the hairlines. */
+    main:has(+ aside) .document-container,
+    main:has(+ aside) .document-container[data-full-width] {
+      --doc-pad: clamp(36px, 8cqi, 76px);
+    }
+  }
+
+  /* The page title: Notion's 40px bold line, first in the column. */
+  .page-title {
+    padding-top: 80px;
+    margin-bottom: 4px;
+    font-size: calc(var(--doc-size) * 2.5);
+    line-height: 1.2;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    @apply text-foreground;
+  }
+
+  @container canvas (width < 600px) {
+    .page-title {
+      padding-top: 40px;
+      font-size: calc(var(--doc-size) * 2);
+    }
+  }
+
+  .page-title-field[data-empty]::before {
+    content: attr(data-placeholder);
+    @apply pointer-events-none text-placeholder;
+  }
+
+  /* ----------------------------------------
+     Block rows
+
+     Spacing lives on the row, never inside the block, so the row box, the
+     hover area and the handle all start where the block's space starts.
+     Every kind states two numbers the handle aligns from:
+       --row-pt   the row's top padding (a heading's space above it)
+       --line     the height of the block's first line
+       --inset-t  extra space between the row's padding and that line
+                  (a callout's or code block's own padding)
+     ---------------------------------------- */
+
+  .block-row {
+    --row-pt: 3px;
+    --line: 1.5em;
+    --inset-t: 0px;
+    position: relative;
+    margin-top: 2px;
+    padding-top: var(--row-pt);
+    padding-bottom: 3px;
+    border-radius: var(--radius-sm);
+    transition: background-color 120ms ease, opacity var(--transition-base) ease;
+  }
+
+  .block-row[data-kind="h1"],
+  .block-row[data-kind="h2"],
+  .block-row[data-kind="h3"] {
+    --line: 1.3em;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  .block-row[data-kind="h1"] {
+    --row-pt: calc(var(--doc-size) * 2);
+    font-size: calc(var(--doc-size) * 1.875);
+    letter-spacing: -0.015em;
+  }
+
+  .block-row[data-kind="h2"] {
+    --row-pt: calc(var(--doc-size) * 1.4);
+    font-size: calc(var(--doc-size) * 1.5);
+    letter-spacing: -0.01em;
+  }
+
+  .block-row[data-kind="h3"] {
+    --row-pt: calc(var(--doc-size) * 1);
+    font-size: calc(var(--doc-size) * 1.25);
+    letter-spacing: -0.005em;
+  }
+
+  .block-row[data-kind="quote"] {
+    font-size: 1.15em;
+  }
+
+  .block-row[data-kind="callout"] {
+    --inset-t: 12px;
+    margin-block: 4px;
+  }
+
+  .block-row[data-kind="code"] {
+    --inset-t: 36px;
+    --line: calc(0.85em * 1.6);
+    margin-block: 4px;
+  }
+
+  .block-row[data-kind="divider"] {
+    --line: 18px;
+  }
+
+  /* The handle, aligned to the first line of whatever kind of block this is,
+     and outside the text box on the left. It inherits the row's font size,
+     which is what `--line`'s `em` resolves against. */
+  .block-controls,
+  .block-marks {
+    position: absolute;
+    top: calc(var(--row-pt) + var(--inset-t) + (var(--line) - 24px) / 2);
+    right: calc(100% - var(--row-indent, 0px));
+    /* Anchored by its right edge, it has no room of its own to shrink to. */
+    width: max-content;
+  }
+
+  .block-controls {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  .block-row:hover > .block-controls,
+  .block-controls:focus-within,
+  .block-controls[data-open] {
+    opacity: 1;
+  }
+
+  .block-row:hover > .block-marks {
+    opacity: 0;
+  }
+
+  /* A phone has no hover and 20px of padding: the handle alone, for the
+     block being written. Headings step down with the title. */
+  @container canvas (width < 600px) {
+    .block-row[data-kind="h1"] {
+      font-size: calc(var(--doc-size) * 1.625);
+    }
+
+    .block-row[data-kind="h2"] {
+      font-size: calc(var(--doc-size) * 1.375);
+    }
+
+    .block-row[data-kind="h3"] {
+      font-size: calc(var(--doc-size) * 1.1875);
+    }
+
+    /* The "+" is hidden here by its own `@max-[600px]/canvas:hidden`
+       utility: a rule in this layer lost to the button's `flex`. */
+
+    .block-controls {
+      padding-right: 1px;
+    }
+
+    .block-row[data-active] > .block-controls {
+      opacity: 1;
+    }
   }
 
   /* The floating format toolbar locates the active field by this class. */
@@ -429,98 +857,195 @@
     @apply outline-none;
   }
 
-  [contenteditable][data-placeholder]:empty::before {
+  /* The space the API leaves after a table or chart: kept in the text,
+     not drawn as an indent on the line below the figure. */
+  .editable [data-figure-gap] {
+    font-size: 0;
+  }
+
+  /* Links and inline code in the prose, as Notion draws them: a link keeps
+     the text colour with a soft underline that firms up on hover; inline
+     code is a small tinted chip in the code ink. Scoped to both the block
+     content and the editables, so a proposed rewrite and the Ask AI preview
+     read the same as the page. */
+  :is(.block-content, .editable) a[href] {
+    color: inherit;
+    text-decoration-line: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+    text-underline-offset: 2px;
+    cursor: pointer;
+    transition: color 120ms ease, text-decoration-color 120ms ease;
+  }
+
+  :is(.block-content, .editable) a[href]:hover {
+    color: var(--color-link);
+    text-decoration-color: currentColor;
+  }
+
+  :is(.block-content, .editable) code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    padding: 0.15em 0.35em;
+    border-radius: 4px;
+    background: var(--color-inline-code-bg);
+    color: var(--color-inline-code-fg);
+    overflow-wrap: anywhere;
+  }
+
+  /* The code block's own editor is monospace already; no chip inside it. */
+  :is(.block-content, .editable) pre code,
+  .code-block code {
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: inherit;
+    font-size: inherit;
+  }
+
+  /* `data-empty` is kept by the editables themselves: `:empty` alone missed
+     the `<br>` a browser leaves behind when the last character is deleted,
+     and the hint never came back. */
+  [contenteditable][data-placeholder]:empty::before,
+  .editable[data-placeholder][data-empty]::before,
+  .code-editable[data-placeholder][data-empty]::before {
     content: attr(data-placeholder);
-    @apply text-muted-foreground pointer-events-none;
+    @apply text-placeholder pointer-events-none;
+  }
+
+  /* The "press / for commands" hint belongs to the line being written, not
+     to every blank paragraph on the page. */
+  .editable[data-placeholder-when="focus"]:not(:focus)::before {
+    content: none;
+  }
+
+  /* What an open Ask AI prompt is about: the selected text (via the CSS
+     Custom Highlight API, so it stays marked while focus is in the prompt)
+     or the blocks it would replace. */
+  ::highlight(ask-ai-target) {
+    background-color: var(--color-selection);
+  }
+
+  .block-row[data-ai-target="true"] {
+    background-color: var(--color-selection);
+  }
+
+  /* Block selection (Esc, Shift+click, ⌘A twice): one continuous wash. The
+     2px between adjacent rows is filled by a shadow outside the row, which
+     never overlaps the row's own translucent fill, and the corners between
+     two selected rows are squared off. */
+  .block-row[data-selected="true"] {
+    background-color: var(--color-block-selection);
+  }
+
+  .block-row[data-selected="true"] + .block-row[data-selected="true"] {
+    box-shadow: 0 -2px 0 0 var(--color-block-selection);
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+
+  .block-row[data-selected="true"]:has(+ .block-row[data-selected="true"]) {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  /* A selected block holds focus (so Tab moves on from it); the wash is its
+     focus indicator, a ring on top would double it. */
+  .block-row[data-selected="true"]:focus {
+    outline: none;
+  }
+
+  /* While a drag is selecting blocks, the browser must not grow a text
+     selection underneath it. */
+  .canvas[data-block-drag],
+  .canvas[data-block-drag] * {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* The rectangle drawn by a drag that starts in the page margin. */
+  .block-marquee {
+    position: fixed;
+    z-index: var(--z-popover);
+    pointer-events: none;
+    border-radius: 2px;
+    background-color: var(--color-block-selection);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent);
   }
 
   /* ----------------------------------------
-     Inline AI suggestion widget
-     Built with raw DOM in FloatingToolbar, so it is styled here rather
-     than with utility classes on a React element.
+     Moving a block by its handle
+
+     `useBlockDrag` drives the drag, `ReorderMotion` the landing. After
+     the kind rules above, which the preview's reset has to beat.
      ---------------------------------------- */
 
-  /* A panel in the run of text rather than a stretch of it: the two versions
-     stack so the rewrite can be read against the original in one pass, and
-     they carry the same diff tokens as a block-level proposal so the same
-     decision looks like the same decision wherever it is asked. */
-  .ai-suggest {
-    @apply my-1 block rounded-md border border-primary/30 bg-primary/5 p-2;
+  /* The block being carried stays where it was, stepped back: the author
+     can see what is moving and where it came from. */
+  .block-row[data-dragging] {
+    opacity: 0.35;
   }
 
-  .ai-suggest[data-error="1"] {
-    @apply border-destructive/40 bg-destructive/5;
+  /* Where it will land. It sits over the page, not in the flow, so the
+     text never shifts under the pointer. It glides from slot to slot and
+     grows in from its start when it first appears; the ring marks the
+     insertion point the way a caret would. */
+  .block-drop-line {
+    position: absolute;
+    inset-inline: 0;
+    top: -1px;
+    height: 2px;
+    border-radius: var(--radius-full);
+    background-color: var(--color-primary);
+    pointer-events: none;
+    transform-origin: left center;
+    transition: translate var(--transition-fast) cubic-bezier(0.2, 0, 0, 1);
+    animation: drop-line-in var(--transition-base) ease-out;
   }
 
-  .ai-original,
-  .ai-generated {
-    @apply block rounded-sm px-1.5 py-1;
+  .block-drop-line::before {
+    content: "";
+    position: absolute;
+    left: -7px;
+    top: -3px;
+    width: 8px;
+    height: 8px;
+    border: 2px solid var(--color-primary);
+    border-radius: var(--radius-full);
+    background-color: var(--color-background);
   }
 
-  .ai-original {
-    @apply bg-diff-remove text-diff-remove-fg line-through
-           decoration-diff-remove-border/60;
+  /* What follows the pointer: a copy of the block on a lifted card. It
+     exists only while the browser takes its snapshot, off screen. The
+     outline gives the card an edge wherever the shadow is not part of
+     that snapshot. */
+  .block-drag-preview {
+    position: fixed;
+    top: 0;
+    left: -10000px;
+    overflow: hidden;
+    border-radius: var(--radius-lg);
+    background-color: var(--color-popover);
+    box-shadow: var(--shadow-md);
+    outline: 1px solid var(--color-border);
+    outline-offset: -1px;
+    pointer-events: none;
   }
 
-  .ai-generated {
-    @apply mt-1 bg-diff-add text-diff-add-fg;
+  .block-drag-preview[data-clipped] {
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
   }
 
-  /* An empty replacement has no line box, so the row it will fill collapses to
-     nothing and the panel looks broken while the first token is in flight. */
-  .ai-generated:empty::before {
-    content: '\200b';
+  .block-drag-preview > .block-row {
+    margin: 0;
+    padding-block: 0;
   }
 
-  /* Unless nothing is coming: a failed rewrite that kept its empty green row
-     would be claiming an addition it does not have. */
-  .ai-suggest[data-error="1"] .ai-generated:empty {
-    @apply hidden;
+  /* The block a drop just put down, tinted for a moment so the eye finds
+     it. */
+  .block-row[data-landed] {
+    animation: block-landed 900ms ease-out;
   }
-
-  .ai-suggest[data-generating="1"] .ai-generated::after {
-    content: '';
-    @apply ml-0.5 inline-block h-4 w-1 rounded-xs bg-diff-add-border align-text-bottom;
-    animation: shimmer 1.1s ease-in-out infinite;
-  }
-
-  .ai-error {
-    @apply mt-1.5 block text-xs text-destructive;
-  }
-
-  .ai-controls {
-    @apply mt-2 flex flex-wrap items-center gap-1.5;
-  }
-
-  .ai-status {
-    @apply mr-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground;
-  }
-
-  /* The suggestion is raw DOM inside the paragraph, so the system `Spinner`
-     cannot be mounted into it — this is the same mark in CSS. */
-  .ai-spinner {
-    @apply inline-block h-3 w-3 shrink-0 rounded-full border-2 border-current
-           border-t-transparent align-[-1px] opacity-70;
-    animation: spin 0.7s linear infinite;
-  }
-
-  .ai-suggest:not([data-generating="1"]) .ai-status {
-    @apply hidden;
-  }
-
-  .ai-btn {
-    @apply inline-flex h-6 items-center justify-center rounded-sm border
-           border-border/60 px-2 text-xs font-medium transition-colors;
-  }
-
-  .ai-btn[hidden] {
-    display: none;
-  }
-
-  .ai-accept { @apply border-success/40 bg-success/15 text-success hover:bg-success/25; }
-  .ai-reject { @apply bg-muted text-muted-foreground hover:bg-accent hover:text-foreground; }
-  .ai-stop { @apply bg-muted text-muted-foreground hover:bg-accent hover:text-foreground; }
-  .ai-regenerate { @apply border-primary/40 bg-primary/15 text-primary hover:bg-primary/25; }
 
   /* ----------------------------------------
      Assistant composer
@@ -532,9 +1057,12 @@
      text with a stray `×` after it.
      ---------------------------------------- */
 
+  /* A reference reads like a Notion mention: a quiet tint, no outline, the
+     text at the size of the words around it. Shared by the composer and by
+     sent messages, so a reference looks the same written as sent. */
   .ref-chip {
-    @apply inline-flex max-w-[14rem] select-none items-center gap-1 rounded-sm border
-           px-1 py-px align-baseline text-2xs font-medium whitespace-nowrap;
+    @apply inline-flex max-w-[16rem] select-none items-center gap-0.5 rounded-sm
+           px-1 align-baseline text-[0.9em] font-medium leading-[1.45] whitespace-nowrap;
     /* The chip is one character to the caret; nothing inside it is a target. */
     cursor: pointer;
   }
@@ -544,37 +1072,37 @@
   }
 
   .ref-chip-remove {
-    @apply -mr-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-xs
+    @apply -mr-0.5 flex h-4 w-4 items-center justify-center rounded-xs
            leading-none opacity-60 transition-opacity;
   }
 
   .ref-chip-remove:hover {
-    @apply bg-black/20 opacity-100;
+    @apply bg-active opacity-100;
   }
 
   .ref-chip--doc {
-    @apply border-primary/40 bg-primary/15 text-foreground;
+    @apply bg-tint-blue text-tint-blue-fg;
   }
 
   .ref-chip--block {
-    @apply border-info/40 bg-info/15 text-foreground;
-  }
-
-  /* Chips inside a sent message sit on the filled user bubble, where a
-     translucent wash of the same hue is the only thing that stays legible. */
-  .ref-chip--onfill {
-    @apply border-white/25 bg-white/15 text-primary-foreground;
+    @apply bg-tint-gray text-tint-gray-fg;
   }
 
   .chat-composer-input {
     @apply relative;
   }
 
+  /* The page text a composer selection chip stands for, kept marked while
+     focus is in the composer (see chatContextHighlight.ts). */
+  ::highlight(chat-context) {
+    background-color: var(--color-selection);
+  }
+
   /* Absolute, so the caret sits at the start of the empty field rather than
      after the placeholder — it read as text already typed and not deletable. */
   .chat-composer-input[data-empty]::before {
     content: attr(data-placeholder);
-    @apply pointer-events-none absolute inset-x-3 top-2 text-muted-foreground;
+    @apply pointer-events-none absolute inset-x-3 top-1.5 truncate text-placeholder;
   }
 
   /* ----------------------------------------
@@ -590,6 +1118,25 @@
   .reveal-flash {
     border-radius: var(--radius-sm);
     animation: reveal-flash 1.4s ease-out;
+  }
+
+  /* ----------------------------------------
+     Review suggestions (menus)
+
+     A pending rewrite is shown once, in the block's place: the suggestion
+     row carries the diff (old words struck, new words marked), so the
+     original row above it would be a second, dimmed copy of the same
+     paragraph. A pending deletion is the same: the suggestion row shows
+     the block struck through under its label. The row comes back the
+     moment the suggestion is accepted or rejected, because the suggestion
+     row is then gone.
+     ---------------------------------------- */
+
+  .block-row:has(+ .review-change[data-change-kind="replace"]),
+  .block-row:has(+ .review-change + .review-change[data-change-kind="replace"]),
+  .block-row:has(+ .review-change[data-change-kind="delete"]),
+  .block-row:has(+ .review-change + .review-change[data-change-kind="delete"]) {
+    display: none;
   }
 
   /* ----------------------------------------

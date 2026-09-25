@@ -1,44 +1,44 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { uid } from '@/lib/uid';
 import { Button } from '@/components/ui/button';
-import { useEditor } from '@/editor';
-import { dispatchAction } from '@/services/actionDispatcher';
-import type { AiAction } from '@/config/aiActions';
-import { AIActionMenu } from './AIActionMenu/AIActionMenu';
-import {
-  commitMaterializedCitationSuggestion,
-  materializeCitationSuggestionForAction,
-  stripCitationTags,
-} from './citationTags';
-import {
-  clearChildPlaceholders,
-  serializeEditableHtml,
-} from '@/components/common/Editable/editableHtml';
 import { Input } from '@/components/ui/input';
-import { Bold, Code, Italic, Link2, Strikethrough } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { menuItem, menuLabel, menuSeparator } from '@/components/ui/menuStyles';
+import { TURN_INTO_KINDS, blockKind, kindOf, useEditor, type BlockKindId } from '@/editor';
+import { AgentToolsContext } from '@/components/preferences/agentToolsContextState';
+import { PanelsContext } from '@/components/panels/panelsContextState';
+import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
+import {
+  AlertCircle,
+  Bold,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Code,
+  Italic,
+  Link2,
+  MoreHorizontal,
+  Quote,
+  Sparkles,
+  Strikethrough,
+  Telescope,
+  Underline,
+} from 'lucide-react';
+import { openAskAi } from '../AskAi/askAiEvents';
+import { ASK_AI_PRESETS, type AskAiPreset } from '../AskAi/presets';
+import { ToolbarMenu } from './ToolbarMenu';
+import { EDIT_LINK_EVENT, normalizeHref } from './linkHref';
+import { LinkHoverCard } from './LinkHoverCard';
 
-const TOOLBAR_HEIGHT = 44;
+const TOOLBAR_HEIGHT = 36;
 const VIEWPORT_MARGIN = 8;
+/** Space between the selection and the toolbar. */
+const GAP = 8;
 /** Roughly the toolbar's width; used only until the real size is measured. */
-const ESTIMATED_WIDTH = 260;
-
-/**
- * Keep the toolbar on screen: flip below the selection when there is no room
- * above, and clamp horizontally so it never runs off either edge.
- *
- * Before the first layout the size is the estimate above; afterwards the
- * measured size, so the guess is spent on one frame at most.
- */
-function positionFor(rect: DOMRect, size: { width: number; height: number }) {
-  const preferredTop = rect.top - size.height;
-  const top = preferredTop < VIEWPORT_MARGIN ? rect.bottom + VIEWPORT_MARGIN : preferredTop;
-  const half = size.width / 2;
-  const left = Math.min(
-    Math.max(rect.left + rect.width / 2, half + VIEWPORT_MARGIN),
-    window.innerWidth - half - VIEWPORT_MARGIN,
-  );
-  return { top, left };
-}
+const ESTIMATED_WIDTH = 460;
+/** Tall enough for either menu; decides whether a menu opens up or down. */
+const MENU_ROOM = 480;
 
 /** `⌘X` on Apple platforms, `Ctrl+X` everywhere else. */
 function modKeyLabel(key: string): string {
@@ -48,7 +48,17 @@ function modKeyLabel(key: string): string {
   return apple ? `⌘${key}` : `Ctrl+${key}`;
 }
 
-type FormatStateKey = 'bold' | 'italic' | 'strike' | 'code';
+/**
+ * The top of the room the toolbar may use: just under the page's topbar (the
+ * top edge of the scrolling canvas), or the viewport edge outside a canvas.
+ */
+function roomTop(block: Element | null): number {
+  const canvas = block?.closest('.canvas') ?? document.querySelector('.canvas');
+  const top = canvas?.getBoundingClientRect().top ?? 0;
+  return Math.max(VIEWPORT_MARGIN, top + VIEWPORT_MARGIN);
+}
+
+type FormatStateKey = 'bold' | 'italic' | 'underline' | 'strike' | 'code';
 
 interface FormatButton {
   command: string;
@@ -58,23 +68,32 @@ interface FormatButton {
   shortcut?: string;
 }
 
-/**
- * Underline is gone and link and inline code have taken its place.
- *
- * Underline in running prose reads as a link and means nothing in a paper,
- * while link — the most-used inline format in any writing tool — was
- * unreachable: `⌘K` did nothing and the toolbar did not offer it.
- */
 const FORMAT_BUTTONS: readonly FormatButton[] = [
   { command: 'bold', stateKey: 'bold', label: 'Bold', icon: Bold, shortcut: modKeyLabel('B') },
   { command: 'italic', stateKey: 'italic', label: 'Italic', icon: Italic, shortcut: modKeyLabel('I') },
+  { command: 'underline', stateKey: 'underline', label: 'Underline', icon: Underline, shortcut: modKeyLabel('U') },
   { command: 'strikeThrough', stateKey: 'strike', label: 'Strikethrough', icon: Strikethrough },
   { command: 'code', stateKey: 'code', label: 'Inline code', icon: Code },
 ];
 
 type FormatState = Record<FormatStateKey, boolean>;
 
-const EMPTY_STATE: FormatState = { bold: false, italic: false, strike: false, code: false };
+const EMPTY_STATE: FormatState = { bold: false, italic: false, underline: false, strike: false, code: false };
+
+/**
+ * The toolbar's "…" menu: the Ask AI presets that make sense for a selection,
+ * each opening the Ask AI prompt with that preset already running. The prompt
+ * shows the result as a diff and asks before anything replaces the text —
+ * one AI surface, reached from here, the slash menu, Space and ⌘J alike.
+ */
+const MORE_AI_GROUPS: ReadonlyArray<{ label: string; ids: readonly string[] }> = [
+  { label: 'Edit', ids: ['improve', 'grammar', 'shorter', 'longer', 'simplify', 'tone', 'translate'] },
+  { label: 'Research', ids: ['explain', 'cite', 'check', 'counter'] },
+];
+
+function presetById(id: string): AskAiPreset | undefined {
+  return ASK_AI_PRESETS.find((preset) => preset.id === id);
+}
 
 /** The `<code>` element the selection sits inside, if any. */
 function codeAncestor(node: Node | null): HTMLElement | null {
@@ -114,27 +133,26 @@ function toggleInlineCode(range: Range): void {
 }
 
 /**
- * The toolbar's selection tracking, formatting and AI-suggestion machinery.
+ * The toolbar's selection tracking, formatting and hand-offs.
  *
  * It locates the active field by walking up to an element with the `editable`
- * class. That class was never rendered, so until it was added to `Editable`
- * this toolbar could not appear at all and the AI action menu was unreachable.
+ * class, which `Editable` renders on every prose block.
  */
 function useFloatingToolbar() {
-  const { exec, refs, updateHtml, addParagraphChild, documentId, ensureRemoteDocument } =
-    useEditor();
+  const { exec, refs, updateHtml, addParagraphChild, getBlock, setBlockKind, documentId } = useEditor();
   const [visible, setVisible] = useState(false);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const [pos, setPos] = useState({ top: 0, left: 0, below: false });
   const [states, setStates] = useState<FormatState>(EMPTY_STATE);
   const [activeIndex, setActiveIndex] = useState(0);
+  /** The block the selection is in, for Turn into, Cite and Ask AI. */
+  const [blockId, setBlockId] = useState<string | null>(null);
   /** The href on the current selection, and whether its editor is open. */
   const [linkHref, setLinkHref] = useState<string | null>(null);
   const [linkOpen, setLinkOpen] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const slashOpenRef = useRef(false);
-  // The last non-collapsed range inside an editable. Keeping it lets menu
-  // items run from the keyboard, where opening the menu moves DOM focus away
+  // The last non-collapsed range inside an editable. Keeping it lets the
+  // buttons run from the keyboard, where reaching them moves DOM focus away
   // from the text and a live `getSelection()` read is no longer reliable.
   const savedRangeRef = useRef<Range | null>(null);
   // The selection rect behind the current position, kept so a measured
@@ -144,6 +162,50 @@ function useFloatingToolbar() {
   // Escape hides the toolbar until the selection it acted on is released —
   // restoring that selection would otherwise re-show it in the same gesture.
   const dismissedRef = useRef(false);
+  // Set by the link card's Edit: the selection it is about to make should
+  // open with the link field rather than the formatting row.
+  const pendingLinkEditRef = useRef(false);
+
+  /**
+   * Above the selection, as in every editor — and it stays there, over a
+   * heading if need be, as Notion's does: a toolbar that jumped below for the
+   * first paragraph under each heading covered the rest of that paragraph and
+   * moved from block to block. It goes below only when above would run under
+   * the page's topbar or off screen. Clamped horizontally to either edge.
+   */
+  const positionFor = useCallback((rect: DOMRect, block: Element | null) => {
+    const { width, height } = sizeRef.current;
+    const half = width / 2;
+    const left = Math.min(
+      Math.max(rect.left + rect.width / 2, half + VIEWPORT_MARGIN),
+      window.innerWidth - half - VIEWPORT_MARGIN,
+    );
+    const minTop = roomTop(block);
+    const above = rect.top - height - GAP;
+    const below = rect.bottom + GAP;
+    const roomBelow = below + height + VIEWPORT_MARGIN <= window.innerHeight;
+    const flip = above < minTop && roomBelow;
+    return { top: flip ? below : Math.max(minTop, above), left, below: flip };
+  }, []);
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const onEditLink = () => {
+      dismissedRef.current = false;
+      pendingLinkEditRef.current = true;
+      window.clearTimeout(timer);
+      // Selection changes arrive asynchronously, sometimes more than one per
+      // gesture; the request covers all of them, then lapses.
+      timer = window.setTimeout(() => {
+        pendingLinkEditRef.current = false;
+      }, 200);
+    };
+    window.addEventListener(EDIT_LINK_EVENT, onEditLink);
+    return () => {
+      window.removeEventListener(EDIT_LINK_EVENT, onEditLink);
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   useEffect(() => {
     const onSlashVisibility = (event: Event) => {
@@ -164,6 +226,18 @@ function useFloatingToolbar() {
     setVisible(false);
   }, [documentId]);
 
+  const findBlockId = useCallback((node: Node | null): { el: HTMLDivElement | null; id: string | null } => {
+    let current: Node | null = node;
+    while (current) {
+      if (current instanceof HTMLElement && current.classList.contains('editable')) break;
+      current = current.parentNode;
+    }
+    const el = (current as HTMLDivElement | null) ?? null;
+    if (!el) return { el: null, id: null };
+    const entry = Object.entries(refs.current || {}).find(([, dom]) => dom === el);
+    return { el, id: entry?.[0] ?? null };
+  }, [refs]);
+
   useEffect(() => {
     const onSelectionChange = () => {
       // Moving focus onto a toolbar button greys the selection out, which used
@@ -180,15 +254,7 @@ function useFloatingToolbar() {
         return;
       }
 
-      let node: Node | null = selection.anchorNode;
-      let editable: HTMLElement | null = null;
-      while (node) {
-        if (node instanceof HTMLElement && node.classList.contains('editable')) {
-          editable = node;
-          break;
-        }
-        node = node.parentNode;
-      }
+      const { el: editable, id } = findBlockId(selection.anchorNode);
       if (!editable) {
         setVisible(false);
         return;
@@ -206,11 +272,13 @@ function useFloatingToolbar() {
       savedRangeRef.current = range.cloneRange();
       selectionRectRef.current = rect;
 
-      setPos(positionFor(rect, sizeRef.current));
+      setBlockId(id);
+      setPos(positionFor(rect, editable.closest('[data-block-id]')));
       try {
         setStates({
           bold: document.queryCommandState('bold'),
           italic: document.queryCommandState('italic'),
+          underline: document.queryCommandState('underline'),
           strike: document.queryCommandState('strikeThrough'),
           code: codeAncestor(range.commonAncestorContainer) !== null,
         });
@@ -218,7 +286,7 @@ function useFloatingToolbar() {
         setStates(EMPTY_STATE);
       }
       setLinkHref(linkAncestor(range.commonAncestorContainer)?.getAttribute('href') ?? null);
-      setLinkOpen(false);
+      setLinkOpen(pendingLinkEditRef.current);
       setVisible(true);
     };
 
@@ -230,10 +298,7 @@ function useFloatingToolbar() {
       window.removeEventListener('scroll', onSelectionChange, true);
       window.removeEventListener('resize', onSelectionChange);
     };
-  }, []);
-
-  // Abort any in-flight generation if the toolbar unmounts.
-  useEffect(() => () => abortRef.current?.abort(), []);
+  }, [findBlockId, positionFor]);
 
   // The first position of an opening is computed against the size estimates;
   // measure the rendered toolbar and refine it before the browser paints.
@@ -245,27 +310,16 @@ function useFloatingToolbar() {
     const { offsetWidth: width, offsetHeight: height } = el;
     if (width === sizeRef.current.width && height === sizeRef.current.height) return;
     sizeRef.current = { width, height };
-    setPos(positionFor(rect, sizeRef.current));
-  }, [visible]);
-
-  const findBlockId = useCallback((node: Node | null): { el: HTMLDivElement | null; id: string | null } => {
-    let current: Node | null = node;
-    while (current) {
-      if (current instanceof HTMLElement && current.classList.contains('editable')) break;
-      current = current.parentNode;
-    }
-    const el = (current as HTMLDivElement | null) ?? null;
-    if (!el) return { el: null, id: null };
-    const entry = Object.entries(refs.current || {}).find(([, dom]) => dom === el);
-    return { el, id: entry?.[0] ?? null };
-  }, [refs]);
+    const block = blockId ? refs.current[blockId]?.closest('[data-block-id]') ?? null : null;
+    setPos(positionFor(rect, block));
+  }, [visible, blockId, positionFor, refs]);
 
   /**
    * Put the caret back where the user left it before reaching the toolbar.
    *
    * `document.execCommand` acts on whatever the document has selected, so once
    * focus sits on a toolbar button it would apply to nothing. The pointer path
-   * never hit this because `mousedown` is prevented; the keyboard path does.
+   * never hits this because `mousedown` is prevented; the keyboard path does.
    */
   const focusSavedRange = useCallback(() => {
     const range = savedRangeRef.current;
@@ -291,6 +345,37 @@ function useFloatingToolbar() {
     focusSavedRange();
   }, [focusSavedRange]);
 
+  /**
+   * Hand the selection to the Ask AI prompt, optionally with a preset already
+   * chosen. The selection is put back first, because the prompt captures what
+   * it acts on from the document selection when it opens.
+   */
+  const onAskAi = useCallback(
+    (presetId?: string) => {
+      const range = savedRangeRef.current;
+      if (!range) return;
+      const { id } = findBlockId(range.commonAncestorContainer);
+      if (!id) return;
+      focusSavedRange();
+      dismissedRef.current = true;
+      setVisible(false);
+      openAskAi({ blockId: id, actionId: presetId });
+    },
+    [findBlockId, focusSavedRange],
+  );
+
+  /** The selected words, as one line — what a Research query is made of. */
+  const selectedText = useCallback(
+    () => savedRangeRef.current?.toString().replace(/\s+/g, ' ').trim() ?? '',
+    [],
+  );
+
+  /** Write the block's DOM back to document state after a hand-made edit. */
+  const commitActiveBlock = useCallback(() => {
+    const { el, id } = findBlockId(document.getSelection()?.anchorNode ?? null);
+    if (el && id) updateHtml(id, serializeEditableHtml(el));
+  }, [findBlockId, updateHtml]);
+
   const onFormat = (command: string) => (event: React.MouseEvent | React.KeyboardEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -305,12 +390,6 @@ function useFloatingToolbar() {
     }
     exec(command);
   };
-
-  /** Write the block's DOM back to document state after a hand-made edit. */
-  const commitActiveBlock = useCallback(() => {
-    const { el, id } = findBlockId(document.getSelection()?.anchorNode ?? null);
-    if (el && id) updateHtml(id, serializeEditableHtml(el));
-  }, [findBlockId, updateHtml]);
 
   /**
    * Apply, replace or clear the link on the saved selection.
@@ -341,298 +420,56 @@ function useFloatingToolbar() {
     [commitActiveBlock, exec, focusSavedRange],
   );
 
-  const onAi = useCallback(
-    async (action: AiAction, language?: string) => {
-      const range = savedRangeRef.current;
-      if (!range || range.collapsed) return;
-
-      const { el: editable, id: blockId } = findBlockId(range.commonAncestorContainer);
-      if (!editable || !blockId) return;
-
-      const selectedText = range.toString();
-      if (!selectedText.trim()) return;
-
-      abortRef.current?.abort();
-
-      // The old and the new stacked, not run together in the line.
-      //
-      // The original and its streaming replacement used to render adjacent and
-      // inline, so a three-sentence rewrite made the paragraph twice as long
-      // with the two versions interleaved in reading order — the layout that
-      // makes a comparison hardest, for the one task that is nothing but
-      // comparison. They are two rows now, carrying the same `diff-remove` /
-      // `diff-add` tokens the block-level review already uses.
-      const wrapper = document.createElement('span');
-      wrapper.className = 'ai-suggest';
-      wrapper.setAttribute('data-action', action);
-      wrapper.contentEditable = 'true';
-      wrapper.setAttribute('data-generating', '1');
-
-      const original = document.createElement('span');
-      original.className = 'ai-original';
-      original.contentEditable = 'false';
-
-      const generated = document.createElement('span');
-      generated.className = 'ai-generated';
-      generated.contentEditable = 'true';
-
-      const errorLine = document.createElement('span');
-      errorLine.className = 'ai-error';
-      errorLine.contentEditable = 'false';
-      errorLine.hidden = true;
-
-      const controls = document.createElement('span');
-      controls.className = 'ai-controls';
-      controls.contentEditable = 'false';
-
-      // Progress used to be a `data-generating` attribute and whatever the
-      // stylesheet made of it; failure used to be `data-error` and nothing at
-      // all — no message, no cause, no retry label.
-      const status = document.createElement('span');
-      status.className = 'ai-status';
-      const spinner = document.createElement('span');
-      spinner.className = 'ai-spinner';
-      spinner.setAttribute('aria-hidden', 'true');
-      const statusText = document.createElement('span');
-      statusText.textContent = 'Writing…';
-      status.append(spinner, statusText);
-      status.setAttribute('role', 'status');
-
-      /**
-       * A control in the same vocabulary as the rest of the app: a labelled
-       * button, not a bare glyph. ✓, ✕ and ■ asked the same question the
-       * review bar asks — keep this or not — in a second, cheaper-looking
-       * language, and the cheap one was the one editing your sentence.
-       */
-      const makeControl = (className: string, label: string, hint?: string) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = `ai-btn ${className}`;
-        button.title = hint ? `${label} · ${hint}` : label;
-        button.setAttribute('aria-label', button.title);
-        button.textContent = label;
-        return button;
-      };
-
-      /**
-       * Wire a suggestion control for pointer *and* keyboard.
-       *
-       * `mousedown` is only here to stop the caret jumping into the control;
-       * the action runs on `click`, which is what Enter and Space produce.
-       * These used to carry the action on `mousedown` alone, which meant a
-       * suggestion could not be accepted, rejected or stopped without a mouse.
-       */
-      const bindControl = (button: HTMLButtonElement, run: () => void) => {
-        button.onmousedown = (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        };
-        button.onclick = (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          run();
-        };
-      };
-
-      const acceptBtn = makeControl('ai-accept', 'Accept', modKeyLabel('↵'));
-      const rejectBtn = makeControl('ai-reject', 'Reject', 'Esc');
-      // Stop and regenerate are two different things, so they are two
-      // different buttons. The stop control used to turn into a ↻ in place,
-      // which changes what a control means without moving it.
-      const stopBtn = makeControl('ai-stop', 'Stop');
-      const regenerateBtn = makeControl('ai-regenerate', 'Try again');
-      regenerateBtn.hidden = true;
-      controls.append(status, acceptBtn, rejectBtn, stopBtn, regenerateBtn);
-
-      let originalFrag: DocumentFragment;
-      try {
-        originalFrag = range.extractContents();
-      } catch {
-        originalFrag = document.createDocumentFragment();
-        originalFrag.append(document.createTextNode(selectedText));
-      }
-      original.append(originalFrag);
-      wrapper.append(original, generated, errorLine, controls);
-      range.insertNode(wrapper);
-
-      /**
-       * Persist the block as if the suggestion were not there.
-       *
-       * The suggestion UI — struck-through original, streaming text, and the
-       * ✓/✕/■ buttons — lives inside the contenteditable, so the raw
-       * `innerHTML` contains all of it. Storing that put literal buttons into
-       * the saved document (within one frame, via the localStorage effect),
-       * and navigating away mid-suggestion made it permanent. Until the user
-       * accepts or rejects, the document's committed state is the original.
-       */
-      const persistPreSuggestion = () => {
-        const clone = editable.cloneNode(true) as HTMLDivElement;
-        clone.querySelectorAll('.ai-suggest').forEach((node) => {
-          const pristine = node.querySelector('.ai-original');
-          node.replaceWith(...Array.from(pristine?.childNodes ?? []));
-        });
-        clearChildPlaceholders(clone);
-        updateHtml(blockId, clone.innerHTML);
-      };
-
-      persistPreSuggestion();
+  /** Turn the selection's block into another kind, keeping its text. */
+  const turnInto = useCallback(
+    (kind: BlockKindId) => {
+      if (!blockId) return;
+      const el = refs.current[blockId];
+      dismissedRef.current = true;
       setVisible(false);
-
-      let rafPending = false;
-      const schedulePersist = () => {
-        if (rafPending) return;
-        rafPending = true;
-        requestAnimationFrame(() => {
-          rafPending = false;
-          persistPreSuggestion();
-        });
-      };
-      generated.addEventListener('input', schedulePersist);
-
-      let stopped = false;
-
-      bindControl(stopBtn, () => {
-        stopped = true;
-        abortRef.current?.abort();
-      });
-      bindControl(regenerateBtn, () => {
-        void runStream();
-      });
-
-      /** Say what went wrong, in the citation widget's register. */
-      const fail = (message: string) => {
-        wrapper.setAttribute('data-error', '1');
-        errorLine.textContent = message;
-        errorLine.hidden = false;
-      };
-
-      const runStream = async () => {
-        stopped = false;
-        wrapper.setAttribute('data-generating', '1');
-        wrapper.removeAttribute('data-error');
-        errorLine.hidden = true;
-        errorLine.textContent = '';
-        generated.replaceChildren();
-        stopBtn.hidden = false;
-        regenerateBtn.hidden = true;
-
-        abortRef.current?.abort();
-        const controller = new AbortController();
-        abortRef.current = controller;
-
-        try {
-          // The agent addresses the document by id, and an empty one is not a
-          // document the server can find — the rewrite failed with nothing on
-          // screen to explain why. Save the draft first, as sending a chat
-          // message does.
-          const targetDocumentId = documentId ?? (await ensureRemoteDocument());
-          if (!targetDocumentId) {
-            fail('This draft could not be saved to the server, so the assistant has nothing to work from. Check your connection and try again.');
-            return;
-          }
-
-          await dispatchAction({
-            selectedText,
-            action,
-            documentId: targetDocumentId,
-            signal: controller.signal,
-            language,
-            onToken: (delta) => {
-              if (stopped || !delta) return;
-              const last = generated.lastChild;
-              if (last && last.nodeType === Node.TEXT_NODE) {
-                (last as Text).data += delta;
-              } else {
-                generated.append(document.createTextNode(delta));
-              }
-              schedulePersist();
-            },
-          });
-        } catch (error) {
-          if (!stopped) {
-            const detail = error instanceof Error ? error.message.trim() : '';
-            fail(detail ? `The rewrite failed: ${detail}` : 'The rewrite failed before it finished.');
-          }
-        } finally {
-          wrapper.removeAttribute('data-generating');
-          stopBtn.hidden = true;
-          regenerateBtn.hidden = false;
-        }
-      };
-
-      const replaceWith = (frag: DocumentFragment) => {
-        wrapper.replaceWith(frag);
-        // The wrapper is gone by now, but raw innerHTML would still bake the
-        // rendered internals of any inline widget into its placeholder span.
-        updateHtml(blockId, serializeEditableHtml(editable));
-      };
-
-      bindControl(acceptBtn, () => {
-        stopped = true;
-        abortRef.current?.abort();
-
-        const structured = materializeCitationSuggestionForAction(
-          action,
-          generated.textContent ?? '',
-        );
-        if (structured) {
-          commitMaterializedCitationSuggestion(
-            blockId,
-            structured,
-            addParagraphChild,
-            replaceWith,
-          );
-          return;
-        }
-
-        const frag = document.createDocumentFragment();
-        if (action === 'search-for-references') {
-          // Nothing readable came back. The generated nodes are plain text, so
-          // appending them verbatim would put a literal `<citation … />` into
-          // the author's paragraph. Losing the citations is recoverable;
-          // markup in the manuscript is what the author has to clean up by
-          // hand without knowing where it came from.
-          const stripped = stripCitationTags(generated.textContent ?? '').trim();
-          if (stripped) frag.append(document.createTextNode(stripped));
-        } else {
-          frag.append(...Array.from(generated.childNodes));
-        }
-        // Accepting an empty generation keeps the original rather than
-        // silently deleting the selected text.
-        if (!frag.firstChild) frag.append(...Array.from(original.childNodes));
-        replaceWith(frag);
-      });
-
-      const reject = () => {
-        stopped = true;
-        abortRef.current?.abort();
-        const frag = document.createDocumentFragment();
-        frag.append(...Array.from(original.childNodes));
-        replaceWith(frag);
-      };
-
-      bindControl(rejectBtn, reject);
-
-      // The decision was mouse-only: the buttons carried no shortcut, and the
-      // surrounding editable deliberately ignores keys inside `.ai-suggest`.
-      wrapper.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-          event.preventDefault();
-          event.stopPropagation();
-          acceptBtn.click();
-          return;
-        }
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          event.stopPropagation();
-          reject();
-        }
-      });
-
-      await runStream();
+      setBlockKind(blockId, kind, el ? { html: serializeEditableHtml(el) } : undefined);
     },
-    [addParagraphChild, documentId, ensureRemoteDocument, findBlockId, updateHtml],
+    [blockId, refs, setBlockKind],
   );
+
+  /**
+   * Put an empty citation straight after the selection and open its source
+   * picker — the selected words are the claim being cited.
+   *
+   * The placeholder and the child are committed together: a paragraph whose
+   * html and children disagree fails validation for every later edit.
+   */
+  const cite = useCallback(() => {
+    const range = savedRangeRef.current;
+    if (!range || !blockId) return;
+    const el = refs.current[blockId];
+    if (!el || !range.endContainer.isConnected || !el.contains(range.endContainer)) return;
+
+    const at = range.cloneRange();
+    at.collapse(false);
+    const childId = uid();
+    const placeholder = document.createElement('span');
+    placeholder.setAttribute('data-child-id', childId);
+    placeholder.contentEditable = 'false';
+    at.insertNode(placeholder);
+
+    dismissedRef.current = true;
+    setVisible(false);
+    addParagraphChild(blockId, { id: childId, type: 'citation', keys: [], style: 'numeric' });
+    updateHtml(blockId, serializeEditableHtml(el));
+
+    // The widget mounts into the placeholder on the next render; open it
+    // then, so the author lands in the search field rather than on a red pill.
+    let attempts = 0;
+    const open = () => {
+      const pill = document.querySelector<HTMLElement>(`[data-child-id="${childId}"] button`);
+      if (pill) pill.click();
+      else if (++attempts < 10) requestAnimationFrame(open);
+    };
+    requestAnimationFrame(open);
+  }, [addParagraphChild, blockId, refs, updateHtml]);
+
+  const block = blockId ? getBlock(blockId) : undefined;
 
   return {
     visible,
@@ -641,9 +478,14 @@ function useFloatingToolbar() {
     activeIndex,
     setActiveIndex,
     toolbarRef,
+    block,
     onFormat,
-    onAi,
+    onAskAi,
+    selectedText,
+    turnInto,
+    cite,
     dismiss,
+    restoreSelection: focusSavedRange,
     linkHref,
     linkOpen,
     setLinkOpen,
@@ -668,23 +510,41 @@ function LinkEditor({
   onCancel: () => void;
 }) {
   const [value, setValue] = useState(href ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const errorId = useId();
 
   const commit = () => {
-    const trimmed = value.trim();
-    onApply(trimmed ? trimmed : null);
+    // An emptied field clears the link, as it always has.
+    if (!value.trim()) {
+      onApply(null);
+      return;
+    }
+    const result = normalizeHref(value);
+    if (result.ok) onApply(result.href);
+    else setError(result.reason);
   };
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="relative flex items-center gap-1">
+      {error ? (
+        <AlertCircle aria-hidden="true" className="ml-1.5 h-4 w-4 shrink-0 text-destructive" />
+      ) : (
+        <Link2 aria-hidden="true" className="ml-1.5 h-4 w-4 shrink-0 text-muted-foreground" />
+      )}
       <Input
         autoFocus
         type="url"
         inputMode="url"
         aria-label="Link address"
-        placeholder="https://example.com"
-        className="h-7 w-56 text-xs"
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : undefined}
+        placeholder="Paste a link…"
+        className="h-7 w-60 bg-transparent ring-0 focus-visible:ring-0 max-sm:w-44"
         value={value}
-        onChange={(event) => setValue(event.target.value)}
+        onChange={(event) => {
+          setValue(event.target.value);
+          if (error) setError(null);
+        }}
         // The toolbar prevents mousedown to keep the selection; the field
         // needs the pointer to reach it.
         onMouseDown={(event) => event.stopPropagation()}
@@ -699,7 +559,7 @@ function LinkEditor({
           }
         }}
       />
-      <Button type="button" variant="ghost" size="sm" className="h-7" onClick={commit}>
+      <Button type="button" variant="ghost" size="sm" onClick={commit}>
         Apply
       </Button>
       {href && (
@@ -707,21 +567,34 @@ function LinkEditor({
           type="button"
           variant="ghost"
           size="sm"
-          className="h-7 text-destructive"
+          className="text-destructive"
           onClick={() => onApply(null)}
         >
           Remove
         </Button>
+      )}
+      {error && (
+        <p
+          id={errorId}
+          role="alert"
+          className="absolute left-0 top-full mt-2 whitespace-nowrap rounded-md bg-popover px-2.5 py-1.5 text-xs text-destructive shadow-md"
+        >
+          {error}
+        </p>
       )}
     </div>
   );
 }
 
 /**
- * `role="toolbar"` promises one tab stop plus arrow-key navigation. Keeping the
- * roving `tabindex` in the DOM rather than in JSX lets the AI menu's trigger —
- * which this component does not render — join the same rotation.
+ * `role="toolbar"` promises one tab stop plus arrow-key navigation. The
+ * roving `tabindex` is kept in the DOM rather than in JSX so every top-level
+ * control joins the same rotation, whatever renders it.
  */
+function toolbarItems(toolbar: HTMLElement | null): HTMLButtonElement[] {
+  return Array.from(toolbar?.querySelectorAll<HTMLButtonElement>('[data-toolbar-item]') ?? []);
+}
+
 function useRovingTabIndex(
   toolbarRef: React.RefObject<HTMLDivElement | null>,
   visible: boolean,
@@ -729,15 +602,70 @@ function useRovingTabIndex(
 ) {
   useEffect(() => {
     if (!visible) return;
-    const items = toolbarRef.current?.querySelectorAll<HTMLButtonElement>('button');
-    items?.forEach((item, index) => {
+    toolbarItems(toolbarRef.current).forEach((item, index) => {
       item.tabIndex = index === activeIndex ? 0 : -1;
     });
   }, [toolbarRef, visible, activeIndex]);
 }
 
+/**
+ * A toolbar button's name and shortcut, in the styled tooltip the rest of the
+ * chrome uses (the native `title` took a second to appear, unstyled). Placed
+ * away from the selection: above the toolbar, or below it when the toolbar
+ * sits under the text.
+ */
+function ToolbarTip({
+  label,
+  shortcut,
+  below,
+  children,
+}: {
+  label: string;
+  shortcut?: string;
+  below: boolean;
+  children: React.ReactElement;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={below ? 'bottom' : 'top'} sideOffset={8}>
+        {label}
+        {shortcut && <span className="ml-2 text-tooltip-foreground/60">{shortcut}</span>}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function Divider() {
+  return <div role="separator" aria-orientation="vertical" className="mx-0.5 h-5 w-px shrink-0 bg-divider" />;
+}
+
+/** The open menu, how it was opened, and where its trigger sits in the toolbar. */
+type OpenMenu = { id: 'kind' | 'ai'; fromKeyboard: boolean; left: number } | null;
+
+/**
+ * The selection toolbar:
+ *
+ *   ✦ Ask AI | Text ▾ | B I U S <> 🔗 | ❝ Cite | …
+ *
+ * AI first, as in Notion; then what the block is (and a menu to change it);
+ * then marks; then citing, the move a paper makes most after bold; then the
+ * rest of the AI presets.
+ */
 export function FloatingToolbar() {
+  return (
+    <>
+      <SelectionToolbar />
+      <LinkHoverCard />
+    </>
+  );
+}
+
+function SelectionToolbar() {
   const { loadingDocumentId } = useEditor();
+  const agentTools = useContext(AgentToolsContext);
+  // Optional, like the agent tools: outside the workspace there is no sidebar.
+  const panels = useContext(PanelsContext);
   const {
     visible,
     pos,
@@ -745,19 +673,30 @@ export function FloatingToolbar() {
     activeIndex,
     setActiveIndex,
     toolbarRef,
+    block,
     onFormat,
-    onAi,
+    onAskAi,
+    selectedText,
+    turnInto,
+    cite,
     dismiss,
+    restoreSelection,
     linkHref,
     linkOpen,
     setLinkOpen,
     applyLink,
   } = useFloatingToolbar();
+  const [menu, setMenu] = useState<OpenMenu>(null);
+  const kindButtonRef = useRef<HTMLButtonElement | null>(null);
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null);
 
   useRovingTabIndex(toolbarRef, visible && !linkOpen, activeIndex);
 
+  // A menu belongs to the showing of the toolbar it was opened in.
+  if (!visible && menu) setMenu(null);
+
   // `⌘K` is the binding every writing tool uses for this and the one the
-  // toolbar's own tooltip advertises; it did nothing at all.
+  // toolbar's own tooltip advertises.
   useEffect(() => {
     if (!visible) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -765,11 +704,61 @@ export function FloatingToolbar() {
         return;
       }
       event.preventDefault();
+      setMenu(null);
       setLinkOpen(true);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [visible, setLinkOpen]);
+
+  /**
+   * Escape while the toolbar is up and focus is still in the text.
+   *
+   * A menu is usually opened with the pointer, which leaves focus in the
+   * paragraph — so Escape went to the editor, which turned the text selection
+   * into a block selection and left the menu open over it, with a toolbar
+   * whose buttons no longer had a selection to act on. Caught in the capture
+   * phase, ahead of the editor: the first Escape closes the menu (or the link
+   * field), the next hides the toolbar; the selection is put back each time.
+   * With focus inside the toolbar, its own handlers decide.
+   */
+  useEffect(() => {
+    if (!visible) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (toolbarRef.current?.contains(document.activeElement)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (menu) {
+        setMenu(null);
+        restoreSelection();
+      } else if (linkOpen) {
+        setLinkOpen(false);
+        restoreSelection();
+      } else {
+        dismiss();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, [visible, menu, linkOpen, dismiss, restoreSelection, setLinkOpen, toolbarRef]);
+
+  const closeMenu = useCallback((returnFocus: boolean) => {
+    setMenu((current) => {
+      if (current && returnFocus) {
+        (current.id === 'kind' ? kindButtonRef : moreButtonRef).current?.focus();
+      }
+      return null;
+    });
+  }, []);
+
+  /** Runs the selection as a Research query in the right sidebar. */
+  const searchPapers = () => {
+    const query = selectedText();
+    if (!panels || !query) return;
+    dismiss();
+    panels.openSidebar('research', { tab: 'research', query });
+  };
 
   const onToolbarKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
@@ -777,81 +766,268 @@ export function FloatingToolbar() {
       dismiss();
       return;
     }
-    const items = Array.from(toolbarRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? []);
+    const items = toolbarItems(toolbarRef.current);
     if (items.length === 0) return;
     const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (current < 0) return;
 
     let next: number | null = null;
-    if (event.key === 'ArrowRight') next = current < 0 ? 0 : (current + 1) % items.length;
-    else if (event.key === 'ArrowLeft') next = current <= 0 ? items.length - 1 : current - 1;
+    if (event.key === 'ArrowRight') next = (current + 1) % items.length;
+    else if (event.key === 'ArrowLeft') next = current === 0 ? items.length - 1 : current - 1;
     else if (event.key === 'Home') next = 0;
     else if (event.key === 'End') next = items.length - 1;
     if (next === null) return;
 
     event.preventDefault();
+    setMenu(null);
     setActiveIndex(next);
     items[next].focus();
   };
 
   if (!visible || Boolean(loadingDocumentId)) return null;
 
+  const locked = block?.locked === true;
+  const kind = block && (block.type === 'paragraph' || block.type === 'heading') ? kindOf(block) : null;
+  const KindIcon = kind ? blockKind(kind).icon : Sparkles;
+  const canCite = block?.type === 'paragraph' && !locked;
+  const citationsEnabled = agentTools?.isToolEnabled('search_citations') ?? false;
+  // Open menus upwards when the toolbar sits low on the screen.
+  const menuAbove = pos.top + TOOLBAR_HEIGHT + MENU_ROOM > window.innerHeight && pos.top > MENU_ROOM;
+
+  /** A menu trigger: click toggles, and a keyboard click lands in the menu. */
+  const toggle = (id: 'kind' | 'ai') => (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setLinkOpen(false);
+    // `detail` is 0 for the click that Enter and Space synthesize.
+    const fromKeyboard = event.detail === 0;
+    const left = event.currentTarget instanceof HTMLElement ? event.currentTarget.offsetLeft : 0;
+    setMenu((current) => (current?.id === id ? null : { id, fromKeyboard, left }));
+  };
+
   return (
-    <div
-      ref={toolbarRef}
-      role="toolbar"
-      aria-label="Text formatting"
-      onKeyDown={onToolbarKeyDown}
-      className={cn(
-        'floating-toolbar fixed inline-flex -translate-x-1/2 -translate-y-2 items-center gap-1 p-1',
-        'rounded-lg border border-border bg-popover shadow-lg z-[var(--z-floating)]',
-        'animate-in fade-in-0 zoom-in-95',
-      )}
-      style={{ top: pos.top, left: pos.left }}
-      // Keep the text selection alive while interacting with the toolbar.
-      onMouseDown={(event) => event.preventDefault()}
-    >
-      {linkOpen ? (
-        <LinkEditor href={linkHref} onApply={applyLink} onCancel={() => setLinkOpen(false)} />
-      ) : (
-        <>
-          {FORMAT_BUTTONS.map(({ command, stateKey, label, icon: Icon, shortcut }) => (
-            <Button
-              key={command}
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className={cn('rounded-sm', states[stateKey] && 'bg-primary/15 text-primary')}
-              onClick={onFormat(command)}
-              aria-label={shortcut ? `${label} (${shortcut})` : label}
-              aria-pressed={states[stateKey]}
-              title={shortcut ? `${label} · ${shortcut}` : label}
-            >
-              <Icon aria-hidden="true" className="h-4 w-4" />
-            </Button>
-          ))}
+    // Its own provider: the toolbar is also mounted outside the workspace
+    // shell, and its hints should come quicker than the chrome's.
+    <TooltipProvider delayDuration={300} skipDelayDuration={200}>
+      <div
+        ref={toolbarRef}
+        role="toolbar"
+        aria-label="Text formatting"
+        onKeyDown={onToolbarKeyDown}
+        className={cn(
+          'floating-toolbar fixed flex h-9 -translate-x-1/2 items-center gap-0.5 rounded-lg bg-popover p-1 text-popover-foreground shadow-lg',
+          'animate-in fade-in-0 zoom-in-95 duration-100 z-[var(--z-floating)]',
+        )}
+        style={{ top: pos.top, left: pos.left }}
+        // Keep the text selection alive while interacting with the toolbar.
+        onMouseDown={(event) => event.preventDefault()}
+      >
+        {linkOpen ? (
+          <LinkEditor href={linkHref} onApply={applyLink} onCancel={() => setLinkOpen(false)} />
+        ) : (
+          <>
+            <ToolbarTip label="Ask AI" shortcut={modKeyLabel('J')} below={pos.below}>
+              <Button
+                type="button"
+                variant="ai"
+                size="sm"
+                data-toolbar-item
+                className="font-medium"
+                disabled={!block}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onAskAi();
+                }}
+                aria-label={`Ask AI (${modKeyLabel('J')})`}
+              >
+                <Sparkles aria-hidden="true" />
+                {/* Icons only on a phone, where the full row would not fit. */}
+                <span className="max-sm:sr-only">Ask AI</span>
+              </Button>
+            </ToolbarTip>
 
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className={cn('rounded-sm', linkHref && 'bg-primary/15 text-primary')}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setLinkOpen(true);
-            }}
-            aria-label={`${linkHref ? 'Edit link' : 'Add link'} (${modKeyLabel('K')})`}
-            aria-pressed={Boolean(linkHref)}
-            title={`${linkHref ? 'Edit link' : 'Add link'} · ${modKeyLabel('K')}`}
-          >
-            <Link2 aria-hidden="true" className="h-4 w-4" />
-          </Button>
+            {kind && (
+              <>
+                <Divider />
+                <ToolbarTip label="Turn into" below={pos.below}>
+                  <Button
+                    ref={kindButtonRef}
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    data-toolbar-item
+                    className="gap-1 font-normal aria-expanded:bg-active"
+                    disabled={locked}
+                    aria-haspopup="menu"
+                    aria-expanded={menu?.id === 'kind'}
+                    aria-label={`Turn into (${blockKind(kind).label})`}
+                    onClick={toggle('kind')}
+                  >
+                    <KindIcon aria-hidden="true" className="sm:hidden" />
+                    <span className="max-sm:hidden">{blockKind(kind).label}</span>
+                    <ChevronDown aria-hidden="true" className="!size-3.5 text-muted-foreground" />
+                  </Button>
+                </ToolbarTip>
+              </>
+            )}
 
-          <div role="separator" aria-orientation="vertical" className="mx-1 h-5 w-px bg-border" />
+            <Divider />
+            {FORMAT_BUTTONS.map(({ command, stateKey, label, icon: Icon, shortcut }) => (
+              <ToolbarTip key={command} label={label} shortcut={shortcut} below={pos.below}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  data-toolbar-item
+                  className={cn(states[stateKey] && 'text-primary hover:text-primary')}
+                  onClick={onFormat(command)}
+                  aria-label={shortcut ? `${label} (${shortcut})` : label}
+                  aria-pressed={states[stateKey]}
+                >
+                  <Icon aria-hidden="true" />
+                </Button>
+              </ToolbarTip>
+            ))}
+            <ToolbarTip label={linkHref ? 'Edit link' : 'Add link'} shortcut={modKeyLabel('K')} below={pos.below}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                data-toolbar-item
+                className={cn(linkHref && 'text-primary hover:text-primary')}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setMenu(null);
+                  setLinkOpen(true);
+                }}
+                aria-label={`${linkHref ? 'Edit link' : 'Add link'} (${modKeyLabel('K')})`}
+                aria-pressed={Boolean(linkHref)}
+              >
+                <Link2 aria-hidden="true" />
+              </Button>
+            </ToolbarTip>
 
-          <AIActionMenu onAction={onAi} />
-        </>
-      )}
-    </div>
+            {canCite && (
+              <>
+                <Divider />
+                <ToolbarTip label="Cite a source" below={pos.below}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    data-toolbar-item
+                    className="font-normal"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      cite();
+                    }}
+                    aria-label="Cite a source for the selection"
+                  >
+                    <Quote aria-hidden="true" className="text-muted-foreground" />
+                    <span className="max-sm:sr-only">Cite</span>
+                  </Button>
+                </ToolbarTip>
+              </>
+            )}
+
+            <Divider />
+            <ToolbarTip label="More AI actions" below={pos.below}>
+              <Button
+                ref={moreButtonRef}
+                type="button"
+                variant="icon"
+                size="icon-sm"
+                data-toolbar-item
+                className="aria-expanded:bg-active aria-expanded:text-foreground"
+                disabled={!block}
+                aria-haspopup="menu"
+                aria-expanded={menu?.id === 'ai'}
+                aria-label="More AI actions"
+                onClick={toggle('ai')}
+              >
+                <MoreHorizontal aria-hidden="true" />
+              </Button>
+            </ToolbarTip>
+
+            {menu?.id === 'kind' && kind && (
+              <ToolbarMenu
+                label="Turn into"
+                align={{ left: menu.left }}
+                above={menuAbove}
+                autoFocus={menu.fromKeyboard}
+                onClose={closeMenu}
+              >
+                <div className={menuLabel}>Turn into</div>
+                {TURN_INTO_KINDS.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    role="menuitem"
+                    tabIndex={-1}
+                    className={cn(menuItem, 'w-full text-left')}
+                    onClick={() => turnInto(option.id)}
+                  >
+                    <option.icon aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    {option.id === kind && <Check aria-hidden="true" className="!text-foreground" />}
+                  </button>
+                ))}
+              </ToolbarMenu>
+            )}
+
+            {menu?.id === 'ai' && (
+              <ToolbarMenu
+                label="More AI actions"
+                align="end"
+                above={menuAbove}
+                autoFocus={menu.fromKeyboard}
+                onClose={closeMenu}
+              >
+                {MORE_AI_GROUPS.map((group, groupIndex) => (
+                  <div key={group.label} role="group" aria-label={group.label}>
+                    {groupIndex > 0 && <div role="separator" className={menuSeparator} />}
+                    <div className={menuLabel}>{group.label}</div>
+                    {group.ids
+                      .map(presetById)
+                      .filter((preset): preset is AskAiPreset => !!preset && (!preset.citations || citationsEnabled))
+                      .map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          role="menuitem"
+                          tabIndex={-1}
+                          className={cn(menuItem, 'w-full text-left [&>svg]:text-ai')}
+                          onClick={() => onAskAi(preset.id)}
+                        >
+                          <preset.icon aria-hidden="true" />
+                          <span className="min-w-0 flex-1 truncate">{preset.label}</span>
+                          {preset.children && (
+                            <ChevronRight aria-hidden="true" className="!text-muted-foreground" />
+                          )}
+                        </button>
+                      ))}
+                    {group.label === 'Research' && panels && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        tabIndex={-1}
+                        className={cn(menuItem, 'w-full text-left')}
+                        onClick={searchPapers}
+                      >
+                        <Telescope aria-hidden="true" />
+                        <span className="min-w-0 flex-1 truncate">Search papers for this</span>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </ToolbarMenu>
+            )}
+          </>
+        )}
+      </div>
+    </TooltipProvider>
   );
 }

@@ -6,7 +6,9 @@ import tseslint from 'typescript-eslint'
 import { globalIgnores } from 'eslint/config'
 
 export default tseslint.config([
-  globalIgnores(['dist']),
+  // Build output: `dist` from Vite, and the git-ignored design-sync bundle,
+  // package and cache, which are generated from src/ and never hand-edited.
+  globalIgnores(['dist', 'ds-bundle', 'ds-pkg', '.ds-sync', '.design-sync/.cache', '.design-sync/node_modules']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

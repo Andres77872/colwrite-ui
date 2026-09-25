@@ -10,7 +10,12 @@ import { AuthProvider } from './components/auth/AuthContext'
 import { ToastProvider } from './components/ui/toast'
 import { ConfirmProvider } from './components/ui/confirm-dialog'
 import { TooltipProvider } from './components/ui/tooltip'
+import { initTheme } from './lib/theme'
 import App from './App.tsx'
+
+// Takes over from the pre-paint script in index.html: same resolution, plus
+// following the OS while the preference is "system".
+initTheme()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

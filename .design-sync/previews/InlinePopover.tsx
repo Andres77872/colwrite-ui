@@ -1,4 +1,4 @@
-import { Input, InlinePill, InlinePopover, SettingsFooter, SettingsRow } from 'colwrite-ui';
+import { Input, InlinePopover, InlineTrigger, SettingsFooter, SettingsRow } from 'colwrite-ui';
 
 // InlinePopover is the popover every inline widget edits through. It wires the
 // three things each widget used to do by hand: stop the surrounding
@@ -23,7 +23,7 @@ export function CitationTrigger() {
     <Sentence>
       The exponent holds within error at every budget{' '}
       <InlinePopover
-        trigger={<InlinePill>[Hoffmann 2022]</InlinePill>}
+        trigger={<InlineTrigger look="citation">[Hoffmann 2022]</InlineTrigger>}
         contentClassName="w-80 p-3"
       >
         {(close) => (
@@ -46,7 +46,7 @@ export function EquationTrigger() {
       Substituting{' '}
       <InlinePopover
         align="center"
-        trigger={<InlinePill className="font-mono">L = a·N^-α</InlinePill>}
+        trigger={<InlineTrigger look="math" className="font-mono">L = a·N^-α</InlineTrigger>}
         contentClassName="w-80 p-3"
       >
         {(close) => (
@@ -68,7 +68,7 @@ export function UnresolvedTrigger() {
     <Sentence>
       We follow the matched-budget protocol{' '}
       <InlinePopover
-        trigger={<InlinePill tone="error">[unresolved citation]</InlinePill>}
+        trigger={<InlineTrigger look="citation" tone="error">[unresolved citation]</InlineTrigger>}
         contentClassName="w-80 p-3"
       >
         {(close) => (

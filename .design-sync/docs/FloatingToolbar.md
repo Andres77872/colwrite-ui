@@ -5,8 +5,8 @@ keywords: [floating toolbar, selection toolbar, formatting, bold, italic, ai act
 
 # FloatingToolbar
 
-The selection toolbar: formatting controls on the left, `AIActionMenu` on the
-right. Takes **no props**.
+The selection toolbar: Ask AI | Turn into | B I U S code link | Cite | ⋯.
+Takes **no props**.
 
 **It appears only while there is a non-collapsed selection inside an element
 carrying the `editable` class.** That class is how the toolbar finds the active

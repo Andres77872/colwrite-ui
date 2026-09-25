@@ -1,8 +1,7 @@
-import { useCallback, useMemo, useRef, type ClipboardEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type ClipboardEvent, type KeyboardEvent } from 'react';
 import type { TableAlign, TableChild } from '@/editor';
 import type { InlineWidgetProps } from '../types';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
@@ -29,7 +28,9 @@ import {
   ArrowLeftToLine,
   ArrowRightToLine,
   ArrowUpToLine,
+  Check,
   MoreHorizontal,
+  Plus,
   Trash2,
 } from 'lucide-react';
 
@@ -202,6 +203,20 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
     commit(mergeAt(grid, pasted, r, c));
   };
 
+  // A table just inserted from "/" starts with the caret in its first cell,
+  // not in the paragraph around it. Only an empty table, and only while the
+  // author is writing in the paragraph that holds it — a document that
+  // merely loads with an empty table leaves focus alone.
+  const tableRef = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    const host = tableRef.current?.closest('.editable');
+    const empty = grid.every((row) => row.every((value) => value === ''));
+    if (!empty || !host || document.activeElement !== host) return;
+    focusCell(0, 0);
+    // Mount only: this is about how the table arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const bodyRows = header ? grid.slice(1) : grid;
   const bodyOffset = header ? 1 : 0;
 
@@ -222,13 +237,35 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
       onKeyDown={onCellKeyDown(r, c)}
       onPaste={onCellPaste(r, c)}
       aria-label={isHeader ? `Column ${c + 1} heading` : `Row ${r + 1}, column ${c + 1}`}
+      // An empty heading row says what it is for.
+      placeholder={isHeader ? `Column ${c + 1}` : undefined}
       className={cn(
-        'block w-full resize-none overflow-hidden border-0 bg-transparent px-2 py-1.5 text-sm outline-none',
+        'block w-full resize-none overflow-hidden border-0 bg-transparent px-2 py-1.5 text-sm outline-none placeholder:font-normal placeholder:text-placeholder',
         'min-w-[6rem] focus:bg-primary/5',
-        isHeader && 'font-medium',
+        isHeader && 'font-semibold',
         ALIGN_CLASS[align[c] ?? 'left'],
       )}
     />
+  );
+
+  /** One cell with its options button, which floats in its corner on hover. */
+  const cellWithMenu = (r: number, c: number, isHeader: boolean) => (
+    <>
+      {cell(r, c, isHeader)}
+      <CellMenu
+        label={isHeader ? `Column ${c + 1} heading options` : `Row ${r + 1}, column ${c + 1} options`}
+        align={align[c] ?? 'left'}
+        canDeleteRow={!(isHeader && header) && rows > (header ? 2 : 1)}
+        canDeleteColumn={cols > 1}
+        onInsertAbove={isHeader && header ? undefined : () => addRowAt(r)}
+        onInsertBelow={() => addRowAt(r + 1)}
+        onInsertLeft={() => addColumnAt(c)}
+        onInsertRight={() => addColumnAt(c + 1)}
+        onDeleteRow={() => deleteRowAt(r)}
+        onDeleteColumn={() => deleteColumnAt(c)}
+        onAlign={(value) => setAlign(c, value)}
+      />
+    </>
   );
 
   return (
@@ -236,107 +273,60 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
       label="Table"
       onRemove={remove}
       controls={
-        <InlineSettings label="Table settings">
-          <SettingsRow label="Header row">
-            <SettingsCheck
-              id={`header-${child.id}`}
-              label="Treat the first row as column headings"
-              checked={header}
-              onChange={(checked) => patch({ header: checked })}
-            />
-          </SettingsRow>
-          <SettingsRow label="Caption" htmlFor={`caption-${child.id}`}>
-            <Input
-              id={`caption-${child.id}`}
-              type="text"
-              value={child.caption ?? ''}
-              placeholder="Table 1. Results by condition."
-              onChange={(event) => patch({ caption: event.target.value })}
-              className="h-8 px-2"
-            />
-          </SettingsRow>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Tab moves between cells and adds a row at the end. Shift+Enter starts a new line inside
-            a cell. Paste spreadsheet or CSV data to fill the table.
-          </p>
-        </InlineSettings>
+        <>
+          <InlineSettings label="Table settings">
+            <SettingsRow label="Header row">
+              <SettingsCheck
+                id={`header-${child.id}`}
+                label="Treat the first row as column headings"
+                checked={header}
+                onChange={(checked) => patch({ header: checked })}
+              />
+            </SettingsRow>
+            <SettingsRow label="Caption" htmlFor={`caption-${child.id}`}>
+              <Input
+                id={`caption-${child.id}`}
+                type="text"
+                value={child.caption ?? ''}
+                placeholder="Table 1. Results by condition."
+                onChange={(event) => patch({ caption: event.target.value })}
+                className="h-8 px-2"
+              />
+            </SettingsRow>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {rows} × {cols}. Tab moves between cells and adds a row at the end. Shift+Enter
+              starts a new line inside a cell. Paste spreadsheet or CSV data to fill the table.
+            </p>
+          </InlineSettings>
+        </>
       }
-      caption={
-        child.caption ? (
-          <span className="block border-t border-border/60 px-3 py-1.5 text-xs text-muted-foreground">
-            {child.caption}
-          </span>
-        ) : undefined
-      }
+      caption={child.caption || undefined}
+      // Clear of the add-row strip under the table.
+      captionClassName="mt-6"
     >
+      <span ref={tableRef} className="group/table relative block">
       <span className="block overflow-x-auto">
         <table className="w-full border-collapse">
-          <colgroup>
-            {/* Handles live in a real gutter column rather than floating
-                outside the table: negative offsets were clipped the moment the
-                table became wide enough to scroll. */}
-            <col style={{ width: '1.25rem' }} />
-            {Array.from({ length: cols }, (_, c) => (
-              <col key={c} />
-            ))}
-          </colgroup>
-
-          {/* Column handles: a thin strip that only appears on hover, so a
-              finished table reads as a table rather than as a control panel. */}
-          <thead>
-            <tr className="opacity-0 transition-opacity group-hover/figure:opacity-100 group-focus-within/figure:opacity-100">
-              <th className="h-5 p-0" aria-hidden="true" />
-              {Array.from({ length: cols }, (_, c) => (
-                <th key={c} className="h-5 p-0">
-                  <ColumnMenu
-                    index={c}
-                    align={align[c] ?? 'left'}
-                    canDelete={cols > 1}
-                    onInsertLeft={() => addColumnAt(c)}
-                    onInsertRight={() => addColumnAt(c + 1)}
-                    onDelete={() => deleteColumnAt(c)}
-                    onAlign={(value) => setAlign(c, value)}
-                  />
-                </th>
-              ))}
-            </tr>
-            {header && (
-              <tr className="group/row">
-                <th className="p-0 align-middle">
-                  <RowMenu
-                    label="Header row options"
-                    canDelete={false}
-                    onInsertAbove={() => addRowAt(0)}
-                    onInsertBelow={() => addRowAt(1)}
-                    onDelete={() => deleteRowAt(0)}
-                  />
-                </th>
+          {header && (
+            <thead>
+              <tr>
                 {grid[0].map((_, c) => (
-                  <th key={c} className="border border-border bg-muted/40 p-0 align-top">
-                    {cell(0, c, true)}
+                  <th key={c} className="group/cell relative border border-border bg-subtle p-0 align-top">
+                    {cellWithMenu(0, c, true)}
                   </th>
                 ))}
               </tr>
-            )}
-          </thead>
+            </thead>
+          )}
 
           <tbody>
             {bodyRows.map((row, index) => {
               const r = index + bodyOffset;
               return (
-                <tr key={r} className="group/row">
-                  <td className="p-0 align-middle">
-                    <RowMenu
-                      label={`Row ${r + 1} options`}
-                      canDelete={rows > (header ? 2 : 1)}
-                      onInsertAbove={() => addRowAt(r)}
-                      onInsertBelow={() => addRowAt(r + 1)}
-                      onDelete={() => deleteRowAt(r)}
-                    />
-                  </td>
+                <tr key={r}>
                   {row.map((_, c) => (
-                    <td key={c} className="border border-border p-0 align-top">
-                      {cell(r, c, false)}
+                    <td key={c} className="group/cell relative border border-border p-0 align-top">
+                      {cellWithMenu(r, c, false)}
                     </td>
                   ))}
                 </tr>
@@ -345,55 +335,49 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
           </tbody>
         </table>
       </span>
-
-      <span className="flex items-center gap-1 border-t border-border/60 px-2 py-1 opacity-0 transition-opacity group-hover/figure:opacity-100 group-focus-within/figure:opacity-100">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-6 gap-1 px-1.5 text-xs text-muted-foreground"
-          onClick={() => addRowAt(rows)}
-        >
-          <ArrowDownToLine className="h-3 w-3" />
-          Row
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-6 gap-1 px-1.5 text-xs text-muted-foreground"
-          onClick={() => addColumnAt(cols)}
-        >
-          <ArrowRightToLine className="h-3 w-3" />
-          Column
-        </Button>
-        <span className="ml-auto text-xs text-muted-foreground">
-          {rows} × {cols}
-        </span>
+      {/* Notion's edge bars: a "+" strip under the last row and beside the
+          last column, shown while the table is hovered or being edited. */}
+      <EdgeBar edge="bottom" label="Add a row" onClick={() => addRowAt(rows)} />
+      <EdgeBar edge="right" label="Add a column" onClick={() => addColumnAt(cols)} />
       </span>
     </InlineFigureShell>
   );
 }
 
 /* ----------------------------------------
-   Row and column handles
+   Cell options
+
+   Row and column handles used to live in a gutter column and a strip above
+   the table that kept their space while invisible, insetting the grid and
+   leaving empty bands at rest. One small button in the hovered (or focused)
+   cell's corner reaches the same actions for that cell's row and column
+   without taking any room.
    ---------------------------------------- */
 
-function ColumnMenu({
-  index,
+function CellMenu({
+  label,
   align,
-  canDelete,
+  canDeleteRow,
+  canDeleteColumn,
+  onInsertAbove,
+  onInsertBelow,
   onInsertLeft,
   onInsertRight,
-  onDelete,
+  onDeleteRow,
+  onDeleteColumn,
   onAlign,
 }: {
-  index: number;
+  label: string;
   align: TableAlign;
-  canDelete: boolean;
+  canDeleteRow: boolean;
+  canDeleteColumn: boolean;
+  /** Absent for the header row, which nothing can be inserted above. */
+  onInsertAbove?: () => void;
+  onInsertBelow: () => void;
   onInsertLeft: () => void;
   onInsertRight: () => void;
-  onDelete: () => void;
+  onDeleteRow: () => void;
+  onDeleteColumn: () => void;
   onAlign: (value: TableAlign) => void;
 }) {
   return (
@@ -401,19 +385,33 @@ function ColumnMenu({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex h-5 w-full items-center justify-center rounded-sm text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
-          aria-label={`Column ${index + 1} options`}
+          className={cn(
+            'absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-sm bg-popover text-muted-foreground shadow-sm transition-opacity hover:text-foreground',
+            'opacity-0 group-hover/cell:opacity-100 group-focus-within/cell:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          )}
+          aria-label={label}
         >
-          <MoreHorizontal className="h-3 w-3" />
+          <MoreHorizontal className="h-3.5 w-3.5" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-44">
+      <DropdownMenuContent align="end" className="w-52">
+        {onInsertAbove && (
+          <DropdownMenuItem onSelect={onInsertAbove}>
+            <ArrowUpToLine aria-hidden="true" />
+            Insert row above
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem onSelect={onInsertBelow}>
+          <ArrowDownToLine aria-hidden="true" />
+          Insert row below
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={onInsertLeft}>
-          <ArrowLeftToLine aria-hidden="true" className="text-muted-foreground" />
+          <ArrowLeftToLine aria-hidden="true" />
           Insert column left
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={onInsertRight}>
-          <ArrowRightToLine aria-hidden="true" className="text-muted-foreground" />
+          <ArrowRightToLine aria-hidden="true" />
           Insert column right
         </DropdownMenuItem>
         <DropdownMenuSeparator />
@@ -423,71 +421,47 @@ function ColumnMenu({
             ['center', AlignCenter, 'Align centre'],
             ['right', AlignRight, 'Align right'],
           ] as const
-        ).map(([value, Icon, label]) => (
+        ).map(([value, Icon, itemLabel]) => (
           <DropdownMenuItem key={value} onSelect={() => onAlign(value)}>
-            <Icon aria-hidden="true" className={align === value ? 'text-primary' : 'text-muted-foreground'} />
-            {label}
+            <Icon aria-hidden="true" />
+            {itemLabel}
+            {align === value && <Check aria-hidden="true" className="ml-auto" />}
           </DropdownMenuItem>
         ))}
-        {canDelete && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={onDelete} className="text-destructive">
-              <Trash2 aria-hidden="true" />
-              Delete column
-            </DropdownMenuItem>
-          </>
+        {(canDeleteRow || canDeleteColumn) && <DropdownMenuSeparator />}
+        {canDeleteRow && (
+          <DropdownMenuItem destructive onSelect={onDeleteRow}>
+            <Trash2 aria-hidden="true" />
+            Delete row
+          </DropdownMenuItem>
+        )}
+        {canDeleteColumn && (
+          <DropdownMenuItem destructive onSelect={onDeleteColumn}>
+            <Trash2 aria-hidden="true" />
+            Delete column
+          </DropdownMenuItem>
         )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-function RowMenu({
-  label,
-  canDelete,
-  onInsertAbove,
-  onInsertBelow,
-  onDelete,
-}: {
-  label: string;
-  canDelete: boolean;
-  onInsertAbove: () => void;
-  onInsertBelow: () => void;
-  onDelete: () => void;
-}) {
+/** A thin "+" strip along the table's bottom or right edge. */
+function EdgeBar({ edge, label, onClick }: { edge: 'bottom' | 'right'; label: string; onClick: () => void }) {
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          // In the gutter column, so it never overlaps a cell's own text and
-          // cannot be clipped when the table scrolls sideways.
-          className="flex h-full w-full items-center justify-center rounded-sm py-1 text-muted-foreground/60 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/row:opacity-100 focus-visible:opacity-100"
-          aria-label={label}
-        >
-          <MoreHorizontal className="h-3 w-3 rotate-90" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-40">
-        <DropdownMenuItem onSelect={onInsertAbove}>
-          <ArrowUpToLine aria-hidden="true" className="text-muted-foreground" />
-          Insert row above
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onInsertBelow}>
-          <ArrowDownToLine aria-hidden="true" className="text-muted-foreground" />
-          Insert row below
-        </DropdownMenuItem>
-        {canDelete && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={onDelete} className="text-destructive">
-              <Trash2 aria-hidden="true" />
-              Delete row
-            </DropdownMenuItem>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={cn(
+        'absolute flex items-center justify-center rounded-sm bg-subtle text-muted-foreground transition-[opacity,background-color] duration-150',
+        'opacity-0 hover:bg-active hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'group-hover/table:opacity-100 group-focus-within/table:opacity-100',
+        edge === 'bottom' ? 'inset-x-0 top-full mt-1 h-4' : 'inset-y-0 left-full ml-1 w-4',
+      )}
+    >
+      <Plus aria-hidden="true" className="h-3 w-3" />
+    </button>
   );
 }

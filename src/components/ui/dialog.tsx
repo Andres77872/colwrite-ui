@@ -2,6 +2,7 @@ import * as React from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { quietCloseAutoFocus, quietOpenAutoFocus, useTriggerCapture } from "./quietFocus"
 
 const Dialog = DialogPrimitive.Root
 const DialogTrigger = DialogPrimitive.Trigger
@@ -15,7 +16,7 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 grid place-items-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm z-[var(--z-modal-backdrop)]",
+      "fixed inset-0 grid place-items-center overflow-y-auto bg-scrim p-4 z-[var(--z-modal-backdrop)]",
       "data-[state=open]:animate-in data-[state=open]:fade-in-0",
       "data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
       className
@@ -40,13 +41,23 @@ interface DialogContentProps
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DialogContentProps
->(({ className, children, showCloseButton = true, ...props }, ref) => (
+>(({ className, children, showCloseButton = true, onOpenAutoFocus, onCloseAutoFocus, ...props }, ref) => {
+  const [getTrigger, setRefs] = useTriggerCapture(ref)
+  return (
   <DialogPortal>
     <DialogOverlay>
       <DialogPrimitive.Content
-        ref={ref}
+        ref={setRefs}
+        onOpenAutoFocus={(event) => {
+          onOpenAutoFocus?.(event)
+          quietOpenAutoFocus(event)
+        }}
+        onCloseAutoFocus={(event) => {
+          onCloseAutoFocus?.(event)
+          quietCloseAutoFocus(event, getTrigger())
+        }}
         className={cn(
-          "relative w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-xl outline-none z-[var(--z-modal)]",
+          "relative w-full max-w-lg rounded-xl bg-card p-6 text-card-foreground shadow-xl outline-none forced-colors:border z-[var(--z-modal)]",
           "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
           "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
           className
@@ -55,7 +66,7 @@ const DialogContent = React.forwardRef<
       >
         {children}
         {showCloseButton && (
-          <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none">
+          <DialogPrimitive.Close className="absolute right-3 top-3 grid h-7 w-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-hover hover:text-foreground disabled:pointer-events-none">
             <X aria-hidden="true" className="h-4 w-4" />
             <span className="sr-only">Close</span>
           </DialogPrimitive.Close>
@@ -63,7 +74,8 @@ const DialogContent = React.forwardRef<
       </DialogPrimitive.Content>
     </DialogOverlay>
   </DialogPortal>
-))
+  )
+})
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 const DialogHeader = ({
@@ -94,7 +106,7 @@ const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn("text-lg font-semibold leading-none tracking-tight", className)}
+    className={cn("text-md font-semibold", className)}
     {...props}
   />
 ))

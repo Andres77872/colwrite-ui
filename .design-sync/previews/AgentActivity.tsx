@@ -1,14 +1,13 @@
 import { AgentActivity } from 'colwrite-ui';
 
-// AgentActivity is the assistant's "what I just did" strip, rendered above the
-// answer in a chat turn.
+// AgentActivity is the assistant's "what I just did" list, rendered above the
+// answer in a chat turn: one quiet line per tool call ("✓ Searched Semantic
+// Scholar · 0.8s"), each opening onto its query, input and output.
 //
-// Two things drive what you see, and only one of them is a prop:
-//   • `live` — true while the turn is still running. It forces the list open and
-//     swaps the summary line for the running verb of the LAST run in the array.
-//   • internal `expanded` state — defaults false, so a finished turn (live
-//     false) collapses to a single "N steps" line until someone clicks it. That
-//     collapsed line is the real resting state, not a broken render.
+// `live` is the only prop that changes the shape: while a turn runs every line
+// is shown and the running one shimmers; once it finishes, more than three
+// steps fold under a single "Used N tools" line until someone clicks it. A
+// failure's cause is always printed under its line.
 //
 // `tool` is a key into TOOL_META (ChatAssistant/AgentActivity/toolMeta.ts). An
 // unknown key still renders, but with the generic fallback label — the ids below
@@ -60,7 +59,7 @@ export function Running() {
   );
 }
 
-export function FinishedAndCollapsed() {
+export function Finished() {
   return (
     <div className="max-w-[34rem]">
       <AgentActivity live={false} runs={FINISHED} />
@@ -84,6 +83,17 @@ export function WithAFailedStep() {
           },
           { id: 'r3', tool: 'search_citations', state: 'running' },
         ]}
+      />
+    </div>
+  );
+}
+
+export function FinishedAndFolded() {
+  return (
+    <div className="max-w-[34rem]">
+      <AgentActivity
+        live={false}
+        runs={[...FINISHED, { id: 'r4', tool: 'doc_read', state: 'done', durationMs: 300 }]}
       />
     </div>
   );

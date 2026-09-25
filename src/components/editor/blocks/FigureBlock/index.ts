@@ -1,0 +1,1 @@
+export { FigureBlock } from './FigureBlock';

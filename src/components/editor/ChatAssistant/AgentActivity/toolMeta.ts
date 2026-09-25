@@ -8,6 +8,7 @@ import {
   BookOpen,
   FilePlus2,
   FileSearch,
+  Globe,
   Library,
   PenLine,
   Scissors,
@@ -45,6 +46,13 @@ export type ToolRun = {
   outputChars?: number;
   /** The server cut the output at its size limit before the model saw it. */
   outputTruncated?: boolean;
+  /** When this browser heard the call start, for a live elapsed counter. */
+  startedAt?: number;
+  /**
+   * How much of its input the model has written so far, while it is still
+   * writing it (a long edit takes a while). Dropped once the input is known.
+   */
+  argumentsChars?: number;
 };
 
 /**
@@ -55,9 +63,14 @@ export type ToolRun = {
  * for sources, or preparing an edit they will have to review.
  */
 const TOOL_META: Record<string, { label: string; running: string; icon: typeof Wand2 }> = {
+  skill_read: { label: 'Read writing guidance', running: 'Reading relevant guidance', icon: BookOpen },
+  todo_read: { label: 'Checked task progress', running: 'Checking task progress', icon: SearchCheck },
+  todo_write: { label: 'Updated task progress', running: 'Updating task progress', icon: SearchCheck },
+  delegate_research: { label: 'Delegated research', running: 'Running focused research', icon: Network },
   doc_read: { label: 'Read the document', running: 'Reading your document', icon: FileSearch },
   doc_edit: { label: 'Prepared changes', running: 'Drafting changes', icon: PenLine },
   doc_create: { label: 'Created a document', running: 'Creating a document', icon: FilePlus2 },
+  cite_sources: { label: 'Prepared citations', running: 'Adding citations', icon: BookMarked },
   search_citations: { label: 'Searched for sources', running: 'Searching for sources', icon: BookMarked },
   semantic_scholar_search: {
     label: 'Searched Semantic Scholar',
@@ -112,6 +125,10 @@ const TOOL_META: Record<string, { label: string; running: string; icon: typeof W
     running: 'Finding relevant passages in your PDFs',
     icon: SearchCheck,
   },
+  // The public web. Named apart from the scholarly databases above so the
+  // author can tell a web page from a paper at a glance.
+  web_search: { label: 'Searched the web', running: 'Searching the web', icon: Globe },
+  web_read: { label: 'Read a web page', running: 'Reading a web page', icon: Globe },
   add_details: { label: 'Expanded a passage', running: 'Expanding a passage', icon: Wand2 },
   more_concise: { label: 'Condensed a passage', running: 'Condensing a passage', icon: Scissors },
   aibeat: { label: 'Ran an instruction', running: 'Running your instruction', icon: Sparkles },

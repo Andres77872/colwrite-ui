@@ -2,15 +2,17 @@ import { ChatMarkdown } from 'colwrite-ui';
 
 // ChatMarkdown renders one assistant message. It is a deliberately small
 // subset of markdown parsed in-process (no remark/rehype): fenced code,
-// h1–h3, bullet and ordered lists, blockquotes, paragraphs; inline `code`,
-// **bold**, *italic* and [links](href).
+// h1–h3, bullet and ordered lists, blockquotes, tables, paragraphs; inline
+// `code`, **bold**, *italic* and [links](href) — plus maths typeset by KaTeX
+// ($…$, \(…\), $$…$$, \[…\], ```math) and ```mermaid fences drawn by
+// MermaidDiagram.
 //
-// HAZARD — see .design-sync/NOTES.md. `parseBlocks` matches a fence with
-// /^```(\w*)\s*$/ and its paragraph loop also skips any line starting with a
-// fence, so an info string that is not a single \w* run (```js title="a.js",
-// ```py extra) advances no index and hangs the renderer forever. Every fixture
-// below therefore uses a bare fence or a single-word language, and any new one
-// must too.
+// The old fence hazard (an info string that was not a single \w* run hung the
+// parser) is fixed in source — only the first word is read as the language —
+// but fixtures still keep to one-word languages, which is what models write.
+//
+// The diagram cell draws asynchronously; its source is deterministic, so the
+// settled card is the same on every capture.
 
 function Bubble({ children }: { children: React.ReactNode }) {
   return (
@@ -92,6 +94,66 @@ export function InlineFormatting() {
   return (
     <Bubble>
       <ChatMarkdown text={INLINE} />
+    </Bubble>
+  );
+}
+
+const WITH_MATHS = [
+  'The balance loss adds one term to the task loss:',
+  '',
+  '$$',
+  '\\mathcal{L} = \\mathcal{L}_{task} + \\alpha N \\sum_{i=1}^{N} f_i P_i',
+  '$$',
+  '',
+  'where $f_i$ is the share of tokens routed to expert $i$ and $P_i$ its mean',
+  'router probability. With $\\alpha = 10^{-2}$ it costs under $1\\%$ of',
+  'throughput — and a run still costs about $5 an hour, as prose.',
+].join('\n');
+
+const WITH_DIAGRAM = [
+  'Here is the round trip a suggested edit takes:',
+  '',
+  '```mermaid',
+  'sequenceDiagram',
+  '  participant A as Author',
+  '  participant M as Assistant',
+  '  A->>M: Ask for a rewrite',
+  '  M-->>A: Change card',
+  '  A->>A: Accept or reject',
+  '```',
+  '',
+  'Nothing lands in the document until you accept it.',
+].join('\n');
+
+const STREAMING_DIAGRAM = [
+  'Drafting the pipeline now:',
+  '',
+  '```mermaid',
+  'flowchart LR',
+  '  A[Collect] --> B[Clean]',
+  '  B --> C[Tra',
+].join('\n');
+
+export function WithMaths() {
+  return (
+    <Bubble>
+      <ChatMarkdown text={WITH_MATHS} />
+    </Bubble>
+  );
+}
+
+export function WithDiagram() {
+  return (
+    <Bubble>
+      <ChatMarkdown text={WITH_DIAGRAM} />
+    </Bubble>
+  );
+}
+
+export function DiagramStillStreaming() {
+  return (
+    <Bubble>
+      <ChatMarkdown text={STREAMING_DIAGRAM} />
     </Bubble>
   );
 }

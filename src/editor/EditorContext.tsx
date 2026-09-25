@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { Block, Doc, ParagraphChild, ToolOperation } from './types';
-import { buildBibliography, citationFingerprint } from './citations';
+import type { Block, CitationSource, Doc, ParagraphChild, ToolOperation } from './types';
+import { clampIndent, continuationOf, convertBlock, isListItem, type BlockKindId } from './blockKinds';
+import { buildBibliography, canonicalCitationKey, citationFingerprint } from './citations';
 import { BibliographyContext } from './bibliographyContextState';
 import { loadDoc, saveDoc, loadDocumentId, saveDocumentId } from './storage';
 import {
@@ -54,17 +55,42 @@ type HistoryEntry = {
 function blankBlock(id: string, type: Block['type']): Block {
   if (type === 'paragraph') return { id, type: 'paragraph', html: '', children: [], columns: 1 };
   if (type === 'heading') return { id, type: 'heading', level: 2, html: '' };
+  if (type === 'code') return { id, type: 'code', text: '' };
   return { id, type: 'divider' };
 }
 
+/**
+ * A copy of `block` under a new id, safe to sit next to the original.
+ *
+ * Inline widget ids get fresh values as well (with their placeholders
+ * rewritten), and an equation's cross-reference label is dropped: labels are
+ * unique across the document and the export rejects a duplicate.
+ */
+function duplicateOf(block: Block, id: string): Block {
+  const copy = structuredClone(block) as Block;
+  copy.id = id;
+  if (copy.type !== 'paragraph' || !copy.children?.length) return copy;
+  let html = copy.html;
+  copy.children = copy.children.map((child) => {
+    const childId = uid();
+    html = html.split(`data-child-id="${child.id}"`).join(`data-child-id="${childId}"`);
+    const next = { ...child, id: childId } as ParagraphChild;
+    if (next.type === 'equation') delete next.labelId;
+    return next;
+  });
+  copy.html = html;
+  return copy;
+}
+
+/**
+ * A new page: no name yet (the title shows its "Untitled" placeholder) and
+ * one empty line to write on, rather than sample prose to delete first.
+ */
 function makeDefaultDoc(): Doc {
   return {
     version: 1,
     name: 'Untitled document',
-    blocks: [
-      { id: uid(), type: 'heading', level: 2, html: 'Your document' },
-      { id: uid(), type: 'paragraph', html: 'Write something here. Select text to format. Use the + to insert blocks.', children: [], columns: 1 },
-    ],
+    blocks: [{ id: uid(), type: 'paragraph', html: '', children: [], columns: 1 }],
   };
 }
 
@@ -390,7 +416,10 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     // starts a fresh step); structural changes always start a new entry.
     if (
       !applyingHistoryRef.current &&
-      (next.blocks !== before.blocks || next.name !== before.name)
+      (next.blocks !== before.blocks ||
+        next.name !== before.name ||
+        next.sources !== before.sources ||
+        next.citationStyle !== before.citationStyle)
     ) {
       const key = options?.coalesceKey ?? null;
       const now = Date.now();
@@ -572,12 +601,13 @@ export function EditorProvider({ children }: { children: ReactNode }) {
             children: children.filter(c => !afterIds.has(c.id)),
           } as Block)
         : ({ ...b, html: beforeHtml } as Block));
+      // A new line under a list item continues the list at its depth; after
+      // anything else it is body text.
+      const continuation = continuationOf(b, newId, afterHtml);
       const after = withoutOrphanChildren({
-        id: newId,
-        type: 'paragraph',
-        html: afterHtml,
+        ...continuation,
         children: children.filter(c => afterIds.has(c.id)),
-        columns: b.type === 'paragraph' ? b.columns ?? 1 : 1,
+        columns: b.type === 'paragraph' && !isListItem(b) ? b.columns ?? 1 : 1,
       } as Block);
       const out = [...prev];
       out.splice(idx, 1, before, after);
@@ -598,8 +628,11 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const idx = list.findIndex(b => b.id === id);
     if (idx <= 0) return null;
     const current = list[idx];
-    if (!('html' in current)) return null;
+    if (current.type !== 'paragraph' && current.type !== 'heading') return null;
     const prev = list[idx - 1];
+    // A locked block above is protected from being merged into, and a code
+    // block holds plain text that inline html cannot be folded into.
+    if (prev.locked || prev.type === 'code') return null;
     if (prev.type === 'divider') {
       // The block after a divider backspaces the divider away rather than
       // into it — a divider has no text to merge with.
@@ -650,7 +683,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const idx = prev.findIndex(b => b.id === id && 'html' in b);
     if (idx === -1) return prev;
     const b = prev[idx];
-    if (b.type === 'divider') return prev;
+    if (b.type !== 'paragraph' && b.type !== 'heading') return prev;
     if (b.html === html) return prev;
     const out = prev.slice();
     // Deleting an inline widget removes its placeholder span from the html but
@@ -720,6 +753,216 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const setHeadingLevel = useCallback((id: string, level: 1 | 2 | 3) => setBlocks(prev => prev.map(b => (
     b.id === id && b.type === 'heading' ? ({ ...b, level }) : b
   ))), [setBlocks]);
+
+  /**
+   * Turn a block into another kind in place ("Turn into", markdown shortcuts).
+   *
+   * `html` replaces the text in the same step — a markdown shortcut removes
+   * the `## ` it was typed as — so the conversion is one undo entry rather
+   * than an edit followed by a conversion.
+   */
+  const setBlockKind = useCallback((id: string, kind: BlockKindId, options?: { html?: string }) => setBlocks(prev => {
+    const idx = prev.findIndex(b => b.id === id);
+    if (idx === -1 || prev[idx].locked) return prev;
+    let source = prev[idx];
+    if (options?.html !== undefined && (source.type === 'paragraph' || source.type === 'heading')) {
+      source = withoutOrphanChildren({ ...source, html: options.html } as Block);
+    }
+    const out = prev.slice();
+    out[idx] = convertBlock(source, kind);
+    return out;
+  }), [setBlocks]);
+
+  const getBlock = useCallback((id: string) => docRef.current.blocks.find(b => b.id === id), []);
+
+  /**
+   * Add sources to the document's library, or refresh ones already there.
+   *
+   * Matched by canonical key, so a DOI written two ways is one entry. An
+   * incoming record's non-empty fields replace the stored ones — this is
+   * how "Add to library" upgrades an entry typed by hand — while fields it
+   * lacks are kept.
+   */
+  const upsertSources = useCallback((incoming: readonly CitationSource[]) => {
+    if (incoming.length === 0) return;
+    mutateDoc(prev => {
+      const library = [...(prev.sources ?? [])];
+      const index = new Map(library.map((source, i) => [canonicalCitationKey(source.key), i]));
+      for (const source of incoming) {
+        const key = canonicalCitationKey(source.key);
+        if (!key) continue;
+        const clean = Object.fromEntries(
+          Object.entries(source).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+        ) as CitationSource;
+        const at = index.get(key);
+        if (at === undefined) {
+          index.set(key, library.length);
+          library.push({ ...clean, key: source.key });
+        } else {
+          library[at] = { ...library[at], ...clean, key: library[at].key };
+        }
+      }
+      return { ...prev, sources: library };
+    });
+  }, [mutateDoc]);
+
+  /** Edit one library entry; an emptied field is removed. */
+  const updateSource = useCallback((key: string, patch: Partial<CitationSource>) => {
+    const target = canonicalCitationKey(key);
+    mutateDoc(prev => {
+      const library = prev.sources ?? [];
+      const at = library.findIndex(source => canonicalCitationKey(source.key) === target);
+      if (at === -1) return prev;
+      const next = { ...library[at], ...patch, key: library[at].key } as Record<string, unknown>;
+      for (const [field, value] of Object.entries(next)) {
+        if (value === undefined || value === null || value === '') delete next[field];
+      }
+      const out = library.slice();
+      out[at] = next as CitationSource;
+      return { ...prev, sources: out };
+    });
+  }, [mutateDoc]);
+
+  /** Drop an entry from the library. Citations keep their own copy of it. */
+  const removeSource = useCallback((key: string) => {
+    const target = canonicalCitationKey(key);
+    mutateDoc(prev => {
+      const library = prev.sources ?? [];
+      const out = library.filter(source => canonicalCitationKey(source.key) !== target);
+      if (out.length === library.length) return prev;
+      const { sources: _sources, ...rest } = prev;
+      return out.length ? { ...prev, sources: out } : rest;
+    });
+  }, [mutateDoc]);
+
+  const setCitationStyle = useCallback((style: Doc['citationStyle'] | null) => {
+    mutateDoc(prev => {
+      if ((prev.citationStyle ?? null) === style) return prev;
+      const { citationStyle: _style, ...rest } = prev;
+      return style ? { ...rest, citationStyle: style } : rest;
+    });
+  }, [mutateDoc]);
+
+  const setChecked = useCallback((id: string, checked: boolean) => setBlocks(prev => prev.map(b => (
+    b.id === id && b.type === 'paragraph' && b.variant === 'todo' && !b.locked
+      ? { ...b, checked }
+      : b
+  ))), [setBlocks]);
+
+  /**
+   * Nest or un-nest a list item (Tab / Shift+Tab).
+   *
+   * An item can sit at most one level deeper than the item above it, the way
+   * an outline works: indenting the first item of a list would otherwise
+   * produce a sub-list with no parent. Returns whether anything changed, so
+   * the key handler knows whether it consumed the key.
+   */
+  const indentBlock = useCallback((id: string, delta: 1 | -1): boolean => {
+    const list = docRef.current.blocks;
+    const idx = list.findIndex(b => b.id === id);
+    const block = list[idx];
+    if (!block || block.type !== 'paragraph' || !isListItem(block) || block.locked) return false;
+    const current = block.indent ?? 0;
+    const above = list[idx - 1];
+    const ceiling = above && above.type === 'paragraph' && isListItem(above) ? (above.indent ?? 0) + 1 : 0;
+    const next = delta > 0 ? Math.min(clampIndent(current + 1), ceiling) : clampIndent(current - 1);
+    if (next === current) return false;
+    setBlocks(prev => prev.map(b => {
+      if (b.id !== id || b.type !== 'paragraph') return b;
+      const { indent: _indent, ...rest } = b;
+      return next > 0 ? { ...rest, indent: next } : rest;
+    }));
+    return true;
+  }, [setBlocks]);
+
+  const updateCodeText = useCallback((id: string, text: string) => setBlocks(prev => {
+    const idx = prev.findIndex(b => b.id === id);
+    const b = prev[idx];
+    if (!b || b.type !== 'code' || b.text === text) return prev;
+    const out = prev.slice();
+    out[idx] = { ...b, text };
+    return out;
+  }, `code:${id}`), [setBlocks]);
+
+  const setCodeLanguage = useCallback((id: string, language: string | null) => setBlocks(prev => prev.map(b => {
+    if (b.id !== id || b.type !== 'code') return b;
+    const { language: _language, ...rest } = b;
+    return language ? { ...rest, language } : rest;
+  })), [setBlocks]);
+
+  const duplicateBlock = useCallback((id: string): string | null => {
+    const source = docRef.current.blocks.find(b => b.id === id);
+    if (!source) return null;
+    const newId = uid();
+    const copy = duplicateOf(source, newId);
+    setBlocks(prev => {
+      const idx = prev.findIndex(b => b.id === id);
+      if (idx === -1) return prev;
+      const out = prev.slice();
+      out.splice(idx + 1, 0, copy);
+      return out;
+    });
+    return newId;
+  }, [setBlocks]);
+
+  /**
+   * Swap blocks for others in one undo step — an AI result replacing the
+   * passage it rewrote. The new blocks land where the first replaced block
+   * stood. Locked blocks are never removed: they stay, after the new ones.
+   * Returns the inserted ids.
+   */
+  const replaceBlocks = useCallback((ids: readonly string[], incoming: readonly Block[]): string[] => {
+    const doomed = new Set(ids);
+    const taken = new Set(docRef.current.blocks.filter(b => !doomed.has(b.id)).map(b => b.id));
+    const fresh = incoming.map(block => (taken.has(block.id) ? duplicateOf(block, uid()) : block));
+    setBlocks(prev => {
+      const first = prev.findIndex(b => doomed.has(b.id));
+      if (first === -1) return fresh.length ? [...prev, ...fresh] : prev;
+      // Everything before `first` survives, so it is also the insertion
+      // index once the replaced blocks are gone.
+      const out = prev.filter(b => !doomed.has(b.id) || b.locked);
+      out.splice(first, 0, ...fresh);
+      return out;
+    });
+    return fresh.map(block => block.id);
+  }, [setBlocks]);
+
+  /** Remove several blocks as one undo step, skipping locked ones. */
+  const removeBlocks = useCallback((ids: readonly string[]) => {
+    const doomed = new Set(ids);
+    setBlocks(prev => {
+      const out = prev.filter(b => !doomed.has(b.id) || b.locked);
+      return out.length === prev.length ? prev : out;
+    });
+  }, [setBlocks]);
+
+  /**
+   * Insert several ready-made blocks after `afterId` (or at the start when it
+   * is null) as one undo step — pasted markdown, an assistant answer.
+   * Returns the ids actually inserted; an id already in use is replaced.
+   */
+  const insertBlocksAfter = useCallback((
+    afterId: string | null,
+    incoming: readonly Block[],
+    options?: { replaceAnchor?: boolean },
+  ): string[] => {
+    const taken = new Set(docRef.current.blocks.map(b => b.id));
+    const fresh = incoming.map(block => (taken.has(block.id) ? duplicateOf(block, uid()) : block));
+    if (fresh.length === 0) return [];
+    setBlocks(prev => {
+      const idx = afterId === null ? -1 : prev.findIndex(b => b.id === afterId);
+      const out = prev.slice();
+      // Replacing takes the anchor's place — pasting into a blank line should
+      // not leave the blank line behind — unless the anchor is locked.
+      if (options?.replaceAnchor && idx !== -1 && !prev[idx].locked) {
+        out.splice(idx, 1, ...fresh);
+      } else {
+        out.splice(afterId === null ? 0 : idx === -1 ? out.length : idx + 1, 0, ...fresh);
+      }
+      return out;
+    });
+    return fresh.map(block => block.id);
+  }, [setBlocks]);
 
   /**
    * A contenteditable command. `value` carries the argument the few commands
@@ -1302,6 +1545,27 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /**
+   * Blocks selected as whole blocks (Esc, Shift+click on the handle, ⌘A
+   * twice) rather than as text. Kept in document order and pruned of ids
+   * that left the document, so every consumer can act on it directly.
+   */
+  const [selectedIdsRaw, setSelectedIds] = useState<readonly string[]>([]);
+  const selectedBlockIds = useMemo(() => {
+    if (selectedIdsRaw.length === 0) return selectedIdsRaw;
+    const wanted = new Set(selectedIdsRaw);
+    const ordered = blocks.filter(b => wanted.has(b.id)).map(b => b.id);
+    return ordered.length === selectedIdsRaw.length && ordered.every((id, i) => id === selectedIdsRaw[i])
+      ? selectedIdsRaw
+      : ordered;
+  }, [blocks, selectedIdsRaw]);
+  const selectBlocks = useCallback((ids: readonly string[]) => setSelectedIds(ids.slice()), []);
+  const clearBlockSelection = useCallback(() => setSelectedIds(previous => (previous.length ? [] : previous)), []);
+  useEffect(() => {
+    // Selection belongs to the document it was made in.
+    setSelectedIds(previous => (previous.length ? [] : previous));
+  }, [documentSessionId]);
+
+  /**
    * Walk the document back or forward one journaled state.
    *
    * The replay goes through `mutateDoc` so it dirties the revision and arms
@@ -1390,9 +1654,14 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   // `blocks` gets a new identity on every keystroke, which used to re-run the
   // whole scan just as often. The fingerprint captures exactly the fields the
   // scan reads, so the rebuild only happens when a citation actually changes.
-  const bibliographyFingerprint = useMemo(() => citationFingerprint(blocks), [blocks]);
+  const library = doc.sources;
+  const documentStyle = doc.citationStyle ?? null;
+  const bibliographyFingerprint = useMemo(
+    () => citationFingerprint(blocks, { library, style: documentStyle }),
+    [blocks, library, documentStyle],
+  );
   const bibliography = useMemo(
-    () => buildBibliography(blocks),
+    () => buildBibliography(blocks, { library, style: documentStyle }),
     // The fingerprint stands in for `blocks`: identical fingerprint means
     // identical scan inputs, hence an identical bibliography.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1434,6 +1703,20 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     updateParagraphChild,
     removeParagraphChild,
     setHeadingLevel,
+    setBlockKind,
+    getBlock,
+    upsertSources,
+    updateSource,
+    removeSource,
+    setCitationStyle,
+    setChecked,
+    indentBlock,
+    updateCodeText,
+    setCodeLanguage,
+    duplicateBlock,
+    removeBlocks,
+    replaceBlocks,
+    insertBlocksAfter,
     exec,
     getBlockIds,
     getJSON,
@@ -1459,6 +1742,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     adoptRestoredDocument,
     applyPatch,
     markRecentlyChanged,
+    selectBlocks,
+    clearBlockSelection,
   }), [
     registerEditable,
     setBlockMenu,
@@ -1485,6 +1770,20 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     updateParagraphChild,
     removeParagraphChild,
     setHeadingLevel,
+    setBlockKind,
+    getBlock,
+    upsertSources,
+    updateSource,
+    removeSource,
+    setCitationStyle,
+    setChecked,
+    indentBlock,
+    updateCodeText,
+    setCodeLanguage,
+    duplicateBlock,
+    removeBlocks,
+    replaceBlocks,
+    insertBlocksAfter,
     exec,
     getBlockIds,
     getJSON,
@@ -1510,6 +1809,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     adoptRestoredDocument,
     applyPatch,
     markRecentlyChanged,
+    selectBlocks,
+    clearBlockSelection,
   ]);
 
   const stateValue: EditorStateContextValue = useMemo(() => ({
@@ -1532,6 +1833,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     restoreEpoch,
     hasAnyRemoteDocs,
     recentlyChanged,
+    selectedBlockIds,
   }), [
     doc,
     blocks,
@@ -1552,6 +1854,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     restoreEpoch,
     hasAnyRemoteDocs,
     recentlyChanged,
+    selectedBlockIds,
   ]);
 
   // Focus moves are rare next to keystrokes, so the one piece of state an

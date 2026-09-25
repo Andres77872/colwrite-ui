@@ -1,9 +1,57 @@
 import { citationYear } from './citations';
 import { sanitizeEditableHtml } from '@/export/sanitize';
-import type { Block, ParagraphChild, ToolOperation } from './types';
+import { MAX_BLOCK_INDENT } from './types';
+import type { Block, ParagraphBlock, ParagraphChild, ParagraphVariant, ToolOperation } from './types';
 
 /** Block types the canvas knows how to render. */
-const BLOCK_TYPES = new Set<Block['type']>(['paragraph', 'heading', 'divider']);
+const BLOCK_TYPES = new Set<Block['type']>(['paragraph', 'heading', 'divider', 'code']);
+
+const PARAGRAPH_VARIANTS = new Set<ParagraphVariant>(['bullet', 'numbered', 'todo', 'quote', 'callout']);
+
+/** Same pattern as the API's `code.language` validator. */
+const CODE_LANGUAGE_RE = /^[A-Za-z0-9][A-Za-z0-9+#._-]{0,39}$/;
+
+/**
+ * Fields each block type owns beyond id/type and the author flags. The
+ * canonical model forbids unknown fields, so a block that picked up another
+ * type's field — a heading still carrying `children` after a conversion —
+ * fails the save of the whole document. Mirrors `_BLOCK_TYPE_FIELDS` in the
+ * API's operations module.
+ */
+const BLOCK_META_FIELDS = ['id', 'type', 'aiHidden', 'locked', 'collapsed'];
+const BLOCK_TYPE_FIELDS: Record<Block['type'], readonly string[]> = {
+  paragraph: ['html', 'children', 'columns', 'variant', 'checked', 'indent'],
+  heading: ['html', 'level'],
+  divider: [],
+  code: ['text', 'language'],
+};
+
+/** Drop every field the block's type does not own. */
+function ownFields(candidate: Record<string, unknown>, type: Block['type']): Record<string, unknown> {
+  const allowed = new Set([...BLOCK_META_FIELDS, ...BLOCK_TYPE_FIELDS[type]]);
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(candidate)) {
+    if (allowed.has(key) && value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Paragraph role fields in canonical form: an unknown variant is dropped (the
+ * text survives as body text), `checked` only on a to-do, and a top-level
+ * indent is omitted rather than stored as 0.
+ */
+function paragraphRole(candidate: Record<string, unknown>): Partial<ParagraphBlock> {
+  const role: Partial<ParagraphBlock> = {};
+  const variant = candidate.variant;
+  if (typeof variant === 'string' && PARAGRAPH_VARIANTS.has(variant as ParagraphVariant)) {
+    role.variant = variant as ParagraphVariant;
+  }
+  if (role.variant === 'todo') role.checked = candidate.checked === true;
+  const indent = Number(candidate.indent);
+  if (Number.isFinite(indent) && indent >= 1) role.indent = Math.min(MAX_BLOCK_INDENT, Math.floor(indent));
+  return role;
+}
 
 /** Inline widget types the canvas has a component for. */
 const CHILD_TYPES = new Set<ParagraphChild['type']>([
@@ -118,6 +166,9 @@ export function reconcileBlocks(blocks: Block[]): Block[] {
       const html = sanitizeEditableHtml(block.html);
       if (html !== block.html) next = { ...next, html } as Block;
     }
+    if (next.type === 'code' && typeof next.text !== 'string') {
+      next = { ...next, text: '' };
+    }
     if (next.type === 'paragraph' && Array.isArray(next.children)) {
       const original = next.children;
       const children = coerceChildren(original);
@@ -152,7 +203,21 @@ export function coerceBlock(raw: unknown): Block | null {
   const type = candidate.type;
   if (typeof type !== 'string' || !BLOCK_TYPES.has(type as Block['type'])) return null;
 
-  if (type === 'divider') return { ...candidate, id, type: 'divider' } as Block;
+  const own = ownFields(candidate, type as Block['type']);
+
+  if (type === 'divider') return { ...own, id, type: 'divider' } as Block;
+
+  if (type === 'code') {
+    // Plain text rendered as text, never as markup, so it needs no html
+    // sanitizing — only a string.
+    const text = typeof candidate.text === 'string' ? candidate.text : '';
+    const language =
+      typeof candidate.language === 'string' && CODE_LANGUAGE_RE.test(candidate.language)
+        ? candidate.language
+        : undefined;
+    const { language: _language, ...rest } = own;
+    return { ...rest, id, type: 'code', text, ...(language ? { language } : {}) } as Block;
+  }
 
   // The html is as untrusted as the rest of the payload: it lands on the
   // canvas via `innerHTML`, so active markup must not survive this boundary.
@@ -161,7 +226,7 @@ export function coerceBlock(raw: unknown): Block | null {
   if (type === 'heading') {
     const rawLevel = Number(candidate.level);
     const level = rawLevel === 1 || rawLevel === 2 || rawLevel === 3 ? rawLevel : 2;
-    return { ...candidate, id, type: 'heading', level, html } as Block;
+    return { ...own, id, type: 'heading', level, html } as Block;
   }
 
   const rawColumns = Number(candidate.columns);
@@ -169,14 +234,16 @@ export function coerceBlock(raw: unknown): Block | null {
     ? Math.max(1, Math.min(6, Math.floor(rawColumns)))
     : 1;
   const children = coerceChildren(candidate.children);
+  const { variant: _variant, checked: _checked, indent: _indent, ...rest } = own;
 
   return withoutOrphanChildren({
-    ...candidate,
+    ...rest,
     id,
     type: 'paragraph',
     html,
     columns,
     children,
+    ...paragraphRole(candidate),
   } as Block);
 }
 

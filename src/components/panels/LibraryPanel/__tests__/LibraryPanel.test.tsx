@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/components/ui/toast';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { makeCollection, makeResource } from '@/services/__tests__/resourceFixtures';
 import type {
   CollectionItem,
@@ -97,9 +98,11 @@ function deferred<T>(): Deferred<T> {
 function renderPanel() {
   return render(
     <ToastProvider>
-      <ConfirmProvider>
-        <LibraryPanel />
-      </ConfirmProvider>
+      <TooltipProvider>
+        <ConfirmProvider>
+          <LibraryPanel />
+        </ConfirmProvider>
+      </TooltipProvider>
     </ToastProvider>,
   );
 }
@@ -116,11 +119,11 @@ function searchBox(): HTMLInputElement {
   return screen.getByRole('searchbox', { name: /^Search/ }) as HTMLInputElement;
 }
 
-/** Type into the full-text box and submit it. */
+/** Type into the full-text box and submit it with Enter (there is no Find button). */
 async function runSearch(term: string) {
   fireEvent.change(searchBox(), { target: { value: term } });
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'Find' }));
+    fireEvent.submit(searchBox().closest('form')!);
   });
 }
 
@@ -359,6 +362,32 @@ describe('LibraryPanel', () => {
     expect(
       await screen.findByRole('button', { name: /the oldest matching phrase/i }),
     ).toBeTruthy();
+  });
+
+  it('opens straight onto a file handed over from Research', async () => {
+    mocks.list.mockResolvedValue(listing([]));
+    mocks.get.mockResolvedValue(makeResource({ id: 99, filename: 'handed.pdf', title: 'Handed over' }));
+    mocks.read.mockResolvedValue({
+      resource: makeResource({ id: 99 }),
+      text: 'The router picks one expert.',
+      offset: 0,
+      returned_chars: 28,
+      total_chars: 28,
+      next_offset: null,
+      truncated: false,
+    });
+
+    render(
+      <ToastProvider>
+        <ConfirmProvider>
+          <LibraryPanel initialResource={{ resourceId: 99, offset: 4, term: 'router' }} />
+        </ConfirmProvider>
+      </ToastProvider>,
+    );
+
+    expect(await screen.findByRole('button', { name: 'Back to the file list' })).toBeTruthy();
+    expect(mocks.get).toHaveBeenCalledWith(99);
+    expect(await screen.findByText('Handed over')).toBeTruthy();
   });
 
   it('opens a search result that is outside the currently loaded page', async () => {

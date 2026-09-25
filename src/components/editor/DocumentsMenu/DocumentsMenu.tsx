@@ -1,22 +1,51 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
-import { formatDateTime } from '@/lib/text';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { EmptyState } from '@/components/ui/empty-state';
+import { displayTitle, isUntitledName } from '@/components/layout/displayTitle';
+import { editedLabel, shortDateTime } from '@/components/layout/editedLabel';
+import { rememberDocumentSummaries } from '@/components/layout/documentSummaryCache';
 import { Skeleton, Spinner } from '@/components/ui/spinner';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useConfirm } from '@/components/ui/confirmContext';
 import { useToast } from '@/components/ui/toastContext';
 import { useEditor } from '@/editor';
+import { useNewDocument } from '@/components/layout/useNewDocument';
+import {
+  sidebarHoverAction,
+  sidebarRow,
+  sidebarRowActive,
+} from '@/components/layout/Sidebar/sidebarStyles';
 import type {
   DocumentListOptions,
   DocumentSortBy,
   DocumentSortOrder,
   DocumentSummary,
 } from '@/services';
-import { AlertCircle, ChevronLeft, ChevronRight, FileText, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  ChevronDown,
+  ExternalLink,
+  FileText,
+  Link2,
+  ListFilter,
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react';
 
 const PAGE_SIZE = 10;
+/** The API's largest page; "Load more" stops here and the filter takes over. */
+const MAX_LIMIT = 100;
+/** Below this many documents a filter field is clutter, not help. */
+const FILTER_THRESHOLD = 8;
 const SEARCH_DEBOUNCE_MS = 350;
 
 type SortValue = `${DocumentSortBy}:${DocumentSortOrder}`;
@@ -35,6 +64,24 @@ const SORT_OPTIONS: {
   { value: 'name:desc', label: 'Title — Z–A', sortBy: 'name', sortOrder: 'desc' },
 ];
 
+function documentLink(id: string): string {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.hash = '';
+  url.searchParams.set('doc', id);
+  return url.toString();
+}
+
+/**
+ * The sidebar's "Documents" section: a section label, one quiet row per
+ * document and a "Load more" row.
+ *
+ * It used to be a form — a search box, a refresh button, a native sort
+ * select, a full-width primary button and 50px rows repeating a timestamp to
+ * the second. Sorting, refreshing and filtering now live in the section's
+ * hover menu, each row's actions in its own "…" menu, and the update time in
+ * the row's tooltip.
+ */
 export function DocumentsMenu({
   onDocumentCommitted,
 }: {
@@ -43,7 +90,6 @@ export function DocumentsMenu({
   const {
     listRemote,
     switchTo,
-    createAndSwitch,
     deleteRemote,
     documentId,
     loadingDocumentId,
@@ -51,23 +97,34 @@ export function DocumentsMenu({
   } = useEditor();
   const confirm = useConfirm();
   const { toast } = useToast();
+  const newDocument = useNewDocument();
+  const headingId = useId();
+  const filterRef = useRef<HTMLInputElement | null>(null);
+  // Set while "Filter documents" closes its menu: the menu would otherwise
+  // hand focus back to its trigger and swallow what the author types next.
+  const pendingFilterFocus = useRef(false);
 
   const [items, setItems] = useState<DocumentSummary[]>([]);
   const [count, setCount] = useState(0);
-  const [page, setPage] = useState(1);
+  // Pages loaded so far. Refetches ask for all of them at once, so a save
+  // elsewhere (which bumps the list revision) never collapses the list the
+  // author has scrolled through.
+  const [pages, setPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'create' | 'delete' | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [filterOpen, setFilterOpen] = useState(false);
   const [sortBy, setSortBy] = useState<DocumentSortBy>('updated_at');
   const [sortOrder, setSortOrder] = useState<DocumentSortOrder>('desc');
   const [refreshRevision, setRefreshRevision] = useState(0);
   const requestSequence = useRef(0);
   const activeController = useRef<AbortController | null>(null);
 
-  const totalPages = useMemo(() => Math.max(1, Math.ceil(count / PAGE_SIZE)), [count]);
   const sortValue: SortValue = `${sortBy}:${sortOrder}`;
+  const limit = Math.min(MAX_LIMIT, pages * PAGE_SIZE);
+  const hasMore = items.length < count && limit < MAX_LIMIT;
 
   const fetchList = useCallback(
     async (options: DocumentListOptions) => {
@@ -81,12 +138,16 @@ export function DocumentsMenu({
         const res = await listRemote(options, { signal: controller.signal });
         if (controller.signal.aborted || requestId !== requestSequence.current) return;
         setItems(res.documents);
+        rememberDocumentSummaries(res.documents);
         setCount(res.count);
         setListError(null);
+        // Once the list is long enough to need a filter, keep offering it —
+        // it must not vanish under the caret while the query narrows the list.
+        if (!options.query && res.count > FILTER_THRESHOLD) setFilterOpen(true);
       } catch (error) {
         if (controller.signal.aborted || requestId !== requestSequence.current) return;
-        // This load is background work, so report it where the missing list
-        // would have been instead of interrupting the user with a toast.
+        // Background work: report it where the list would have been instead
+        // of interrupting with a toast.
         setListError(error instanceof Error ? error.message : 'Request failed');
         setItems([]);
         setCount(0);
@@ -102,7 +163,7 @@ export function DocumentsMenu({
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setDebouncedQuery(query.trim());
-      setPage(1);
+      setPages(1);
     }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [query]);
@@ -110,8 +171,8 @@ export function DocumentsMenu({
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void fetchList({
-        page,
-        limit: PAGE_SIZE,
+        page: 1,
+        limit,
         query: debouncedQuery || undefined,
         sortBy,
         sortOrder,
@@ -121,40 +182,20 @@ export function DocumentsMenu({
       window.clearTimeout(timer);
       activeController.current?.abort();
     };
-  }, [
-    debouncedQuery,
-    documentListRevision,
-    fetchList,
-    page,
-    refreshRevision,
-    sortBy,
-    sortOrder,
-  ]);
+  }, [debouncedQuery, documentListRevision, fetchList, limit, refreshRevision, sortBy, sortOrder]);
 
   const onSortChange = (value: string) => {
     const selected = SORT_OPTIONS.find((option) => option.value === value);
     if (!selected) return;
     setSortBy(selected.sortBy);
     setSortOrder(selected.sortOrder);
-    setPage(1);
+    setPages(1);
   };
 
-  const onCreate = async () => {
-    if (loadingDocumentId) return;
-    setBusy('create');
-    try {
-      await createAndSwitch({ version: 1, name: 'Untitled document', blocks: [] });
-      setPage(1);
-      toast({ title: 'Document created', variant: 'success' });
-    } catch (error) {
-      toast({
-        title: 'Could not create document',
-        description: error instanceof Error ? error.message : undefined,
-        variant: 'error',
-      });
-    } finally {
-      setBusy(null);
-    }
+  const showFilter = () => {
+    setFilterOpen(true);
+    // Focused from the menu's close handler, once the field has mounted.
+    pendingFilterFocus.current = true;
   };
 
   const onLoad = async (id: string) => {
@@ -171,21 +212,17 @@ export function DocumentsMenu({
   const onDelete = async (doc: DocumentSummary) => {
     if (loadingDocumentId) return;
     const ok = await confirm({
-      title: `Delete “${doc.name}”?`,
+      title: `Delete “${displayTitle(doc.name)}”?`,
       description: 'This permanently removes the document and its chats. It cannot be undone.',
       confirmLabel: 'Delete',
       destructive: true,
     });
     if (!ok) return;
 
-    setBusy('delete');
+    setDeleting(true);
     try {
+      // The context revision performs the refresh after the mutation.
       await deleteRemote(doc.id);
-      // Deleting the last item on the final page would otherwise strand the
-      // user on a page that no longer exists. The context revision performs
-      // the actual refresh after the mutation.
-      const nextPage = Math.min(page, Math.max(1, Math.ceil(Math.max(0, count - 1) / PAGE_SIZE)));
-      setPage(nextPage);
       toast({ title: 'Document deleted', variant: 'success' });
     } catch (error) {
       toast({
@@ -194,63 +231,99 @@ export function DocumentsMenu({
         variant: 'error',
       });
     } finally {
-      setBusy(null);
+      setDeleting(false);
+    }
+  };
+
+  const copyLink = async (id: string) => {
+    try {
+      await navigator.clipboard.writeText(documentLink(id));
+      toast({ title: 'Link copied', variant: 'success' });
+    } catch {
+      toast({ title: 'Could not copy the link', variant: 'error' });
     }
   };
 
   const showSkeleton = loading && items.length === 0;
+  const busy = deleting || Boolean(loadingDocumentId);
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-1.5">
-        <Input
-          type="search"
-          placeholder="Search documents…"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          aria-label="Search documents"
-          className="h-8 flex-1"
-        />
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => setRefreshRevision((revision) => revision + 1)}
-          disabled={loading}
-          aria-label="Refresh document list"
-          title="Refresh"
-        >
-          <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-        </Button>
+    <section aria-labelledby={headingId} className="flex flex-col gap-px">
+      <div className="group/section flex h-7 items-center gap-0.5 rounded-md pl-2 pr-1 hover:bg-hover">
+        <h2 id={headingId} className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
+          Documents
+        </h2>
+        <div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/section:opacity-100 has-[[data-state=open]]:opacity-100 pointer-coarse:opacity-100">
+          <DropdownMenu>
+            <DropdownMenuTrigger className={sidebarHoverAction} aria-label="Document list options">
+              <MoreHorizontal aria-hidden="true" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="w-60"
+              onCloseAutoFocus={(event) => {
+                if (!pendingFilterFocus.current) return;
+                pendingFilterFocus.current = false;
+                event.preventDefault();
+                filterRef.current?.focus();
+              }}
+            >
+              <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={sortValue} onValueChange={onSortChange}>
+                {SORT_OPTIONS.map((option) => (
+                  <DropdownMenuRadioItem key={option.value} value={option.value} indicator>
+                    {option.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={showFilter}>
+                <ListFilter aria-hidden="true" />
+                Filter documents
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setRefreshRevision((revision) => revision + 1)}>
+                <RefreshCw aria-hidden="true" />
+                Refresh
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <button
+            type="button"
+            className={sidebarHoverAction}
+            onClick={() => void newDocument.createDocument()}
+            disabled={newDocument.disabled}
+            aria-label="New document"
+            title="New document"
+          >
+            {newDocument.creating ? <Spinner /> : <Plus aria-hidden="true" />}
+          </button>
+        </div>
       </div>
 
-      <select
-        className="h-8 w-full rounded-md border border-input bg-input px-2 text-xs text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-        value={sortValue}
-        aria-label="Sort documents"
-        onChange={(event) => onSortChange(event.target.value)}
-      >
-        {SORT_OPTIONS.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      {(filterOpen || query) && (
+        <input
+          ref={filterRef}
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && query) {
+              event.preventDefault();
+              setQuery('');
+            }
+          }}
+          placeholder="Filter documents…"
+          aria-label="Search documents"
+          className="mb-1 h-7 w-full rounded-md bg-transparent px-2 text-sm text-foreground outline-none transition-colors placeholder:text-placeholder hover:bg-hover focus:bg-subtle focus:ring-2 focus:ring-ring/40 pointer-coarse:h-9"
+        />
+      )}
 
-      <Button
-        size="sm"
-        onClick={onCreate}
-        disabled={busy !== null || Boolean(loadingDocumentId)}
-        className="w-full"
-      >
-        {busy === 'create' ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
-        New document
-      </Button>
-
-      <ul className="flex flex-col gap-1" aria-busy={loading}>
+      <ul className="flex flex-col gap-px" aria-busy={loading}>
         {showSkeleton &&
           Array.from({ length: 4 }).map((_, index) => (
-            <li key={index} className="px-2 py-2">
-              <Skeleton className="h-3.5 w-3/4" />
+            <li key={index} className="flex h-[30px] items-center gap-2 px-2">
+              <Skeleton className="h-4 w-4" />
+              <Skeleton className="h-3 flex-1" style={{ maxWidth: `${80 - index * 12}%` }} />
             </li>
           ))}
 
@@ -258,124 +331,115 @@ export function DocumentsMenu({
           items.map((doc) => {
             const isActive = documentId === doc.id;
             const isPending = loadingDocumentId === doc.id;
-            const updatedLabel = formatDateTime(doc.updatedAt);
+            const name = displayTitle(doc.name);
+            const untitled = isUntitledName(doc.name);
+            const updated = shortDateTime(doc.updatedAt);
+            const edited = editedLabel(doc.updatedAt);
             return (
               <li key={doc.id}>
                 <div
                   className={cn(
-                    'group flex items-center gap-1 rounded-lg border border-transparent transition-colors',
-                    isActive ? 'border-border bg-primary/10' : 'hover:bg-accent',
+                    'group/row relative flex items-center rounded-md transition-colors duration-150',
+                    isActive ? 'bg-active' : 'hover:bg-hover has-[[data-state=open]]:bg-hover',
                   )}
                 >
                   <button
                     type="button"
                     onClick={() => onLoad(doc.id)}
                     aria-current={isActive ? 'true' : undefined}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left"
-                  >
-                    <FileText
-                      aria-hidden="true"
-                      className={cn(
-                        'h-3.5 w-3.5 flex-shrink-0',
-                        isActive ? 'text-primary' : 'text-muted-foreground',
-                      )}
-                    />
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm">{doc.name}</span>
-                      {isPending ? (
-                        <span className="flex items-center gap-1 text-2xs text-muted-foreground">
-                          <Spinner />
-                          Opening…
-                        </span>
-                      ) : (
-                        <time
-                          dateTime={doc.updatedAt || undefined}
-                          className="block truncate text-2xs text-muted-foreground"
-                        >
-                          Updated {updatedLabel || '—'}
-                        </time>
-                      )}
-                    </span>
-                  </button>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
+                    title={updated ? `${name}\nEdited ${updated}` : name}
                     className={cn(
-                      'mr-1 flex-shrink-0 text-muted-foreground transition-opacity hover:bg-destructive/10 hover:text-destructive',
-                      // Keep the control reachable by keyboard even while hidden on hover-capable devices.
-                      'opacity-0 focus-visible:opacity-100 group-hover:opacity-100',
+                      sidebarRow,
+                      // Room for the "…" only while it shows, so titles are
+                      // not cut short on every row by an invisible button.
+                      'flex-1 hover:bg-transparent group-hover/row:pr-7 group-focus-within/row:pr-7 group-has-[[data-state=open]]/row:pr-7 pointer-coarse:pr-9',
+                      isActive && sidebarRowActive,
+                      isActive && 'bg-transparent hover:bg-transparent',
                     )}
-                    onClick={() => onDelete(doc)}
-                    disabled={busy !== null || Boolean(loadingDocumentId)}
-                    aria-label={`Delete ${doc.name}`}
-                    title="Delete document"
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                    {isPending ? <Spinner className="size-[18px]" /> : <FileText aria-hidden="true" />}
+                    <span className={cn('min-w-0 flex-1 truncate', untitled && 'text-muted-foreground')}>
+                      {name}
+                    </span>
+                    {isPending && <span className="sr-only">Opening…</span>}
+                  </button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      className={cn(
+                        sidebarHoverAction,
+                        'absolute right-1 opacity-0 group-hover/row:opacity-100',
+                      )}
+                      aria-label={`Actions for ${name}`}
+                    >
+                      <MoreHorizontal aria-hidden="true" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" side="right" className="w-56">
+                      <DropdownMenuItem disabled={isActive || isPending} onSelect={() => void onLoad(doc.id)}>
+                        <FileText aria-hidden="true" />
+                        Open
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild>
+                        <a href={documentLink(doc.id)} target="_blank" rel="noreferrer">
+                          <ExternalLink aria-hidden="true" />
+                          Open in new tab
+                        </a>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => void copyLink(doc.id)}>
+                        <Link2 aria-hidden="true" />
+                        Copy link
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem destructive disabled={busy} onSelect={() => void onDelete(doc)}>
+                        <Trash2 aria-hidden="true" />
+                        Delete
+                      </DropdownMenuItem>
+                      {edited && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <p className="px-2 py-1 text-xs text-muted-foreground" title={updated}>
+                            {edited}
+                          </p>
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </li>
             );
           })}
       </ul>
 
-      {!loading && listError && (
-        <div
-          role="alert"
-          className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-center"
+      {hasMore && !listError && (
+        <button
+          type="button"
+          className={cn(sidebarRow, 'text-muted-foreground')}
+          onClick={() => setPages((current) => current + 1)}
+          disabled={loading}
         >
-          <p className="flex items-center justify-center gap-1.5 text-sm font-medium text-destructive">
-            <AlertCircle aria-hidden="true" className="h-3.5 w-3.5" />
-            Could not load documents
-          </p>
-          <p className="mt-1 break-words text-xs text-muted-foreground">{listError}</p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-2"
+          {loading ? <Spinner className="size-[18px]" /> : <ChevronDown aria-hidden="true" />}
+          Load more
+        </button>
+      )}
+
+      {!loading && listError && (
+        <div role="alert" className="px-2 py-1.5 text-xs text-muted-foreground">
+          <p className="font-medium text-destructive">Could not load documents</p>
+          <p className="mt-0.5 break-words">{listError}</p>
+          <button
+            type="button"
+            className="mt-1 font-medium text-link hover:underline"
             onClick={() => setRefreshRevision((revision) => revision + 1)}
           >
             Retry
-          </Button>
+          </button>
         </div>
       )}
 
       {!loading && !listError && items.length === 0 && (
-        <EmptyState
-          icon={FileText}
-          title={debouncedQuery ? 'No matches' : 'No documents yet'}
-          description={
-            debouncedQuery
-              ? `Nothing matches “${debouncedQuery}”.`
-              : 'Create one to start writing.'
-          }
-        />
+        <p className="px-2 py-1.5 text-sm text-muted-foreground">
+          {debouncedQuery ? `Nothing matches “${debouncedQuery}”` : 'No documents yet'}
+        </p>
       )}
-
-      {totalPages > 1 && (
-        <div className="mt-1 flex items-center justify-between border-t border-border/50 pt-2">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setPage((currentPage) => Math.max(1, currentPage - 1))}
-            disabled={page <= 1 || loading}
-            aria-label="Previous page"
-          >
-            <ChevronLeft className="h-3.5 w-3.5" />
-          </Button>
-          <span className="text-2xs tabular-nums text-muted-foreground">
-            Page {page} of {totalPages} · {count} total
-          </span>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setPage((currentPage) => Math.min(totalPages, currentPage + 1))}
-            disabled={page >= totalPages || loading}
-            aria-label="Next page"
-          >
-            <ChevronRight className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      )}
-    </div>
+    </section>
   );
 }

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useEditor } from '@/editor';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { NativeSelect } from '@/components/ui/select';
 import {
   Dialog,
   DialogClose,
@@ -13,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Spinner } from '@/components/ui/spinner';
 import { useToast } from '@/components/ui/toastContext';
+import { useReturnFocus } from '@/hooks/useReturnFocus';
 import { downloadBlob, exportFilename } from '@/export/download';
 import { printStandaloneHtml } from '@/export/print';
 import type {
@@ -26,12 +28,15 @@ import type {
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Where focus goes when the dialog closes. Opened from a menu item, which
+   * unmounts with its menu, it would otherwise fall to <body>.
+   */
+  returnFocus?: () => HTMLElement | null | undefined;
 };
 
-const selectClass =
-  'h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring';
-
-export function DocumentExportDialog({ open, onOpenChange }: Props) {
+export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props) {
+  const focusReturn = useReturnFocus(returnFocus);
   const { getExportSnapshot } = useEditor();
   const { toast } = useToast();
   const [format, setFormat] = useState<'html' | 'pdf'>('pdf');
@@ -65,8 +70,12 @@ export function DocumentExportDialog({ open, onOpenChange }: Props) {
         local_revision: snapshot.localRevision,
         dirty: snapshot.dirty,
       };
-      const { renderStandaloneHtml } = await import('@/export/renderStandaloneHtml');
-      const html = renderStandaloneHtml(snapshot.document, options, exportSnapshot);
+      const [{ renderStandaloneHtml }, { renderDocumentDiagrams }] = await Promise.all([
+        import('@/export/renderStandaloneHtml'),
+        import('@/export/diagrams'),
+      ]);
+      const diagrams = await renderDocumentDiagrams(snapshot.document.blocks);
+      const html = renderStandaloneHtml(snapshot.document, options, exportSnapshot, diagrams);
 
       if (format === 'html') {
         downloadBlob(
@@ -94,7 +103,11 @@ export function DocumentExportDialog({ open, onOpenChange }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent showCloseButton={!busy}>
+      <DialogContent
+        showCloseButton={!busy}
+        onOpenAutoFocus={focusReturn.onOpenAutoFocus}
+        onCloseAutoFocus={focusReturn.onCloseAutoFocus}
+      >
         <DialogHeader>
           <DialogTitle>Export document</DialogTitle>
           <DialogDescription>
@@ -106,63 +119,58 @@ export function DocumentExportDialog({ open, onOpenChange }: Props) {
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <label className="grid gap-1.5 text-sm">
             <span className="font-medium">Format</span>
-            <select
-              className={selectClass}
+            <NativeSelect
               value={format}
               onChange={(event) => onFormatChange(event.target.value as 'html' | 'pdf')}
               disabled={busy}
             >
               <option value="pdf">PDF</option>
               <option value="html">Standalone HTML</option>
-            </select>
+            </NativeSelect>
           </label>
           <label className="grid gap-1.5 text-sm">
             <span className="font-medium">Profile</span>
-            <select
-              className={selectClass}
+            <NativeSelect
               value={profile}
               onChange={(event) => setProfile(event.target.value as ExportProfile)}
               disabled={busy}
             >
               <option value="paper">Paper — light and reflowed</option>
               <option value="editor-faithful">Editor faithful — fixed measure</option>
-            </select>
+            </NativeSelect>
           </label>
           <label className="grid gap-1.5 text-sm">
             <span className="font-medium">Page size</span>
-            <select
-              className={selectClass}
+            <NativeSelect
               value={pageSize}
               onChange={(event) => setPageSize(event.target.value as ExportPageSize)}
               disabled={busy || format === 'html'}
             >
               <option value="A4">A4</option>
               <option value="Letter">Letter</option>
-            </select>
+            </NativeSelect>
           </label>
           <label className="grid gap-1.5 text-sm">
             <span className="font-medium">Orientation</span>
-            <select
-              className={selectClass}
+            <NativeSelect
               value={orientation}
               onChange={(event) => setOrientation(event.target.value as ExportOrientation)}
               disabled={busy || format === 'html'}
             >
               <option value="portrait">Portrait</option>
               <option value="landscape">Landscape</option>
-            </select>
+            </NativeSelect>
           </label>
           <label className="grid gap-1.5 text-sm sm:col-span-2">
             <span className="font-medium">AI Beat drafts</span>
-            <select
-              className={selectClass}
+            <NativeSelect
               value={aiBeat}
               onChange={(event) => setAiBeat(event.target.value as AiBeatExportMode)}
               disabled={busy}
             >
               <option value="omit">Omit from document</option>
               <option value="draft-card">Include as labelled draft cards</option>
-            </select>
+            </NativeSelect>
           </label>
           <label className="flex items-center gap-2 text-sm sm:col-span-2">
             <Checkbox

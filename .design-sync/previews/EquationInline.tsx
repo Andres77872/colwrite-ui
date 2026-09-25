@@ -1,4 +1,4 @@
-import { EditorContext, EquationInline } from 'colwrite-ui';
+import { EditorContext, EquationInline, LiteralEditor } from 'colwrite-ui';
 
 // EquationInline is the maths widget embedded in a paragraph — inline in the
 // run of text, or on its own centred line when `display` is set.
@@ -29,7 +29,7 @@ const EDITOR = { blocks: [], documentId: 'doc-1', refs };
 
 function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <EditorContext.Provider value={EDITOR as unknown as Ctx}>{children}</EditorContext.Provider>
+    <LiteralEditor value={EDITOR as unknown as Ctx}>{children}</LiteralEditor>
   );
 }
 

@@ -3,7 +3,9 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import katex from 'katex';
 import type {
+  Block,
   CitationChild,
+  CodeBlock,
   Doc,
   EquationChild,
   GraphChild,
@@ -21,13 +23,20 @@ import {
   type Bibliography,
 } from '@/editor/citations';
 import { ChartFigure } from '@/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/ChartFigure';
+import { cn } from '@/lib/utils';
 import { exportStyles } from './styles';
 import {
   materializedParts,
   safeChartColors,
+  safeDiagramSvg,
   safeHttpUrl,
   sanitizeInlineFragment,
 } from './sanitize';
+import { figureNumbers, isDiagramBlock, isFigureBlock } from '@/editor/blockKinds';
+import { StaticFigure } from '@/components/common/StructuredFigure/StaticFigure';
+import { compileFigure, figureMeta } from '@/lib/figure/compile';
+import { getFigureMeasurer } from '@/lib/figure/measure';
+import type { RenderedDiagrams } from './diagrams';
 import type {
   DocumentExportOptions,
   DocumentExportSnapshot,
@@ -40,6 +49,8 @@ export class ExportValidationError extends Error {}
 type Numbering = {
   bibliography: Bibliography;
   equations: Map<string, number>;
+  /** Captioned structured figures, "Figure N", in document order. */
+  figures: Map<string, number>;
 };
 
 function escapeAttribute(value: string): string {
@@ -61,7 +72,11 @@ function numberingFor(doc: Doc): Numbering {
       }
     }
   }
-  return { bibliography: buildBibliography(doc.blocks), equations };
+  return {
+    bibliography: buildBibliography(doc.blocks, { library: doc.sources, style: doc.citationStyle ?? null }),
+    equations,
+    figures: figureNumbers(doc.blocks, (source) => figureMeta(source).caption),
+  };
 }
 
 /**
@@ -302,15 +317,28 @@ function InlineChildView({
   return null;
 }
 
-function ParagraphView({
-  block,
-  numbering,
-  options,
-}: {
-  block: ParagraphBlock;
-  numbering: Numbering;
-  options: DocumentExportOptions;
-}) {
+/**
+ * Characters an author–year citation may sit flush against — the same rule
+ * the editor's CitationInline applies, so "lengths (Vaswani, 2017)" exports
+ * the way it reads on the page instead of "lengths(Vaswani, 2017)".
+ */
+const OPENS_OR_SPACE = /[\s([{\u2018\u201C"'/\u2013\u2014-]/;
+
+/** The last character a reader would see in an inline HTML fragment. */
+function lastVisibleCharacter(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;|&#160;/g, ' ')
+    .replace(/&[a-z0-9#]+;/gi, 'x')
+    .slice(-1);
+}
+
+/** A paragraph's runs of prose and its block-level widgets, in order. */
+function paragraphOutput(
+  block: ParagraphBlock,
+  numbering: Numbering,
+  options: DocumentExportOptions,
+): React.ReactNode[] {
   const children = block.children ?? [];
   const byId = new Map<string, ParagraphChild>();
   for (const child of children) {
@@ -343,10 +371,12 @@ function ParagraphView({
     run = [];
   };
 
+  let previousCharacter = '';
   for (const part of materializedParts(sanitized)) {
     if (part.kind === 'html') {
       if (part.html) {
         run.push(<span key={`html-${sequence++}`} dangerouslySetInnerHTML={{ __html: part.html }} />);
+        previousCharacter = lastVisibleCharacter(part.html) || previousCharacter;
       }
       continue;
     }
@@ -364,6 +394,16 @@ function ParagraphView({
         />,
       );
     } else {
+      const style = numbering.bibliography.documentStyle ?? (child.type === 'citation' ? child.style : undefined);
+      if (
+        child.type === 'citation'
+        && style === 'author-year'
+        && previousCharacter
+        && !OPENS_OR_SPACE.test(previousCharacter)
+      ) {
+        run.push(' ');
+      }
+      previousCharacter = child.type === 'citation' ? ')' : 'x';
       run.push(
         <InlineChildView
           key={`child-${child.id}`}
@@ -375,7 +415,25 @@ function ParagraphView({
     }
   }
   flush();
+  return output;
+}
 
+function ParagraphView({
+  block,
+  numbering,
+  options,
+}: {
+  block: ParagraphBlock;
+  numbering: Numbering;
+  options: DocumentExportOptions;
+}) {
+  const output = paragraphOutput(block, numbering, options);
+  if (block.variant === 'quote') {
+    return <blockquote className="export-block export-quote">{output}</blockquote>;
+  }
+  if (block.variant === 'callout') {
+    return <aside className="export-block export-callout">{output}</aside>;
+  }
   return (
     <section
       className="export-block paragraph-block"
@@ -386,16 +444,183 @@ function ParagraphView({
   );
 }
 
-function DocumentView({ doc, options }: { doc: Doc; options: DocumentExportOptions }) {
+/**
+ * A code block — or, for a Mermaid diagram that was drawn ahead of the export
+ * (`renderDocumentDiagrams`), the drawing. A diagram that was not drawn keeps
+ * its source, so nothing the author wrote goes missing from the page.
+ */
+function CodeView({
+  block,
+  diagrams,
+  figureNumber,
+  options,
+}: {
+  block: CodeBlock;
+  diagrams?: RenderedDiagrams;
+  figureNumber?: number;
+  options: DocumentExportOptions;
+}) {
+  if (isFigureBlock(block)) {
+    // Structured figures lay out synchronously, so they are drawn right here
+    // rather than ahead of time like Mermaid. The SVG is built from React
+    // elements — labels are text nodes, maths is KaTeX with `trust: false` —
+    // so no markup from the spec reaches the page.
+    const compiled = compileFigure(block.text, getFigureMeasurer());
+    if (compiled.ok) {
+      return (
+        <StaticFigure
+          compiled={compiled}
+          number={figureNumber}
+          theme={options.profile === 'editor-faithful' ? 'dark' : 'light'}
+          idPrefix={`cwfig-${block.id.replace(/[^A-Za-z0-9_-]/g, '')}`}
+          className="export-block export-figure"
+        />
+      );
+    }
+  }
+  const svg = isDiagramBlock(block) ? safeDiagramSvg(diagrams?.get(block.id)) : null;
+  if (svg) {
+    return (
+      <figure
+        className="export-block export-diagram"
+        role="img"
+        aria-label="Diagram"
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+    );
+  }
+  return (
+    <pre className="export-block export-code" data-language={block.language || undefined}>
+      <code>{block.text}</code>
+    </pre>
+  );
+}
+
+type ListTag = 'ul' | 'ol' | 'todo';
+
+function listTag(block: ParagraphBlock): ListTag {
+  return block.variant === 'numbered' ? 'ol' : block.variant === 'todo' ? 'todo' : 'ul';
+}
+
+/**
+ * A run of consecutive list items as nested html lists.
+ *
+ * Storage is flat — each item is a block with an `indent` — while html nests
+ * a sub-list inside the item above it. An item deeper than its predecessor
+ * therefore goes inside the previous `<li>`; a run that starts indented gets
+ * an empty parent item, as the LaTeX export does.
+ */
+function ListRun({
+  items,
+  depth,
+  numbering,
+  options,
+}: {
+  items: ParagraphBlock[];
+  depth: number;
+  numbering: Numbering;
+  options: DocumentExportOptions;
+}) {
+  const lists: React.ReactNode[] = [];
+  let index = 0;
+  while (index < items.length) {
+    const tag = listTag(items[index]);
+    const entries: React.ReactNode[] = [];
+    while (index < items.length) {
+      const item = items[index];
+      const itemDepth = item.indent ?? 0;
+      let end = index + 1;
+      if (itemDepth === depth) {
+        if (listTag(item) !== tag) break;
+        while (end < items.length && (items[end].indent ?? 0) > depth) end += 1;
+        const nested = items.slice(index + 1, end);
+        entries.push(
+          <li
+            key={item.id}
+            className={cn(tag === 'todo' && 'todo-item', item.checked && 'is-checked')}
+          >
+            {tag === 'todo' && (
+              <span className="todo-box" aria-hidden="true">{item.checked ? '☑' : '☐'}</span>
+            )}
+            {paragraphOutput(item, numbering, options)}
+            {nested.length > 0 && (
+              <ListRun items={nested} depth={depth + 1} numbering={numbering} options={options} />
+            )}
+          </li>,
+        );
+      } else {
+        end = index;
+        while (end < items.length && (items[end].indent ?? 0) > depth) end += 1;
+        entries.push(
+          <li key={`spacer-${item.id}`} className="list-spacer">
+            <ListRun items={items.slice(index, end)} depth={depth + 1} numbering={numbering} options={options} />
+          </li>,
+        );
+      }
+      index = end;
+    }
+    const key = `list-${lists.length}-${items[0].id}`;
+    if (tag === 'ol') lists.push(<ol key={key} className="export-list">{entries}</ol>);
+    else lists.push(<ul key={key} className={cn('export-list', tag === 'todo' && 'todo-list')}>{entries}</ul>);
+  }
+  return <>{lists}</>;
+}
+
+// A plain boolean, not a type predicate: a predicate's false branch would
+// narrow every paragraph out of the caller's union, list item or not.
+function isListBlock(block: Block | undefined): boolean {
+  return (
+    block?.type === 'paragraph' &&
+    (block.variant === 'bullet' || block.variant === 'numbered' || block.variant === 'todo')
+  );
+}
+
+function DocumentView({
+  doc,
+  options,
+  diagrams,
+}: {
+  doc: Doc;
+  options: DocumentExportOptions;
+  diagrams?: RenderedDiagrams;
+}) {
   const numbering = numberingFor(doc);
   const blockIds = new Set<string>();
   return (
     <main className={`document-export profile-${options.profile}`}>
       {options.include_title && <h1 className="document-title">{doc.name?.trim() || 'Untitled document'}</h1>}
-      {doc.blocks.map((block) => {
+      {doc.blocks.map((block, index) => {
         if (blockIds.has(block.id)) throw new ExportValidationError(`Duplicate block ID: ${block.id}`);
         blockIds.add(block.id);
+        if (isListBlock(block)) {
+          // The first item of a run renders the whole run; the rest are
+          // already inside it.
+          const previous = doc.blocks[index - 1];
+          if (previous && isListBlock(previous)) return null;
+          let end = index + 1;
+          while (end < doc.blocks.length && isListBlock(doc.blocks[end])) end += 1;
+          return (
+            <ListRun
+              key={block.id}
+              items={doc.blocks.slice(index, end) as ParagraphBlock[]}
+              depth={0}
+              numbering={numbering}
+              options={options}
+            />
+          );
+        }
         if (block.type === 'divider') return <hr className="export-divider" key={block.id} />;
+        if (block.type === 'code') {
+          return (
+            <CodeView
+              key={block.id}
+              block={block}
+              diagrams={diagrams}
+              figureNumber={numbering.figures.get(block.id)}
+              options={options}
+            />
+          );
+        }
         if (block.type === 'heading') {
           const Heading = `h${block.level}` as 'h1' | 'h2' | 'h3';
           const sanitized = sanitizeInlineFragment(block.html);
@@ -421,6 +646,8 @@ export function renderStandaloneHtml(
   doc: Doc,
   options: DocumentExportOptions,
   snapshot: DocumentExportSnapshot,
+  /** Diagram blocks already drawn to SVG, by block id (`renderDocumentDiagrams`). */
+  diagrams?: RenderedDiagrams,
 ): string {
   if (!Number.isInteger(doc.version) || doc.version < 1) {
     throw new ExportValidationError('Document version must be a positive integer');
@@ -428,7 +655,7 @@ export function renderStandaloneHtml(
   if (!Array.isArray(doc.blocks) || doc.blocks.length > 2000) {
     throw new ExportValidationError('Document contains too many blocks');
   }
-  const body = renderToStaticMarkup(<DocumentView doc={doc} options={options} />);
+  const body = renderToStaticMarkup(<DocumentView doc={doc} options={options} diagrams={diagrams} />);
   const title = escapeAttribute(doc.name?.trim() || 'Untitled document');
   const styles = exportStyles(options);
   return `<!doctype html>

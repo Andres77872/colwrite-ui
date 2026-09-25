@@ -113,21 +113,22 @@ export function ResizeHandle({
       aria-valuetext={value === undefined ? undefined : `${Math.round(value)} pixels`}
       tabIndex={0}
       className={cn(
-        'group/handle relative flex flex-shrink-0 select-none items-center justify-center rounded-sm',
-        isHorizontal ? 'w-3 cursor-col-resize' : 'h-3 cursor-row-resize',
+        'group/handle relative flex flex-shrink-0 select-none items-center justify-center focus-visible:outline-hidden',
+        isHorizontal ? 'w-2 cursor-col-resize' : 'h-2 cursor-row-resize',
         className,
       )}
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
       style={{ touchAction: 'none' }}
     >
+      {/* Invisible at rest: the hit area straddles the region's hairline and
+          only shows itself as a line on hover, focus or drag. */}
       <div
         className={cn(
-          'rounded-full bg-border transition-all duration-150',
-          'group-hover/handle:bg-primary/60 group-focus-visible/handle:bg-primary',
-          isHorizontal
-            ? ['h-8 w-1', 'group-hover/handle:h-12', isDragging && 'h-16 bg-primary']
-            : ['h-1 w-8', 'group-hover/handle:w-12', isDragging && 'w-16 bg-primary'],
+          'bg-transparent transition-colors duration-150',
+          'group-hover/handle:bg-primary/50 group-focus-visible/handle:bg-primary',
+          isHorizontal ? 'h-full w-0.5' : 'h-0.5 w-full',
+          isDragging && 'bg-primary',
         )}
       />
     </div>
@@ -153,13 +154,13 @@ export function PanelHeader({ title, icon, actions, className }: PanelHeaderProp
   return (
     <div
       className={cn(
-        'flex h-11 flex-shrink-0 items-center justify-between gap-2 border-b border-border/50 px-3',
+        'flex h-11 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-3',
         className,
       )}
     >
       <div className="flex min-w-0 items-center gap-2">
-        {icon && <span className="flex-shrink-0 text-primary/70">{icon}</span>}
-        <h2 className="truncate text-sm font-medium text-foreground/90">{title}</h2>
+        {icon && <span className="flex-shrink-0 text-muted-foreground">{icon}</span>}
+        <h2 className="truncate text-sm font-medium text-foreground">{title}</h2>
       </div>
       {actions && <div className="flex flex-shrink-0 items-center gap-0.5">{actions}</div>}
     </div>

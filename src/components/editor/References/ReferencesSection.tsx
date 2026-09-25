@@ -36,26 +36,27 @@ export function ReferencesSection() {
   const unresolved = entries.filter((entry) => entry.unresolved).length;
 
   return (
-    <section
-      aria-labelledby={HEADING_ID}
-      className="references-section border-t border-border pt-5 pb-2"
-      style={{ paddingLeft: 'var(--doc-gutter)' }}
-    >
+    // A section of the paper in the paper's own type: the heading is set like
+    // the document's H2 and the entries sit in the text column.
+    <section aria-labelledby={HEADING_ID} className="references-section pb-2 pt-[2.1em]">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h2 id={HEADING_ID} className="text-lg font-semibold">
+        <h2
+          id={HEADING_ID}
+          className="text-[1.5em] font-semibold leading-[1.3] tracking-[-0.01em]"
+        >
           References
         </h2>
         <p className="text-xs text-muted-foreground">
           {entries.length} {entries.length === 1 ? 'source' : 'sources'} · {STYLE_NOTE[style]}
         </p>
         {unresolved > 0 && (
-          <Badge variant="warning" className="px-2 py-0 text-2xs">
+          <Badge variant="warning">
             {unresolved} without details
           </Badge>
         )}
       </div>
 
-      <ol className="mt-3 space-y-1">
+      <ol className="mt-2 space-y-0.5 text-[0.9375em]">
         {entries.map((entry) => (
           <ReferenceRow key={entry.key} entry={entry} style={style} />
         ))}
@@ -77,13 +78,14 @@ function ReferenceRow({ entry, style }: { entry: BibliographyEntry; style: Citat
       // Focusable only as a jump target: a citation followed with the keyboard
       // has to leave focus on the entry it landed on, not back in the paragraph.
       tabIndex={-1}
-      className="flex gap-2 rounded-sm px-1.5 py-1 text-sm"
+      className="flex rounded-sm py-1"
     >
+      {/* A hanging number: wrapped lines align with the text, not the marker. */}
       {marker && (
-        <span className="shrink-0 tabular-nums text-muted-foreground">{marker}</span>
+        <span className="w-9 shrink-0 pr-2 text-right tabular-nums text-muted-foreground">{marker}</span>
       )}
       <div className="min-w-0 flex-1">
-        <p className={cn('leading-snug', entry.unresolved && 'font-mono text-xs')}>
+        <p className={cn('leading-normal', entry.unresolved && 'font-mono text-xs')}>
           {parts.text}
         </p>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
@@ -129,7 +131,7 @@ function BackLinks({ entry }: { entry: BibliographyEntry }) {
               ? `Go to the citation of ${name}`
               : `Go to citation ${usage.ordinal} of ${entry.usages.length} for ${name}`
           }
-          className="inline-flex items-center gap-0.5 rounded-xs px-1 tabular-nums transition-colors hover:bg-accent hover:text-foreground"
+          className="inline-flex items-center gap-0.5 rounded-xs px-1 tabular-nums transition-colors hover:bg-hover hover:text-foreground"
         >
           <ArrowUpLeft aria-hidden="true" className="h-3 w-3" />
           {single ? 'Cited once' : usage.ordinal}

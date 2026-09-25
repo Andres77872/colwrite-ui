@@ -1,3 +1,5 @@
+import { scrollBehavior } from './motion';
+
 const FLASH_CLASS = 'reveal-flash';
 const FLASH_MS = 1400;
 
@@ -17,7 +19,7 @@ export function revealElement(target: Element | null | undefined): boolean {
   if (!(target instanceof HTMLElement)) return false;
 
   if (typeof target.scrollIntoView === 'function') {
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
   }
 
   const running = pending.get(target);

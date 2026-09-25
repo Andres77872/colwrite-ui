@@ -1,10 +1,30 @@
 import type { CSSProperties } from 'react';
 import { cn } from '@/lib/utils';
+import { uid } from '@/lib/uid';
 import { sanitizeEditableHtml } from '@/export/sanitize';
-import { useActiveBlock, useEditorActions } from '../../../editor';
+import {
+  isListItem,
+  kindOf,
+  markdownPrefixKind,
+  useActiveBlock,
+  useEditorActions,
+  type BlockKindId,
+} from '../../../editor';
 import { useLayoutEffect, useRef } from 'react';
 import { openSlashMenu, isSlashMenuOpen } from '../../editor/SlashMenu/slashMenuEvents';
-import { serializeEditableHtml } from './editableHtml';
+import { openAskAi } from '../../editor/AskAi/askAiEvents';
+import { normalizeEditableHtml, serializeEditableHtml } from './editableHtml';
+import { BLOCKS_MIME, pasteAsBlocks } from './pasteBlocks';
+import { isMod, turnIntoKind } from './blockKeys';
+import {
+  captureCaretOffset,
+  caretLineInfo,
+  deleteBeforeCaret,
+  isEditableEmpty,
+  placeCaretAtLine,
+  restoreCaretOffset,
+  textBeforeCaret,
+} from './caret';
 
 /**
  * Whether a node sits inside an inline widget rather than in the prose.
@@ -16,51 +36,11 @@ import { serializeEditableHtml } from './editableHtml';
  * reworked: the paragraph then treated typing inside a table cell as typing in
  * the document, so "/" opened the command menu and Backspace in an empty cell
  * deleted the whole block.
- *
- * `.ai-suggest` is listed separately because the floating toolbar builds it
- * with raw DOM inside the paragraph, not as a child widget.
  */
 function isInsideWidget(node: Node | null | undefined): boolean {
   if (!node) return false;
   const element = node.nodeType === 1 ? (node as HTMLElement) : node.parentElement;
-  return !!element?.closest?.('[data-child-id], .ai-suggest');
-}
-
-/** Caret position as a character offset over the element's text content. */
-function captureCaretOffset(el: HTMLElement): number | null {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode)) return null;
-  const range = sel.getRangeAt(0);
-  const pre = range.cloneRange();
-  pre.selectNodeContents(el);
-  pre.setEnd(range.startContainer, range.startOffset);
-  return pre.toString().length;
-}
-
-/** Restore the caret from a character offset, clamped to the content. */
-function restoreCaretOffset(el: HTMLElement, offset: number): void {
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-  let remaining = offset;
-  let node = walker.nextNode() as Text | null;
-  while (node) {
-    if (remaining <= node.data.length) {
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.setStart(node, remaining);
-      range.collapse(true);
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-      return;
-    }
-    remaining -= node.data.length;
-    node = walker.nextNode() as Text | null;
-  }
-  const sel = window.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  range.collapse(false);
-  sel?.removeAllRanges();
-  sel?.addRange(range);
+  return !!element?.closest?.('[data-child-id]');
 }
 
 /**
@@ -78,10 +58,18 @@ function caretAtWordBoundary(el: HTMLElement): boolean {
   return /\s/.test(el.textContent?.charAt(offset - 1) ?? '');
 }
 
+/** A whole-line markdown token that converts as soon as it is complete. */
+const INSTANT_MARKDOWN: Record<string, BlockKindId> = {
+  '---': 'divider',
+  '***': 'divider',
+  '```': 'code',
+};
+
 export function Editable({
   id,
   html,
   placeholder,
+  placeholderWhen = 'always',
   ariaLabel,
   className,
   style,
@@ -91,6 +79,13 @@ export function Editable({
   id: string;
   html: string;
   placeholder?: string;
+  /**
+   * `focus` shows the placeholder only on the line being written — the
+   * "Type '/' for commands" hint belongs to the caret, not to every blank
+   * paragraph on the page. Headings and list items keep theirs always, since
+   * an empty heading with no hint is invisible.
+   */
+  placeholderWhen?: 'always' | 'focus';
   /** Accessible name for the document field, such as "Paragraph". */
   ariaLabel?: string;
   className?: string;
@@ -114,11 +109,20 @@ export function Editable({
   // `getBlockIds` instead of a `blocks` subscription for the same reason.
   const {
     addBlockAfter,
+    duplicateBlock,
+    getBlock,
     getBlockIds,
+    indentBlock,
+    insertBlockBeforeExact,
     mergeWithPrevious,
+    moveBlock,
     removeBlock,
+    selectBlocks,
+    setBlockKind,
+    setChecked,
     splitBlock,
     updateHtml,
+    insertBlocksAfter,
     refs,
     registerEditable,
   } = useEditorActions();
@@ -128,6 +132,8 @@ export function Editable({
   const prevHtmlRef = useRef(html || '');
   /** True between compositionstart and compositionend (IME input). */
   const composingRef = useRef(false);
+  /** A "/" typed at a word boundary: open the menu once it is in the DOM. */
+  const slashPendingRef = useRef(false);
 
   /** Nearest block in `dir` that has an editable element, if any. */
   const neighbourBlock = (dir: -1 | 1): string | null => {
@@ -138,6 +144,49 @@ export function Editable({
     return null;
   };
 
+  /**
+   * Focus a block and place the caret once React has rendered it.
+   *
+   * A conversion can swap the element (paragraph → heading remounts the
+   * editable), so the lookup happens after the frame, not before.
+   */
+  const focusLater = (targetId: string, place: (el: HTMLElement) => void) => {
+    requestAnimationFrame(() => {
+      const target = refs.current[targetId];
+      if (!target) return;
+      target.focus({ preventScroll: false });
+      place(target);
+    });
+  };
+
+  const syncEmpty = (el: HTMLElement) => {
+    el.toggleAttribute('data-empty', isEditableEmpty(el));
+  };
+
+  const commit = (el: HTMLDivElement) => {
+    const serialized = serializeEditableHtml(el);
+    syncEmpty(el);
+    if (el.getAttribute('data-serialized') !== serialized) {
+      el.setAttribute('data-serialized', serialized);
+      updateHtml(id, serialized);
+    }
+    return serialized;
+  };
+
+  /** Convert this block, rewriting its html in the same undo step. */
+  const convert = (el: HTMLDivElement, kind: BlockKindId, remountExpected: boolean) => {
+    const html = serializeEditableHtml(el);
+    el.setAttribute('data-serialized', html);
+    syncEmpty(el);
+    setBlockKind(id, kind, { html });
+    if (kind === 'divider') {
+      const nextId = addBlockAfter(id, 'paragraph');
+      focusLater(nextId, (target) => restoreCaretOffset(target, 0));
+      return;
+    }
+    if (remountExpected) focusLater(id, (target) => restoreCaretOffset(target, 0));
+  };
+
   // Keep DOM content in sync only when NOT actively editing this block.
   // When becoming active (focus), ensure content is restored if a re-render replaced the node.
   useLayoutEffect(() => {
@@ -145,18 +194,23 @@ export function Editable({
     if (!el) return;
     const next = html || '';
     if (activeId !== id) {
-      if (el.innerHTML !== next) el.innerHTML = next;
+      // Rewrite only when the markup really differs. The live DOM of a
+      // paragraph with a citation or an equation always differs from `html`
+      // by the widgets' rendered insides, so comparing raw innerHTML rewrote
+      // it every time any block gained or lost focus. That detached every
+      // node a saved Range pointed at: the selection toolbar's link field
+      // then linked nothing, and "Cite at cursor" landed at the start of the
+      // block.
+      if (el.innerHTML !== next && serializeEditableHtml(el) !== normalizeEditableHtml(next)) {
+        el.innerHTML = next;
+      }
     } else {
       // State that moved without this editable — an accepted agent change, a
       // restore, an undo — must not wait for blur: the next keystroke would
       // serialize this stale DOM back over the new state. Detect it against
-      // the last html this editable itself committed, and rebase. While an AI
-      // suggestion is live the toolbar owns the DOM on purpose, so state and
-      // DOM legitimately disagree there.
+      // the last html this editable itself committed, and rebase.
       const movedExternally =
-        prevHtmlRef.current !== next &&
-        el.getAttribute('data-serialized') !== next &&
-        !el.querySelector('.ai-suggest');
+        prevHtmlRef.current !== next && el.getAttribute('data-serialized') !== next;
       if (movedExternally) {
         const caret = captureCaretOffset(el);
         el.innerHTML = next;
@@ -175,8 +229,10 @@ export function Editable({
         if (sel) { sel.removeAllRanges(); sel.addRange(range); }
       }
     }
+    syncEmpty(el);
     prevHtmlRef.current = next;
   }, [html, activeId, id]);
+
   return (
     <div
       className={cn(
@@ -185,8 +241,7 @@ export function Editable({
         // AI-action toolbar never appears.
         "editable",
         // No focus outline: a box drawn around body text reads as an error
-        // state while writing. The affordance is the row tint in `Canvas`,
-        // which keys off `.editable:focus-visible`.
+        // state while writing. The caret is the affordance, as on paper.
         "min-h-[1.5em] w-full outline-none whitespace-pre-wrap break-words",
         locked && "cursor-default",
         className
@@ -208,6 +263,8 @@ export function Editable({
       tabIndex={locked ? 0 : undefined}
       aria-readonly={locked || undefined}
       suppressContentEditableWarning
+      data-placeholder={placeholder}
+      data-placeholder-when={placeholderWhen}
       onMouseDown={() => { pointerDownRef.current = true; }}
       onFocus={(e) => {
         setActive(id);
@@ -258,26 +315,31 @@ export function Editable({
         // drop the in-flight text.
         if (composingRef.current) return;
         const target = e.currentTarget as HTMLDivElement;
-        const serialized = serializeEditableHtml(target);
-        if (target.getAttribute('data-serialized') !== serialized) {
-          target.setAttribute('data-serialized', serialized);
-          updateHtml(id, serialized);
+        // `---` and ``` convert the moment they are complete, as in Notion:
+        // there is no text after them worth waiting for.
+        const block = getBlock(id);
+        const instant = INSTANT_MARKDOWN[(target.textContent ?? '').trim()];
+        if (instant && block?.type === 'paragraph' && !block.variant && !target.querySelector('[data-child-id]')) {
+          target.innerHTML = '';
+          convert(target, instant, true);
+          return;
+        }
+        commit(target);
+        if (slashPendingRef.current) {
+          slashPendingRef.current = false;
+          openSlashMenu(id);
         }
       }}
       onCompositionStart={() => { composingRef.current = true; }}
       onCompositionEnd={(e) => {
         composingRef.current = false;
-        const target = e.currentTarget as HTMLDivElement;
-        const serialized = serializeEditableHtml(target);
-        if (target.getAttribute('data-serialized') !== serialized) {
-          target.setAttribute('data-serialized', serialized);
-          updateHtml(id, serialized);
-        }
+        commit(e.currentTarget as HTMLDivElement);
       }}
       onPaste={(e) => {
         // Widget interiors (table cells, …) run their own paste handling.
         const selection = window.getSelection();
         if (isInsideWidget(selection?.anchorNode) || isInsideWidget(e.target as Node)) return;
+        if (locked) { e.preventDefault(); return; }
         // Browser-default paste would drop arbitrary clipboard HTML into the
         // DOM; `onInput` would then serialize it into document state and it
         // would round-trip to storage as stored XSS. Placeholder spans are
@@ -285,6 +347,15 @@ export function Editable({
         // pasted `data-child-id` span would render as an empty ghost widget.
         e.preventDefault();
         const html = e.clipboardData.getData('text/html');
+        const text = e.clipboardData.getData('text/plain');
+        // Several lines of structured text — a markdown list, headings,
+        // paragraphs copied from elsewhere — become blocks of their own, the
+        // way they were written, instead of one paragraph full of line breaks.
+        const el = e.currentTarget as HTMLDivElement;
+        const blocksJson = e.clipboardData.getData(BLOCKS_MIME);
+        if (pasteAsBlocks({ el, blockId: id, html, text, blocksJson, getBlock, splitBlock, insertBlocksAfter, commit, focusLater })) {
+          return;
+        }
         if (html) {
           document.execCommand(
             'insertHTML',
@@ -293,7 +364,6 @@ export function Editable({
           );
           return;
         }
-        const text = e.clipboardData.getData('text/plain');
         if (text) document.execCommand('insertText', false, text);
       }}
       onKeyDown={(e) => {
@@ -312,6 +382,31 @@ export function Editable({
         // 'Process', but Firefox/Safari leak Backspace/Enter — which used to
         // delete or split the block mid-composition.
         if (e.nativeEvent.isComposing || composingRef.current) return;
+        // The command menu owns navigation keys while it is open.
+        if (isSlashMenuOpen() && ['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) return;
+
+        // Block selection: Esc lifts the caret out of the text and selects
+        // the whole block, the entry point to moving, duplicating or
+        // deleting blocks from the keyboard.
+        if (e.key === 'Escape' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          selectBlocks([id]);
+          el.blur();
+          return;
+        }
+        // Mod+A on a block whose text is already all selected (or empty)
+        // widens to every block in the document.
+        if (isMod(e) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') {
+          const all = (el.textContent ?? '').length;
+          const selected = selection?.toString().length ?? 0;
+          if (all === 0 || selected >= all) {
+            e.preventDefault();
+            selectBlocks(getBlockIds());
+            el.blur();
+          }
+          return;
+        }
+
         // A selection spanning two editables would make the browser do DOM
         // surgery across two React-tracked roots; collapse it into this block
         // before an editing key acts on it.
@@ -326,23 +421,120 @@ export function Editable({
             return;
           }
         }
+
+        // Block-level shortcuts that do not change text work on locked
+        // blocks too, except those that would convert or move them.
+        if (isMod(e) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'd') {
+          e.preventDefault();
+          duplicateBlock(id);
+          return;
+        }
+        if (isMod(e) && e.shiftKey && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+          e.preventDefault();
+          if (locked) return;
+          const caret = captureCaretOffset(el) ?? 0;
+          moveBlock(id, e.key === 'ArrowUp' ? -1 : 1);
+          focusLater(id, (target) => restoreCaretOffset(target, caret));
+          return;
+        }
+        const turnInto = isMod(e) && e.altKey && !e.shiftKey ? turnIntoKind(e) : undefined;
+        if (turnInto) {
+          e.preventDefault();
+          if (locked) return;
+          const kind = turnInto;
+          const block = getBlock(id);
+          if (!block || kindOf(block) === kind) return;
+          const headingSwitch = (block.type === 'heading') !== (kind === 'h1' || kind === 'h2' || kind === 'h3');
+          convert(el, kind, headingSwitch || kind === 'code');
+          return;
+        }
+        // Mod+J asks the assistant about the selection, or at the caret.
+        if (isMod(e) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'j') {
+          e.preventDefault();
+          e.stopPropagation();
+          openAskAi({ blockId: id });
+          return;
+        }
+
         // Nothing that mutates a locked block applies to it. Arrow keys fall
         // through to the navigation handler below, which only moves the caret.
         if (locked && !e.key.startsWith('Arrow')) return;
-        if (slashEnabled && e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-          // Mid-word the key falls through and types a literal '/'; the menu
-          // only opens at a word boundary.
-          if (!caretAtWordBoundary(el)) return;
+
+        const block = getBlock(id);
+        const isParagraph = block?.type === 'paragraph';
+        const variant = isParagraph ? block.variant : undefined;
+
+        // Space on an empty text line opens the assistant prompt there.
+        if (
+          e.key === ' ' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey &&
+          isParagraph && !variant && isEditableEmpty(el)
+        ) {
           e.preventDefault();
-          openSlashMenu(id);
+          openAskAi({ blockId: id });
           return;
         }
+
+        // Markdown at the start of a line: `# `, `- `, `1. `, `[] `, `> `.
+        if (
+          e.key === ' ' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey &&
+          selection?.isCollapsed && isParagraph
+        ) {
+          const before = textBeforeCaret(el);
+          const kind = before === null ? null : markdownPrefixKind(before);
+          if (kind && block && kindOf(block) !== kind) {
+            e.preventDefault();
+            deleteBeforeCaret(el);
+            convert(el, kind, kind === 'h1' || kind === 'h2' || kind === 'h3');
+            if (kind === 'todo' && /x/i.test(before ?? '')) setChecked(id, true);
+            return;
+          }
+        }
+
+        if (slashEnabled && e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          // The "/" is typed like any other character; the menu opens once it
+          // is in the text and filters on what follows it. Mid-word it is a
+          // literal slash and no menu opens.
+          slashPendingRef.current = caretAtWordBoundary(el);
+          return;
+        }
+
+        if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && block && isListItem(block)) {
+          // Tab nests a list item under the one above; Shift+Tab lifts it.
+          // Consumed even when the item cannot move, so focus stays in the
+          // document rather than jumping to the next control.
+          e.preventDefault();
+          indentBlock(id, e.shiftKey ? -1 : 1);
+          return;
+        }
+
         if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
-          // Split the block at the caret; the text after it moves into a new
-          // paragraph below. Ctrl+Enter below keeps the old "empty block
-          // after" behavior.
           e.preventDefault();
           if (!selection || selection.rangeCount === 0) return;
+          // Enter on an empty list item, quote or callout leaves it, the way
+          // an outline does: a nested item steps out one level first.
+          if (variant && isEditableEmpty(el)) {
+            if (block && isListItem(block) && (block.type === 'paragraph' && (block.indent ?? 0) > 0)) {
+              indentBlock(id, -1);
+            } else {
+              convert(el, 'text', false);
+            }
+            return;
+          }
+          // Enter at the very start of a non-empty block opens a line above
+          // and leaves this block — its type, its widgets — where it is. A
+          // split here would have left an empty heading behind and moved the
+          // heading's words into a paragraph.
+          if (selection.isCollapsed && captureCaretOffset(el) === 0 && !isEditableEmpty(el) && block) {
+            const above = block.type === 'paragraph' && isListItem(block)
+              ? { ...block, id: uid(), html: '', children: [], ...(block.variant === 'todo' ? { checked: false } : {}) }
+              : { id: uid(), type: 'paragraph' as const, html: '', children: [], columns: 1 };
+            insertBlockBeforeExact(id, above);
+            return;
+          }
+          // Split the block at the caret; the text after it moves into a new
+          // block below — the same list kind for a list item, body text
+          // otherwise. Ctrl+Enter below keeps the old "empty block after"
+          // behavior.
           const range = selection.getRangeAt(0);
           range.deleteContents();
           const afterRange = document.createRange();
@@ -354,40 +546,63 @@ export function Editable({
           const beforeHtml = serializeEditableHtml(el);
           // The live DOM already shows exactly the before half.
           el.setAttribute('data-serialized', beforeHtml);
+          syncEmpty(el);
           const newId = splitBlock(id, beforeHtml, afterHtml);
-          requestAnimationFrame(() => {
-            const target = refs.current[newId];
-            if (target) { target.focus(); restoreCaretOffset(target, 0); }
-          });
+          focusLater(newId, (target) => restoreCaretOffset(target, 0));
           return;
         }
-        if (e.key === 'Enter' && e.ctrlKey) {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey) {
           e.preventDefault();
           const newId = addBlockAfter(id, 'paragraph');
-          queueMicrotask(() => refs.current[newId]?.focus());
+          focusLater(newId, (target) => restoreCaretOffset(target, 0));
           return;
         }
-        if (e.key === 'Backspace') {
-          const html = el.innerHTML.trim();
-          // Only delete the block when it is truly empty (no lines),
-          // not when it has only newline wrappers like <div><br></div>.
-          const isTrulyEmpty = html === '' || /^<br\s*\/?>(?:\s*)?$/i.test(html);
-          if (isTrulyEmpty) { e.preventDefault(); removeBlock(id); return; }
+        if (e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          const atStart = selection?.isCollapsed && captureCaretOffset(el) === 0;
+          // A list item, quote or callout — or a heading — turns back into
+          // body text first; only then does Backspace merge or delete.
+          if (atStart && block && (variant || block.type === 'heading')) {
+            e.preventDefault();
+            convert(el, 'text', block.type === 'heading');
+            return;
+          }
+          if (isEditableEmpty(el)) {
+            e.preventDefault();
+            // The caret goes to the end of the block above; deleting the line
+            // used to leave focus nowhere.
+            const prevId = neighbourBlock(-1);
+            removeBlock(id);
+            if (prevId) focusLater(prevId, (target) => restoreCaretOffset(target, Number.MAX_SAFE_INTEGER));
+            return;
+          }
           // At the very start of a non-empty block, Backspace merges the
           // block into the one above instead of doing nothing.
-          if (selection?.isCollapsed && captureCaretOffset(el) === 0) {
+          if (atStart) {
             e.preventDefault();
             const merged = mergeWithPrevious(id);
             if (merged && merged.targetId !== id) {
-              requestAnimationFrame(() => {
-                const target = refs.current[merged.targetId];
-                if (target) { target.focus(); restoreCaretOffset(target, merged.caretOffset); }
-              });
+              focusLater(merged.targetId, (target) => restoreCaretOffset(target, merged.caretOffset));
             }
           }
           return;
         }
-        // Arrow keys cross block boundaries at the edges of the text.
+        if (e.key === 'Delete' && !e.ctrlKey && !e.metaKey && !e.altKey && selection?.isCollapsed) {
+          // Forward delete at the end pulls the next block up into this one.
+          const offset = captureCaretOffset(el);
+          if (offset !== null && offset === (el.textContent?.length ?? 0)) {
+            const nextId = neighbourBlock(1);
+            const next = nextId ? getBlock(nextId) : undefined;
+            if (nextId && next && !next.locked && (next.type === 'paragraph' || next.type === 'heading')) {
+              e.preventDefault();
+              const merged = mergeWithPrevious(nextId);
+              if (merged) focusLater(merged.targetId, (target) => restoreCaretOffset(target, merged.caretOffset));
+            }
+          }
+          return;
+        }
+        // Arrow keys cross block boundaries at the edges of the text: Left and
+        // Right at the first and last character, Up and Down on the first and
+        // last visual line, keeping the column.
         if (
           (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'ArrowRight' || e.key === 'ArrowDown') &&
           !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
@@ -395,24 +610,34 @@ export function Editable({
         ) {
           const offset = captureCaretOffset(el);
           const textLength = el.textContent?.length ?? 0;
-          if ((e.key === 'ArrowLeft' || e.key === 'ArrowUp') && offset === 0) {
+          const line = e.key === 'ArrowUp' || e.key === 'ArrowDown' ? caretLineInfo(el) : null;
+          const leaveUp =
+            e.key === 'ArrowLeft' ? offset === 0 : e.key === 'ArrowUp' && (line ? line.onFirstLine : offset === 0);
+          const leaveDown =
+            e.key === 'ArrowRight'
+              ? offset === textLength
+              : e.key === 'ArrowDown' && (line ? line.onLastLine : offset === textLength);
+          if (leaveUp) {
             const prevId = neighbourBlock(-1);
-            if (prevId) {
+            const target = prevId ? refs.current[prevId] : null;
+            if (target) {
               e.preventDefault();
-              const target = refs.current[prevId];
-              if (target) { target.focus(); restoreCaretOffset(target, target.textContent?.length ?? 0); }
+              target.focus();
+              if (e.key === 'ArrowUp' && line) placeCaretAtLine(target, 'last', line.x);
+              else restoreCaretOffset(target, target.textContent?.length ?? 0);
             }
-          } else if ((e.key === 'ArrowRight' || e.key === 'ArrowDown') && offset === textLength) {
+          } else if (leaveDown) {
             const nextId = neighbourBlock(1);
-            if (nextId) {
+            const target = nextId ? refs.current[nextId] : null;
+            if (target) {
               e.preventDefault();
-              const target = refs.current[nextId];
-              if (target) { target.focus(); restoreCaretOffset(target, 0); }
+              target.focus();
+              if (e.key === 'ArrowDown' && line) placeCaretAtLine(target, 'first', line.x);
+              else restoreCaretOffset(target, 0);
             }
           }
         }
       }}
-      data-placeholder={placeholder}
       style={style}
       /* Initial content is set via useLayoutEffect to avoid caret resets */
     />

@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { createRef, StrictMode, useImperativeHandle } from 'react';
 import type { SSEEventHandlers } from '@/services/streamParser';
 import type { ToolAction } from '@/editor/types';
+import { PanelsContext, type PanelsContextValue } from '@/components/panels/panelsContextState';
 
 /**
  * Integration tests for the real ChatAssistant, EditorProvider and
@@ -44,9 +45,16 @@ const listMessages = vi.fn(async () => ({
   pivotThreadId: null as number | null,
 }));
 const listThreads = vi.fn(async () => ({ threads: [] as Array<{ id: number }> }));
+type StoredChat = { chat_id: string; title: string | null; last_thread_id: number | null; updated_at: string | null };
+const listChats = vi.fn(async () => ({ chats: [] as StoredChat[], count: 0, status: 'ok', message: '' }));
+const updateChatTitle = vi.fn(async () => ({ status: 'ok', message: '' }));
 vi.mock('@/services/chats', () => ({
   listMessages: (...args: unknown[]) => listMessages(...(args as [])),
   listThreads: (...args: unknown[]) => listThreads(...(args as [])),
+  listChats: (...args: unknown[]) => listChats(...(args as [])),
+  createChat: vi.fn(),
+  deleteChat: vi.fn(),
+  updateChatTitle: (...args: unknown[]) => updateChatTitle(...(args as [])),
 }));
 vi.mock('@/services', async () => ({
   createDocument: () => createDocument(),
@@ -61,10 +69,13 @@ const { ProposalsProvider } = await import('@/editor/ProposalsContext');
 const { useProposals } = await import('@/editor/proposalsContextState');
 const { ChatSessionsProvider } = await import('../../../chat/ChatSessionsContext');
 const { useChatSessions } = await import('../../../chat/chatSessionsState');
-// The assistant's open/closed state is shell state, so the panels provider is
-// part of its contract rather than an ambient convenience.
-const { PanelsProvider } = await import('../../../panels');
 const { ChatAssistant } = await import('../ChatAssistant');
+const { TooltipProvider } = await import('@/components/ui/tooltip');
+const { ConfirmContext } = await import('@/components/ui/confirmContext');
+const { ToastContext } = await import('@/components/ui/toastContext');
+const { forgetCaret, useRememberCaret } = await import('../../References');
+const { AgentEngineContext } = await import('@/components/preferences/agentEngineContextState');
+type EngineContext = import('@/components/preferences/agentEngineContextState').AgentEngineContextValue;
 
 // ── Harness ──
 
@@ -107,10 +118,14 @@ function CaptureChats() {
 }
 
 /** Renders the assistant against a document that is already saved remotely. */
-async function mount({ strict = false }: { strict?: boolean } = {}) {
+async function mount({
+  strict = false,
+  panels,
+  engines,
+}: { strict?: boolean; panels?: Partial<PanelsContextValue>; engines?: EngineContext } = {}) {
   localStorage.setItem('colwrite:lastDocId', DOC_ID);
 
-  await renderAssistant({ strict });
+  await renderAssistant({ strict, panels, engines });
 
   // The provider probes for remote documents and hydrates from the server.
   await waitFor(() => expect(listDocuments).toHaveBeenCalled());
@@ -124,35 +139,49 @@ async function mountUnsaved() {
   expect(harness.editor.documentId).toBeNull();
 }
 
-async function renderAssistant({ strict = false }: { strict?: boolean } = {}) {
-  const tree = (
+async function renderAssistant({
+  strict = false,
+  panels,
+  engines,
+}: { strict?: boolean; panels?: Partial<PanelsContextValue>; engines?: EngineContext } = {}) {
+  const editor = (
     <EditorProvider>
       <ProposalsProvider>
         <Capture />
         <ChatSessionsProvider>
           <CaptureChats />
-          <PanelsProvider>
-            <main>
-              <ChatAssistant />
-            </main>
-          </PanelsProvider>
+          <ConfirmContext.Provider value={confirm}>
+            <ToastContext.Provider value={{ toast: () => 'toast', dismiss: () => {} }}>
+              <TooltipProvider>
+                {/* The sidebar's AI tab: a column the panel fills. */}
+                <aside>
+                  <ChatAssistant />
+                </aside>
+              </TooltipProvider>
+            </ToastContext.Provider>
+          </ConfirmContext.Provider>
         </ChatSessionsProvider>
       </ProposalsProvider>
     </EditorProvider>
+  );
+  const withPanels = panels ? (
+    <PanelsContext.Provider value={panels as PanelsContextValue}>{editor}</PanelsContext.Provider>
+  ) : (
+    editor
+  );
+  const tree = engines ? (
+    <AgentEngineContext.Provider value={engines}>{withPanels}</AgentEngineContext.Provider>
+  ) : (
+    withPanels
   );
   render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   await act(async () => {});
 }
 
-/** Expand the panel if it is collapsed, and put text in the composer. */
-async function compose(text: string) {
-  const trigger = screen.queryByRole('button', { name: /^assistant$/i });
-  if (trigger) {
-    await act(async () => {
-      trigger.click();
-    });
-  }
+const confirm = vi.fn(async () => true);
 
+/** Put text in the composer. */
+async function compose(text: string) {
   // The composer is a contenteditable that rebuilds its model from the DOM on
   // `input`, so set the text and fire the event the component listens for.
   const host = screen.getByRole('textbox');
@@ -207,41 +236,17 @@ const acceptAll = async () => {
   });
 };
 
-let desktopViewport = true;
-const mediaListeners = new Set<() => void>();
-
-function setDesktopViewport(desktop: boolean) {
-  desktopViewport = desktop;
-  mediaListeners.forEach((listener) => listener());
-}
-
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
-  desktopViewport = true;
-  mediaListeners.clear();
   listDocuments.mockResolvedValue({ documents: [{}], count: 1, status: 'ok', message: '' });
-
-  // jsdom ships no `matchMedia`, so every media query reads as false and the
-  // assistant renders its small-screen layout — the one without a window to
-  // move. Answer width queries the way a desktop would.
-  vi.stubGlobal('matchMedia', (query: string) => ({
-    matches: /min-width/.test(query) && desktopViewport,
-    media: query,
-    onchange: null,
-    addEventListener: (_type: string, listener: () => void) => mediaListeners.add(listener),
-    removeEventListener: (_type: string, listener: () => void) => mediaListeners.delete(listener),
-    addListener: (listener: () => void) => mediaListeners.add(listener),
-    removeListener: (listener: () => void) => mediaListeners.delete(listener),
-    dispatchEvent: () => false,
-  }));
+  listChats.mockResolvedValue({ chats: [], count: 0, status: 'ok', message: '' });
 });
 
 afterEach(() => {
   // vitest is not running with `globals`, so RTL's auto-cleanup never fires.
   cleanup();
   localStorage.clear();
-  mediaListeners.clear();
   vi.unstubAllGlobals();
 });
 
@@ -521,6 +526,191 @@ describe('the composer', () => {
   });
 });
 
+describe('where the author is working', () => {
+  /** Block `a` as the canvas renders it, with the caret tracker mounted. */
+  function Canvas() {
+    useRememberCaret();
+    return (
+      <div data-block-id="a">
+        <div className="editable" data-testid="block-a">Transformers changed NLP.</div>
+      </div>
+    );
+  }
+
+  async function selectInBlock(text: string) {
+    const element = screen.getByTestId('block-a');
+    const start = element.textContent!.indexOf(text);
+    await act(async () => {
+      const range = document.createRange();
+      range.setStart(element.firstChild!, start);
+      range.setEnd(element.firstChild!, start + text.length);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+  }
+
+  afterEach(() => forgetCaret());
+
+  it('sends the selection and the referenced blocks along with the message', async () => {
+    await mount();
+    render(<Canvas />);
+    await selectInBlock('changed NLP');
+    answerWith([]);
+
+    await compose('make #this/b match this');
+    expect(screen.getByText('“changed NLP”')).toBeTruthy();
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+
+    expect(streamAgentChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'make #this/b match this',
+        context: {
+          block_id: 'a',
+          selection: { block_id: 'a', text: 'changed NLP' },
+          block_ids: ['b'],
+        },
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('leaves the selection out once the author removes it', async () => {
+    await mount();
+    render(<Canvas />);
+    await selectInBlock('Transformers');
+    answerWith([]);
+
+    await compose('summarise the document');
+    await act(async () => {
+      screen.getByRole('button', { name: /don't send the selection/i }).click();
+    });
+    expect(screen.queryByText('“Transformers”')).toBeNull();
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+
+    const [params] = streamAgentChat.mock.calls[0];
+    expect(params.context).toBeUndefined();
+  });
+
+  it('keeps the attached selection marked in the page until it is sent', async () => {
+    const registry = new Map<string, unknown>();
+    const cssBefore = (globalThis as { CSS?: unknown }).CSS;
+    const highlightBefore = (globalThis as { Highlight?: unknown }).Highlight;
+    (globalThis as { CSS?: unknown }).CSS = { ...(cssBefore as object), highlights: registry };
+    (globalThis as { Highlight?: unknown }).Highlight = class {
+      ranges: Range[];
+      constructor(...ranges: Range[]) {
+        this.ranges = ranges;
+      }
+    };
+    try {
+      await mount();
+      render(<Canvas />);
+      await selectInBlock('changed NLP');
+      answerWith([]);
+
+      const marked = registry.get('chat-context') as { ranges: Range[] } | undefined;
+      expect(marked?.ranges[0].toString()).toBe('changed NLP');
+
+      await compose('make it formal');
+      await act(async () => {
+        screen.getByRole('button', { name: /send message/i }).click();
+      });
+      // Sent once: the chip and the mark in the page go with it.
+      expect(screen.queryByText('“changed NLP”')).toBeNull();
+      expect(registry.has('chat-context')).toBe(false);
+    } finally {
+      (globalThis as { CSS?: unknown }).CSS = cssBefore;
+      (globalThis as { Highlight?: unknown }).Highlight = highlightBefore;
+    }
+  });
+
+  it('keeps the mark on the selected text after the block rewrites its text nodes', async () => {
+    const registry = new Map<string, unknown>();
+    const cssBefore = (globalThis as { CSS?: unknown }).CSS;
+    const highlightBefore = (globalThis as { Highlight?: unknown }).Highlight;
+    (globalThis as { CSS?: unknown }).CSS = { ...(cssBefore as object), highlights: registry };
+    (globalThis as { Highlight?: unknown }).Highlight = class {
+      ranges: Range[];
+      constructor(...ranges: Range[]) {
+        this.ranges = ranges;
+      }
+    };
+    try {
+      await mount();
+      render(<Canvas />);
+      await selectInBlock('changed NLP');
+      const block = screen.getByTestId('block-a');
+      const before = registry.get('chat-context') as { ranges: Range[] };
+
+      // Focus leaves for the composer, and the editor re-renders the block
+      // on blur: the page selection is gone and the old text node with it.
+      await act(async () => {
+        window.getSelection()!.removeAllRanges();
+        const html = block.innerHTML;
+        block.innerHTML = html;
+      });
+      expect(before.ranges[0].collapsed).toBe(true);
+
+      const marked = registry.get('chat-context') as { ranges: Range[] } | undefined;
+      expect(marked?.ranges[0].collapsed).toBe(false);
+      expect(marked?.ranges[0].toString()).toBe('changed NLP');
+      expect(block.contains(marked!.ranges[0].startContainer)).toBe(true);
+    } finally {
+      (globalThis as { CSS?: unknown }).CSS = cssBefore;
+      (globalThis as { Highlight?: unknown }).Highlight = highlightBefore;
+    }
+  });
+
+  it('inserts a prose reply after the list the caret is in, not inside it', async () => {
+    await mount();
+    await act(async () => {
+      harness.editor.insertBlocksAfter('a', [
+        { id: 'l1', type: 'paragraph', variant: 'bullet', html: 'one', children: [] },
+        { id: 'l2', type: 'paragraph', variant: 'bullet', html: 'two', children: [] },
+      ]);
+    });
+    function ListCanvas() {
+      useRememberCaret();
+      return (
+        <div data-block-id="l1">
+          <div className="editable" data-testid="block-l1">one</div>
+        </div>
+      );
+    }
+    render(<ListCanvas />);
+    await act(async () => {
+      const text = screen.getByTestId('block-l1').firstChild!;
+      const range = document.createRange();
+      range.setStart(text, 1);
+      range.collapse(true);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    answerText('A paragraph of prose.\n\n- and a point');
+    await compose('go');
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+
+    await act(async () => {
+      (await screen.findByRole('button', { name: 'Insert into page' })).click();
+    });
+
+    const ids = harness.editor.blocks.map((block) => block.id);
+    expect(ids.slice(0, 3)).toEqual(['a', 'l1', 'l2']);
+    expect(ids[ids.length - 1]).toBe('b');
+    expect(ids).toHaveLength(6);
+  });
+});
+
 describe('the transcript after a turn', () => {
   it('keeps the reply it just streamed instead of refetching it', async () => {
     await mount();
@@ -531,7 +721,7 @@ describe('the transcript after a turn', () => {
     // Fetching them replaced the live reply — tool activity, proposal chip and
     // all — with the server's plain text a second after it arrived.
     expect(listMessages).not.toHaveBeenCalled();
-    expect(screen.getByText(/review in the document/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /review 1 change/i })).toBeTruthy();
   });
 
   it('still loads a conversation the author switches to', async () => {
@@ -571,8 +761,9 @@ describe('the transcript after a turn', () => {
       harness.chats.setSelectedChatId('strict-chat');
     });
 
+    // In the transcript, and as the chat's name until it has a stored title.
     await waitFor(() =>
-      expect(screen.getByText('Survives the double mount')).toBeTruthy(),
+      expect(screen.getAllByText('Survives the double mount')).toHaveLength(2),
     );
   });
 });
@@ -639,110 +830,325 @@ describe('document-scoped streams', () => {
   });
 });
 
-describe('the assistant window', () => {
-  it('can be moved and resized from the keyboard', async () => {
+describe('live feedback while the assistant works', () => {
+  /** Send a message and hold its stream open, returning its handlers. */
+  async function holdStream() {
+    let handlers!: SSEEventHandlers;
+    let finish!: () => void;
+    streamAgentChat.mockImplementation(
+      (_params: unknown, nextHandlers: SSEEventHandlers) => {
+        handlers = nextHandlers;
+        return new Promise((resolve) => {
+          finish = () => resolve({ chatId: 'chat-1', threadId: 1, usage: null, terminal: 'done' });
+        });
+      },
+    );
     await mount();
-    await compose('');
-
-    expect(screen.getByRole('button', { name: /move assistant/i })).toBeTruthy();
-    expect(screen.getByRole('separator', { name: /resize assistant/i })).toBeTruthy();
-  });
-
-  it('remembers where it was put', async () => {
-    await mount();
-    await compose('');
-
-    // Persisted geometry is what makes the window worth moving at all: a
-    // window that snaps back to the corner on every reload is not one.
-    await waitFor(() => expect(localStorage.getItem('chat.rect')).toBeTruthy());
-    expect(JSON.parse(localStorage.getItem('chat.rect') ?? '{}')).toMatchObject({
-      width: expect.any(Number),
-      height: expect.any(Number),
+    await compose('what does section 2 claim?');
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
     });
+    await waitFor(() => expect(streamAgentChat).toHaveBeenCalledTimes(1));
+    return {
+      emit: (fn: (h: SSEEventHandlers) => void) => act(() => fn(handlers)),
+      finish: async () => {
+        await act(async () => {
+          handlers.onDone?.('chat-1', 1, { promptTokens: 0, completionTokens: 0 });
+          finish();
+          await Promise.resolve();
+        });
+      },
+    };
+  }
+
+  const statusWith = (text: string) =>
+    screen.queryAllByRole('status').find((element) => element.textContent?.includes(text)) ?? null;
+
+  it('names each step before the first word, in the engine’s own words', async () => {
+    const turn = await holdStream();
+    expect(statusWith('Thinking…')).toBeTruthy();
+
+    turn.emit((h) => h.onStatus?.('starting', 'Starting Claude Code…'));
+    expect(statusWith('Starting Claude Code…')).toBeTruthy();
+
+    turn.emit((h) =>
+      h.onStatus?.('retrying', 'Claude is overloaded — retrying in 8s (attempt 2 of 10)'),
+    );
+    expect(statusWith('Claude is overloaded — retrying in 8s (attempt 2 of 10)')).toBeTruthy();
+    // The generic server wording never reaches the author verbatim.
+    turn.emit((h) => h.onStatus?.('thinking', 'Processing tool results...'));
+    expect(statusWith('Thinking…')).toBeTruthy();
+    expect(statusWith('Processing tool results')).toBeNull();
+    await turn.finish();
   });
 
-  it('does not restore a desktop-open assistant over the mobile canvas', async () => {
-    setDesktopViewport(false);
-    localStorage.setItem('chat.expanded', 'true');
+  it('shows the model’s reasoning while it thinks, and folds it apart from the answer', async () => {
+    const turn = await holdStream();
+    turn.emit((h) => h.onReasoning?.('**Reading the document**\n\nSection 2 defines the loss.'));
 
-    await mount();
+    const toggle = screen.getByRole('button', { name: /^Thinking/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    // The newest line, so a long silence reads as work.
+    expect(screen.getByText('Section 2 defines the loss.')).toBeTruthy();
 
-    expect(screen.getByRole('button', { name: /^assistant$/i })).toBeTruthy();
-    expect(screen.queryByRole('dialog', { name: /writing assistant/i })).toBeNull();
+    turn.emit((h) => h.onToken?.('It claims sublinear scaling.'));
+    await turn.finish();
+
+    const folded = screen.getByRole('button', { name: /^Thought/ });
+    expect(screen.queryByText('Section 2 defines the loss.')).toBeNull();
+    fireEvent.click(folded);
+    expect(screen.getByText('Reading the document').tagName).toBe('STRONG');
+    expect(screen.getByText('Section 2 defines the loss.')).toBeTruthy();
+    // Never part of the answer (on screen, or as announced when it finished).
+    const answers = screen.getAllByText('It claims sublinear scaling.');
+    expect(answers.length).toBeGreaterThan(0);
+    for (const answer of answers) expect(answer.textContent).not.toContain('defines the loss');
   });
 
-  it('closes an open floating window when the layout becomes mobile', async () => {
-    await mount();
-    await compose('');
-    expect(screen.getByRole('complementary', { name: /writing assistant/i })).toBeTruthy();
+  it('counts a long edit as it is drafted, then runs it', async () => {
+    const turn = await holdStream();
+    turn.emit((h) => h.onToolCallStart?.('doc_edit', 'call_e', {}));
+    turn.emit((h) =>
+      h.onToolCallProgress?.({ tool: 'doc_edit', toolCallId: 'call_e', argumentsChars: 2410 }),
+    );
+    expect(screen.getByText(new RegExp(`${(2410).toLocaleString()} characters`))).toBeTruthy();
 
-    await act(async () => setDesktopViewport(false));
-
-    expect(screen.getByRole('button', { name: /^assistant$/i })).toBeTruthy();
-    expect(screen.queryByRole('dialog', { name: /writing assistant/i })).toBeNull();
+    // Large arguments arrive as a preview only, without the full object.
+    turn.emit((h) =>
+      h.onToolCallArgs?.({ tool: 'doc_edit', toolCallId: 'call_e', argumentsPreview: '{"content_redacted": true}', argumentsTruncated: true }),
+    );
+    expect(screen.queryByText(/characters/)).toBeNull();
+    // A count that trails the call's arguments is ignored.
+    turn.emit((h) =>
+      h.onToolCallProgress?.({ tool: 'doc_edit', toolCallId: 'call_e', argumentsChars: 2500 }),
+    );
+    expect(screen.queryByText(/characters/)).toBeNull();
+    await turn.finish();
   });
 
-  it('uses a modal, focus-contained sheet when explicitly opened on mobile', async () => {
-    setDesktopViewport(false);
-    await mount();
-    await compose('');
+  it('says the model went back to thinking once its tools finish', async () => {
+    const turn = await holdStream();
+    turn.emit((h) => h.onToolCallStart?.('web_search', 'call_1', {}));
+    // The running step itself is the indicator; no second line competes.
+    expect(statusWith('Thinking…')).toBeNull();
 
-    const dialog = screen.getByRole('dialog', { name: 'Writing assistant for Doc' });
-    expect(dialog.getAttribute('aria-modal')).toBe('true');
-    expect(screen.queryByRole('complementary', { name: /writing assistant/i })).toBeNull();
+    turn.emit((h) =>
+      h.onToolCallEnd?.({
+        tool: 'web_search', toolCallId: 'call_1', durationMs: 900, isError: false, error: null,
+        errorType: null, outputPreview: null, outputChars: 0, outputTruncated: false,
+        argumentsPreview: '{}', argumentsTruncated: false,
+      }),
+    );
+    expect(statusWith('Thinking…')).toBeTruthy();
+    await turn.finish();
+  });
+
+  it('keeps a line under a reply that paused to search, where the reader is looking', async () => {
+    const turn = await holdStream();
+    turn.emit((h) => h.onToken?.('Let me check the literature.'));
+    // Words are arriving: the text is the progress.
+    expect(statusWith('Working…')).toBeNull();
+
+    turn.emit((h) => h.onToolCallStart?.('web_search', 'call_2', {}));
+    // After a short debounce, under the answer (the activity list sits above it).
+    await waitFor(() => expect(statusWith('Searching the web…')).toBeTruthy());
+    const answer = screen.getByText('Let me check the literature.');
+    const line = statusWith('Searching the web…')!;
+    expect(answer.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await turn.finish();
+    expect(statusWith('Searching the web…')).toBeNull();
+  });
+
+  it('shows a reply that stopped mid-way as still working', async () => {
+    const turn = await holdStream();
+    turn.emit((h) => h.onToken?.('First paragraph.'));
+    await waitFor(() => expect(statusWith('Working…')).toBeTruthy(), { timeout: 3000 });
+    turn.emit((h) => h.onToken?.(' More.'));
+    expect(statusWith('Working…')).toBeNull();
+    await turn.finish();
+  });
+});
+
+/** Answer the next send with prose, then `done` with the given usage. */
+function answerText(text: string, usage = { promptTokens: 0, completionTokens: 0 }) {
+  streamAgentChat.mockImplementation(
+    async (_params: unknown, handlers: SSEEventHandlers) => {
+      handlers.onToken?.(text);
+      handlers.onDone?.('chat-1', 1, usage);
+      return { chatId: 'chat-1', threadId: 1, usage, terminal: 'done' };
+    },
+  );
+}
+
+describe('the docked panel', () => {
+  it('fills the column it is given, with no window of its own', async () => {
+    await mount();
+
+    const region = screen.getByRole('region', { name: 'Writing assistant for Doc' });
+    expect(region.closest('aside')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('button', { name: /move assistant/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /maximise assistant/i })).toBeNull();
-
-    const outside = document.createElement('button');
-    outside.textContent = 'Editor action';
-    document.body.appendChild(outside);
-    outside.focus();
-    fireEvent.focusIn(outside);
-    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
-    outside.remove();
-
-    fireEvent.click(screen.getByRole('button', { name: /hide assistant/i }));
-    const trigger = await screen.findByRole('button', { name: /^assistant$/i });
-    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(screen.getByText('How can I help with this paper?')).toBeTruthy();
+    // Width is the sidebar's: with no sidebar around, there is nothing to widen.
+    expect(screen.queryByRole('button', { name: /widen the assistant/i })).toBeNull();
   });
 
-  it('makes the maximised desktop assistant modal, then restores floating controls', async () => {
-    await mount();
-    await compose('');
+  it('widens the docked sidebar for a long conversation, and back', async () => {
+    const setRightWidth = vi.fn();
+    await mount({ panels: { isDesktop: true, rightWidth: 420, setRightWidth } });
+    fireEvent.click(screen.getByRole('button', { name: 'Widen the panel' }));
+    expect(setRightWidth).toHaveBeenCalledWith(720);
 
-    await act(async () => {
-      screen.getByRole('button', { name: /maximise assistant/i }).click();
-    });
-
-    const dialog = screen.getByRole('dialog', { name: 'Writing assistant for Doc' });
-    expect(dialog.getAttribute('aria-modal')).toBe('true');
-    expect(screen.queryByRole('complementary', { name: /writing assistant/i })).toBeNull();
-
-    await act(async () => {
-      screen.getByRole('button', { name: /restore assistant size/i }).click();
-    });
-
-    expect(screen.getByRole('complementary', { name: /writing assistant/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /move assistant/i })).toBeTruthy();
-    expect(screen.getByRole('separator', { name: /resize assistant/i })).toBeTruthy();
+    cleanup();
+    await mount({ panels: { isDesktop: true, rightWidth: 720, setRightWidth } });
+    fireEvent.click(screen.getByRole('button', { name: 'Narrow the panel' }));
+    expect(setRightWidth).toHaveBeenLastCalledWith(420);
   });
 
-  it('fits default geometry to the canvas edge instead of the docked tools area', async () => {
-    vi.stubGlobal('innerWidth', 1000);
-    vi.stubGlobal('innerHeight', 800);
+  it('closes the sheet on a phone before showing a reply’s changes in the page', async () => {
+    const setAssistantOpen = vi.fn();
+    await mount({ panels: { isDesktop: false, setAssistantOpen } });
+    await sendWith([
+      proposal({
+        actions: [{ op: 'replace_block', blockId: 'a', block: { html: '<p>edited</p>' } }],
+      }),
+    ]);
+    await waitFor(() => expect(harness.review.pendingCount).toBe(1));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Review 1 change' }));
+    // The sheet covers the page, so it goes first; then the change is shown.
+    expect(setAssistantOpen).toHaveBeenCalledWith(false);
+    await waitFor(
+      () => expect(harness.review.focusedChangeId).toBe(harness.review.pending[0].id),
+      { timeout: 2000 },
+    );
+  });
+
+  it('sends a suggestion straight away', async () => {
     await mount();
-    await compose('');
+    answerWith([]);
 
-    const main = document.querySelector('main');
-    if (!main) throw new Error('Expected the editor canvas');
-    vi.spyOn(main, 'getBoundingClientRect').mockReturnValue({ right: 700 } as DOMRect);
-
-    await act(async () => window.dispatchEvent(new Event('resize')));
-
-    await waitFor(() => {
-      expect(screen.getByRole('complementary', { name: /writing assistant/i }).style.right).toBe(
-        '312px',
-      );
+    await act(async () => {
+      screen.getByRole('button', { name: 'Find related work' }).click();
     });
+
+    expect(streamAgentChat).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringMatching(/related work/i) }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('names the conversation by its first question until it has a stored title', async () => {
+    await mount();
+    expect(screen.getByRole('button', { name: 'Chats: New chat' })).toBeTruthy();
+
+    await sendWith([]);
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Chats: do the thing' })).toBeTruthy(),
+    );
+    // The API keeps no title of its own; the list learns the same name.
+    expect(updateChatTitle).toHaveBeenCalledWith(DOC_ID, 'chat-1', 'do the thing');
+  });
+
+  it('lists this document’s chats in the header and opens the one picked', async () => {
+    listChats.mockResolvedValue({
+      chats: [{ chat_id: 'chat-7', title: 'Outline review', last_thread_id: 7, updated_at: null }],
+      count: 1,
+      status: 'ok',
+      message: '',
+    });
+    await mount();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Chats:/ }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Outline review' }));
+    });
+
+    await waitFor(() =>
+      expect(listMessages).toHaveBeenCalledWith(DOC_ID, 'chat-7', 7, expect.anything()),
+    );
+    expect(harness.chats.selectedChatId).toBe('chat-7');
+    expect(screen.getByRole('button', { name: 'Chats: Outline review' })).toBeTruthy();
+  });
+
+  it('starts over from New chat', async () => {
+    await mount();
+    answerText('An answer.');
+    await compose('first question');
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy());
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Start a new chat' }).click();
+    });
+
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.getByText('How can I help with this paper?')).toBeTruthy();
+    expect(harness.chats.selectedChatId).toBeNull();
+  });
+
+  it('offers to ask the latest question again', async () => {
+    await mount();
+    answerText('First take.');
+    await compose('tighten the abstract');
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy());
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Retry' }).click();
+    });
+
+    expect(streamAgentChat).toHaveBeenCalledTimes(2);
+    expect(streamAgentChat.mock.calls[1][0]).toMatchObject({ message: 'tighten the abstract' });
+  });
+
+  it('keeps what a finished reply cost out of the answer, in the Copy tooltip', async () => {
+    await mount();
+    answerText('Done.', { promptTokens: 12_400, completionTokens: 890 });
+    await compose('go');
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+
+    const copy = await screen.findByRole('button', { name: 'Copy' });
+    expect(screen.getByRole('button', { name: 'Insert into page' })).toBeTruthy();
+    // Not a line of telemetry under the answer…
+    expect(screen.queryByText(/12\.4k tokens in · 890 out/)).toBeNull();
+    // …but there for whoever asks.
+    fireEvent.focus(copy);
+    await waitFor(() => expect(screen.getAllByText(/12\.4k tokens in · 890 out/).length).toBeGreaterThan(0));
+  });
+
+  it('stops a run on Escape', async () => {
+    let signal!: AbortSignal;
+    streamAgentChat.mockImplementation(
+      (_params: unknown, _handlers: SSEEventHandlers, options: { signal?: AbortSignal }) => {
+        signal = options.signal!;
+        return new Promise(() => {});
+      },
+    );
+    await mount();
+    const host = await compose('a long question');
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: /stop generating/i })).toBeTruthy());
+
+    await act(async () => {
+      fireEvent.keyDown(host, { key: 'Escape' });
+    });
+
+    expect(signal.aborted).toBe(true);
+    expect(screen.getByRole('button', { name: /send message/i })).toBeTruthy();
   });
 });
 
@@ -812,7 +1218,7 @@ describe('a document that has never been saved', () => {
     await waitFor(() => expect(harness.chats.selectedChatId).toBe('chat-1'));
     expect(harness.chats.selectedThreadId).toBe(1);
     // The empty state is gone, so the transcript survived the attach.
-    expect(screen.queryByText(/Ask about/i)).toBeNull();
+    expect(screen.queryByText(/How can I help/i)).toBeNull();
   });
 
   it('says so rather than greying the suggestions out', async () => {
@@ -821,28 +1227,28 @@ describe('a document that has never been saved', () => {
 
     expect(screen.getByText(/Asking saves this document first/i)).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: /Summarise this document/i }).hasAttribute('disabled'),
+      screen.getByRole('button', { name: /Summarize this document/i }).hasAttribute('disabled'),
     ).toBe(false);
   });
 });
 
 describe('the document a session is attached to', () => {
-  it('is named in the header, so “nothing happened” can be told from “that happened elsewhere”', async () => {
+  it('is named beside the composer, so “nothing happened” can be told from “that happened elsewhere”', async () => {
     await mount();
     await compose('');
 
-    expect(screen.getByTitle(/This conversation is kept with “Doc”/)).toBeTruthy();
-    expect(screen.getByText(/Ask about/)).toBeTruthy();
+    expect(screen.getByTitle(/This conversation is kept with “Doc”/).textContent).toBe('Doc');
+    expect(screen.getByText('“Doc”')).toBeTruthy();
   });
 
   it('reaches a screen reader through the region label', async () => {
     await mount();
     await compose('');
 
-    // The header line is small, muted and not focusable, so on its own it would
+    // The page chip is small, muted and not focusable, so on its own it would
     // only be found by reading the whole panel.
     expect(
-      screen.getByRole('complementary', { name: 'Writing assistant for Doc' }),
+      screen.getByRole('region', { name: 'Writing assistant for Doc' }),
     ).toBeTruthy();
   });
 
@@ -856,7 +1262,7 @@ describe('the document a session is attached to', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole('complementary', { name: 'Writing assistant for Attention Is All You Need' }),
+        screen.getByRole('region', { name: 'Writing assistant for Attention Is All You Need' }),
       ).toBeTruthy(),
     );
     expect(screen.getByTitle(/kept with “Attention Is All You Need”/)).toBeTruthy();
@@ -868,7 +1274,7 @@ describe('the document a session is attached to', () => {
 
     expect(screen.getByText('Not saved yet')).toBeTruthy();
     expect(
-      screen.getByRole('complementary', {
+      screen.getByRole('region', {
         name: 'Writing assistant for a document that has not been saved yet',
       }),
     ).toBeTruthy();
@@ -883,7 +1289,7 @@ describe('the document a session is attached to', () => {
 
     await waitFor(() => expect(screen.queryByText('Not saved yet')).toBeNull());
     expect(
-      screen.getByRole('complementary', { name: 'Writing assistant for Untitled document' }),
+      screen.getByRole('region', { name: 'Writing assistant for Untitled document' }),
     ).toBeTruthy();
   });
 });
@@ -985,5 +1391,69 @@ describe('a chat id the server no longer has', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert').textContent).toContain('Chat not found'),
     );
+  });
+});
+
+describe('agent engine', () => {
+  function engineContext(overrides: Partial<EngineContext> = {}): EngineContext {
+    return {
+      catalog: null,
+      loading: false,
+      error: null,
+      prefs: { chat: 'claude', inline: 'chat', models: { claude: 'sonnet' } },
+      selectable: false,
+      statusOf: () => null,
+      engineFor: () => 'claude',
+      requestFor: (surface) => (surface === 'chat' ? { engine: 'claude', model: 'sonnet' } : {}),
+      setChatEngine: () => {},
+      setInlineEngine: () => {},
+      setModel: () => null,
+      checking: null,
+      checkError: {},
+      check: async () => null,
+      refresh: async () => {},
+      noteRunError: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  it('runs the turn on the chosen engine and model', async () => {
+    const engines = engineContext();
+    await mount({ engines });
+    await sendWith([]);
+
+    const [params] = streamAgentChat.mock.calls[0];
+    expect(params.engine).toBe('claude');
+    expect(params.model).toBe('sonnet');
+    expect(params.mode).toBe('assistant');
+  });
+
+  it('sends no engine at all on the default', async () => {
+    await mount();
+    await sendWith([]);
+
+    const [params] = streamAgentChat.mock.calls[0];
+    expect('engine' in params).toBe(false);
+    expect('model' in params).toBe(false);
+  });
+
+  it('shows a CLI sign-in problem as something to fix, not to retry', async () => {
+    const engines = engineContext();
+    streamAgentChat.mockImplementation(async (_params: unknown, handlers: SSEEventHandlers) => {
+      handlers.onError?.(
+        'ENGINE_AUTH_REQUIRED',
+        'Claude Code is not signed in. Run `claude auth login` in your terminal, sign in with your own account, then check the engine again.',
+      );
+      return { chatId: null, threadId: null, usage: null, terminal: 'error' };
+    });
+    await mount({ engines });
+    await compose('hello');
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+
+    expect(engines.noteRunError).toHaveBeenCalledWith('ENGINE_AUTH_REQUIRED');
+    expect(await screen.findByText(/Run `claude auth login` in your terminal/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });

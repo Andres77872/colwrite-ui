@@ -1,6 +1,6 @@
 // ── Event handler types ──
 
-import type { ToolAction, ToolOperation, ToolOperationResult } from '../editor/types';
+import type { CitationSource, ToolAction, ToolOperation, ToolOperationResult } from '../editor/types';
 
 /**
  * Everything the server knows about a finished tool call.
@@ -40,8 +40,74 @@ export type ToolCallArgsEvent = {
   argumentsTruncated: boolean;
 };
 
+/**
+ * A source a research tool returned during the run, as the server's source
+ * registry recorded it: bibliographic metadata only, under the `id` the
+ * assistant cites it by in its answer (`[S3]`).
+ */
+export type AgentSource = CitationSource & {
+  id: string;
+  /** The tool that returned it (`semantic_scholar_search`, `web_read`, …). */
+  origin?: string;
+};
+
+const SOURCE_HANDLE = /^S[1-9]\d{0,4}$/;
+
+/** Keep only well-formed sources; the event is untrusted like any other. */
+function mapSources(raw: unknown): AgentSource[] {
+  if (!Array.isArray(raw)) return [];
+  const out: AgentSource[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.id !== 'string' || !SOURCE_HANDLE.test(record.id)) continue;
+    if (typeof record.key !== 'string' || !record.key) continue;
+    const source: AgentSource = { id: record.id, key: record.key };
+    for (const field of ['title', 'authors', 'year', 'venue', 'url', 'doi', 'providerId', 'pdfUrl', 'kind', 'accessed', 'origin'] as const) {
+      if (typeof record[field] === 'string') (source as Record<string, unknown>)[field] = record[field];
+    }
+    if (['arxiv', 'semantic_scholar', 'crossref', 'web', 'resource', 'manual'].includes(String(record.provider))) {
+      source.provider = record.provider as AgentSource['provider'];
+    }
+    if (record.externalIds && typeof record.externalIds === 'object') {
+      source.externalIds = Object.fromEntries(
+        Object.entries(record.externalIds as Record<string, unknown>).filter(
+          (pair): pair is [string, string] => typeof pair[1] === 'string',
+        ),
+      );
+    }
+    if (typeof record.citationCount === 'number') source.citationCount = record.citationCount;
+    out.push(source);
+  }
+  return out;
+}
+
+export type AgentTodo = { id: string; content: string; status: 'pending' | 'in_progress' | 'completed' };
+export type AgentWorker = { id: string; status: string; engine: string };
+
+/**
+ * The model is still writing a tool call's arguments (a long `doc_edit` can
+ * take a minute). Only their running length crosses the wire.
+ */
+export type ToolCallProgressEvent = {
+  tool: string;
+  toolCallId: string;
+  argumentsChars: number;
+};
+
 export type SSEEventHandlers = {
+  onSessionChat?: (chatId: string) => void;
+  onTodo?: (items: AgentTodo[]) => void;
+  onSubagent?: (worker: AgentWorker) => void;
   onToken?: (content: string) => void;
+  /**
+   * A fragment of the model's reasoning, streamed while it thinks. Not part
+   * of the answer: it is never in `onToken` and never saved with the chat.
+   */
+  onReasoning?: (content: string) => void;
+  onToolCallProgress?: (event: ToolCallProgressEvent) => void;
+  /** Sources the run's research tools returned, as they arrive. */
+  onSources?: (sources: AgentSource[]) => void;
   onStatus?: (status: string, detail: string) => void;
   onToolCallStart?: (tool: string, toolCallId: string, args: Record<string, unknown>) => void;
   onToolCallArgs?: (event: ToolCallArgsEvent) => void;
@@ -196,11 +262,121 @@ function mapToolCallEnd(data: Record<string, unknown>): ToolCallEndEvent {
   };
 }
 
+/** Dispatch an already-decoded event from either the durable socket or SSE. */
+export function dispatchAgentEvent(
+  effectiveEvent: string | null,
+  payload: unknown,
+  handlers: SSEEventHandlers,
+): ParseSSEResult {
+  let capturedChatId: string | null = null;
+  let capturedThreadId: number | null = null;
+  let terminal: 'done' | 'error' | null = null;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return { chatId: null, threadId: null, terminal: null };
+  }
+  const data = payload as Record<string, unknown>;
+  // Dispatch to the right handler based on event type
+  if (effectiveEvent === 'token' || effectiveEvent === null) {
+    // A bare `data:` line without a preceding `event:` is treated as token
+    if (typeof data.content === 'string') {
+      handlers.onToken?.(data.content);
+    }
+  } else if (effectiveEvent === 'reasoning') {
+    if (typeof data.content === 'string' && data.content) {
+      handlers.onReasoning?.(data.content);
+    }
+  } else if (effectiveEvent === 'tool_call_progress') {
+    const chars = data.arguments_chars;
+    if (typeof chars === 'number' && Number.isFinite(chars) && chars >= 0) {
+      handlers.onToolCallProgress?.({
+        tool: typeof data.tool === 'string' ? data.tool : String(data.tool ?? ''),
+        toolCallId:
+          typeof data.tool_call_id === 'string'
+            ? data.tool_call_id
+            : String(data.tool_call_id ?? ''),
+        argumentsChars: Math.floor(chars),
+      });
+    }
+  } else if (effectiveEvent === 'status') {
+    handlers.onStatus?.(
+      typeof data.status === 'string' ? data.status : String(data.status ?? ''),
+      typeof data.detail === 'string' ? data.detail : String(data.detail ?? ''),
+    );
+  } else if (effectiveEvent === 'tool_call_start') {
+    handlers.onToolCallStart?.(
+      typeof data.tool === 'string' ? data.tool : String(data.tool ?? ''),
+      typeof data.tool_call_id === 'string' ? data.tool_call_id : String(data.tool_call_id ?? ''),
+      typeof data.arguments === 'object' && data.arguments !== null
+        ? (data.arguments as Record<string, unknown>)
+        : {},
+    );
+  } else if (effectiveEvent === 'tool_call_args') {
+    handlers.onToolCallArgs?.({
+      tool: typeof data.tool === 'string' ? data.tool : String(data.tool ?? ''),
+      toolCallId:
+        typeof data.tool_call_id === 'string'
+          ? data.tool_call_id
+          : String(data.tool_call_id ?? ''),
+      ...argumentFields(data),
+    });
+  } else if (effectiveEvent === 'tool_call_end') {
+    handlers.onToolCallEnd?.(mapToolCallEnd(data));
+  } else if (effectiveEvent === 'error') {
+    terminal = 'error';
+    handlers.onError?.(
+      typeof data.error_code === 'string' ? data.error_code : String(data.error_code ?? ''),
+      typeof data.message === 'string' ? data.message : String(data.message ?? ''),
+    );
+  } else if (effectiveEvent === 'done') {
+    const chatId =
+      data.chat_id !== null && data.chat_id !== undefined
+        ? String(data.chat_id)
+        : null;
+    const threadId =
+      typeof data.thread_id === 'number'
+        ? data.thread_id
+        : data.thread_id !== null && data.thread_id !== undefined
+          ? Number(data.thread_id)
+          : null;
+
+    const usage = data.usage as
+      | { prompt_tokens?: number; completion_tokens?: number }
+      | undefined;
+
+    terminal = 'done';
+    handlers.onDone?.(chatId, threadId, {
+      promptTokens: usage?.prompt_tokens ?? 0,
+      completionTokens: usage?.completion_tokens ?? 0,
+    });
+
+    // Capture for return value
+    capturedChatId = chatId;
+    capturedThreadId = threadId;
+  } else if (effectiveEvent === 'tool_action') {
+    handlers.onToolAction?.(mapSseToolAction(data));
+  } else if (effectiveEvent === 'session.chat' && typeof data.chat_id === 'string') {
+    handlers.onSessionChat?.(data.chat_id);
+  } else if (effectiveEvent === 'todo' && Array.isArray(data.items)) {
+    const items = data.items.filter((item): item is AgentTodo =>
+      !!item && typeof item === 'object' && typeof item.id === 'string' &&
+      typeof item.content === 'string' && ['pending', 'in_progress', 'completed'].includes(item.status),
+    ).slice(0, 30);
+    handlers.onTodo?.(items);
+  } else if (effectiveEvent === 'subagent' && typeof data.id === 'string' && typeof data.status === 'string') {
+    handlers.onSubagent?.({ id: data.id, status: data.status, engine: typeof data.engine === 'string' ? data.engine : '' });
+  } else if (effectiveEvent === 'sources') {
+    const sources = mapSources(data.sources);
+    if (sources.length) handlers.onSources?.(sources);
+  }
+  return { chatId: capturedChatId, threadId: capturedThreadId, terminal };
+}
+
 /**
  * Parse a `text/event-stream` `Response` body into typed SSE event callbacks.
  *
- * Handles all backend event types (`token`, `status`, `tool_call_start`,
- * `tool_call_args`, `tool_call_end`, `tool_action`, `error`, `done`).  Bare
+ * Handles all backend event types (`token`, `reasoning`, `status`,
+ * `tool_call_start`, `tool_call_progress`, `tool_call_args`, `tool_call_end`,
+ * `tool_action`, `sources`, `error`, `done`).  Bare
  * `data:` lines without a preceding `event:` are emitted as `onToken`.
  * Comment lines (`: keepalive`) are ignored.  Malformed JSON payloads are
  * silently skipped.  AbortSignal stops reading without throwing.
@@ -272,69 +448,11 @@ export async function parseSSEStream(
       return;
     }
 
-    // Dispatch to the right handler based on event type
-    if (effectiveEvent === 'token' || effectiveEvent === null) {
-      // A bare `data:` line without a preceding `event:` is treated as token
-      if (typeof data.content === 'string') {
-        handlers.onToken?.(data.content);
-      }
-    } else if (effectiveEvent === 'status') {
-      handlers.onStatus?.(
-        typeof data.status === 'string' ? data.status : String(data.status ?? ''),
-        typeof data.detail === 'string' ? data.detail : String(data.detail ?? ''),
-      );
-    } else if (effectiveEvent === 'tool_call_start') {
-      handlers.onToolCallStart?.(
-        typeof data.tool === 'string' ? data.tool : String(data.tool ?? ''),
-        typeof data.tool_call_id === 'string' ? data.tool_call_id : String(data.tool_call_id ?? ''),
-        typeof data.arguments === 'object' && data.arguments !== null
-          ? (data.arguments as Record<string, unknown>)
-          : {},
-      );
-    } else if (effectiveEvent === 'tool_call_args') {
-      handlers.onToolCallArgs?.({
-        tool: typeof data.tool === 'string' ? data.tool : String(data.tool ?? ''),
-        toolCallId:
-          typeof data.tool_call_id === 'string'
-            ? data.tool_call_id
-            : String(data.tool_call_id ?? ''),
-        ...argumentFields(data),
-      });
-    } else if (effectiveEvent === 'tool_call_end') {
-      handlers.onToolCallEnd?.(mapToolCallEnd(data));
-    } else if (effectiveEvent === 'error') {
-      terminal = 'error';
-      handlers.onError?.(
-        typeof data.error_code === 'string' ? data.error_code : String(data.error_code ?? ''),
-        typeof data.message === 'string' ? data.message : String(data.message ?? ''),
-      );
-    } else if (effectiveEvent === 'done') {
-      const chatId =
-        data.chat_id !== null && data.chat_id !== undefined
-          ? String(data.chat_id)
-          : null;
-      const threadId =
-        typeof data.thread_id === 'number'
-          ? data.thread_id
-          : data.thread_id !== null && data.thread_id !== undefined
-            ? Number(data.thread_id)
-            : null;
-
-      const usage = data.usage as
-        | { prompt_tokens?: number; completion_tokens?: number }
-        | undefined;
-
-      terminal = 'done';
-      handlers.onDone?.(chatId, threadId, {
-        promptTokens: usage?.prompt_tokens ?? 0,
-        completionTokens: usage?.completion_tokens ?? 0,
-      });
-
-      // Capture for return value
-      capturedChatId = chatId;
-      capturedThreadId = threadId;
-    } else if (effectiveEvent === 'tool_action') {
-      handlers.onToolAction?.(mapSseToolAction(data));
+    const dispatched = dispatchAgentEvent(effectiveEvent, data, handlers);
+    if (dispatched.terminal) {
+      terminal = dispatched.terminal;
+      capturedChatId = dispatched.chatId;
+      capturedThreadId = dispatched.threadId;
     }
     // Unknown event types are silently skipped
   }

@@ -25,7 +25,7 @@ export function Skeleton({
   return (
     <div
       aria-hidden="true"
-      className={cn('animate-shimmer rounded-md bg-muted/60', className)}
+      className={cn('animate-shimmer rounded-md bg-muted', className)}
       style={style}
     />
   );

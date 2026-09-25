@@ -183,6 +183,9 @@ itself.
    check earns its keep — run it every time.*
    *Fourth sync: all six re-checked against source, all six held — including the
    `ExtractionStatus` union, still the same five members.*
+   *Sixth sync: five now, since `Topbar` was deleted with its override. Four
+   held. `Sidebar` had drifted: the override still said "takes no props", but
+   Sidebar now requires `onOpenPalette` and `onShowShortcuts`. Corrected.*
 9. **`agentToolsAllEnabled` in `preview-providers.ts` is an inlined fixture.**
    It claims every agent capability is on and casts away the rest of
    `AgentToolsContextValue`. If a component starts reading `settings`,
@@ -206,8 +209,7 @@ itself.
    missing bindings from `src/components/ui/index.ts`, and the `@utility`
    change for the animation classes. Both are described below; if either lands,
    update this file rather than leaving the workaround undocumented.
-8. **Only partially verified**: `Sidebar`'s document list renders its offline
-   error state (the API is unreachable in a static capture), and hover, drag,
+8. **Only partially verified**: hover, drag,
    focus-transition and enter/exit-animation states are not gradeable from
    screenshots anywhere in the set.
 10. **Context degradation is the risk this repo keeps re-learning.** Three syncs
@@ -264,7 +266,7 @@ itself.
 - Both quirks are in the bundled converter lib, not in this repo. If a future
   skill version fixes them, the generator's workarounds stay harmless.
 
-## Styling: Tailwind v4, dark-only
+## Styling: Tailwind v4, light default + dark via `data-theme`
 
 - Tokens live in `src/styles/globals.css` under `@theme` (Tailwind v4 reads
   `--color-*`, `--text-*`, `--radius-*`, `--shadow-*`, `--font-*`, `--animate-*`)
@@ -286,17 +288,20 @@ itself.
   matrix with opacity steps, radius, shadow, transitions, and the common
   `hover:`/`focus:`/`sm:`–`xl:` variants). That is why `ds.css` is ~460 KB.
   **If a design renders unstyled, the missing utility belongs in that SAFELIST.**
-- **The theme is single-mode dark** and there is deliberately no `@custom-variant
-  dark` and no light token set (shadows, scrollbars, scrim and the 8 chart series
-  are all validated against `#0a0a0f`). Two consequences the generator handles by
-  appending rules to `ds.css`:
+- **Two themes.** `@theme` holds the light values (the default); an unlayered
+  `[data-theme="dark"]` block re-declares every colour for dark, on `<html>` or
+  on any element (a dark island). `@custom-variant dark` keys `dark:` to that
+  attribute, not the OS. The generator ships the dark block in `tokens.css`
+  next to the `:root` blocks. Shadow tokens read `--shadow-*-color` properties
+  because Tailwind bakes a shadow token's value into the utility. Two rules the
+  generator appends to `ds.css`:
   - The app's surface comes from `@layer base { body { … } }`, and **layered
     rules lose to any unlayered `body` rule**. The generated preview cards
-    hardcode `body{background:#fff}`, which rendered every card near-white on
-    white. Fixed by restating the surface unlayered as `html body { … }`.
+    hardcode `body{background:#fff}`, which renders dark-theme cards near-white
+    on white. Fixed by restating the surface unlayered as `html body { … }`.
   - The converter's "preview not yet authored" placeholder styles its own text
-    near-black inline, assuming a white page. Fixed with
-    `[data-ds-fallback] { background-color: #fff }`.
+    near-black inline, assuming a white page; unreadable in the dark theme.
+    Fixed with `[data-ds-fallback] { background-color: #fff }`.
   Both rules ship in `_ds_bundle.css` and are correct for real designs too.
 - Fonts: the DS's own type is system stacks only (`--font-sans` /
   `--font-mono`), so no `@font-face` of its own and no `[FONT_MISSING]`;
@@ -373,7 +378,28 @@ each component reads only a handful, so
 `ProposalsProvider` itself is side-effect-free (no network, no storage, no
 timers) but calls `useEditor()`, so it still requires an editor above it.
 
-## HARNESS HAZARD: ChatMarkdown fixtures must use a one-word code-fence info string
+**The editor is now three contexts, so use `LiteralEditor`.** `EditorProvider`
+publishes state (`useEditorState`), actions (`useEditorActions`) and the
+active block (`useActiveBlock`) separately, so typing does not re-render every
+consumer of an action. A preview that only supplied `EditorContext.Provider`
+threw as soon as it reached an `Editable`, a `CodeEditable` or a paragraph,
+because the other two hooks throw without their provider. `preview-providers.ts`
+exports `LiteralEditor`, which hands one literal to all three contexts.
+`activeId` picks the focused block. Every editor preview goes through it
+(the fifth sync migrated all 14). The old `{...} as unknown as Ctx` literal is
+still the value: it already carried both the state and the action members.
+
+## HARNESS HAZARD (fixed in source): ChatMarkdown code-fence info strings
+
+**Status, fifth sync:** fixed. The fence opener is now `/^```\s*(\w*)/`, which
+matches every line starting with ` ``` `, and the paragraph loop's stop test
+excludes exactly those lines. `ChatMarkdown.test.tsx` asserts termination on
+every fence shape below. The maths blocks added in the same sync (`$$`, `\[`)
+use one helper (`mathBlockAt`) for both the block branch and the paragraph stop
+test, so they cannot reintroduce the hang. Fixtures still use one-word
+languages because that is what models write. The original finding is kept
+below for history.
+
 
 `ChatMarkdown`'s `parseBlocks` (`src/components/editor/ChatAssistant/ChatMarkdown/ChatMarkdown.tsx`)
 **infinite-loops** on any line starting with ` ``` ` whose info string is not a
@@ -443,9 +469,11 @@ single-word language until the source is fixed. Re-check this note if
 
 ## App-shell components need context injected into previews
 
-`AppShell`, `Sidebar` and `Topbar` read app context and **throw** without it
+`AppShell` and `Sidebar` read app context and **throw** without it
 (`usePanels`/`useView`/`useAuth` all throw by design; `DocumentsMenu`, which
 `Sidebar` renders, additionally needs the editor, toast and confirm contexts).
+`Topbar` is gone: the sixth sync found its account menu moved into `Sidebar`,
+which is why `Sidebar` now reads `useAuth` and `useView`.
 
 A preview cannot import those providers from `src/` directly: the preview bundler
 would compile a SECOND copy of each context module, whose React context instance
@@ -457,15 +485,18 @@ module instance. They are absent from the types barrel, so the converter never
 treats them as components (no card, no `.d.ts`, no doc).
 
 Two cases need the raw context rather than the real provider:
-- `Topbar` returns `null` while `user` is null, and `AuthProvider` only sets a
-  user after confirming a cached identity against the server — unreachable in an
-  offline static capture. Its preview supplies a literal `AuthContext` value.
-- `Sidebar`'s collapsed state is persisted user state with no prop to force it,
-  so that cell overrides `PanelsContext` with `leftCollapsed: true`.
+- `AuthProvider` only sets a user after confirming a cached identity against
+  the server, which is unreachable in an offline static capture. `Sidebar`'s
+  account menu names the workspace after that user, so its preview supplies a
+  literal `AuthContext` value (as the deleted `Topbar`'s did).
+- The real `ViewProvider` rewrites the address bar on mount and calls
+  `useEditor()`. `Sidebar`'s preview supplies a literal `ViewContext`.
 
-`Sidebar`'s document list is fetched from the API, so in an offline capture the
-list area shows its own load/error state. That is a truthful render — the card is
-about the sidebar chrome.
+Since the sixth sync `Sidebar`'s editor is a `LiteralEditor` whose `listRemote`
+resolves a fixed page, so the card shows real documents instead of the offline
+error state the real `EditorProvider` produced. There is no collapsed cell any
+more: a collapsed sidebar is off-screen, and `AppShell` peeks the same
+full-width column on hover.
 
 ## Conventions header
 
@@ -633,8 +664,9 @@ forceable actually are not.
 `HeadingBlock` declares no context use and still throws without an
 `EditorContext`. `CitationInline` and `EquationInline` take full props *and*
 call `useEditor()`. `Canvas` needs `ConfirmProvider` not for itself but for the
-`BlockControls` it renders per block; without it the whole canvas paints as an
-empty surface with no error visible in the card.
+`ReviewBar` it pins to the top (it was `BlockControls` until the sixth sync);
+without it the whole canvas paints as an empty surface with no error visible in
+the card.
 
 **`registerEditable` must really register.** A no-op passes the crash check and
 still breaks rendering: the effect that mounts inline widgets looks its host up
@@ -650,8 +682,11 @@ on `,` `;` and ` and `, so `"Hoffmann et al."` renders as `(al., 2022)`. Use
 `"Hoffmann, J., Borgeaud, S."`.
 
 **What can and cannot be forced open**, verified per component:
-- `BlockControls` — YES. Open state is in the editor context
-  (`openMenuBlockId` + `openMenuType`), so both menus render open.
+- `BlockControls` — YES, via its `menuOpen` prop (Canvas passes
+  `openMenuBlockId === id && openMenuType === 'options'`). Since the sixth sync
+  there is only the options menu: `+` inserts a line and opens the "/" menu.
+  The controls are placed by `globals.css` against a `.block-row` inside a
+  `.document-container`, so a cell must render both.
 - `SlashMenu` — YES, via its real trigger: register a contenteditable in
   `refs`, put a caret in it, then
   `window.dispatchEvent(new CustomEvent('colwrite:open-slash-menu', {detail:{blockId}}))`.
@@ -662,7 +697,8 @@ on `,` `;` and ` and `, so `"Hoffmann et al."` renders as `(al., 2022)`. Use
 - `ChatRefPicker` — YES, via the `openAt()` ref handle. But its list is
   `absolute bottom-full`, so it needs a **`relative` wrapper** or it resolves
   against the root and lands at a negative top, off the card.
-- `ChatAssistant` — YES, `assistantOpen` comes from `PanelsContext`.
+- `ChatAssistant` — N/A: it is docked panel content with no open state of its
+  own; the card renders it in a sidebar-sized column.
 - `InlinePopover`, `InlineSettings`, `AIActionMenu` — **NO.** All hold `open` in
   internal state with no prop. Cards show the closed trigger.
 - `InlineFigureShell`'s control header — **NO.** `opacity-0` until hover.
@@ -670,10 +706,14 @@ on `,` `;` and ` and `, so `"Hoffmann et al."` renders as `(al., 2022)`. Use
 **Cells deliberately removed rather than shipped** (each rendered identically to
 a sibling, or rendered nothing). The reason is written into the preview file at
 the point of removal, so it does not get re-added:
-`SlashMenu.Filtering` (query lives in the menu's own search field, not the block
-text) · `ReviewBar.SteppingThroughABatch` (`focusedChangeId` highlights document
+`SlashMenu.Filtering` (the query lived in the menu's own search field; since
+the sixth sync it is the text after the slash, so this cell could now be
+written) · `Canvas.WithAnActiveBlock` (the caret's row is no longer tinted;
+replaced by `WithSelectedBlocks`) · `Sidebar.Collapsed` (see "App-shell
+components") · `ReviewBar.SteppingThroughABatch` (`focusedChangeId` highlights document
 cards, not the bar) · `BlockControls.Resting` (affordances are hover-revealed →
-empty card) · `DocumentFooter.LocalDraftNotYetSaved` (`documentId` only gates the
+empty card; a block with marks does draw, hence `MarksOnALockedHiddenBlock`) ·
+`DocumentFooter.LocalDraftNotYetSaved` (`documentId` only gates the
 null-return) · `InlineFigureShell.WithSettingsControl` (`controls` lands in the
 hidden header) · `SettingsCheck.WithHint` (see below) · `DividerBlock.OnItsOwn`
 and `InlineSettings.OnItsOwn` (single hairline / 14px icon on an empty card —
@@ -725,6 +765,10 @@ a later run is new. Note this run needed **no `[GRID_OVERFLOW]` remedies** —
 `ReferencesSection` fits a grid cell at the default card mode, so it carries no
 `cfg.overrides` entry.
 
+**Sixth sync:** 111 components. The render check reported 110/111 clean, with
+four warns, none of them on the five cards fixed that sync. See "Sixth sync"
+at the end of this file for the list. Treat that list as the new baseline.
+
 One informational line is expected and fine: `tokens: 251 defined, 165
 referenced (1 missing, below threshold)`. (It read 248/163 through the second
 sync; the app's own token additions move these counts, so compare the *shape*
@@ -732,15 +776,156 @@ of the line — still 1 missing, still below threshold — not the numbers.)
 
 ## Prop contracts
 
-- `cfg.dtsPropsFor` overrides six components:
+- `cfg.dtsPropsFor` overrides five components:
   - `Alert`, `EmptyState` — `icon?: React.ElementType` was expanded by the
     extractor into a 180-member string union of every HTML tag name.
-  - `ErrorBoundary`, `Sidebar`, `Topbar` — extraction produced
-    `[key: string]: unknown`; the first takes `children`+`label`, the other two
-    take no props at all (they read app context).
+  - `ErrorBoundary`, `Sidebar` — extraction produced
+    `[key: string]: unknown`. `ErrorBoundary` takes `children` + `label`;
+    `Sidebar` takes `onOpenPalette` + `onShowShortcuts` (it had no props until
+    the sixth sync) and reads the rest from app context.
   - `ExtractionBadge` — `status` resolved to `any`; the real type is the
     `ExtractionStatus` union from `src/services/resources.ts`. **If that union
     changes, update the override.**
 - Native DOM props are filtered from the emitted `<Name>Props` by design, so
   `Input`/`Textarea` show only `className`/`id`/`style`. Their docs state
   explicitly that standard input attributes pass through.
+
+## Fifth sync: Mermaid diagrams and chat maths
+
+New catalog entries: **`MermaidDiagram`** (Content), **`DiagramBlock`** and
+**`CodeBlock`** (Editor blocks). Updated: **`ChatMarkdown`** (maths and diagram
+stories). Stories added to **`Canvas`** (`WithADiagram`) and **`ChangeCard`**
+(`InsertingADiagram`).
+
+**Model.** A diagram is not a new block type. It is the canonical `code`
+block with `language: "mermaid"` (`isDiagramBlock` in `src/editor/blockKinds.ts`),
+and the author-level kind `diagram` maps onto it. The API contract is unchanged:
+the agent's `doc_edit`, markdown, the clipboard and the LaTeX export all carry
+the source as-is.
+
+**One renderer.** `src/lib/mermaid.ts` owns everything Mermaid:
+- the lazy import (through the `@/lib/mermaidModule` seam, below);
+- a render queue, because `initialize` is global and two themes must not
+  interleave;
+- an LRU cache keyed by theme and source, returning a fresh element id per
+  reuse, since Mermaid scopes styles and markers to the id;
+- the token-to-`themeVariables` mapping.
+
+`securityLevel: 'strict'` is fixed. Mermaid DOMPurify-sanitises the SVG, and the
+export adds a fail-closed `safeDiagramSvg` check on top of its CSP.
+
+**The palette is read from the DOM.** `mermaidThemeFor(element)` reads
+`--color-*` from the host element's computed style, so a `data-theme="dark"`
+island draws dark with no prop (the `MermaidDiagram` `DarkIsland` cell). It
+accepts only hex/`rgb()` values, which is what khroma parses. If a token moves to
+`oklch()` or `color-mix()`, the diagram silently falls back to the light
+palette. Add a converter there if the tokens ever change format.
+
+**Bundle: Mermaid is not in `_ds_bundle.js`, and must not be.** Measured
+first build: 1.9 MB → **14.8 MB**, because esbuild inlines the app's dynamic
+`import('mermaid')` into the IIFE (the same mechanism NOTES item 4 describes
+for the exporter). `build-ds-pkg.mjs` now pins `@/lib/mermaidModule` to a
+generated stub that `import()`s
+`https://cdn.jsdelivr.net/npm/mermaid@<exact pinned version>/dist/mermaid.esm.min.mjs`
+at runtime. The build refuses to run unless `package.json` pins mermaid to an
+exact version, so the CDN copy is the same code the app ships. Consequences:
+- A rendered design or card draws diagrams only if it can reach jsdelivr. If
+  it cannot, `MermaidDiagram` shows "The diagram renderer could not be
+  loaded". Nothing throws, and the failure is not cached, so a later draw retries.
+- The render check photographs whatever state the diagram cells are in when
+  it captures. A card stuck on "Drawing diagram…" means the capture beat the
+  CDN, not a broken component. Re-capture before debugging.
+- Mermaid brings its own KaTeX (0.16, nested under `node_modules/mermaid`).
+  Because Mermaid is external, it does not reach the bundle either.
+
+**Asynchronous drawing.** Every diagram cell starts on "Drawing diagram…" and
+settles a moment later. All fixture sources are deterministic, so the settled
+render hashes are stable across syncs.
+
+**Chat maths** is KaTeX from the already-bundled package (`renderLatex` with
+`lenient: true`), so it adds nothing to the bundle.
+
+**`DiagramBlock` `Editing` cell.** The source view is the block's own state,
+not a prop. The cell reaches it the way an author does: a wrapper clicks the
+block's **Edit** button once after mount. If that button's label changes, the
+cell silently shows the drawing instead of the editor.
+
+## Sixth sync: five cards broken by app refactors under their previews
+
+The render check reported five broken cards. The previews had not moved, but
+the components under them had. This is the failure mode of the third and
+fourth syncs again (risk item 10), except that this time all five threw.
+
+| Card | Reported | What changed in the app | Fix in the preview |
+| --- | --- | --- | --- |
+| `Sidebar` | root empty, `useView must be used within ViewProvider` | Took over the deleted `Topbar`'s account menu (`useAuth`) and Settings link (`useView`); gained two required props | Literal `ViewContext` and `AuthContext`; `LiteralEditor` replaces the real `EditorProvider`; passes `onOpenPalette` / `onShowShortcuts` |
+| `BlockControls` | root empty, `useToast must be used within ToastProvider` | Props went from `id` to `block`, `isFirst`, `isLast`, `menuOpen`; the add menu is gone; absolutely positioned against `.block-row` | `ToastProvider` (no `ConfirmProvider` needed); new props; a real `.document-container > .block-row` |
+| `Canvas` | root empty, `reading 'length'` | Reads about 25 more editor members through block selection, caret memory, Ask AI, `PageTitle`, `BlankPageActions`, `ReviewBar` and the block bodies | Members added to `EDITOR` |
+| `FloatingToolbar`, `SlashMenu` | `getBlock is not a function` | Both look up the selection's or the caret's block | `getBlock` over the cell's own blocks, plus `setBlockKind`, `loadingDocumentId`, etc. |
+
+**The reported error is only the first throw.** Fixing it alone would have
+left `Sidebar` throwing at `useAuth` and `BlockControls` at `block.id`. Every
+missing member was found in one pass with a scratch jsdom probe, which was not
+checked in. It is a vitest config that aliases `colwrite-ui` to
+`ds-pkg/entry.ts`, re-exports `LiteralEditor` wrapped in a Proxy that records
+reads of absent keys, and renders every story of the named previews. **Gotcha:**
+`useEditor()` spreads state and actions into a new object, so the spread copies
+only the keys that exist and the Proxy never sees reads made through
+`useEditor()`. The probe also had to wrap that spread, using a vite `transform`
+on `editorContextState.ts`. With it in place, the four editor previews showed
+zero absent reads on render.
+
+**Lookups must look up.** `SlashMenu` ignores its open event unless
+`getBlock(id)?.type === 'paragraph'`, so a no-op `getBlock` would give an empty
+card with no error. `FloatingToolbar` uses the block for its Turn into label and
+for Cite. `Canvas`'s `Frame` derives `getBlock` / `getBlockIds` from the blocks
+the cell renders, because `WithADiagram` swaps in its own blocks. Its
+`registerEditable` now really registers.
+
+**Found by reading the pixels, not by the check** (item 10 again):
+- `Canvas` now draws the document name as its page title (`PageTitle`), so the
+  fixtures' H1 blocks printed the title twice. The H1 blocks were removed, and
+  `EmptyDocument` is now untitled, so it shows the "Untitled" placeholder.
+- `Canvas.WithAnActiveBlock` came out byte-identical to `ADraft`: the caret's row
+  is no longer tinted. It was replaced by `WithSelectedBlocks` (the block
+  selection wash, `selectedBlockIds: ['h2', 'p2']`).
+- `Canvas.WithADiagram` was cut off by the 700px capture: first by height
+  (top-down flowchart), then by width, since a five-node left-to-right flowchart
+  scrolls sideways in the 660px column. It is now four nodes, left to right, and
+  fits.
+- `BlockControls.AddMenuOpen` described a menu that no longer exists. It was
+  replaced by `MarksOnALockedHiddenBlock`, the component's one visible resting
+  state (gutter marks). The menu footer's relative "Page edited …" line is kept
+  out by `lastSavedAt: null`, so the card stays stable across syncs.
+- `Sidebar.Collapsed` would have drawn the same pixels as the expanded cell (see
+  "App-shell components"). It was replaced by `EmailOnlyAccount` (workspace and
+  initials named from the email's local part). `Expanded` was renamed
+  `WithDocuments`.
+
+**Config.** The `Sidebar` override in `dtsPropsFor` was corrected (risk item 2).
+The other four overrides were re-checked and held.
+
+**Known harness artefact, not fixed.** Single-story renders sit in
+`.ds-single { transform: translateZ(0) }` (`.ds-sync/lib/emit.mjs`), which makes
+the wrapper the containing block for `position: fixed`. `FloatingToolbar` and
+`SlashMenu` compute viewport coordinates, so they land shifted down by the
+wrapper's offset. In `FloatingToolbar.OverAPhrase` the toolbar overlaps its
+selected line by about 15px. This predates this sync, and the preview cannot
+correct for it.
+
+**Result** (scratch build, nothing uploaded): the render check reported
+**110/111 clean**, and the five cards had 0 page errors and were not bad, thin,
+blank or identical. The remaining warnings are all on components this sync did
+not touch:
+- `[FONT_MISSING] "Cambria"`
+- `[RENDER_BLANK] Separator`
+- `[GRID_OVERFLOW] TabsTrigger` (wide)
+- `[GRID_OVERFLOW] DiagramBlock` (fixed/portal), on the second of two runs only
+- 8 new components on the floor card. Five of them throw: `PageTopbar`
+  (`usePanels`), `ReviewPill` and `DocumentExportDialog` (`useEditorState`),
+  and `DropdownMenuCheckboxItem` / `DropdownMenuRadioItem` (outside a `Menu`).
+
+The bundle is **2256 KB**, up from 1825 KB (risk item 12). The inlined-package
+count is unchanged at 51, so the growth is app code rather than a new
+dependency. The tokens line reads `295 defined, 210 referenced (1 missing, below
+threshold)`, the same shape as before.

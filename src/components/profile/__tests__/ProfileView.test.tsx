@@ -8,6 +8,7 @@ import { makeResource } from '@/services/__tests__/resourceFixtures';
 
 const switchTo = vi.fn<(_id: string) => Promise<boolean>>(async () => true);
 const getOverview = vi.fn<() => Promise<UserOverview>>();
+const updateProfile = vi.fn();
 const editorState = {
   documentId: null as string | null,
   loadingDocumentId: null as string | null,
@@ -19,15 +20,21 @@ const editorState = {
 vi.mock('@/editor', () => ({ useEditor: () => ({ ...editorState, switchTo }) }));
 vi.mock('@/services/userProfile', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/userProfile')>();
-  return { ...actual, getOverview: () => getOverview() };
+  return {
+    ...actual,
+    getOverview: () => getOverview(),
+    updateProfile: (changes: unknown) => updateProfile(changes),
+  };
 });
 vi.mock('@/components/preferences', () => ({
-  AgentToolsPreferences: () => (
+  AgentToolsPreferences: ({ leading }: { leading?: React.ReactNode }) => (
     <section aria-label="Agent preferences">
+      {leading}
       Agent capability controls
       <input aria-label="Agent preference draft" />
     </section>
   ),
+  AgentEnginePreferences: () => <div>Agent engine choice</div>,
 }));
 
 const { ProfileView } = await import('../ProfileView');
@@ -99,6 +106,11 @@ const OVERVIEW: UserOverview = {
   collections: [],
 };
 
+/** Radix tabs activate on mousedown. */
+function openPane(name: string) {
+  fireEvent.mouseDown(screen.getByRole('tab', { name }), { button: 0, ctrlKey: false });
+}
+
 function renderProfile() {
   return render(
     <ToastProvider>
@@ -117,6 +129,7 @@ beforeEach(() => {
   editorState.documentId = null;
   editorState.loadingDocumentId = null;
   getOverview.mockReset();
+  updateProfile.mockReset();
   getOverview.mockResolvedValue(OVERVIEW);
 });
 
@@ -126,45 +139,111 @@ describe('ProfileView', () => {
   it('loads the whole dashboard in a single request', async () => {
     renderProfile();
 
-    await screen.findByRole('heading', { name: 'Ada Lovelace', level: 1 });
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
     expect(getOverview).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the application-owned profile, not auth fields', async () => {
+  it('lays the account out as labelled rows, editable in place', async () => {
     renderProfile();
 
-    await screen.findByRole('heading', { name: 'Ada Lovelace', level: 1 });
-    expect(screen.getByText('@ada')).toBeTruthy();
-    expect(screen.getByText('Computational linguistics')).toBeTruthy();
-    expect(screen.getByText('Analytical Engine Lab')).toBeTruthy();
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    expect(screen.getByText(/@ada/)).toBeTruthy();
+    const value = (name: string) => (screen.getByLabelText(name) as HTMLInputElement).value;
+    expect(value('Preferred name')).toBe('Ada Lovelace');
+    expect(value('Headline')).toBe('Computational linguistics');
+    expect(value('Affiliation')).toBe('Analytical Engine Lab');
+    expect(value('About')).toBe('Working on note-to-paper pipelines.');
+    expect(value('Time zone')).toBe('UTC');
+    // No "Edit profile" detour, and the username is shown read-only.
+    expect(screen.queryByRole('button', { name: /edit profile/i })).toBeNull();
+    expect(screen.getByText('Username')).toBeTruthy();
+    expect(screen.getByText(/managed by your ColWrite account/)).toBeTruthy();
   });
 
-  it('provides a dedicated agent tools preferences tab', async () => {
+  it('shows no badge for the default account type', async () => {
     renderProfile();
-    await screen.findByRole('heading', { name: 'Ada Lovelace', level: 1 });
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Agent tools' }), {
-      button: 0,
-      ctrlKey: false,
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    expect(screen.queryByText('consumer')).toBeNull();
+  });
+
+  it('offers a save bar once a field changes, and saves every field', async () => {
+    updateProfile.mockResolvedValue({
+      profile: { ...OVERVIEW.profile, headline: 'Parsing at scale' },
     });
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    expect(screen.queryByRole('region', { name: 'Unsaved changes' })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Headline'), { target: { value: 'Parsing at scale' } });
+    const bar = screen.getByRole('region', { name: 'Unsaved changes' });
+    fireEvent.click(within(bar).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(updateProfile).toHaveBeenCalledTimes(1));
+    expect(updateProfile.mock.calls[0][0]).toMatchObject({
+      display_name: 'Ada Lovelace',
+      headline: 'Parsing at scale',
+      affiliation: 'Analytical Engine Lab',
+      timezone: 'UTC',
+    });
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Unsaved changes' })).toBeNull());
+  });
+
+  it('discards unsaved edits from the save bar', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+
+    fireEvent.change(screen.getByLabelText('Affiliation'), { target: { value: 'Elsewhere' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+
+    expect((screen.getByLabelText('Affiliation') as HTMLInputElement).value).toBe('Analytical Engine Lab');
+    expect(screen.queryByRole('region', { name: 'Unsaved changes' })).toBeNull();
+  });
+
+  it('lays settings out as panes with a navigation list', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+
+    expect(screen.getByRole('tablist').getAttribute('aria-orientation')).toBe('vertical');
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Account',
+      'Preferences',
+      'AI & tools',
+      'Usage',
+      'Documents & files',
+    ]);
+  });
+
+  it('provides a dedicated agent tools preferences pane', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+
+    openPane('AI & tools');
 
     expect(await screen.findByRole('region', { name: 'Agent preferences' })).toBeTruthy();
   });
 
+  it('hides the force-mounted agent pane while another pane is showing', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+
+    // Mounted for the draft's sake, and hidden by its inactive state (jsdom
+    // applies no stylesheet, so the hook itself is what can be checked).
+    const pane = screen.getByRole('region', { name: 'Agent preferences' }).closest('[role="tabpanel"]');
+    expect(pane?.getAttribute('data-state')).toBe('inactive');
+    expect(pane?.className).toContain('data-[state=inactive]:hidden');
+  });
+
   it('keeps an unsaved preferences draft when switching profile tabs', async () => {
     renderProfile();
-    await screen.findByRole('heading', { name: 'Ada Lovelace', level: 1 });
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
 
-    const agentTab = screen.getByRole('tab', { name: 'Agent tools' });
-    fireEvent.mouseDown(agentTab, { button: 0, ctrlKey: false });
+    openPane('AI & tools');
     const draft = await screen.findByRole('textbox', { name: 'Agent preference draft' });
     fireEvent.change(draft, { target: { value: 'unsaved choice' } });
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Overview' }), {
-      button: 0,
-      ctrlKey: false,
-    });
-    fireEvent.mouseDown(agentTab, { button: 0, ctrlKey: false });
+    openPane('Account');
+    openPane('AI & tools');
 
     expect(
       (screen.getByRole('textbox', {
@@ -176,7 +255,8 @@ describe('ProfileView', () => {
   it('renders the usage tiles from the summary', async () => {
     renderProfile();
 
-    await screen.findByRole('heading', { name: 'Ada Lovelace', level: 1 });
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    openPane('Usage');
     // Scoped: "Documents" is both a tile label and a section heading.
     const tiles = within(screen.getByRole('region', { name: 'Usage summary' }));
     expect(tiles.getByText('Documents')).toBeTruthy();
@@ -190,6 +270,7 @@ describe('ProfileView', () => {
 
   it('lists documents with the activity only MySQL knows', async () => {
     renderProfile();
+    openPane('Documents & files');
 
     await screen.findByText('Thesis draft');
     expect(screen.getByText('64')).toBeTruthy();
@@ -198,6 +279,7 @@ describe('ProfileView', () => {
 
   it('opens a document and returns to the editor', async () => {
     renderProfile();
+    openPane('Documents & files');
 
     // "Open" alone is not a name a screen-reader user can act on in a list of
     // documents, so each button names its document.
@@ -209,6 +291,7 @@ describe('ProfileView', () => {
 
   it('makes the document name itself open the document', async () => {
     renderProfile();
+    openPane('Documents & files');
 
     const name = await screen.findByRole('button', { name: 'Thesis draft' });
     name.click();
@@ -220,6 +303,7 @@ describe('ProfileView', () => {
     editorState.documentId = 'another-document';
     editorState.loadingDocumentId = '507f1f77bcf86cd799439011';
     renderProfile();
+    openPane('Documents & files');
 
     const name = await screen.findByRole('button', { name: 'Thesis draft' });
     expect(name.getAttribute('aria-current')).toBeNull();
@@ -231,6 +315,7 @@ describe('ProfileView', () => {
 
   it('lists uploaded PDFs with their size', async () => {
     renderProfile();
+    openPane('Documents & files');
 
     await screen.findByText('reference.pdf');
     expect(screen.getByText(/1\.0 MB/)).toBeTruthy();
@@ -238,6 +323,7 @@ describe('ProfileView', () => {
 
   it('refreshes the lists, not only the tiles', async () => {
     renderProfile();
+    openPane('Documents & files');
     await screen.findByText('Thesis draft');
 
     getOverview.mockResolvedValue({
@@ -267,10 +353,7 @@ describe('ProfileView', () => {
     renderProfile();
     await screen.findByText('Overview unavailable');
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Agent tools' }), {
-      button: 0,
-      ctrlKey: false,
-    });
+    openPane('AI & tools');
 
     expect(await screen.findByRole('region', { name: 'Agent preferences' })).toBeTruthy();
   });

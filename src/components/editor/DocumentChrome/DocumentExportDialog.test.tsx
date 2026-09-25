@@ -73,6 +73,7 @@ describe('DocumentExportDialog', () => {
         include_references: true,
       },
       { base_version: 4, local_revision: 12, dirty: true },
+      new Map(),
     );
     expect(mocks.printStandaloneHtml).toHaveBeenCalledWith(
       '<!doctype html><title>Current draft</title>',

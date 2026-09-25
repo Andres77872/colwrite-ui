@@ -8,14 +8,11 @@ import {
   it,
   vi,
 } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createRef, useImperativeHandle, useLayoutEffect } from 'react';
 import type { Doc, ParagraphBlock as ParagraphBlockType } from '@/editor/types';
-import type { DispatchActionParams } from '@/services/actionDispatcher';
-
-const actionMocks = vi.hoisted(() => ({
-  dispatch: vi.fn(),
-}));
+import { ASK_AI_EVENT, type AskAiRequest } from '../AskAi/askAiEvents';
+import { PanelsContext, type PanelsContextValue } from '@/components/panels/panelsContextState';
 
 vi.mock('@/services', () => ({
   createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
@@ -23,25 +20,6 @@ vi.mock('@/services', () => ({
   loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
   deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
   listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
-}));
-
-vi.mock('@/services/actionDispatcher', () => ({
-  dispatchAction: actionMocks.dispatch,
-}));
-
-// The menu's Radix keyboard/focus behavior is covered independently. This
-// integration test keeps the real toolbar accept path and replaces only the
-// action picker needed to invoke it.
-vi.mock('./AIActionMenu/AIActionMenu', () => ({
-  AIActionMenu: ({
-    onAction,
-  }: {
-    onAction: (action: 'search-for-references') => void;
-  }) => (
-    <button type="button" onClick={() => onAction('search-for-references')}>
-      Search references
-    </button>
-  ),
 }));
 
 const { EditorProvider, useEditor } = await import('@/editor');
@@ -90,7 +68,7 @@ function Harness() {
   }, [editor.doc]);
 
   const block = editor.blocks.find((candidate) => candidate.id === 'p1');
-  if (!block || block.type !== 'paragraph') return null;
+  if (!block || (block.type !== 'paragraph' && block.type !== 'heading')) return null;
   return (
     <>
       <Editable id={block.id} html={block.html} />
@@ -99,7 +77,7 @@ function Harness() {
   );
 }
 
-async function mountEditor() {
+async function mountEditor(panels?: Partial<PanelsContextValue>, html = 'Evidence claim') {
   const doc: Doc = {
     version: 1,
     name: 'Floating toolbar test',
@@ -107,7 +85,7 @@ async function mountEditor() {
       {
         id: 'p1',
         type: 'paragraph',
-        html: 'Evidence claim',
+        html,
         children: [],
         columns: 1,
       },
@@ -115,10 +93,17 @@ async function mountEditor() {
   };
   localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc }));
 
-  const result = render(
+  const editor = (
     <EditorProvider>
       <Harness />
-    </EditorProvider>,
+    </EditorProvider>
+  );
+  const result = render(
+    panels ? (
+      <PanelsContext.Provider value={panels as PanelsContextValue}>{editor}</PanelsContext.Provider>
+    ) : (
+      editor
+    ),
   );
   await act(async () => {});
 
@@ -152,17 +137,6 @@ beforeEach(() => {
   localStorage.clear();
   committedDocs = [];
   vi.clearAllMocks();
-  actionMocks.dispatch.mockImplementation(async (params: DispatchActionParams) => {
-    params.onToken?.(
-      [
-        'Supported ',
-        '<citation title="A Study" authors="A. Author" doi="10.1000/TEST" />',
-        ' and ',
-        '<citation title="Another Study" paper_id="CorpusId:42" ',
-        'url="https://www.semanticscholar.org/paper/example/CorpusId:42" />.',
-      ].join(''),
-    );
-  });
 });
 
 afterEach(() => {
@@ -251,48 +225,161 @@ describe('FloatingToolbar keyboard operation', () => {
   });
 });
 
-describe('FloatingToolbar structured citation acceptance', () => {
-  it('commits every citation placeholder together with its corresponding child', async () => {
+describe('FloatingToolbar actions', () => {
+  it('leads with Ask AI and hands the selection to the prompt', async () => {
     const { editable } = await mountEditor();
+    const requests: AskAiRequest[] = [];
+    const listen = (event: Event) => requests.push((event as CustomEvent<AskAiRequest>).detail);
+    window.addEventListener(ASK_AI_EVENT, listen);
+
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+    const toolbar = await screen.findByRole('toolbar', { name: 'Text formatting' });
+    const first = toolbar.querySelector('[data-toolbar-item]');
+    expect(first?.getAttribute('aria-label')).toMatch(/^Ask AI/);
+
+    fireEvent.click(first as HTMLElement);
+    expect(requests).toEqual([{ blockId: 'p1', actionId: undefined }]);
+    expect(screen.queryByRole('toolbar')).toBeNull();
+    window.removeEventListener(ASK_AI_EVENT, listen);
+  });
+
+  it('runs a preset from the more-AI menu through the same prompt', async () => {
+    const { editable } = await mountEditor();
+    const requests: AskAiRequest[] = [];
+    const listen = (event: Event) => requests.push((event as CustomEvent<AskAiRequest>).detail);
+    window.addEventListener(ASK_AI_EVENT, listen);
 
     act(() => {
       editable.focus();
       selectText(editable, 0, 'Evidence claim'.length);
     });
-    fireEvent.click(await screen.findByRole('button', { name: 'Search references' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'More AI actions' }));
+    const menu = screen.getByRole('menu', { name: 'More AI actions' });
+    // Every item used to be a no-op: the Radix menu took focus into a portal,
+    // the paragraph blurred and re-rendered, and the saved Range collapsed.
+    // The menu lives inside the toolbar now, and hands off to Ask AI.
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Make shorter' }));
 
-    // An unsaved draft is saved before the agent is asked anything — it
-    // addresses the document by id. Only once the suggestion has actually
-    // streamed in is there something to accept.
-    await waitFor(() => expect(actionMocks.dispatch).toHaveBeenCalled());
-    // Labelled, not a bare ✓, and the label carries its shortcut.
-    const accept = await screen.findByRole('button', { name: /^Accept/ });
-    // `click`, not `mouseDown` — the control has to answer the event that Enter
-    // and Space produce, or the suggestion cannot be accepted without a mouse.
-    fireEvent.click(accept);
+    expect(requests).toEqual([{ blockId: 'p1', actionId: 'shorter' }]);
+    // Outside the workspace there is no sidebar to search in.
+    expect(within(menu).queryByRole('menuitem', { name: 'Search papers for this' })).toBeNull();
+    window.removeEventListener(ASK_AI_EVENT, listen);
+  });
+
+  it('searches papers for the selection in the Research tab', async () => {
+    const openSidebar = vi.fn();
+    const { editable } = await mountEditor({ openSidebar });
+
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence claim'.length);
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'More AI actions' }));
+    const menu = screen.getByRole('menu', { name: 'More AI actions' });
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Search papers for this' }));
+
+    expect(openSidebar).toHaveBeenCalledWith('research', { tab: 'research', query: 'Evidence claim' });
+    expect(screen.queryByRole('toolbar', { name: 'Text formatting' })).toBeNull();
+  });
+
+  it('opens a menu from the keyboard with focus on its first item, and Escape returns', async () => {
+    const { editable } = await mountEditor();
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+
+    const trigger = await screen.findByRole('button', { name: /^Turn into/ });
+    expect(trigger.textContent).toContain('Text');
+    act(() => trigger.focus());
+    // `detail: 0` is the click Enter and Space synthesize.
+    fireEvent.click(trigger, { detail: 0 });
+
+    const menu = screen.getByRole('menu', { name: 'Turn into' });
+    expect(document.activeElement).toBe(within(menu).getAllByRole('menuitem')[0]);
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' });
+    expect(document.activeElement?.textContent).toContain('Heading 1');
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(screen.getByRole('toolbar', { name: 'Text formatting' })).toBeTruthy();
+  });
+
+  it('Escape from the text closes a pointer-opened menu first, then the toolbar, never reaching the editor', async () => {
+    const { editable } = await mountEditor();
+    // What the editor does with an Escape that gets through: it turns the
+    // text selection into a block selection.
+    const editorEscape = vi.fn();
+    editable.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') editorEscape();
+    });
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+
+    // A pointer click (detail 1): focus stays in the paragraph.
+    fireEvent.click(await screen.findByRole('button', { name: /^Turn into/ }), { detail: 1 });
+    expect(screen.getByRole('menu', { name: 'Turn into' })).toBeTruthy();
+    expect(document.activeElement).toBe(editable);
+
+    fireEvent.keyDown(editable, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(screen.getByRole('toolbar', { name: 'Text formatting' })).toBeTruthy();
+    expect(document.getSelection()?.toString()).toBe('Evidence');
+    expect(editorEscape).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(editable, { key: 'Escape' });
+    expect(screen.queryByRole('toolbar')).toBeNull();
+    expect(document.activeElement).toBe(editable);
+    expect(document.getSelection()?.toString()).toBe('Evidence');
+    expect(editorEscape).not.toHaveBeenCalled();
+
+    // With the toolbar gone, Escape is the editor's again.
+    fireEvent.keyDown(editable, { key: 'Escape' });
+    expect(editorEscape).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns the block into another kind, keeping its text', async () => {
+    const { editable } = await mountEditor();
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Turn into/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Heading 2' }));
+
+    await waitFor(() =>
+      expect(editorRef.current?.doc.blocks[0]).toMatchObject({ id: 'p1', type: 'heading', level: 2 }),
+    );
+    expect(screen.queryByRole('toolbar')).toBeNull();
+  });
+
+  it('cites after the selection, committing the placeholder with its child', async () => {
+    const { editable } = await mountEditor();
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Cite/ }));
 
     await waitFor(() => {
       const block = paragraph(editorRef.current?.doc ?? { version: 1, blocks: [] });
-      expect(block.children).toHaveLength(2);
-      expect(block.html).toContain('data-child-id=');
+      expect(block.children).toHaveLength(1);
     });
-
     const finalBlock = paragraph(editorRef.current!.doc);
-    expect(finalBlock.children?.[0]).toMatchObject({
-      type: 'citation',
-      keys: ['10.1000/test'],
-      sources: [{ provider: 'manual', doi: '10.1000/test' }],
-    });
-    expect(finalBlock.children?.[1]).toMatchObject({
-      type: 'citation',
-      keys: ['S2:CorpusId:42'],
-      sources: [{ provider: 'semantic_scholar', providerId: 'CorpusId:42' }],
-    });
-    expect(finalBlock.html).not.toContain('<citation');
+    expect(finalBlock.children?.[0]).toMatchObject({ type: 'citation', keys: [], style: 'numeric' });
+    // Straight after the cited words, not at the start of the paragraph.
+    expect(finalBlock.html).toMatch(/^Evidence<span data-child-id="[^"]+"/);
 
-    // This is the transaction invariant: no state committed by the real
-    // provider may expose placeholder HTML without the child data required to
-    // render and persist it.
+    // The transaction invariant: no committed state may expose placeholder
+    // html without the child data required to render and persist it.
     for (const doc of committedDocs) {
       const block = paragraph(doc);
       const childIds = new Set((block.children ?? []).map((entry) => entry.id));
@@ -302,5 +389,76 @@ describe('FloatingToolbar structured citation acceptance', () => {
       );
       for (const id of placeholderIds) expect(childIds.has(id)).toBe(true);
     }
+  });
+});
+
+describe('Links', () => {
+  const withExec = () => {
+    const exec = vi.fn(() => true);
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: exec });
+    return exec;
+  };
+
+  it('adds https:// to a bare address before creating the link', async () => {
+    const { editable } = await mountEditor();
+    const exec = withExec();
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /^Add link/ }));
+    const field = screen.getByRole('textbox', { name: 'Link address' });
+    fireEvent.change(field, { target: { value: 'arxiv.org/abs/2101.03961' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+
+    expect(exec).toHaveBeenCalledWith('createLink', false, 'https://arxiv.org/abs/2101.03961');
+    Reflect.deleteProperty(document, 'execCommand');
+  });
+
+  it('refuses a javascript: link and says why', async () => {
+    const { editable } = await mountEditor();
+    const exec = withExec();
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /^Add link/ }));
+    const field = screen.getByRole('textbox', { name: 'Link address' });
+    fireEvent.change(field, { target: { value: 'javascript:alert(1)' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+
+    expect(exec).not.toHaveBeenCalledWith('createLink', expect.anything(), expect.anything());
+    expect(screen.getByRole('alert').textContent).toMatch(/not allowed/);
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    Reflect.deleteProperty(document, 'execCommand');
+  });
+
+  it('opens a link in a new tab on Ctrl+click, resolving a stored bare address', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const { editable } = await mountEditor(undefined, 'See <a href="arxiv.org/abs/1">the paper</a>');
+    const anchor = editable.querySelector('a');
+    if (!anchor) throw new Error('Link did not render');
+
+    fireEvent.click(anchor, { ctrlKey: true });
+
+    expect(open).toHaveBeenCalledWith('https://arxiv.org/abs/1', '_blank', 'noopener,noreferrer');
+    open.mockRestore();
+  });
+
+  it('shows where a clicked link goes, and removes it from its card', async () => {
+    const { editable } = await mountEditor(undefined, 'See <a href="https://example.com/x">the paper</a>');
+    const anchor = editable.querySelector('a');
+    if (!anchor) throw new Error('Link did not render');
+
+    fireEvent.click(anchor);
+
+    const card = await screen.findByRole('group', { name: 'Link' });
+    expect(within(card).getByText('example.com')).toBeTruthy();
+    expect(within(card).getByRole('link', { name: /Open/ }).getAttribute('rel')).toContain('noopener');
+
+    fireEvent.click(within(card).getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(paragraph(editorRef.current!.doc).html).toBe('See the paper'));
+    expect(screen.queryByRole('group', { name: 'Link' })).toBeNull();
   });
 });

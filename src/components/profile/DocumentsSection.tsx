@@ -1,9 +1,9 @@
 import { useState, type ElementType } from 'react';
 import { Button } from '@/components/ui/button';
+import { editedLabel } from '@/components/layout/editedLabel';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Spinner } from '@/components/ui/spinner';
 import { useToast } from '@/components/ui/toastContext';
-import { formatDateTime } from '@/lib/text';
 import { usePagedList } from '@/hooks/usePagedList';
 import { errorMessage } from '@/services/contracts';
 import { listUserDocuments, type UserDocument } from '@/services/userProfile';
@@ -63,7 +63,7 @@ export function DocumentsSection({
   };
 
   return (
-    <section className="rounded-xl border border-border/60 bg-card p-4">
+    <section className="border-t border-border pt-6">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-md font-semibold">Documents</h2>
         <p className="text-xs text-muted-foreground">
@@ -86,7 +86,7 @@ export function DocumentsSection({
               return (
               <li
                 key={document.document_id}
-                className="rounded-md py-2.5 transition-colors hover:bg-accent/40 has-focus-visible:bg-accent/40"
+                className="rounded-md py-2.5 transition-colors hover:bg-hover has-focus-visible:bg-hover"
               >
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
@@ -103,14 +103,14 @@ export function DocumentsSection({
                     </button>
                     <p className="mt-0.5 text-2xs text-muted-foreground">
                       v{document.version}
-                      {document.updated_at && ` · edited ${formatDateTime(document.updated_at)}`}
+                      {document.updated_at && ` · ${editedLabel(document.updated_at)}`}
                     </p>
                     <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-2xs text-muted-foreground">
-                      <Metric icon={Save} value={document.save_count} label="saves" />
-                      <Metric icon={MessagesSquare} value={document.chat_count} label="chats" />
-                      <Metric icon={Bot} value={document.agent_run_count} label="assistant runs" />
+                      <Metric icon={Save} value={document.save_count} label="save" />
+                      <Metric icon={MessagesSquare} value={document.chat_count} label="chat" />
+                      <Metric icon={Bot} value={document.agent_run_count} label="assistant run" />
                       {document.resource_count > 0 && (
-                        <Metric icon={Paperclip} value={document.resource_count} label="attachments" />
+                        <Metric icon={Paperclip} value={document.resource_count} label="attachment" />
                       )}
                     </ul>
                   </div>
@@ -154,13 +154,14 @@ function Metric({
 }: {
   icon: ElementType;
   value: number;
+  /** Singular; pluralised here ("1 attachment", "2 attachments"). */
   label: string;
 }) {
   return (
     <li className="flex items-center gap-1">
       <Icon aria-hidden="true" className="h-3 w-3" />
       <span className="tabular-nums">{value}</span>
-      <span>{label}</span>
+      <span>{value === 1 ? label : `${label}s`}</span>
     </li>
   );
 }

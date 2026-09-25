@@ -649,3 +649,53 @@ describe('parseSSEStream', () => {
     expect(onToolAction.mock.calls[0][0].toolCallId).toBe('call_1');
   });
 });
+
+describe('sources event', () => {
+  it('delivers well-formed sources and drops malformed ones', async () => {
+    const onSources = vi.fn();
+    const payload = {
+      sources: [
+        { id: 'S1', key: '10.1234/a', title: 'A', provider: 'crossref', externalIds: { DOI: '10.1234/a', bad: 3 } },
+        { id: 'not-a-handle', key: 'x', title: 'Dropped' },
+        { id: 'S2', title: 'No key' },
+        { id: 'S3', key: 'https://example.org', provider: 'evil', title: 'Web' },
+      ],
+    };
+    await parseSSEStream(createMockResponse(`event: sources\ndata: ${JSON.stringify(payload)}\n\n`), { onSources });
+
+    expect(onSources).toHaveBeenCalledTimes(1);
+    const [sources] = onSources.mock.calls[0];
+    expect(sources).toEqual([
+      { id: 'S1', key: '10.1234/a', title: 'A', provider: 'crossref', externalIds: { DOI: '10.1234/a' } },
+      { id: 'S3', key: 'https://example.org', title: 'Web' },
+    ]);
+  });
+
+  it('streams reasoning apart from the answer', async () => {
+    const onReasoning = vi.fn();
+    const onToken = vi.fn();
+    const response = createMockResponse(
+      'event: reasoning\ndata: {"content":"Checking the loss "}\n\n' +
+      'event: reasoning\ndata: {"content":""}\n\n' +
+      'event: reasoning\ndata: {"content":"definition."}\n\n' +
+      'event: token\ndata: {"content":"It is in section 2."}\n\n',
+    );
+    await parseSSEStream(response, { onReasoning, onToken });
+    // An empty fragment carries nothing to show.
+    expect(onReasoning.mock.calls).toEqual([['Checking the loss '], ['definition.']]);
+    expect(onToken.mock.calls).toEqual([['It is in section 2.']]);
+  });
+
+  it('reports how much of a tool call has been drafted, and nothing else', async () => {
+    const onToolCallProgress = vi.fn();
+    const response = createMockResponse(
+      'event: tool_call_progress\ndata: {"tool":"doc_edit","tool_call_id":"call_1","arguments_chars":2410.7}\n\n' +
+      'event: tool_call_progress\ndata: {"tool":"doc_edit","tool_call_id":"call_1","arguments_chars":"12"}\n\n' +
+      'event: tool_call_progress\ndata: {"tool":"doc_edit","tool_call_id":"call_1","arguments_chars":-1}\n\n',
+    );
+    await parseSSEStream(response, { onToolCallProgress });
+    expect(onToolCallProgress.mock.calls).toEqual([
+      [{ tool: 'doc_edit', toolCallId: 'call_1', argumentsChars: 2410 }],
+    ]);
+  });
+});

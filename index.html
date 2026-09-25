@@ -1,19 +1,37 @@
 <!doctype html>
-<!-- No `class="dark"`: Tailwind v4 only enables the `dark:` variant when the
-     stylesheet declares `@custom-variant dark`, which this project deliberately
-     does not — the theme is single-mode. The class was inert, and left in place
-     it would make any future `dark:` utility fail silently. The dark palette
-     comes from `color-scheme` plus the tokens in src/styles/globals.css. -->
+<!-- Appearance is `data-theme="light|dark"` on <html>: set by the inline
+     script below before first paint, then kept by src/lib/theme.ts. Every
+     token in src/styles/globals.css, and the `dark:` variant, switch on it. -->
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#0a0a0f" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)" />
     <meta name="description" content="ColWrite — a focused writing environment with an integrated AI assistant for composing, revising and structuring arXiv papers." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>ColWrite — Assistant writer for arXiv papers</title>
-
+    <!-- Resolve the appearance before the first paint, so a dark-mode reader
+         never sees a white flash while the bundle loads. Mirrors
+         src/lib/theme.ts, which takes over once the app starts. -->
+    <script>
+      (function () {
+        var theme = 'light';
+        try {
+          var stored = localStorage.getItem('colwrite:theme');
+          theme =
+            stored === 'light' || stored === 'dark'
+              ? stored
+              : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light';
+        } catch (e) {}
+        var root = document.documentElement;
+        root.dataset.theme = theme;
+        root.style.colorScheme = theme;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

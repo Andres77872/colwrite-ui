@@ -10,3 +10,4 @@ export * from './chats';
 export * from './session';
 export * from './agentChat';
 export * from './contracts';
+export * from './sources';

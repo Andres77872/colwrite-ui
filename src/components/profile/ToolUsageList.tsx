@@ -15,7 +15,7 @@ export function ToolUsageList({ tools }: { tools: ToolUsage[] }) {
   const peak = tools.reduce((best, tool) => Math.max(best, tool.call_count), 0);
 
   return (
-    <section className="rounded-xl border border-border/60 bg-card p-4">
+    <section className="border-t border-border pt-6">
       <h2 className="text-md font-semibold">Assistant tools</h2>
       <p className="text-xs text-muted-foreground">Most used first</p>
 

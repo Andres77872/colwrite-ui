@@ -1,105 +1,93 @@
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
-import {
-  Check,
-  ChevronRight,
-  CircleSlash,
-  TriangleAlert,
-} from 'lucide-react';
-import {
-  failureLead,
-  formatDuration,
-  formatTokens,
-  metaFor,
-} from './toolMeta';
+import { Check, ChevronRight, CircleSlash, TriangleAlert } from 'lucide-react';
+import { formatDraftSize, formatElapsed, useNow } from '@/components/editor/AgentProgress';
+import { failureLead, formatDuration, metaFor } from './toolMeta';
 import type { ToolRun } from './toolMeta';
 
-export type ActivityUsage = { promptTokens: number; completionTokens: number };
+/** A running step shows its clock only once it has taken a noticeable while. */
+const SHOW_RUNNING_TIME_AFTER_MS = 2000;
 
 /**
- * What the agent did on this turn, in the order it did it.
- *
- * Open by default while streaming, but the author stays in charge of the
- * disclosure — it used to be locked open during a run, with `aria-expanded`
- * claiming otherwise. Once the turn finishes it collapses to a single line;
- * failures stay visible in the summary either way.
+ * How long a running call has been going, and how much of its input has been
+ * drafted: "· 2,410 characters · 12s". A minute-long edit used to be one
+ * unchanging spinner.
  */
-export function AgentActivity({
-  runs,
-  live,
-  usage,
-}: {
-  runs: ToolRun[];
-  live: boolean;
-  usage?: ActivityUsage | null;
-}) {
+function RunningMeta({ run }: { run: ToolRun }) {
+  const now = useNow(true);
+  const elapsed = run.startedAt === undefined ? 0 : now - run.startedAt;
+  const drafted = run.argumentsChars ? formatDraftSize(run.argumentsChars) : null;
+  if (!drafted && elapsed < SHOW_RUNNING_TIME_AFTER_MS) return null;
+  return (
+    <span aria-hidden="true" className="shrink-0 tabular-nums">
+      {drafted && `· ${drafted} `}
+      {elapsed >= SHOW_RUNNING_TIME_AFTER_MS && `· ${formatElapsed(elapsed)}`}
+    </span>
+  );
+}
+
+/** Past this many steps a finished turn folds them under one summary line. */
+const FOLD_AFTER = 3;
+
+/**
+ * What the agent did on this turn, one quiet line per tool call:
+ * "✓ Searched Semantic Scholar · 0.8s". Each line opens onto its query, input
+ * and output. A long finished run folds under "Used N tools"; a failure's
+ * cause is always on screen, never behind a click.
+ */
+export function AgentActivity({ runs, live }: { runs: ToolRun[]; live: boolean }) {
   // null = the author hasn't touched it; follow the live default.
   const [expanded, setExpanded] = useState<boolean | null>(null);
 
   if (runs.length === 0) return null;
 
-  const open = expanded ?? live;
   const failed = runs.filter((run) => run.state === 'error').length;
   const interrupted = runs.filter((run) => run.state === 'interrupted').length;
-  const running = [...runs].reverse().find((run) => run.state === 'running');
+  const folds = !live && runs.length > FOLD_AFTER;
+  const open = !folds || (expanded ?? false);
 
-  const summary = live
-    ? running
-      ? metaFor(running.tool).running + '…'
-      : 'Working…'
-    : `${runs.length} ${runs.length === 1 ? 'step' : 'steps'}`;
+  const list = (
+    <ol className="flex flex-col" aria-label="What the assistant did">
+      {runs.map((run) => (
+        <ActivityRun key={run.id} run={run} />
+      ))}
+    </ol>
+  );
+
+  if (!folds) return list;
 
   return (
-    <div className="rounded-lg border border-border/70 bg-muted/30">
+    <div>
       <button
         type="button"
         onClick={() => setExpanded(!open)}
         aria-expanded={open}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
+        className="group/line -mx-1 flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[13px] text-muted-foreground transition-colors duration-120 hover:bg-hover hover:text-foreground"
       >
+        <Check aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+        <span className="truncate">Used {runs.length} tools</span>
+        {failed > 0 && <span className="shrink-0 text-destructive">· {failed} failed</span>}
+        {interrupted > 0 && <span className="shrink-0">· {interrupted} interrupted</span>}
         <ChevronRight
           aria-hidden="true"
-          className={cn('h-3 w-3 shrink-0 transition-transform', open && 'rotate-90')}
+          className={cn('h-3.5 w-3.5 shrink-0 transition-transform', open && 'rotate-90')}
         />
-        <span className="min-w-0 flex-1 truncate">{summary}</span>
-        {failed > 0 && (
-          <span className="shrink-0 text-destructive">{failed} failed</span>
-        )}
-        {interrupted > 0 && (
-          <span className="shrink-0">{interrupted} interrupted</span>
-        )}
-        {!live && usage && (usage.promptTokens > 0 || usage.completionTokens > 0) && (
-          <span
-            className="shrink-0 tabular-nums"
-            title={`${usage.promptTokens} prompt tokens in, ${usage.completionTokens} completion tokens out`}
-          >
-            {formatTokens(usage.promptTokens)} in · {formatTokens(usage.completionTokens)} out
-          </span>
-        )}
       </button>
-
-      {open && (
-        <ol className="space-y-1 border-t border-border/60 px-2.5 py-1.5">
-          {runs.map((run) => (
-            <ActivityRun key={run.id} run={run} />
-          ))}
-        </ol>
-      )}
+      {open && <div className="mt-0.5 border-l border-border pl-3">{list}</div>}
     </div>
   );
 }
 
-/** One tool call: status, label, duration, failure cause, and its own
-    input/output disclosure when there is anything to show. */
+/** One tool call: state, label, duration, the cause of a failure, and a
+    disclosure onto whatever it was given and returned. */
 function ActivityRun({ run }: { run: ToolRun }) {
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [open, setOpen] = useState(false);
 
   const meta = metaFor(run.tool);
-  const Icon = meta.icon;
   const duration = formatDuration(run.durationMs);
   const hasDetails = Boolean(
-    run.argsPreview || run.args || run.outputPreview || run.errorType,
+    run.detail || run.argsPreview || run.args || run.outputPreview || run.errorType || run.outputTruncated,
   );
 
   const stateText =
@@ -111,62 +99,90 @@ function ActivityRun({ run }: { run: ToolRun }) {
           ? 'interrupted'
           : 'finished';
 
-  return (
-    <li className="text-xs">
-      <div className="flex items-start gap-2">
-        <span className="mt-0.5 shrink-0">
-          {run.state === 'running' ? (
-            <Spinner className="h-3 w-3" />
-          ) : run.state === 'error' ? (
-            <TriangleAlert aria-hidden="true" className="h-3 w-3 text-destructive" />
-          ) : run.state === 'interrupted' ? (
-            <CircleSlash aria-hidden="true" className="h-3 w-3 text-muted-foreground" />
-          ) : (
-            <Check aria-hidden="true" className="h-3 w-3 text-diff-add-fg" />
-          )}
-          <span className="sr-only">{stateText}</span>
-        </span>
-        <Icon aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1">
-          <span className={cn(run.state === 'error' ? 'text-destructive' : 'text-foreground')}>
-            {run.state === 'running'
-              ? meta.running
-              : run.state === 'interrupted'
-                ? `${meta.running} — interrupted`
-                : meta.label}
-          </span>
-          {run.detail && (
-            <span className="block text-muted-foreground">{run.detail}</span>
-          )}
-          {/* The reason a call failed is the one thing the author needs from
-              this list — it is never hidden behind another click. */}
-          {run.state === 'error' && (
-            <span className="block text-destructive/90">
-              {failureLead(run.errorType)}
-              {run.error ? ` — ${run.error}` : '.'}
-            </span>
-          )}
-          {run.outputTruncated && run.state !== 'error' && (
-            <span className="block text-muted-foreground">
-              The reply was cut at the size limit; the assistant saw only part of it.
-            </span>
-          )}
-        </span>
-        {duration && <span className="shrink-0 text-muted-foreground">{duration}</span>}
-        {hasDetails && (
-          <button
-            type="button"
-            onClick={() => setDetailsOpen((value) => !value)}
-            aria-expanded={detailsOpen}
-            className="shrink-0 text-2xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
-          >
-            {detailsOpen ? 'Hide' : 'Details'}
-          </button>
-        )}
-      </div>
+  const label =
+    run.state === 'running'
+      ? `${meta.running}…`
+      : run.state === 'interrupted'
+        ? `${meta.running} — interrupted`
+        : meta.label;
 
-      {detailsOpen && hasDetails && (
-        <div className="ml-5 mt-1 space-y-1.5 border-l border-border/60 pl-2.5">
+  const line = (
+    <>
+      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+        {run.state === 'running' ? (
+          <Spinner className="h-3 w-3" />
+        ) : run.state === 'error' ? (
+          <TriangleAlert aria-hidden="true" className="h-3.5 w-3.5 text-destructive" />
+        ) : run.state === 'interrupted' ? (
+          <CircleSlash aria-hidden="true" className="h-3.5 w-3.5" />
+        ) : (
+          <Check aria-hidden="true" className="h-3.5 w-3.5 text-success" />
+        )}
+        {/* Separators for the accessible name only: flex gaps are not text,
+            so this line was read as "finishedSearched …· 812ms". */}
+        <span className="sr-only">{stateText}</span>
+        <span className="sr-only">: </span>
+      </span>
+      <span
+        className={cn(
+          'min-w-0 truncate',
+          run.state === 'running' && 'animate-shimmer text-foreground',
+          run.state === 'error' && 'text-destructive',
+        )}
+      >
+        {label}
+      </span>
+      {run.state === 'running' && <RunningMeta run={run} />}
+      {duration && (
+        <span className="shrink-0 tabular-nums">
+          <span className="sr-only">, </span>· {duration}
+        </span>
+      )}
+      {hasDetails && (
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            'h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover/line:opacity-100 group-focus-visible/line:opacity-100',
+            open && 'rotate-90 opacity-100',
+          )}
+        />
+      )}
+    </>
+  );
+
+  const lineClass =
+    'group/line -mx-1 flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[13px] text-muted-foreground';
+
+  return (
+    <li>
+      {hasDetails ? (
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          className={cn(lineClass, 'transition-colors duration-120 hover:bg-hover hover:text-foreground')}
+        >
+          {line}
+        </button>
+      ) : (
+        <div className={lineClass}>{line}</div>
+      )}
+
+      {/* The reason a call failed is the one thing the author needs from this
+          list — it is never hidden behind another click. */}
+      {run.state === 'error' && (
+        <p className="ml-5 text-[13px] text-destructive">
+          {failureLead(run.errorType)}
+          {run.error ? ` — ${run.error}` : '.'}
+        </p>
+      )}
+
+      {open && hasDetails && (
+        <div className="mb-1.5 ml-5 mt-1 space-y-1.5 border-l border-border pl-3 text-xs text-muted-foreground">
+          {run.detail && <p>{run.detail}</p>}
+          {run.outputTruncated && run.state !== 'error' && (
+            <p>The reply was cut at the size limit; the assistant saw only part of it.</p>
+          )}
           {(run.args || run.argsPreview) && (
             <RunPayload
               label="Input"
@@ -186,8 +202,8 @@ function ActivityRun({ run }: { run: ToolRun }) {
             />
           )}
           {run.errorType && (
-            <p className="text-2xs text-muted-foreground">
-              Error type: <code>{run.errorType}</code>
+            <p>
+              Error type: <code className="font-mono">{run.errorType}</code>
             </p>
           )}
         </div>
@@ -199,11 +215,11 @@ function ActivityRun({ run }: { run: ToolRun }) {
 function RunPayload({ label, text, note }: { label: string; text: string; note?: string }) {
   return (
     <div>
-      <p className="text-2xs font-medium text-muted-foreground">
+      <p className="font-medium">
         {label}
         {note && <span className="font-normal"> ({note})</span>}
       </p>
-      <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/60 p-1.5 text-2xs text-foreground/90">
+      <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-code-bg p-2 font-mono text-xs text-foreground">
         {text}
       </pre>
     </div>

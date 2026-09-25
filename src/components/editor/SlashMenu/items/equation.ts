@@ -1,6 +1,9 @@
 import { Sigma, SquareRadical } from 'lucide-react';
+import type { ParagraphChild } from '@/editor';
 import type { SlashItem } from '../types';
-import { insertInlineChild } from './insertChild';
+import { insertAndEditInlineChild } from './insertChild';
+
+const noLatex = (child: ParagraphChild) => child.type === 'equation' && !(child.latex ?? '').trim();
 
 export const equationItem: SlashItem = {
   id: 'equation',
@@ -9,7 +12,9 @@ export const equationItem: SlashItem = {
   icon: Sigma,
   keywords: ['math', 'maths', 'latex', 'formula', 'tex', 'inline'],
   group: 'insert',
-  onSelect: (ctx) => insertInlineChild(ctx, (id) => ({ id, type: 'equation', latex: '' })),
+  onSelect: (ctx) => {
+    insertAndEditInlineChild(ctx, (id) => ({ id, type: 'equation', latex: '' }), noLatex);
+  },
 };
 
 export const displayEquationItem: SlashItem = {
@@ -19,12 +24,17 @@ export const displayEquationItem: SlashItem = {
   icon: SquareRadical,
   keywords: ['math', 'maths', 'latex', 'formula', 'tex', 'block', 'numbered'],
   group: 'insert',
-  onSelect: (ctx) =>
-    insertInlineChild(ctx, (id) => ({
-      id,
-      type: 'equation',
-      latex: '',
-      display: true,
-      numbered: true,
-    })),
+  onSelect: (ctx) => {
+    insertAndEditInlineChild(
+      ctx,
+      (id) => ({
+        id,
+        type: 'equation',
+        latex: '',
+        display: true,
+        numbered: true,
+      }),
+      noLatex,
+    );
+  },
 };

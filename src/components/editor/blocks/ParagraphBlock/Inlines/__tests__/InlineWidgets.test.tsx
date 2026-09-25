@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createRef, useImperativeHandle } from 'react';
+import type { PanelsContextValue } from '@/components/panels/panelsContextState';
 import type { Block, Doc, ParagraphChild } from '@/editor/types';
 
 /**
@@ -48,6 +49,7 @@ vi.mock('@/services/semanticScholar', async (importOriginal) => {
 });
 
 const { EditorProvider, useEditor } = await import('@/editor');
+const { PanelsContext } = await import('@/components/panels/panelsContextState');
 const { CitationInline } = await import('../CitationInline/CitationInline');
 const { EquationInline } = await import('../EquationInline/EquationInline');
 const { ReferencesSection } = await import('@/components/editor/References');
@@ -82,7 +84,11 @@ function Host({ blockId, child }: { blockId: string; child: ParagraphChild }) {
   return null;
 }
 
-async function mount(child: ParagraphChild, extraBlocks: Block[] = []) {
+async function mount(
+  child: ParagraphChild,
+  extraBlocks: Block[] = [],
+  panels?: Partial<PanelsContextValue>,
+) {
   const doc: Doc = {
     version: 1,
     blocks: [
@@ -93,14 +99,21 @@ async function mount(child: ParagraphChild, extraBlocks: Block[] = []) {
   // The provider adopts the local draft when no remote document is known.
   localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc }));
 
-  const utils = render(
+  const editor = (
     <EditorProvider>
       <Capture />
       <Host blockId="p1" child={child} />
       {/* The other half of a citation: mounted so the jump between them is
           exercised against the real reference list, not a stub. */}
       <ReferencesSection />
-    </EditorProvider>,
+    </EditorProvider>
+  );
+  const utils = render(
+    panels ? (
+      <PanelsContext.Provider value={panels as PanelsContextValue}>{editor}</PanelsContext.Provider>
+    ) : (
+      editor
+    ),
   );
   // Flush the provider's mount effects (remote-listing probe, draft cache).
   await act(async () => {});
@@ -230,6 +243,12 @@ describe('CitationInline', () => {
     expect(pill().textContent).toBe('(see Smith, 2020, p. 12)');
   });
 
+  it('reads as quiet bracketed text, not a filled pill', async () => {
+    await mount(citation('c1'));
+    // Only an error keeps a fill; a working citation is part of the sentence.
+    expect(pill().className).not.toMatch(/(^|\s)bg-/);
+  });
+
   it('marks a citation with no keys as needing a source', async () => {
     await mount(citation('c1', { keys: [] }));
     // `[1]` would name a reference entry that does not exist.
@@ -268,13 +287,43 @@ describe('CitationInline', () => {
     expect(document.activeElement?.id).toBe('ref-1');
   });
 
+  it('shows a cited source in the Sources tab when the workspace has one', async () => {
+    const openSidebar = vi.fn();
+    const source = { key: 'k1', title: 'Attention Is All You Need', year: '2017' };
+    await mount(citation('c1', { keys: ['k1'], sources: [source] }), [], { openSidebar });
+    fireEvent.click(pill());
+    fireEvent.click(screen.getByRole('button', { name: 'Show Attention Is All You Need in sources' }));
+
+    expect(openSidebar).toHaveBeenCalledWith('sources', { tab: 'sources', sourceKey: 'k1' });
+  });
+
+  it('keeps style and prefix / locator / suffix behind More options', async () => {
+    await mount(citation('c1'));
+    fireEvent.click(pill());
+    expect(screen.queryByLabelText('Prefix')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }));
+    expect(screen.getByLabelText('Prefix')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Author–year/ })).toBeTruthy();
+  });
+
+  it('opens More options when the citation already has a locator', async () => {
+    await mount(citation('c1', { locator: 'p. 12' }));
+    fireEvent.click(pill());
+    expect((screen.getByLabelText('Locator') as HTMLInputElement).value).toBe('p. 12');
+  });
+
+  it('offers no Sources jump outside the workspace', async () => {
+    await mount(citation('c1', { sources: [{ key: 'k1', title: 'Attention Is All You Need' }] }));
+    fireEvent.click(pill());
+    expect(screen.queryByRole('button', { name: /in sources$/ })).toBeNull();
+  });
+
   it('adds a pasted identifier as a key instead of searching for it', async () => {
     await mount(citation('c1', { keys: [] }));
     fireEvent.click(pill());
 
-    const field = screen.getByPlaceholderText(
-      'Search arXiv and Semantic Scholar, or paste a key / DOI',
-    );
+    const field = screen.getByPlaceholderText('Search or paste DOI / arXiv ID');
     fireEvent.change(field, { target: { value: '2103.00020' } });
     fireEvent.keyDown(field, { key: 'Enter' });
 
@@ -289,7 +338,8 @@ describe('CitationInline', () => {
     await mount(citation('c1', { keys: [] }));
     fireEvent.click(pill());
 
-    const field = screen.getByPlaceholderText('Search arXiv, or paste a key / DOI');
+    const field = screen.getByPlaceholderText('Search or paste DOI / arXiv ID');
+    expect(field.getAttribute('title')).toBe('Searches arXiv');
     fireEvent.change(field, { target: { value: 'arxiv-only query' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await act(async () => {});
@@ -331,7 +381,7 @@ describe('CitationInline', () => {
     await mount(citation('c1', { keys: [], sources: [] }));
     fireEvent.click(pill());
 
-    const field = screen.getByPlaceholderText('Loading paper source preferences…');
+    const field = screen.getByPlaceholderText('Loading sources…');
     fireEvent.change(field, { target: { value: 'graph neural networks' } });
     fireEvent.keyDown(field, { key: 'Enter' });
 
@@ -377,9 +427,7 @@ describe('CitationInline', () => {
     await mount(citation('c1', { keys: [], sources: [] }));
     fireEvent.click(pill());
 
-    const field = screen.getByPlaceholderText(
-      'Search arXiv and Semantic Scholar, or paste a key / DOI',
-    );
+    const field = screen.getByPlaceholderText('Search or paste DOI / arXiv ID');
     fireEvent.change(field, { target: { value: 'semantic query' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await act(async () => {});
@@ -442,9 +490,7 @@ describe('CitationInline', () => {
     await mount(citation('c1', { keys: [], sources: [] }));
     fireEvent.click(pill());
 
-    const field = screen.getByPlaceholderText(
-      'Search arXiv and Semantic Scholar, or paste a key / DOI',
-    );
+    const field = screen.getByPlaceholderText('Search or paste DOI / arXiv ID');
     fireEvent.change(field, { target: { value: 'federated identity' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await act(async () => {});
@@ -502,9 +548,7 @@ describe('CitationInline', () => {
     await mount(citation('c1', { keys: [], sources: [] }));
     fireEvent.click(pill());
 
-    const field = screen.getByPlaceholderText(
-      'Search arXiv and Semantic Scholar, or paste a key / DOI',
-    );
+    const field = screen.getByPlaceholderText('Search or paste DOI / arXiv ID');
     fireEvent.change(field, { target: { value: 'partial provider search' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await act(async () => {});
@@ -528,7 +572,7 @@ describe('EquationInline', () => {
   const equation = (id: string, over: Partial<ParagraphChild> = {}): ParagraphChild =>
     ({ id, type: 'equation', latex: 'E = mc^2', ...over }) as ParagraphChild;
 
-  it('renders the LaTeX source as a pill while typesetting loads', async () => {
+  it('renders the LaTeX source in the text while typesetting loads', async () => {
     await mount(equation('e1'));
     expect(screen.getByRole('button', { name: 'E = mc^2' })).toBeTruthy();
   });
@@ -562,7 +606,10 @@ describe('EquationInline', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('moves focus into the panel on open and back to the trigger on close', async () => {
+  // Inside a paragraph, closing puts the caret after the widget instead
+  // (caretAfterWidget.test.ts); this harness mounts the widget outside any
+  // editable text, which is exactly the fallback case.
+  it('moves focus into the panel on open and, with no text to return to, back to the trigger on close', async () => {
     await mount(equation('e1'));
     const trigger = screen.getByRole('button', { name: 'E = mc^2' });
     fireEvent.click(trigger);

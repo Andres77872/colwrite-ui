@@ -1,6 +1,6 @@
 import { Bookmark } from 'lucide-react';
 import type { SlashItem } from '../types';
-import { insertInlineChild } from './insertChild';
+import { insertAndEditInlineChild } from './insertChild';
 
 export const citationItem: SlashItem = {
   id: 'citation',
@@ -9,6 +9,11 @@ export const citationItem: SlashItem = {
   icon: Bookmark,
   keywords: ['cite', 'reference', 'source', 'bibliography', 'doi', 'paper'],
   group: 'insert',
-  onSelect: (ctx) =>
-    insertInlineChild(ctx, (id) => ({ id, type: 'citation', keys: [], style: 'numeric' })),
+  onSelect: (ctx) => {
+    insertAndEditInlineChild(
+      ctx,
+      (id) => ({ id, type: 'citation', keys: [], style: 'numeric' }),
+      (child) => child.type === 'citation' && (child.keys ?? []).length === 0,
+    );
+  },
 };

@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from 'react';
-import { BookOpen, FileText, Folder, GripVertical, SearchX, Upload, X } from 'lucide-react';
+import { BookOpen, ExternalLink, FileText, Folder, GripVertical, Link2, SearchX, Upload } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatBytes } from '@/lib/text';
 import { PDF_ACCEPT } from '@/lib/fileDrop';
@@ -8,11 +8,13 @@ import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Spinner } from '@/components/ui/spinner';
-import type {
-  CollectionItem,
-  ResourceItem,
-  ResourceSearchResponse,
+import {
+  resourceContentUrl,
+  type CollectionItem,
+  type ResourceItem,
+  type ResourceSearchResponse,
 } from '@/services/resources';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ExtractionBadge } from '@/components/common/ExtractionStatus';
 import { CollectionAttachmentLabel } from './CollectionAttachmentLabel';
 import { Highlighted } from './Highlighted';
@@ -31,7 +33,7 @@ import {
  * rectangle and the keyboard lit up a different, smaller one.
  */
 const ROW_SURFACE =
-  'group rounded-lg border border-border bg-card transition-colors hover:bg-accent has-focus-visible:bg-accent';
+  'group rounded-md transition-colors duration-150 hover:bg-hover has-focus-visible:bg-hover';
 
 /**
  * A pointer-only drag handle.
@@ -86,71 +88,44 @@ export function UploadDropZone({
     accepts: isExternalFileDrag,
   });
 
-  const chooser = (
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={uploading}
-      onClick={() => inputRef.current?.click()}
-    >
-      {uploading && <Spinner />}
-      {uploading ? 'Uploading…' : 'Choose files'}
-    </Button>
-  );
-
-  const input = (
-    <input
-      ref={inputRef}
-      type="file"
-      accept={PDF_ACCEPT}
-      multiple
-      className="sr-only"
-      aria-label="Add PDFs to your library"
-      onChange={(event) => {
-        onFiles(event.target.files);
-        event.target.value = '';
-      }}
-    />
-  );
-
-  // Two deliberate layouts rather than one shrunk down. The compact form is a
-  // single fixed-height row, so the zone no longer changes height as the list
-  // it sits above gains and loses items.
-  if (compact) {
-    return (
-      <div
-        className={cn(
-          'flex items-center gap-2 rounded-lg border-2 border-dashed px-2.5 py-2 transition-colors',
-          dragOver ? 'border-primary bg-primary/5' : 'border-border',
-        )}
-        {...dropHandlers}
-      >
-        <Upload aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <p className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">
-          Drop PDFs to add to <span className="font-medium text-foreground">{targetLabel}</span>
-        </p>
-        {chooser}
-        {input}
-      </div>
-    );
-  }
-
+  // One quiet row in every state: a dashed box with an outlined button was
+  // the loudest thing in the calm sidebar. Dropping files on the row (or
+  // anywhere it lights up) still uploads them.
   return (
     <div
       className={cn(
-        'rounded-lg border-2 border-dashed p-5 text-center transition-colors',
-        dragOver ? 'border-primary bg-primary/5' : 'border-border',
+        '-mx-1 flex items-center gap-2 rounded-md px-1 transition-colors duration-150',
+        dragOver && 'bg-tint-blue ring-1 ring-primary/40',
       )}
       {...dropHandlers}
     >
-      <Upload aria-hidden="true" className="mx-auto mb-2 h-5 w-5 text-muted-foreground" />
-      <p className="text-sm font-medium">Drop PDFs here</p>
-      <p className="text-2xs text-muted-foreground">Upload to {targetLabel}</p>
-      <p className="mb-3 mt-1 text-xs text-muted-foreground">
-        Stored on your account, converted to text, and readable by the assistant
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-1 text-muted-foreground hover:text-foreground"
+        disabled={uploading}
+        onClick={() => inputRef.current?.click()}
+      >
+        {uploading ? <Spinner /> : <Upload aria-hidden="true" />}
+        {uploading ? 'Uploading…' : 'Upload PDF'}
+      </Button>
+      <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+        {dragOver ? 'Drop to add to ' : compact ? 'into ' : 'or drop PDFs here · into '}
+        <span className="text-foreground">{targetLabel}</span>
       </p>
-      {chooser}
-      {input}
+      <input
+        ref={inputRef}
+        type="file"
+        accept={PDF_ACCEPT}
+        multiple
+        className="sr-only"
+        aria-label="Add PDFs to your library"
+        tabIndex={-1}
+        onChange={(event) => {
+          onFiles(event.target.files);
+          event.target.value = '';
+        }}
+      />
     </div>
   );
 }
@@ -252,10 +227,13 @@ export function ResourceList({
   filter,
   emptyTitle,
   emptyDescription,
+  filterHint,
   onOpen,
 }: {
   resources: ResourceItem[];
   filter: string;
+  /** Added to "No matches" — e.g. how to search inside the files instead. */
+  filterHint?: string;
   emptyTitle: string;
   emptyDescription: string;
   onOpen: (resource: ResourceItem) => void;
@@ -288,7 +266,7 @@ export function ResourceList({
           // "No file matches", not "no file name contains": the filter also
           // looks at the title, so the narrower wording was a lie whenever a
           // title matched and a filename did not.
-          description={`No file matches “${filter.trim()}”.`}
+          description={`No file name matches “${filter.trim()}”.${filterHint ? ` ${filterHint}` : ''}`}
         />
       )}
     </>
@@ -338,15 +316,16 @@ function ResourceRow({ resource, onOpen }: { resource: ResourceItem; onOpen: () 
 
 export function SearchResults({
   result,
-  onClear,
   onOpen,
+  onAttach,
   onOpenResource,
   onLoadMore,
   loadingMore = false,
 }: {
   result: ResourceSearchResponse;
-  onClear?: () => void;
   onOpen: (resourceId: number, offset: number, term: string) => void;
+  /** Attach the file to the open page; offered on hover when given. */
+  onAttach?: (resourceId: number) => void;
   onOpenResource: (resourceId: number) => void;
   onLoadMore?: () => void;
   loadingMore?: boolean;
@@ -354,21 +333,17 @@ export function SearchResults({
   const skipped = result.resources_skipped ?? [];
 
   return (
-    <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-2xs text-muted-foreground">
-          {result.match_count === 0
-            ? 'No matches'
-            : `${result.match_count}${result.truncated ? '+' : ''} match${result.match_count === 1 ? '' : 'es'}`}{' '}
-          across {result.resources_searched}{' '}
-          {result.resources_searched === 1 ? 'file' : 'files'}
-        </p>
-        {onClear && (
-          <Button variant="ghost" size="icon-sm" onClick={onClear} aria-label="Clear the search">
-            <X aria-hidden="true" className="h-3.5 w-3.5" />
-          </Button>
-        )}
-      </div>
+    // Widened by the rows' inset (-mx-2 px-2) so the scroll box, which clips,
+    // does not cut the hover fill the rows draw outside the text column.
+    <div className="-mx-2 min-h-0 flex-1 space-y-2 overflow-y-auto px-2">
+      {/* No clear button here: the query box above clears the search. */}
+      <p className="px-0.5 text-xs text-muted-foreground">
+        {result.match_count === 0
+          ? 'No matches'
+          : `${result.match_count}${result.truncated ? '+' : ''} match${result.match_count === 1 ? '' : 'es'}`}{' '}
+        across {result.resources_searched}{' '}
+        {result.resources_searched === 1 ? 'file' : 'files'}
+      </p>
 
       {skipped.length > 0 && (
         <Alert variant="warning" role="status" className="text-xs">
@@ -393,27 +368,77 @@ export function SearchResults({
         </Alert>
       )}
 
-      <ul className="space-y-1.5">
-        {result.matches.map((match, index) => (
-          <li key={`${match.resource_id}-${match.offset}-${index}`}>
-            <button
-              type="button"
-              data-library-resource-id={match.resource_id}
-              onClick={() => onOpen(match.resource_id, match.offset, result.query)}
-              className="w-full rounded-lg border border-border bg-card p-2.5 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      <ul className="-mx-2">
+        {result.matches.map((match, index) => {
+          const name = match.title || match.filename;
+          return (
+            <li
+              key={`${match.resource_id}-${match.offset}-${index}`}
+              // The same shell as a paper row: padded hover fill, actions on
+              // the title line that reveal on hover or focus.
+              className="group relative rounded-md px-2 py-2.5 transition-colors duration-150 hover:bg-hover has-focus-visible:bg-hover"
             >
-              <span className="block truncate text-2xs font-medium text-muted-foreground">
-                {match.title || match.filename}
-              </span>
-              {/* Marked here as well as in the detail view. Scanning a list of
-                  excerpts for the term you just typed, unmarked, is the work
-                  the search was supposed to do. */}
-              <span className="mt-1 block text-xs leading-relaxed text-foreground/90">
-                <Highlighted text={match.excerpt} needle={result.query} />
-              </span>
-            </button>
-          </li>
-        ))}
+              <button
+                type="button"
+                data-library-resource-id={match.resource_id}
+                onClick={() => onOpen(match.resource_id, match.offset, result.query)}
+                className="block w-full rounded-xs text-left focus-visible:outline-none"
+              >
+                <span
+                  className={cn(
+                    'block truncate text-sm font-medium leading-snug text-foreground',
+                    // Room for the actions: on hover or focus with a mouse, and
+                    // always on touch, where they are always shown.
+                    onAttach
+                      ? 'pointer-fine:group-hover:pr-16 pointer-fine:group-focus-within:pr-16 pointer-coarse:pr-16'
+                      : 'pointer-fine:group-hover:pr-8 pointer-fine:group-focus-within:pr-8 pointer-coarse:pr-8',
+                  )}
+                  title={name}
+                >
+                  {name}
+                </span>
+                {/* Marked here as well as in the detail view. Scanning a list of
+                    excerpts for the term you just typed, unmarked, is the work
+                    the search was supposed to do. */}
+                <span className="mt-1 line-clamp-3 block text-xs leading-5 text-muted-foreground">
+                  <Highlighted text={match.excerpt} needle={result.query} />
+                </span>
+              </button>
+              <div className="absolute right-1.5 top-2 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="icon" size="icon-xs" asChild>
+                      <a
+                        href={resourceContentUrl(match.resource_id)}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        aria-label={`Open ${name} (PDF, new tab)`}
+                      >
+                        <ExternalLink aria-hidden="true" />
+                      </a>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Open PDF</TooltipContent>
+                </Tooltip>
+                {onAttach && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="icon"
+                        size="icon-xs"
+                        aria-label={`Attach ${name} to this page`}
+                        onClick={() => onAttach(match.resource_id)}
+                      >
+                        <Link2 aria-hidden="true" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Attach to page</TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
+            </li>
+          );
+        })}
       </ul>
 
       {result.next_offset !== null && onLoadMore && (

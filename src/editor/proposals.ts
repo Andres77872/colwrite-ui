@@ -26,7 +26,8 @@
  * read the same authoring order, so the preview is the outcome.
  */
 
-import type { Block, ToolAction, ToolOperation } from './types';
+import { kindLabel } from './blockKinds';
+import type { Block, ParagraphChild, ToolAction, ToolOperation } from './types';
 import { applyPatchToBlocks, coerceBlock } from './docOps';
 import { uid } from '../lib/uid';
 
@@ -671,11 +672,39 @@ export function mergedBlock(change: ProposedChange, current: Block | undefined):
   return coerceBlock({ ...current, ...change.op.block });
 }
 
-/** Plain text of a block, for diffing and for one-line summaries. */
+/**
+ * What an inline widget reads as in a one-line summary: the maths itself, or
+ * what kind of thing sits there. It used to be a `▦`, which told the author
+ * nothing and which a screen reader announced as "square with orthogonal
+ * crosshatch fill".
+ */
+function widgetStandIn(child: ParagraphChild | undefined): string {
+  if (!child) return '…';
+  switch (child.type) {
+    case 'equation': {
+      const latex = child.latex.replace(/\s+/g, ' ').trim();
+      return latex.length > 32 ? `${latex.slice(0, 31)}…` : latex || '(equation)';
+    }
+    case 'citation':
+      return '[ref]';
+    case 'table':
+      return '(table)';
+    case 'graph':
+      return '(chart)';
+    case 'aiBeat':
+      return '(AI passage)';
+  }
+}
+
+/** Plain text of a block, for one-line summaries and quotes. */
 export function blockText(block: Block | null | undefined): string {
+  if (block?.type === 'code') return block.text.trim();
   if (!block || !('html' in block)) return '';
+  const children = block.type === 'paragraph' ? block.children ?? [] : [];
   return block.html
-    .replace(/<span[^>]*data-child-id[^>]*><\/span>/g, ' ▦ ')
+    .replace(/<span[^>]*data-child-id="([^"]*)"[^>]*><\/span>/g, (_match, id: string) =>
+      ` ${widgetStandIn(children.find((child) => child.id === id))} `,
+    )
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ')
@@ -692,8 +721,10 @@ export function describeChange(change: ProposedChange, blocks: Block[]): string 
   const label = (block: Block | null | undefined) => {
     if (!block) return 'block';
     if (block.type === 'heading') return 'heading';
-    if (block.type === 'divider') return 'divider';
-    return 'paragraph';
+    // "Rewrite to-do list" reads better than "Rewrite paragraph" for a
+    // checklist item; body text stays "paragraph".
+    const kind = kindLabel(block).toLowerCase();
+    return kind === 'text' ? 'paragraph' : kind.replace(/ list$/, ' item');
   };
   // Naming the text is what tells two same-kind changes apart in a long
   // batch: "Delete heading" twice reads as a duplicate; quoting doesn't.

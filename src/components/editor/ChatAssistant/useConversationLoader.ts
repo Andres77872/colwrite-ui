@@ -1,15 +1,18 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useState,
   type Dispatch,
   type MutableRefObject,
   type SetStateAction,
 } from 'react';
+import { findActiveAgentRun, type AssistantSnapshot } from '@/services/agentSessionChat';
 import { listMessages, listThreads } from '@/services/chats';
 import { isRetryableProblem } from '@/services/retry';
 import { describeApiError } from '@/services/contracts';
 import type { EditorContextValue } from '@/editor/editorContextState';
+import type { AgentProgress } from '@/components/editor/AgentProgress';
 import { emptyMessage, type ChatMessage } from './chatUtils';
 
 /**
@@ -19,6 +22,7 @@ import { emptyMessage, type ChatMessage } from './chatUtils';
 export type ConversationNotice = { message: string; preparing: boolean };
 
 type ConversationLoaderOptions = {
+  onResumeRun?: (snapshot: AssistantSnapshot) => void;
   documentId: EditorContextValue['documentId'];
   selectedChatId: string | null;
   selectedThreadId: number | null;
@@ -29,7 +33,7 @@ type ConversationLoaderOptions = {
   loadedConversationRef: MutableRefObject<string | null>;
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   setIsStreaming: Dispatch<SetStateAction<boolean>>;
-  setAgentStatus: Dispatch<SetStateAction<{ status: string; detail: string } | null>>;
+  setAgentStatus: Dispatch<SetStateAction<AgentProgress | null>>;
 };
 
 export type ConversationLoader = {
@@ -42,6 +46,7 @@ export type ConversationLoader = {
  * switched to, pivoting onto the latest thread.
  */
 export function useConversationLoader({
+  onResumeRun,
   documentId,
   selectedChatId,
   selectedThreadId,
@@ -52,6 +57,8 @@ export function useConversationLoader({
   setIsStreaming,
   setAgentStatus,
 }: ConversationLoaderOptions): ConversationLoader {
+  const resumeRun = useEffectEvent((snapshot: AssistantSnapshot) => onResumeRun?.(snapshot));
+
   /** Bumped by the notice's Retry button. There is no automatic ladder. */
   const [conversationReloadTick, setConversationReloadTick] = useState(0);
   const [conversationNotice, setConversationNotice] = useState<ConversationNotice | null>(null);
@@ -107,21 +114,19 @@ export function useConversationLoader({
           if (ids.length) pivot = Math.max(...ids);
         }
         if (controller.signal.aborted) return;
-        if (pivot === undefined) {
-          // A chat with nothing in it yet loaded fine; it is simply empty.
-          settled = true;
-          setConversationNotice(null);
-          return;
-        }
-
-        const res = await listMessages(documentId, selectedChatId, pivot, transport);
+        // A queued run can exist before its first transcript row. Even an
+        // empty chat must continue to the durable-run lookup below.
+        const res = pivot === undefined
+          ? null
+          : await listMessages(documentId, selectedChatId, pivot, transport);
         if (controller.signal.aborted) return;
 
-        loadedConversationRef.current = `${documentId}:${selectedChatId}:${pivot}`;
+        const resolvedPivot = typeof res?.pivotThreadId === 'number' ? res.pivotThreadId : pivot;
+        loadedConversationRef.current = `${documentId}:${selectedChatId}:${resolvedPivot ?? 'latest'}`;
         settled = true;
         setConversationNotice(null);
 
-        const history = (res.messages ?? []).map((m) =>
+        const history = (res?.messages ?? []).map((m) =>
           emptyMessage(
             m.role,
             // Legacy rows can still carry EXTRAS_JSON envelopes.
@@ -131,7 +136,13 @@ export function useConversationLoader({
         // A conversation the server has nothing for does not overwrite one the
         // author can see: that reads as the transcript being thrown away.
         setMessages((prev) => (history.length === 0 && prev.length > 0 ? prev : history));
-        if (typeof res.pivotThreadId === 'number') setSelectedThreadId(res.pivotThreadId);
+        // Restoring is observational: never creates another model turn.
+        let active: AssistantSnapshot | null = null;
+        try { active = await findActiveAgentRun(documentId, selectedChatId, controller.signal); }
+        catch { /* Stored chat remains useful while the socket is unavailable. */ }
+        if (controller.signal.aborted) return;
+        if (typeof resolvedPivot === 'number') setSelectedThreadId(resolvedPivot);
+        if (active?.run) resumeRun(active);
       } catch (e) {
         if (controller.signal.aborted) return;
         settled = true;

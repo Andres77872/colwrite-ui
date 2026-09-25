@@ -14,11 +14,13 @@ function Harness({
   initial = '',
   maxLength,
   isPickerOpen,
+  onTriggerPicker,
 }: {
   onSubmit?: () => void;
   initial?: string;
   maxLength?: number;
   isPickerOpen?: () => boolean;
+  onTriggerPicker?: (anchor: number) => void;
 }) {
   const [value, setValue] = useState(initial);
   return (
@@ -30,6 +32,7 @@ function Harness({
         placeholder="Ask about this document…"
         maxLength={maxLength}
         isPickerOpen={isPickerOpen}
+        onTriggerPicker={onTriggerPicker}
       />
       <output data-testid="value">{value}</output>
     </>
@@ -101,6 +104,35 @@ describe('Enter', () => {
     });
 
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
+
+describe('the reference picker', () => {
+  it('opens once, on the edit that typed the #', async () => {
+    const onTriggerPicker = vi.fn();
+    render(<Harness onTriggerPicker={onTriggerPicker} />);
+    await type('cite');
+    await type('cite ');
+    const host = composer();
+    await act(async () => {
+      host.textContent = 'cite #';
+      const text = host.firstChild!;
+      const range = document.createRange();
+      range.setStart(text, 6);
+      range.collapse(true);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+      host.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(onTriggerPicker).toHaveBeenCalledWith(5);
+
+    // The keys meant for the open picker must not reopen it at its root —
+    // that is what left ArrowDown and Enter doing nothing.
+    await act(async () => {
+      fireEvent.keyUp(host, { key: 'ArrowDown' });
+      fireEvent.keyUp(host, { key: 'Enter' });
+    });
+    expect(onTriggerPicker).toHaveBeenCalledTimes(1);
   });
 });
 

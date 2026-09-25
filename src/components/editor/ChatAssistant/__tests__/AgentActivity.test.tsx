@@ -21,7 +21,14 @@ const doneRun = (over: Partial<ToolRun> = {}): ToolRun => ({
 });
 
 describe('AgentActivity', () => {
-  it('shows the failure cause inline for a failed run', () => {
+  it('shows each run as one line with its duration', () => {
+    render(<AgentActivity live={false} runs={[doneRun()]} />);
+    expect(screen.getByText('Searched Semantic Scholar')).toBeTruthy();
+    expect(screen.getByText(/· 1\.2s/)).toBeTruthy();
+    expect(screen.getByText('finished')).toBeTruthy();
+  });
+
+  it('shows the failure cause inline for a failed run, without a click', () => {
     render(
       <AgentActivity
         live={false}
@@ -34,8 +41,7 @@ describe('AgentActivity', () => {
         ]}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: /1 step/ }));
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(screen.getByText('failed')).toBeTruthy();
     expect(
       screen.getByText(/Took too long and was stopped — Tool 'semantic_scholar_search' timed out/),
     ).toBeTruthy();
@@ -48,12 +54,12 @@ describe('AgentActivity', () => {
         runs={[doneRun(), doneRun({ id: 'call-2', state: 'interrupted' })]}
       />,
     );
-    expect(screen.getByText(/1 interrupted/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /2 steps/ }));
     expect(screen.getByText(/— interrupted/)).toBeTruthy();
+    expect(screen.getByText('interrupted')).toBeTruthy();
+    expect(screen.getAllByText('finished')).toHaveLength(1);
   });
 
-  it('reveals input and output previews behind the Details disclosure', () => {
+  it('reveals input and output previews when a run is opened', () => {
     render(
       <AgentActivity
         live={false}
@@ -66,8 +72,10 @@ describe('AgentActivity', () => {
         ]}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: /1 step/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    const line = screen.getByRole('button', { name: /Searched Semantic Scholar/ });
+    expect(line.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(line);
+    expect(line.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('Input')).toBeTruthy();
     expect(screen.getByText(/transformer attention/)).toBeTruthy();
     expect(screen.getByText(/Output/)).toBeTruthy();
@@ -77,53 +85,46 @@ describe('AgentActivity', () => {
   });
 
   it('flags output the assistant only partially saw', () => {
-    render(
-      <AgentActivity
-        live={false}
-        runs={[doneRun({ outputTruncated: true })]}
-      />,
-    );
-    fireEvent.click(screen.getByRole('button', { name: /1 step/ }));
+    render(<AgentActivity live={false} runs={[doneRun({ outputTruncated: true })]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Searched Semantic Scholar/ }));
     expect(
       screen.getByText(/cut at the size limit; the assistant saw only part of it/),
     ).toBeTruthy();
   });
 
-  it('shows token usage once the turn is over', () => {
-    render(
-      <AgentActivity
-        live={false}
-        runs={[doneRun()]}
-        usage={{ promptTokens: 12_400, completionTokens: 890 }}
-      />,
-    );
-    expect(screen.getByText(/12\.4k in · 890 out/)).toBeTruthy();
+  it('folds a long finished run under one summary line', () => {
+    const runs = [1, 2, 3, 4].map((n) => doneRun({ id: `call-${n}` }));
+    runs[2] = { ...runs[2], state: 'error' };
+    render(<AgentActivity live={false} runs={runs} />);
+
+    const summary = screen.getByRole('button', { name: /Used 4 tools/ });
+    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(summary.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Searched Semantic Scholar')).toBeNull();
+
+    fireEvent.click(summary);
+    expect(summary.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getAllByText('Searched Semantic Scholar')).toHaveLength(4);
   });
 
-  it('can be collapsed while live, and aria-expanded tells the truth', () => {
-    render(
-      <AgentActivity
-        live
-        runs={[doneRun({ state: 'running' })]}
-      />,
-    );
-    const toggle = screen.getAllByRole('button')[0];
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    fireEvent.click(toggle);
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  it('keeps every step in view while the turn is live', () => {
+    const runs = [1, 2, 3, 4].map((n) => doneRun({ id: `call-${n}` }));
+    render(<AgentActivity live runs={runs} />);
+    expect(screen.queryByRole('button', { name: /Used 4 tools/ })).toBeNull();
+    expect(screen.getAllByText('Searched Semantic Scholar')).toHaveLength(4);
   });
 
-  it('headlines the tool that is running now, not the last one finished', () => {
+  it('names the tool that is running now in its present tense', () => {
     render(
       <AgentActivity
         live
         runs={[
           doneRun({ id: 'call-a', tool: 'doc_read' }),
           doneRun({ id: 'call-b', tool: 'search_citations', state: 'running' }),
-          doneRun({ id: 'call-c', tool: 'doc_read' }),
         ]}
       />,
     );
     expect(screen.getByText(/Searching for sources…/)).toBeTruthy();
+    expect(screen.getByText('running')).toBeTruthy();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { streamAgentChat } from '../agentChat';
+import { streamAgentChatSSE as streamAgentChat } from '../agentChat';
 import { ApiError } from '../contracts';
 import * as session from '../session';
 

@@ -38,12 +38,13 @@ describe('HeadingBlock', () => {
 
     // A bare contenteditable div has no outline entry — the role is what puts
     // this block into a screen reader's heading navigation.
-    const heading = screen.getByRole('heading', { level: 2, name: 'Results' });
+    // One level below the block's own: the page title is the only level 1.
+    const heading = screen.getByRole('heading', { level: 3, name: 'Results' });
     expect(heading.textContent).toContain('Results');
     expect(screen.getByRole('textbox', { name: 'Heading level 2' })).toBeTruthy();
   });
 
-  it('maps every block level to aria-level', () => {
+  it('nests every block level under the page title', () => {
     render(
       <>
         <HeadingBlock block={{ id: 'h1', type: 'heading', level: 1, html: 'One' }} />
@@ -51,8 +52,9 @@ describe('HeadingBlock', () => {
       </>,
     );
 
-    expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();
-    expect(screen.getByRole('heading', { level: 3 })).toBeTruthy();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+    expect(screen.getByRole('heading', { level: 2, name: 'One' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 4, name: 'Three' })).toBeTruthy();
   });
 
   it('passes the locked state to the named heading editor', () => {

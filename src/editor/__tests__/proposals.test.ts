@@ -217,15 +217,20 @@ describe('rendering helpers', () => {
     expect(proposedBlock(set.changes[0])).toBeNull();
   });
 
-  it('reads inline widgets as a marker rather than dropping them silently', () => {
+  it('reads inline widgets as what they are rather than dropping them silently', () => {
     const text = blockText({
       id: 'p',
       type: 'paragraph',
-      html: 'See <span data-child-id="c1" contenteditable="false"></span> for detail',
-      children: [],
+      html: 'See <span data-child-id="c1" contenteditable="false"></span> and '
+        + '<span data-child-id="e1" contenteditable="false"></span> in '
+        + '<span data-child-id="gone" contenteditable="false"></span>',
+      children: [
+        { id: 'c1', type: 'citation', keys: ['k'] },
+        { id: 'e1', type: 'equation', latex: 'x_t' },
+      ],
     });
 
-    expect(text).toBe('See ▦ for detail');
+    expect(text).toBe('See [ref] and x_t in …');
   });
 
   it('decodes entities and line breaks', () => {

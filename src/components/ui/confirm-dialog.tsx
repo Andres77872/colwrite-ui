@@ -21,6 +21,9 @@ import {
 } from './dialog';
 import { Button } from './button';
 import { Spinner } from './spinner';
+import { useReturnFocus } from '@/hooks/useReturnFocus';
+import { lastInputWasPointer } from '@/lib/inputModality';
+import { focusQuietly } from './quietFocus';
 
 interface PendingConfirm extends ConfirmOptions {
   resolve: (value: boolean) => void;
@@ -37,6 +40,9 @@ interface PendingConfirm extends ConfirmOptions {
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<PendingConfirm | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  // Usually opened from a menu item that unmounts as its menu closes; focus
+  // goes back to that menu's trigger instead of falling to <body>.
+  const returnFocus = useReturnFocus();
 
   const confirm = useCallback<ConfirmFn>(
     (options) => new Promise<boolean>((resolve) => setPending({ ...options, resolve })),
@@ -63,11 +69,17 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           <DialogContent
             className="max-w-md"
             showCloseButton={false}
+            // A question that interrupts, announced as such.
+            role="alertdialog"
+            onCloseAutoFocus={returnFocus.onCloseAutoFocus}
             // Destructive actions should not be one stray Enter away.
             onOpenAutoFocus={(event) => {
+              returnFocus.onOpenAutoFocus();
               if (!pending.destructive) return;
               event.preventDefault();
-              cancelRef.current?.focus();
+              // After a click, focus Cancel without a ring; Tab shows it.
+              if (lastInputWasPointer()) focusQuietly(cancelRef.current);
+              else cancelRef.current?.focus();
             }}
           >
             <DialogHeader>

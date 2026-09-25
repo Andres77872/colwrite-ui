@@ -145,7 +145,7 @@ describe('HistoryPanel', () => {
     expect(await screen.findByText('v3')).toBeTruthy();
     expect(screen.getByText('v2')).toBeTruthy();
     expect(screen.getByText('Current')).toBeTruthy();
-    expect(screen.getByText('Assistant')).toBeTruthy();
+    expect(screen.getByText('AI')).toBeTruthy();
     expect(screen.getByText('Tightened the intro')).toBeTruthy();
     expect(mocked.listRevisions).toHaveBeenCalledWith(DOC_ID, expect.objectContaining({ limit: 30 }));
   });
@@ -302,6 +302,62 @@ describe('HistoryPanel', () => {
       );
     });
     expect(await screen.findByText('Paragraph changed')).toBeTruthy();
+  });
+
+  it('shows inline equations in a revision diff as equations, not as a ▦ glyph', async () => {
+    const block = (revisionId: string, id: string, words: string) => ({
+      id,
+      type: 'paragraph' as const,
+      html: `${words} token <span data-child-id="${id}-eq"></span> ${revisionId === 'rev-1' ? 'goes to' : 'reaches'} an expert`,
+      children: [{ id: `${id}-eq`, type: 'equation' as const, latex: 'x_t' }],
+      columns: 1,
+    });
+    mocked.diffRevision.mockResolvedValue({
+      baseRevisionId: 'rev-1',
+      targetRevisionId: 'rev-2',
+      targetHeadSeq: null,
+      changes: [
+        {
+          entity: 'block',
+          change: 'changed',
+          entityId: 'p1',
+          entityType: 'paragraph',
+          parentId: null,
+          previousParentId: null,
+          fromIndex: null,
+          toIndex: null,
+          fields: ['html'],
+        },
+        {
+          entity: 'block',
+          change: 'moved',
+          entityId: 'p2',
+          entityType: 'paragraph',
+          parentId: null,
+          previousParentId: null,
+          fromIndex: 1,
+          toIndex: 0,
+          fields: [],
+        },
+      ],
+    });
+    mocked.getRevision.mockImplementation(async (_docId, revisionId) => ({
+      ...revision({ revisionId }),
+      content: {
+        version: 1,
+        name: 'Findings',
+        blocks: [block(revisionId, 'p1', 'The router assigns'), block(revisionId, 'p2', 'Each')],
+      },
+    }));
+
+    renderPanel();
+    fireEvent.click(await screen.findByText('v2'));
+
+    expect(await screen.findByText('Paragraph changed')).toBeTruthy();
+    expect(await screen.findByText(/moved from position/)).toBeTruthy();
+    // One equation in the word diff, one in the moved block's snippet.
+    expect(screen.getAllByRole('img', { name: 'Equation: x_t' })).toHaveLength(2);
+    expect(document.body.textContent).not.toContain('\u25A6');
   });
 
   it('restores after confirmation and adopts the returned head', async () => {

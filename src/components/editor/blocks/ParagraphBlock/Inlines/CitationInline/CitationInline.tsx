@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useContext, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CitationChild, CitationSource } from '@/editor';
 import type { InlineWidgetProps } from '../types';
 import { cn } from '@/lib/utils';
@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   canonicalArxivId,
   canonicalCitationKey,
@@ -21,6 +23,7 @@ import {
   type BibliographyEntry,
 } from '@/editor';
 import { revealReferenceEntry } from '@/components/editor/References/navigation';
+import { PanelsContext } from '@/components/panels/panelsContextState';
 import { searchArxiv, type ArxivResult } from '@/services/arxiv';
 import {
   researchAuthorsLabel,
@@ -29,7 +32,7 @@ import {
   type ResearchPaper,
 } from '@/services/semanticScholar';
 import {
-  InlinePill,
+  InlineTrigger,
   InlinePopover,
   SettingsFooter,
   SettingsRow,
@@ -37,7 +40,7 @@ import {
   useInlineChild,
 } from '../shared';
 import { useAgentTools } from '@/components/preferences';
-import { ExternalLink, ListOrdered, Plus, Search, X } from 'lucide-react';
+import { BookMarked, ChevronRight, ExternalLink, ListOrdered, Plus, Search, X } from 'lucide-react';
 
 /**
  * Type-guard wrapper. It declares no hooks, so returning early here is safe;
@@ -147,12 +150,38 @@ function deduplicateCandidates(candidates: CitationSearchResult[]): CitationSear
   return Array.from(unique.values());
 }
 
+/** Characters a parenthetical citation may sit flush against. */
+const OPENS_OR_SPACE = /[\s([{\u2018\u201C"'/\u2013\u2014-]/;
+
+/**
+ * Whether an author–year citation needs a visual gap before it.
+ *
+ * "lengths (Vaswani, 2017)" is how a parenthetical citation reads; glued on
+ * as "lengths(Vaswani, 2017)" the paper looks broken. Numeric markers stay
+ * glued ("lengths[1]"), which is their convention. The gap is presentation
+ * only — the document text is not changed — so it is skipped when the text
+ * already has a space or an opening bracket there.
+ */
+function needsLeadingGap(host: HTMLElement): boolean {
+  const editable = host.parentElement?.closest<HTMLElement>('[contenteditable]');
+  if (!editable) return false;
+  const range = document.createRange();
+  range.setStart(editable, 0);
+  range.setEndBefore(host);
+  const before = range.toString();
+  if (!before) return false;
+  return !OPENS_OR_SPACE.test(before.slice(-1));
+}
+
 function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
   const { child } = props;
   const { patch, remove } = useInlineChild(props);
   const { blocks, updateParagraphChild } = useEditor();
   const bibliography = useBibliography();
   const { isSourceEnabled, loading: preferencesLoading } = useAgentTools();
+  // Optional: the widget also renders outside the workspace (tests, the
+  // design previews), where there is no sidebar to open.
+  const panels = useContext(PanelsContext);
   const arxivEnabled = isSourceEnabled('arxiv');
   const semanticScholarEnabled = isSourceEnabled('semantic_scholar');
   const [query, setQuery] = useState('');
@@ -160,15 +189,43 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [searchWarning, setSearchWarning] = useState('');
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  // When the editor closed. Closing hands focus back programmatically, and a
+  // hover card opened by that focus would replace one popover with another
+  // and linger with the pointer nowhere near it.
+  const editorClosedAt = useRef(-Infinity);
+  const rootRef = useRef<HTMLSpanElement>(null);
 
   // Shared empties rather than fresh `[]` literals: a new array every render
   // is a new dependency every render, so every memo below would recompute on
   // any state change at all.
   const keys = child.keys ?? EMPTY_KEYS;
   const sources = child.sources ?? EMPTY_SOURCES;
-  const style: Style = child.style ?? 'numeric';
+  // The document's style, when the author chose one, wins over the citation's.
+  const style: Style = bibliography.documentStyle ?? child.style ?? 'numeric';
 
   const label = citationLabel(child, bibliography);
+  const parenthetical = style === 'author-year';
+
+  // Kept current as the writer types before the citation: the check reads
+  // the live text, so it re-runs on the paragraph's input events.
+  // The gap is shown or hidden on the DOM node directly: it follows the live
+  // text around the widget, not React state.
+  const gapRef = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const gap = gapRef.current;
+    if (!root || !gap) return;
+    const host = root.closest<HTMLElement>('[data-child-id]') ?? root;
+    const editable = host.parentElement?.closest<HTMLElement>('[contenteditable]');
+    const update = () => {
+      gap.hidden = !needsLeadingGap(host);
+    };
+    update();
+    editable?.addEventListener('input', update);
+    return () => editable?.removeEventListener('input', update);
+  }, [parenthetical, label]);
 
   // Keyed canonically, because a citation's `keys` and its `sources[].key` are
   // two independently written spellings of the same identifier.
@@ -190,7 +247,7 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
     if (keys.length === 0) return 'Citation with no source attached';
     const titles = keys.map((key) => {
       const entry = entryForKey(bibliography, key);
-      return entry?.source.title ?? localSource(key)?.title ?? key;
+      return entry?.source.title ?? byKey.get(canonicalCitationKey(key))?.title ?? key;
     });
     return `Citation ${label}: ${titles.join('; ')}`;
   }, [bibliography, byKey, keys, label]);
@@ -244,7 +301,7 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
     if (!text || searching) return;
     if (!arxivEnabled && !semanticScholarEnabled) {
       setSearchError(
-        'No paper search source is enabled. Paste a citation key or enable a source in Agent tools.',
+        'No paper search source is enabled. Paste a citation key or enable a source in Settings → AI & tools.',
       );
       setResults(null);
       return;
@@ -313,10 +370,12 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
     enabledSourceLabels.length === 2
       ? enabledSourceLabels.join(' and ')
       : enabledSourceLabels[0];
+  // Short enough to read whole in the field; which indexes are searched is
+  // the field's title.
   const searchPlaceholder = preferencesLoading
-    ? 'Loading paper source preferences…'
+    ? 'Loading sources…'
     : sourceSearchLabel
-      ? `Search ${sourceSearchLabel}, or paste a key / DOI`
+      ? 'Search or paste DOI / arXiv ID'
       : 'Paste a citation key or DOI';
 
   /**
@@ -344,27 +403,57 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
     [blocks, child.id],
   );
 
+  const hasOptions = Boolean(child.prefix || child.locator || child.suffix);
+
   return (
+    <>
+    {/* A real, breakable space rather than a margin: at a line wrap it hangs
+        at the end of the line instead of indenting the next one. It lives
+        inside the widget's placeholder, which is emptied on save, so the
+        document text is unchanged. */}
+    {parenthetical && (
+      <span ref={gapRef} aria-hidden="true" hidden className="whitespace-pre-wrap">
+        {' '}
+      </span>
+    )}
     <span
+      ref={rootRef}
       className="citation-inline relative inline-block align-baseline"
       role="group"
       aria-label="Citation"
       contentEditable={false}
       {...stopEditorEvents}
     >
+      {/* A reader scanning a cited paragraph should not have to open each
+          pill to find out which paper it is: hovering previews the source,
+          the way Notion previews a link. The card steps aside while the
+          editing popover is open. */}
+      <TooltipProvider delayDuration={300} skipDelayDuration={150}>
+      <Tooltip
+        open={previewOpen && !editing}
+        onOpenChange={(open) => {
+          if (open && performance.now() - editorClosedAt.current < 400) return;
+          setPreviewOpen(open);
+        }}
+      >
       <InlinePopover
         align="start"
         contentClassName="w-[24rem] max-w-[85vw] p-3"
+        onOpenChange={(open) => {
+          setEditing(open);
+          if (open) setPreviewOpen(false);
+          else editorClosedAt.current = performance.now();
+        }}
         trigger={
-          <InlinePill
-            tone={keys.length === 0 ? 'error' : 'default'}
-            aria-label={description}
-            // Same text on hover: a reader scanning a cited paragraph should
-            // not have to open each pill to find out which paper it is.
-            title={description}
-          >
-            {label}
-          </InlinePill>
+          <TooltipTrigger asChild>
+            <InlineTrigger
+              look="citation"
+              tone={keys.length === 0 ? 'error' : 'default'}
+              aria-label={description}
+            >
+              {label}
+            </InlineTrigger>
+          </TooltipTrigger>
         }
       >
         {(close, closeAndLeave) => (
@@ -390,6 +479,14 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                         revealReferenceEntry(entry);
                         closeAndLeave();
                       }}
+                      onShowInSources={
+                        panels
+                          ? () => {
+                              panels.openSidebar('sources', { tab: 'sources', sourceKey: key });
+                              closeAndLeave();
+                            }
+                          : undefined
+                      }
                     />
                   ))}
                 </ul>
@@ -403,6 +500,7 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
                   type="text"
                   value={query}
                   placeholder={searchPlaceholder}
+                  title={sourceSearchLabel ? `Searches ${sourceSearchLabel}` : undefined}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key !== 'Enter') return;
@@ -498,71 +596,93 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
               )}
             </SettingsRow>
 
-            <SettingsRow label="Style">
-              <div className="flex gap-1">
-                {STYLES.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => patch({ style: option.value })}
-                    aria-pressed={style === option.value}
-                    className={cn(
-                      'flex-1 rounded-md border px-2 py-1 text-xs transition-colors',
-                      style === option.value
-                        ? 'border-primary bg-primary/10 text-foreground'
-                        : 'border-border text-muted-foreground hover:text-foreground',
-                    )}
-                  >
-                    <span className="block">{option.label}</span>
-                    <span className="block text-xs opacity-60">{option.example}</span>
-                  </button>
-                ))}
-              </div>
-              {otherCitations > 0 && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="mt-1 h-6 px-1.5 text-xs text-muted-foreground"
-                  onClick={() => applyStyleEverywhere(style)}
-                >
-                  Apply this style to all {otherCitations + 1} citations
-                </Button>
-              )}
-            </SettingsRow>
+            {/* Style and the prefix / locator / suffix are set once in a
+                while; behind a disclosure the popover is about the source. */}
+            <Collapsible defaultOpen={hasOptions} className="mt-1">
+              <CollapsibleTrigger className="group/more -ml-1 flex items-center gap-1 rounded-sm px-1 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <ChevronRight
+                  aria-hidden="true"
+                  className="h-3.5 w-3.5 transition-transform group-data-[state=open]/more:rotate-90"
+                />
+                More options
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="pt-2">
+                <SettingsRow label="Style">
+                  <div className="flex gap-0.5 rounded-md bg-subtle p-0.5">
+                    {STYLES.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => patch({ style: option.value })}
+                        aria-pressed={style === option.value}
+                        className={cn(
+                          'flex-1 rounded-[5px] px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                          style === option.value
+                            ? 'bg-background font-medium text-foreground shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        <span className="block">{option.label}</span>
+                        <span
+                          className={cn(
+                            'block text-xs',
+                            style === option.value ? 'text-foreground/70' : 'text-muted-foreground',
+                          )}
+                        >
+                          {option.example}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  {otherCitations > 0 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="mt-1 h-6 px-1.5 text-xs text-muted-foreground"
+                      onClick={() => applyStyleEverywhere(style)}
+                    >
+                      Apply this style to all {otherCitations + 1} citations
+                    </Button>
+                  )}
+                </SettingsRow>
 
-            <div className="grid grid-cols-3 gap-2">
-              <SettingsRow label="Prefix" htmlFor={`prefix-${child.id}`}>
-                <Input
-                  id={`prefix-${child.id}`}
-                  type="text"
-                  value={child.prefix ?? ''}
-                  placeholder="see"
-                  onChange={(event) => patch({ prefix: event.target.value })}
-                  className="h-8 px-2"
-                />
-              </SettingsRow>
-              <SettingsRow label="Locator" htmlFor={`locator-${child.id}`}>
-                <Input
-                  id={`locator-${child.id}`}
-                  type="text"
-                  value={child.locator ?? ''}
-                  placeholder="p. 12"
-                  onChange={(event) => patch({ locator: event.target.value })}
-                  className="h-8 px-2"
-                />
-              </SettingsRow>
-              <SettingsRow label="Suffix" htmlFor={`suffix-${child.id}`}>
-                <Input
-                  id={`suffix-${child.id}`}
-                  type="text"
-                  value={child.suffix ?? ''}
-                  placeholder="ch. 2"
-                  onChange={(event) => patch({ suffix: event.target.value })}
-                  className="h-8 px-2"
-                />
-              </SettingsRow>
-            </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <SettingsRow label="Prefix" htmlFor={`prefix-${child.id}`}>
+                    <Input
+                      id={`prefix-${child.id}`}
+                      type="text"
+                      value={child.prefix ?? ''}
+                      placeholder="see"
+                      onChange={(event) => patch({ prefix: event.target.value })}
+                      className="h-8 px-2"
+                    />
+                  </SettingsRow>
+                  <SettingsRow label="Locator" htmlFor={`locator-${child.id}`}>
+                    <Input
+                      id={`locator-${child.id}`}
+                      type="text"
+                      value={child.locator ?? ''}
+                      placeholder="p. 12"
+                      onChange={(event) => patch({ locator: event.target.value })}
+                      className="h-8 px-2"
+                    />
+                  </SettingsRow>
+                  <SettingsRow label="Suffix" htmlFor={`suffix-${child.id}`}>
+                    <Input
+                      id={`suffix-${child.id}`}
+                      type="text"
+                      value={child.suffix ?? ''}
+                      placeholder="ch. 2"
+                      onChange={(event) => patch({ suffix: event.target.value })}
+                      className="h-8 px-2"
+                    />
+                  </SettingsRow>
+                </div>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
 
             <SettingsFooter
               onRemove={() => {
@@ -574,7 +694,89 @@ function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
           </>
         )}
       </InlinePopover>
+      <TooltipContent
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        className="w-[20rem] max-w-[85vw] rounded-lg border border-border bg-popover p-0 text-sm font-normal text-popover-foreground shadow-lg"
+      >
+        <CitationPreview
+          keys={keys}
+          sourceFor={(key) => entryForKey(bibliography, key)?.source ?? localSource(key)}
+          onShowInSources={
+            panels
+              ? (key) => {
+                  setPreviewOpen(false);
+                  panels.openSidebar('sources', { tab: 'sources', sourceKey: key });
+                }
+              : undefined
+          }
+        />
+      </TooltipContent>
+      </Tooltip>
+      </TooltipProvider>
     </span>
+    </>
+  );
+}
+
+/** The hover card: each cited source's title, authors · year · venue, and where to go. */
+function CitationPreview({
+  keys,
+  sourceFor,
+  onShowInSources,
+}: {
+  keys: readonly string[];
+  sourceFor: (key: string) => CitationSource | undefined;
+  onShowInSources?: (key: string) => void;
+}) {
+  if (keys.length === 0) {
+    return <p className="px-3 py-2.5 text-xs text-muted-foreground">No source attached yet. Click to add one.</p>;
+  }
+  const shown = keys.slice(0, 3);
+  return (
+    <div className="divide-y divide-border">
+      {shown.map((key) => {
+        const source = sourceFor(key);
+        const url = safeExternalHttpUrl(source?.url ?? source?.pdfUrl);
+        const meta = [source?.authors, source?.year, source?.venue].filter(Boolean).join(' · ');
+        return (
+          <div key={key} className="px-3 py-2.5">
+            <p className="line-clamp-2 text-sm font-medium leading-snug">{source?.title ?? key}</p>
+            {meta && <p className="mt-0.5 truncate text-xs text-muted-foreground">{meta}</p>}
+            {(url || onShowInSources) && (
+              <div className="mt-1.5 flex items-center gap-3 text-xs">
+                {url && (
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    tabIndex={-1}
+                    className="inline-flex items-center gap-1 text-link hover:underline"
+                  >
+                    Open
+                    <ExternalLink aria-hidden="true" className="h-3 w-3" />
+                  </a>
+                )}
+                {onShowInSources && (
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => onShowInSources(key)}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    Show in sources
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {keys.length > shown.length && (
+        <p className="px-3 py-2 text-xs text-muted-foreground">and {keys.length - shown.length} more</p>
+      )}
+    </div>
   );
 }
 
@@ -592,6 +794,7 @@ function SourceRow({
   style,
   onDetach,
   onShowReference,
+  onShowInSources,
 }: {
   sourceKey: string;
   source: CitationSource | undefined;
@@ -599,6 +802,8 @@ function SourceRow({
   style: Style;
   onDetach: () => void;
   onShowReference: (entry: BibliographyEntry) => void;
+  /** Opens the Sources tab on this source; absent outside the workspace. */
+  onShowInSources?: () => void;
 }) {
   const resolved = entry?.source ?? source;
   const url = safeExternalHttpUrl(resolved?.url ?? resolved?.pdfUrl);
@@ -610,7 +815,7 @@ function SourceRow({
   const detail = formatted === title ? '' : formatted;
 
   return (
-    <li className="flex items-start gap-2 rounded-md border border-border px-2 py-1.5">
+    <li className="flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-hover">
       {entry && (
         <button
           type="button"
@@ -634,6 +839,17 @@ function SourceRow({
           </span>
         )}
       </span>
+      {onShowInSources && (
+        <button
+          type="button"
+          onClick={onShowInSources}
+          title="Show in sources"
+          aria-label={`Show ${title} in sources`}
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+        >
+          <BookMarked className="h-3.5 w-3.5" />
+        </button>
+      )}
       {url && (
         <a
           href={url}

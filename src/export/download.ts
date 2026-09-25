@@ -1,4 +1,4 @@
-export function exportFilename(name: string | undefined, extension: 'html' | 'pdf'): string {
+export function exportFilename(name: string | undefined, extension: 'html' | 'pdf' | 'bib' | 'md' | 'svg'): string {
   const raw = (name?.trim() || 'Untitled document').replaceAll('\\', '/');
   const basename = Array.from(raw.split('/').at(-1) ?? '')
     .map((character) => {

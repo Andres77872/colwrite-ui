@@ -31,8 +31,13 @@ export type CitationSource = {
   year?: string;
   venue?: string;
   url?: string;
-  /** Search provider that resolved this source. Omitted for legacy/manual keys. */
-  provider?: 'arxiv' | 'semantic_scholar' | 'manual';
+  /**
+   * Where the metadata came from. `manual` is typed by the author and never
+   * verified; every other value names the record it was copied from — a paper
+   * index, the DOI registry (`crossref`), a page the assistant read (`web`),
+   * or one of the author's PDFs (`resource`).
+   */
+  provider?: 'arxiv' | 'semantic_scholar' | 'crossref' | 'manual' | 'web' | 'resource';
   /** Stable identifier in the provider's own namespace. */
   providerId?: string;
   doi?: string;
@@ -42,7 +47,23 @@ export type CitationSource = {
   influentialCitationCount?: number;
   referenceCount?: number;
   isOpenAccess?: boolean;
+  kind?: SourceKind;
+  /** When a web page was read (ISO date) — what a web citation prints as "accessed". */
+  accessed?: string;
 };
+
+export type SourceKind =
+  | 'article'
+  | 'preprint'
+  | 'conference'
+  | 'book'
+  | 'chapter'
+  | 'thesis'
+  | 'report'
+  | 'web'
+  | 'dataset'
+  | 'software'
+  | 'other';
 
 export type CitationChild = {
   id: string;
@@ -91,13 +112,54 @@ type BlockMeta = {
   collapsed?: boolean; // If true, collapse this block in the editor UI
 };
 
-export type ParagraphBlock = { id: string; type: 'paragraph'; html: string; children?: ParagraphChild[]; columns?: number } & BlockMeta;
+/**
+ * How a paragraph presents its text. Absent is plain body text.
+ *
+ * A role, not a separate block type: a list item or a quote is still prose
+ * that can hold citations and equations, so every one of them keeps the
+ * paragraph's html/children machinery and differs only in how it is drawn
+ * and exported. Mirrors `ParagraphVariant` in the API's canonical model.
+ */
+export type ParagraphVariant = 'bullet' | 'numbered' | 'todo' | 'quote' | 'callout';
+
+/** Deepest list nesting the canonical model accepts (0 is top level). */
+export const MAX_BLOCK_INDENT = 4;
+
+export type ParagraphBlock = {
+  id: string;
+  type: 'paragraph';
+  html: string;
+  children?: ParagraphChild[];
+  columns?: number;
+  variant?: ParagraphVariant;
+  /** To-do state. Only valid — and only ever sent — on `variant: 'todo'`. */
+  checked?: boolean;
+  /** Outline depth for list items. Omitted at the top level. */
+  indent?: number;
+} & BlockMeta;
 export type HeadingBlock = { id: string; type: 'heading'; level: 1 | 2 | 3; html: string } & BlockMeta;
 export type DividerBlock = { id: string; type: 'divider' } & BlockMeta;
+/**
+ * Preformatted text: source code, pseudocode, program output. `text` is plain
+ * text, never html — whitespace is significant and nothing in it is markup.
+ */
+export type CodeBlock = { id: string; type: 'code'; text: string; language?: string } & BlockMeta;
 
-export type Block = ParagraphBlock | HeadingBlock | DividerBlock;
+export type Block = ParagraphBlock | HeadingBlock | DividerBlock | CodeBlock;
 export type BlockType = Block['type'];
-export type Doc = { version: number; blocks: Block[]; name?: string };
+export type Doc = {
+  version: number;
+  blocks: Block[];
+  name?: string;
+  /**
+   * The document's source library: every work it cites or keeps for later,
+   * one entry per key. Its metadata wins over the copies citations carry.
+   * Absent on documents that have none.
+   */
+  sources?: CitationSource[];
+  /** The document's citation style; absent means "whatever its citations use". */
+  citationStyle?: 'numeric' | 'author-year' | 'ieee';
+};
 
 // ── ToolAction types for agentic document tools (Phase 3) ──
 

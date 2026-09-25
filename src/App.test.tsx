@@ -42,12 +42,8 @@ vi.mock('./components/layout/AppShell', () => ({
     </div>
   ),
 }));
-vi.mock('./components/layout/Topbar', () => ({ Topbar: () => null }));
 vi.mock('./components/editor/Canvas', () => ({ Canvas: () => null }));
-vi.mock('./components/editor/ChatAssistant', () => ({ ChatAssistant: () => null }));
-vi.mock('./components/editor/DocumentChrome', () => ({
-  DocumentFooter: () => null,
-}));
+vi.mock('./components/editor/DocumentChrome', () => ({ PageTopbar: () => null }));
 vi.mock('./components/editor/FloatingToolbar', () => ({ FloatingToolbar: () => null }));
 vi.mock('./components/editor/SlashMenu', () => ({ SlashMenu: () => null }));
 vi.mock('./components/layout/useAppChrome', () => ({
@@ -59,9 +55,10 @@ vi.mock('./components/layout/Shortcuts', () => ({
   useAppShortcuts: vi.fn(),
 }));
 vi.mock('./components/landing', () => ({ LandingPage: () => null }));
-vi.mock('./components/profile', () => ({ ProfileView: () => null }));
+vi.mock('./components/profile', () => ({ SettingsDialog: () => null }));
 vi.mock('./components/preferences', () => ({
   AgentToolsProvider: ({ children }: { children: React.ReactNode }) => children,
+  AgentEngineProvider: ({ children }: { children: React.ReactNode }) => children,
   useAgentTools: () => ({
     isSourceEnabled: () => false,
     isToolEnabled: () => false,
@@ -183,7 +180,7 @@ describe('document selection integration', () => {
       'doc-a',
       { signal: expect.any(AbortSignal) },
     ));
-    const search = await screen.findByRole('searchbox', { name: 'Search documents' });
+    const documents = await screen.findByRole('region', { name: 'Documents' });
     const beta = (await screen.findByText('Beta')).closest('button');
     if (!beta) throw new Error('Beta document button was not rendered');
     await waitFor(() => {
@@ -224,7 +221,7 @@ describe('document selection integration', () => {
       { signal: expect.any(AbortSignal) },
     );
     expect(new URLSearchParams(window.location.search).get('doc')).toBe('doc-b');
-    expect(screen.getByRole('searchbox', { name: 'Search documents' })).toBe(search);
+    expect(screen.getByRole('region', { name: 'Documents' })).toBe(documents);
     const menuLoadsAfter = mocks.listDocuments.mock.calls.filter(
       ([options]) => (options as { limit?: number } | undefined)?.limit === 10,
     ).length;

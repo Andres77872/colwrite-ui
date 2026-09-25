@@ -249,7 +249,7 @@ export function UploadsSection({
   };
 
   return (
-    <section className="rounded-xl border border-border/60 bg-card p-4">
+    <section className="border-t border-border pt-6">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-md font-semibold">Resources</h2>
         <p className="text-xs text-muted-foreground">
@@ -309,7 +309,7 @@ export function UploadsSection({
               return (
                 <li
                   key={upload.id}
-                  className="flex items-center gap-3 rounded-md py-2.5 transition-colors hover:bg-accent/40 has-focus-visible:bg-accent/40"
+                  className="flex items-center gap-3 rounded-md py-2.5 transition-colors hover:bg-hover has-focus-visible:bg-hover"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">
