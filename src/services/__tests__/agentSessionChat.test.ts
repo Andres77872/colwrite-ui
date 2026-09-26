@@ -235,3 +235,22 @@ describe('durable agent sessions', () => {
   });
 
 });
+
+
+it('preserves attachment references across uncertain websocket starts without resending metadata', async () => {
+  onStart = (socket, command) => {
+    if (runStarts === 1) socket.close(1006);
+    else { socket.reply(command, { id: 'r1', status: 'running' }); socket.finish(1); }
+  };
+  await streamAgentSession({ ...params, message: '', attachments: [
+    { kind: 'image', image_id: 'image-1', filename: 'chart.png', media_type: 'image/png', size_bytes: 80 },
+    { kind: 'resource', resource_id: 42, filename: 'paper.pdf' },
+  ] }, {}, { retry: { baseDelayMs: 0 } });
+  const starts = commands.filter((command) => command.method === 'runs.start');
+  expect(starts).toHaveLength(2);
+  expect(starts[0].params.request).toEqual({ ...params, message: '', attachments: [
+    { kind: 'image', image_id: 'image-1' }, { kind: 'resource', resource_id: 42 },
+  ] });
+  expect(starts[1].params.request).toEqual(starts[0].params.request);
+  expect(starts[1].params.request_id).toBe(starts[0].params.request_id);
+});

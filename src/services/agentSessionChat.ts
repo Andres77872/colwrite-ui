@@ -1,3 +1,4 @@
+import { attachmentRef } from './chatAttachments';
 import { uid } from '@/lib/uid';
 import type { AgentChatOptions, AgentChatParams, AgentChatResult } from './agentChat';
 import { ensureRefreshed, getRefreshGeneration } from './api';
@@ -23,6 +24,7 @@ function requestBody(params: AgentChatParams): Record<string, unknown> {
     if (params[key] != null) body[key] = params[key];
   }
   if (params.ephemeral) body.ephemeral = true;
+  if (params.attachments?.length) body.attachments = params.attachments.map(attachmentRef);
   return body;
 }
 

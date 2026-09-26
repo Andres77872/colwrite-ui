@@ -1,3 +1,4 @@
+import { MessageAttachments } from './ChatAttachments';
 import { useMemo } from 'react';
 import { Circle, CircleCheck, LoaderCircle, FileText, Sparkles } from 'lucide-react';
 import {
@@ -66,6 +67,7 @@ export function MessageRow({
     return (
       <div className="flex justify-end">
         <div className="min-w-0 max-w-[85%] whitespace-pre-wrap break-words rounded-xl bg-subtle px-3 py-2 text-[14.5px] leading-[1.6] text-foreground">
+          <MessageAttachments attachments={message.attachments} />
           <ChatRefTags text={message.content} />
         </div>
       </div>

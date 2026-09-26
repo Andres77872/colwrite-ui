@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createRef, StrictMode, useImperativeHandle } from 'react';
+import * as agentSessions from '@/services/agentSessionChat';
+import * as chatAttachments from '@/services/chatAttachments';
+import * as resources from '@/services/resources';
+import { makeResource } from '@/services/__tests__/resourceFixtures';
 import type { SSEEventHandlers } from '@/services/streamParser';
 import type { ToolAction } from '@/editor/types';
 import { PanelsContext, type PanelsContextValue } from '@/components/panels/panelsContextState';
@@ -41,7 +45,7 @@ vi.mock('@/services/agentChat', () => ({
 }));
 // Widened past what the empty defaults infer, so a test can answer with rows.
 const listMessages = vi.fn(async () => ({
-  messages: [] as Array<{ role: string; content: string }>,
+  messages: [] as Array<{ role: string; content: string; attachments?: chatAttachments.ChatAttachment[]; run_id?: string }>,
   pivotThreadId: null as number | null,
 }));
 const listThreads = vi.fn(async () => ({ threads: [] as Array<{ id: number }> }));
@@ -1456,4 +1460,259 @@ describe('agent engine', () => {
     expect(await screen.findByText(/Run `claude auth login` in your terminal/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
+});
+
+
+describe('assistant file attachments', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('keeps file-drop feedback across children, clears it on exit, and preserves the draft on invalid drops', async () => {
+    const upload = vi.spyOn(chatAttachments, 'uploadChatImage');
+    await mount();
+    await compose('Keep my draft');
+    const composer = screen.getByRole('group', { name: 'Message composer' });
+    const input = screen.getByRole('textbox');
+    // Browsers hide the file list until drop, but expose its type.
+    const dataTransfer = { types: ['Files'], files: [], dropEffect: 'none' };
+    fireEvent.dragEnter(composer, { dataTransfer });
+    fireEvent.dragEnter(input, { dataTransfer });
+    fireEvent.dragLeave(input, { dataTransfer });
+    expect(screen.getByText('Drop images or PDFs to attach')).toBeTruthy();
+    expect(fireEvent.dragOver(input, { dataTransfer })).toBe(false);
+    expect(dataTransfer.dropEffect).toBe('copy');
+    fireEvent.dragLeave(composer, { dataTransfer });
+    expect(screen.queryByText('Drop images or PDFs to attach')).toBeNull();
+    fireEvent.dragEnter(input, { dataTransfer });
+    const file = new File(['text'], 'notes.txt', { type: 'text/plain' });
+    expect(fireEvent.drop(input, { dataTransfer: {
+      ...dataTransfer, files: [file], getData: () => 'file:///notes.txt',
+    } })).toBe(false);
+    expect(screen.queryByText('Drop images or PDFs to attach')).toBeNull();
+    expect(input.textContent).toBe('Keep my draft');
+    expect(await screen.findByText('Choose a PDF, PNG, JPEG, WebP, or GIF file.')).toBeTruthy();
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('keeps plain-text drops working without treating them as attachments', async () => {
+    const upload = vi.spyOn(chatAttachments, 'uploadChatImage');
+    await mount();
+    const input = screen.getByRole('textbox');
+    const dataTransfer = { types: ['text/plain'], files: [], getData: () => 'Dropped caption' };
+    fireEvent.dragEnter(input, { dataTransfer });
+    expect(screen.queryByText('Drop images or PDFs to attach')).toBeNull();
+    fireEvent.drop(input, { dataTransfer });
+    expect(input.textContent).toBe('Dropped caption');
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('prevents file drops while a reply is running without inserting their fallback text', async () => {
+    const upload = vi.spyOn(chatAttachments, 'uploadChatImage');
+    let finish!: () => void;
+    streamAgentChat.mockImplementation(() => new Promise((resolve) => {
+      finish = () => resolve({ chatId: null, threadId: null, usage: null, terminal: 'done' });
+    }));
+    await mount();
+    await compose('Start replying');
+    await act(async () => screen.getByRole('button', { name: 'Send message' }).click());
+    await screen.findByRole('button', { name: 'Stop generating' });
+    await compose('My next message');
+    const input = screen.getByRole('textbox');
+    const dataTransfer = { types: ['Files'], files: [new File(['png'], 'chart.png', { type: 'image/png' })],
+      dropEffect: 'copy', getData: () => 'file:///chart.png' };
+    fireEvent.dragEnter(input, { dataTransfer });
+    expect(screen.getByText('Wait for the reply to finish before attaching files')).toBeTruthy();
+    expect(fireEvent.dragOver(input, { dataTransfer })).toBe(false);
+    expect(dataTransfer.dropEffect).toBe('none');
+    expect(fireEvent.drop(input, { dataTransfer })).toBe(false);
+    expect(input.textContent).toBe('My next message');
+    expect(upload).not.toHaveBeenCalled();
+    expect(screen.queryByRole('list', { name: 'Files to send' })).toBeNull();
+    expect(screen.queryByText('Wait for the reply to finish before attaching files')).toBeNull();
+    await act(async () => finish());
+  });
+
+  it.each(['upload', 'paste', 'drop'])('blocks sends during %s, then sends an image-only message and retains it on retry', async (method) => {
+    let finish!: (attachment: chatAttachments.ChatAttachment) => void;
+    vi.spyOn(chatAttachments, 'uploadChatImage').mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    vi.spyOn(chatAttachments, 'loadChatImageBlob').mockRejectedValue(new Error('No preview in test'));
+    await mount();
+    answerText('The chart shows a rising trend.');
+    const file = new File(['png'], 'chart.png', { type: 'image/png' });
+    if (method === 'paste') {
+      fireEvent.paste(screen.getByRole('textbox'), { clipboardData: {
+        items: [{ kind: 'file', type: file.type, getAsFile: () => file }],
+        files: [file], getData: () => '',
+      } });
+    } else if (method === 'drop') {
+      fireEvent.drop(screen.getByRole('textbox'), { dataTransfer: { types: ['Files'], files: [file] } });
+    } else {
+      fireEvent.change(screen.getByLabelText('Upload images or PDFs'), { target: { files: [file] } });
+    }
+    expect(chatAttachments.uploadChatImage).toHaveBeenCalledExactlyOnceWith(file);
+    expect((screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+    expect(streamAgentChat).not.toHaveBeenCalled();
+    const attachment: chatAttachments.ChatAttachment = { kind: 'image', image_id: 'image-1', filename: 'chart.png', media_type: 'image/png', size_bytes: 3 };
+    await act(async () => finish(attachment));
+    expect((screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => screen.getByRole('button', { name: 'Send message' }).click());
+    expect(streamAgentChat.mock.calls[0][0]).toMatchObject({ message: '', attachments: [attachment] });
+    expect(screen.getByRole('link', { name: /chart.png/ }).getAttribute('href')).toContain('/chat-images/image-1/content');
+    expect(screen.queryByRole('list', { name: 'Files to send' })).toBeNull();
+    await act(async () => screen.getByRole('button', { name: 'Retry' }).click());
+    expect(streamAgentChat.mock.calls[1][0]).toMatchObject({ message: '', attachments: [attachment] });
+  });
+
+  it.each(['upload', 'drop'])('%s saves a new PDF to the library and attaches its resource id', async (method) => {
+    const resource = makeResource({ id: 23, filename: 'new-paper.pdf', extraction_status: 'pending' });
+    const upload = vi.spyOn(resources, 'uploadResource').mockResolvedValue(resource);
+    await mount();
+    answerText('I will review the paper.');
+    const file = new File(['%PDF'], 'new-paper.pdf', { type: 'application/pdf' });
+    if (method === 'drop') {
+      fireEvent.drop(screen.getByRole('group', { name: 'Message composer' }), { dataTransfer: { types: ['Files'], files: [file] } });
+    } else {
+      fireEvent.change(screen.getByLabelText('Upload images or PDFs'), { target: { files: [file] } });
+    }
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(false));
+    await act(async () => screen.getByRole('button', { name: 'Send message' }).click());
+    expect(upload).toHaveBeenCalledWith(file);
+    expect(streamAgentChat.mock.calls[0][0].attachments).toEqual([chatAttachments.resourceAttachment(resource)]);
+    expect(screen.getByRole('link', { name: 'new-paper.pdf' }).getAttribute('href')).toContain('/resources/23/content');
+  });
+
+  it('loads more library PDFs and attaches the selection without moving its folder or document', async () => {
+    const first = Array.from({ length: 20 }, (_, id) => makeResource({ id: id + 1, filename: `paper-${id + 1}.pdf` }));
+    const last = makeResource({ id: 42, filename: 'older-paper.pdf', collection_id: 3, collection_name: 'Saved sources' });
+    const list = vi.spyOn(resources, 'listResources')
+      .mockResolvedValueOnce({ resources: first, count: 20, scope: 'library', limit: 20, offset: 0 })
+      .mockResolvedValueOnce({ resources: [last], count: 1, scope: 'library', limit: 20, offset: 20 });
+    const move = vi.spyOn(resources, 'attachResource');
+    await mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Attach images or PDFs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose PDF from library' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more PDFs' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'older-paper.pdf' }));
+    expect(list).toHaveBeenLastCalledWith({ scope: 'library', limit: 20, offset: 20 });
+    expect(screen.getByRole('button', { name: 'Remove older-paper.pdf' })).toBeTruthy();
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it('restores attachment filenames and links from stored conversation metadata', async () => {
+    listThreads.mockResolvedValue({ threads: [{ id: 4 }] });
+    listMessages.mockResolvedValue({ messages: [{ role: 'user', content: 'Review this PDF', attachments: [
+      { kind: 'resource', resource_id: 51, filename: 'saved-reference.pdf', media_type: 'application/pdf', size_bytes: 42 },
+    ] }], pivotThreadId: 4 });
+    await mount();
+    await act(async () => harness.chats.setSelectedChatId('saved-attachments'));
+    const link = await screen.findByRole('link', { name: 'saved-reference.pdf' });
+    expect(link.getAttribute('href')).toContain('/resources/51/content');
+  });
+});
+
+
+it('keeps an earlier image-only exchange when a different image-only run resumes before persistence', async () => {
+  vi.spyOn(chatAttachments, 'loadChatImageBlob').mockRejectedValue(new Error('No preview in test'));
+  listThreads.mockResolvedValue({ threads: [{ id: 4 }] });
+  listMessages.mockResolvedValue({ messages: [
+    { role: 'user', content: '', attachments: [{ kind: 'image', image_id: 'image-a', filename: 'first-chart.png' }] },
+    { role: 'assistant', content: 'Earlier chart explanation.' },
+  ], pivotThreadId: 4 });
+  vi.spyOn(agentSessions, 'findActiveAgentRun').mockResolvedValue({
+    session: { id: 'session-b', document_id: DOC_ID, chat_id: 'image-chat', title: 'Images', ephemeral: false, last_seq: 1, active_run_id: 'run-b' },
+    run: { id: 'run-b', session_id: 'session-b', request_id: 'request-b', status: 'running', request: {
+      document_id: DOC_ID, chat_id: 'image-chat', message: '', attachments: [{ kind: 'image', image_id: 'image-b' }],
+    } },
+  });
+  streamAgentChat.mockImplementation(async (_params: unknown, handlers: SSEEventHandlers) => {
+    handlers.onToken?.('Current chart explanation.');
+    handlers.onDone?.('image-chat', 6, { promptTokens: 0, completionTokens: 0 });
+    return { chatId: 'image-chat', threadId: 6, usage: null, terminal: 'done' };
+  });
+  await mount();
+  await act(async () => harness.chats.setSelectedChatId('image-chat'));
+  await screen.findAllByText('Current chart explanation.');
+  expect(screen.getByText('Earlier chart explanation.')).toBeTruthy();
+  expect(screen.getByRole('link', { name: /first-chart.png/ }).getAttribute('href')).toContain('/image-a/content');
+  expect(screen.getByRole('link', { name: /Image attachment/ }).getAttribute('href')).toContain('/image-b/content');
+  expect(streamAgentChat.mock.calls[0][2].resume).toEqual({ sessionId: 'session-b', runId: 'run-b' });
+  vi.restoreAllMocks();
+});
+
+
+it('starts a fresh run after a confirmed PDF extraction timeout while retaining the attachment', async () => {
+  const resource = makeResource({ id: 61, filename: 'processing.pdf' });
+  vi.spyOn(resources, 'uploadResource').mockResolvedValue(resource);
+  await mount();
+  const file = new File(['%PDF'], 'processing.pdf', { type: 'application/pdf' });
+  fireEvent.change(screen.getByLabelText('Upload images or PDFs'), { target: { files: [file] } });
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(false));
+  streamAgentChat.mockImplementationOnce(async (_params: unknown, handlers: SSEEventHandlers, options: { onRunStarted: (run: agentSessions.ResumeAgentRun) => void }) => {
+    options.onRunStarted({ sessionId: 'session-1', runId: 'failed-run' });
+    handlers.onError?.('ATTACHMENT_EXTRACTION_TIMEOUT', 'The PDF is still processing. Retry shortly.');
+    return { chatId: null, threadId: null, usage: null, terminal: 'error' };
+  });
+  await act(async () => screen.getByRole('button', { name: 'Send message' }).click());
+  await screen.findByRole('button', { name: 'Try again' });
+  answerText('The PDF is ready.');
+  await act(async () => screen.getByRole('button', { name: 'Try again' }).click());
+  expect(streamAgentChat.mock.calls[1][2].resume).toBeUndefined();
+  expect(streamAgentChat.mock.calls[1][0].attachments).toEqual([chatAttachments.resourceAttachment(resource)]);
+  expect(screen.getAllByRole('link', { name: 'processing.pdf' })).toHaveLength(1);
+  vi.restoreAllMocks();
+});
+
+
+it.each(['run-a', undefined])('preserves a completed identical upload when run identity is %s', async (oldRunId) => {
+  vi.spyOn(chatAttachments, 'loadChatImageBlob').mockRejectedValue(new Error('No preview in test'));
+  listThreads.mockResolvedValue({ threads: [{ id: 4 }] });
+  listMessages.mockResolvedValue({ messages: [
+    { role: 'user', content: '', run_id: oldRunId, attachments: [{ kind: 'resource', resource_id: 7, filename: 'same-paper.pdf' }] },
+    { role: 'assistant', content: 'Earlier paper explanation.' },
+  ], pivotThreadId: 4 });
+  vi.spyOn(agentSessions, 'findActiveAgentRun').mockResolvedValue({
+    session: { id: 'session-b', document_id: DOC_ID, chat_id: 'same-file-chat', title: 'PDFs', ephemeral: false, last_seq: 1, active_run_id: 'run-b' },
+    run: { id: 'run-b', session_id: 'session-b', request_id: 'request-b', status: 'queued', request: {
+      document_id: DOC_ID, chat_id: 'same-file-chat', message: '', attachments: [{ kind: 'resource', resource_id: 7 }],
+    } },
+  });
+  streamAgentChat.mockImplementation(async (_params: unknown, handlers: SSEEventHandlers) => {
+    handlers.onToken?.('Current paper explanation.');
+    handlers.onDone?.('same-file-chat', 6, { promptTokens: 0, completionTokens: 0 });
+    return { chatId: 'same-file-chat', threadId: 6, usage: null, terminal: 'done' };
+  });
+  await mount();
+  await act(async () => harness.chats.setSelectedChatId('same-file-chat'));
+  await screen.findAllByText('Current paper explanation.');
+  expect(screen.getByText('Earlier paper explanation.')).toBeTruthy();
+  expect(screen.getAllByRole('list', { name: 'Message attachments' })).toHaveLength(2);
+  expect(screen.getByRole('link', { name: 'same-paper.pdf' }).getAttribute('href')).toContain('/resources/7/content');
+  vi.restoreAllMocks();
+});
+
+it('reconciles the exact saved run and retains canonical PDF metadata across a reconnect retry', async () => {
+  listThreads.mockResolvedValue({ threads: [{ id: 4 }] });
+  const attachment: chatAttachments.ChatAttachment = { kind: 'resource', resource_id: 7, filename: 'same-paper.pdf' };
+  listMessages.mockResolvedValue({ messages: [
+    { role: 'user', content: '', run_id: 'run-b', attachments: [attachment] },
+    { role: 'assistant', content: 'An incomplete saved answer.' },
+  ], pivotThreadId: 4 });
+  vi.spyOn(agentSessions, 'findActiveAgentRun').mockResolvedValue({
+    session: { id: 'session-b', document_id: DOC_ID, chat_id: 'same-file-chat', title: 'PDFs', ephemeral: false, last_seq: 1, active_run_id: 'run-b' },
+    run: { id: 'run-b', session_id: 'session-b', request_id: 'request-b', status: 'running', request: {
+      document_id: DOC_ID, chat_id: 'same-file-chat', message: '', attachments: [{ kind: 'resource', resource_id: 7 }],
+    } },
+  });
+  streamAgentChat.mockImplementationOnce(async () => ({ chatId: 'same-file-chat', threadId: null, usage: null, terminal: null }));
+  await mount();
+  await act(async () => harness.chats.setSelectedChatId('same-file-chat'));
+  await screen.findByRole('button', { name: 'Try again' });
+  expect(screen.queryByText('An incomplete saved answer.')).toBeNull();
+  expect(screen.getAllByRole('list', { name: 'Message attachments' })).toHaveLength(1);
+  answerText('The restored answer.');
+  await act(async () => screen.getByRole('button', { name: 'Try again' }).click());
+  expect(streamAgentChat.mock.calls[1][2].resume).toEqual({ sessionId: 'session-b', runId: 'run-b' });
+  expect(streamAgentChat.mock.calls[1][0].attachments).toEqual([attachment]);
+  expect(screen.getAllByRole('link', { name: 'same-paper.pdf' })).toHaveLength(1);
+  vi.restoreAllMocks();
 });

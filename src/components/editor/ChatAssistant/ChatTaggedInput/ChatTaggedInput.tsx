@@ -31,6 +31,8 @@ type ChatTaggedInputProps = {
   onChange: (next: string) => void;
   /** Enter — the message is ready to go. */
   onSubmit?: () => void;
+  /** Clipboard image files go through the composer's attachment upload flow. */
+  onPasteImages?: (files: File[]) => void;
   placeholder?: string;
   disabled?: boolean;
   onTriggerPicker?: (anchorIndex: number) => void;
@@ -69,6 +71,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
       value,
       onChange,
       onSubmit,
+      onPasteImages,
       placeholder,
       disabled,
       onTriggerPicker,
@@ -325,9 +328,20 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
         }}
         onPaste={(event) => {
           event.preventDefault();
-          // Plain text only: pasted markup would arrive as DOM the model has no
-          // way to represent, and as styling that is not the composer's.
-          insertText(event.clipboardData.getData('text/plain'));
+          if (disabled) return;
+          const clipboard = event.clipboardData;
+          // Prefer items: browsers can expose the same image in both lists.
+          const images = Array.from(clipboard.items ?? [])
+            .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+            .map((item) => item.getAsFile())
+            .filter((file): file is File => file !== null);
+          const files = images.length ? images : Array.from(clipboard.files ?? [])
+            .filter((file) => file.type.startsWith('image/'));
+          if (files.length) onPasteImages?.(files);
+          // Keep any accompanying text, but never paste HTML into the editor.
+          // Image-only pastes must not delete the current text selection.
+          const text = clipboard.getData('text/plain');
+          if (text) insertText(text);
         }}
         onDrop={(event) => {
           event.preventDefault();

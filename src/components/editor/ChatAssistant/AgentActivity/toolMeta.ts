@@ -115,6 +115,11 @@ const TOOL_META: Record<string, { label: string; running: string; icon: typeof W
     running: 'Reading one of your PDFs',
     icon: BookOpen,
   },
+  attachment_read: {
+    label: 'Read an attached PDF',
+    running: 'Reading your attached PDF',
+    icon: BookOpen,
+  },
   resource_search: {
     label: 'Searched your PDFs',
     running: 'Searching your PDFs',

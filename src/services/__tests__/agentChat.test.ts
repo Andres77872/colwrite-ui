@@ -300,3 +300,19 @@ describe('streamAgentChat retries', () => {
     await expectation;
   });
 });
+
+
+it('sends only attachment references over SSE, including an attachment-only message', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(createSSEResponse([
+    { event: 'done', data: JSON.stringify({ chat_id: 'c1', thread_id: 1 }) },
+  ]));
+  await streamAgentChat({ message: '', document_id: 'doc-1', attachments: [
+    { kind: 'image', image_id: 'image-1', filename: 'chart.png', media_type: 'image/png', size_bytes: 80 },
+    { kind: 'resource', resource_id: 42, filename: 'paper.pdf' },
+  ] }, {});
+  expect(JSON.parse(fetchSpy.mock.calls[0][1]!.body as string)).toEqual({
+    message: '', document_id: 'doc-1', attachments: [
+      { kind: 'image', image_id: 'image-1' }, { kind: 'resource', resource_id: 42 },
+    ],
+  });
+});

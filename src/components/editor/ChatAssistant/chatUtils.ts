@@ -1,3 +1,4 @@
+import type { ChatAttachment } from '@/services/chatAttachments';
 import { uid } from '@/lib/uid';
 import type { ToolRun } from './AgentActivity';
 import type { AgentTodo, AgentWorker, AgentSource } from '@/services/streamParser';
@@ -9,6 +10,9 @@ export type ChatMessage = {
   id: string;
   role: string;
   content: string;
+  attachments?: ChatAttachment[];
+  /** Server-owned identity of the run that stored this user message. */
+  runId?: string;
   /** Tools the agent ran while producing this reply, in order. */
   runs: ToolRun[];
   /**
@@ -61,6 +65,7 @@ export type LastExchange = {
   text: string;
   /** Sent again as it was: a retry is about the same place in the text. */
   context?: AgentChatContext;
+  attachments?: ChatAttachment[];
   userMessageId: string;
   assistantMessageId: string;
   run?: import('@/services/agentSessionChat').ResumeAgentRun;
@@ -100,6 +105,11 @@ export function friendlyStreamError(code: string, message: string): ChatError {
         detail: message || code,
         retryable: true,
       };
+    case 'ATTACHMENT_MODEL_UNSUPPORTED':
+    case 'ATTACHMENT_UNAVAILABLE':
+    case 'ATTACHMENT_INVALID':
+    case 'ATTACHMENT_LIMIT':
+      return { message: message || 'Update the attachments before sending again.', detail: code, retryable: false };
     case 'DOCUMENT_NOT_FOUND':
       return {
         message: 'The assistant could not find this document on the server.',
@@ -136,8 +146,8 @@ export function friendlyStreamError(code: string, message: string): ChatError {
   }
 }
 
-export function emptyMessage(role: string, content = ''): ChatMessage {
-  return { id: uid(), role, content, runs: [], proposedIds: [], applied: 0 };
+export function emptyMessage(role: string, content = '', attachments?: ChatAttachment[], runId?: string | null): ChatMessage {
+  return { id: uid(), role, content, ...(attachments?.length ? { attachments } : {}), ...(runId ? { runId } : {}), runs: [], proposedIds: [], applied: 0 };
 }
 
 function boundedArgument(value: unknown, limit = 120): string | null {

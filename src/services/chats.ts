@@ -1,3 +1,4 @@
+import type { ChatAttachment } from './chatAttachments';
 import { get, post, put, del } from './api';
 import type { JsonValue } from './contracts';
 
@@ -20,6 +21,8 @@ export type ThreadItem = {
   extras: JsonValue | null;
   metadata: JsonValue | null;
   created_at: string | null;
+  attachments?: ChatAttachment[];
+  run_id?: string | null;
 };
 
 /**
@@ -97,7 +100,7 @@ export async function listMessages(
   chatId: string,
   threadId: number,
   options?: ChatsRequestOptions,
-): Promise<{ messages: Array<{ role: 'user' | 'assistant'; content: string }>; pivotThreadId: number; status: string; message: string }> {
+): Promise<{ messages: Array<{ role: 'user' | 'assistant'; content: string; attachments?: ChatAttachment[]; run_id?: string | null }>; pivotThreadId: number; status: string; message: string }> {
   return get(
     `/document/${encodeURIComponent(documentId)}/chats/${encodeURIComponent(chatId)}/messages?threadId=${threadId}`,
     options,

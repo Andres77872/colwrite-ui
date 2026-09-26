@@ -15,7 +15,8 @@ import { useConversationLoader } from './useConversationLoader';
 import { currentFocus, useEditorFocus, type EditorFocus } from '@/components/editor/References';
 import { MessageRow } from './MessageRow';
 import { AssistantHome } from './AssistantHome';
-import { ChatComposer } from './ChatComposer';
+import { useChatAttachments } from './useChatAttachments';
+import { ChatComposer, MAX_MESSAGE_LENGTH } from './ChatComposer';
 import { ChatSwitcher } from './ChatSwitcher';
 import { agentContext } from './chatUtils';
 import { useChatContextHighlight } from './chatContextHighlight';
@@ -73,6 +74,7 @@ function DocumentChatAssistant() {
   const history = useChatHistory();
 
   const [input, setInput] = useState('');
+  const files = useChatAttachments(selectedChatId);
   const [atBottom, setAtBottom] = useState(true);
 
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -238,6 +240,7 @@ function DocumentChatAssistant() {
 
   /** Clear the transcript; the next message starts a conversation. */
   const onNewChat = () => {
+    files.clear();
     resetChatUI(true);
     // Reopening the same conversation later has to fetch it again.
     loadedConversationRef.current = null;
@@ -248,6 +251,7 @@ function DocumentChatAssistant() {
 
   const onPickChat = (chat: ChatItem) => {
     if (chat.chat_id === selectedChatId) return;
+    files.clear();
     resetChatUI(true);
     loadedConversationRef.current = null;
     setSelectedChatId(chat.chat_id);
@@ -269,10 +273,13 @@ function DocumentChatAssistant() {
   // The selection stays marked in the page for as long as it is attached.
   useChatContextHighlight(attachedSelection ? focus : null);
   const sendWithContext = (text: string) => {
+    if (files.blocked || isStreaming || loadingDocumentId || text.length > MAX_MESSAGE_LENGTH || (!text && !files.attachments.length)) return;
     const turnFocus = focus && focus === dismissedFocus ? null : currentFocus();
     // Sent once: the chip and the mark in the page go with the message.
     if (turnFocus?.selection) setDismissedFocus(focus);
-    return send(text, agentContext(text, turnFocus));
+    const attachments = files.attachments;
+    files.clear();
+    return send(text, agentContext(text, turnFocus), attachments);
   };
 
   const onSend = () => sendWithContext(input.trim());
@@ -292,7 +299,7 @@ function DocumentChatAssistant() {
     if (!prompt) return;
     const context =
       lastExchange?.assistantMessageId === answerId ? lastExchange.context : undefined;
-    send(prompt.content, context);
+    send(prompt.content, context, prompt.attachments);
   };
 
   /**
@@ -489,6 +496,7 @@ function DocumentChatAssistant() {
             onStop={onStop}
             isStreaming={isStreaming}
             attachment={attachment}
+            files={files}
             selection={attachedSelection}
             onDismissSelection={() => setDismissedFocus(focus)}
             inputRef={inputHostRef}

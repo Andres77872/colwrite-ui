@@ -11,12 +11,16 @@ import { ChatTaggedInput } from '../ChatTaggedInput';
 
 function Harness({
   onSubmit,
+  onPasteImages,
+  disabled,
   initial = '',
   maxLength,
   isPickerOpen,
   onTriggerPicker,
 }: {
   onSubmit?: () => void;
+  onPasteImages?: (files: File[]) => void;
+  disabled?: boolean;
   initial?: string;
   maxLength?: number;
   isPickerOpen?: () => boolean;
@@ -29,6 +33,8 @@ function Harness({
         value={value}
         onChange={setValue}
         onSubmit={onSubmit}
+        onPasteImages={onPasteImages}
+        disabled={disabled}
         placeholder="Ask about this document…"
         maxLength={maxLength}
         isPickerOpen={isPickerOpen}
@@ -169,5 +175,59 @@ describe('reference chips', () => {
     expect(
       screen.getByRole('button', { name: 'Remove reference #doc/abc123' }),
     ).toBeTruthy();
+  });
+});
+
+
+describe('clipboard images', () => {
+  const image = new File(['png'], 'clipboard.png', { type: 'image/png' });
+  const imageItem = { kind: 'file', type: image.type, getAsFile: () => image };
+
+  it('attaches an image only once without deleting selected draft text', () => {
+    const onPasteImages = vi.fn();
+    render(<Harness initial="Keep this draft" onPasteImages={onPasteImages} />);
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.selectNodeContents(composer());
+    selection.removeAllRanges();
+    selection.addRange(range);
+    fireEvent.paste(composer(), { clipboardData: {
+      items: [imageItem], files: [image], getData: () => '',
+    } });
+    expect(onPasteImages).toHaveBeenCalledExactlyOnceWith([image]);
+    expect(model()).toBe('Keep this draft');
+    expect(composer().querySelector('img')).toBeNull();
+  });
+
+  it('supports file-list clipboards and preserves accompanying plain text within the text limit', () => {
+    const onPasteImages = vi.fn();
+    render(<Harness onPasteImages={onPasteImages} maxLength={5} />);
+    fireEvent.paste(composer(), { clipboardData: {
+      files: [image], getData: (format: string) => format === 'text/plain' ? 'caption' : '<img src="untrusted">',
+    } });
+    expect(onPasteImages).toHaveBeenCalledExactlyOnceWith([image]);
+    expect(model()).toBe('capti');
+    expect(composer().querySelector('img')).toBeNull();
+  });
+
+  it('keeps ordinary text paste working without attaching unrelated files', () => {
+    const onPasteImages = vi.fn();
+    render(<Harness onPasteImages={onPasteImages} />);
+    fireEvent.paste(composer(), { clipboardData: {
+      files: [new File(['pdf'], 'paper.pdf', { type: 'application/pdf' })],
+      getData: () => 'Pasted text',
+    } });
+    expect(onPasteImages).not.toHaveBeenCalled();
+    expect(model()).toBe('Pasted text');
+  });
+
+  it('does not upload or change text when the input is disabled', () => {
+    const onPasteImages = vi.fn();
+    render(<Harness initial="Keep" disabled onPasteImages={onPasteImages} />);
+    fireEvent.paste(composer(), { clipboardData: {
+      items: [imageItem], getData: () => 'Replace',
+    } });
+    expect(onPasteImages).not.toHaveBeenCalled();
+    expect(model()).toBe('Keep');
   });
 });

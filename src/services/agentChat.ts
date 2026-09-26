@@ -1,4 +1,5 @@
 import { streamAgentSession, type ResumeAgentRun } from './agentSessionChat';
+import { attachmentRef, type ChatAttachment } from './chatAttachments';
 import type { AgentEngineId } from './agentEngines';
 import { buildUrl, ensureRefreshed, getRefreshGeneration } from './api';
 import { ApiError, problemRetryAfter } from './contracts';
@@ -59,6 +60,7 @@ export type AgentChatParams = {
    */
   ephemeral?: boolean;
   context?: AgentChatContext;
+  attachments?: ChatAttachment[];
 };
 
 export type AgentChatResult = {
@@ -160,6 +162,8 @@ export async function streamAgentChatSSE(
   if (params.context) {
     body.context = params.context;
   }
+
+  if (params.attachments?.length) body.attachments = params.attachments.map(attachmentRef);
 
   // This endpoint streams, so it cannot go through `request()` in api.ts —
   // that reads the whole body. It still needs the same session handling.

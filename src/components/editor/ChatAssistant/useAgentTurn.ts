@@ -9,6 +9,7 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react';
+import { attachmentKey, type ChatAttachment } from '@/services/chatAttachments';
 import { streamAgentChat, type AgentChatContext, type AgentChatResult } from '@/services/agentChat';
 import { useAgentEngine } from '@/components/preferences/agentEngineContextState';
 import { AgentSocketError } from '@/services/agentSocket';
@@ -68,7 +69,7 @@ export type AgentTurn = {
   agentStatus: AgentProgress | null;
   activeMessageId: string | null;
   lastExchange: LastExchange | null;
-  send: (text: string, context?: AgentChatContext) => Promise<void>;
+  send: (text: string, context?: AgentChatContext, attachments?: ChatAttachment[]) => Promise<void>;
   resumeRun: (snapshot: AssistantSnapshot) => void;
   onStop: () => void;
   onRetry: () => void;
@@ -292,8 +293,8 @@ export function useAgentTurn({
     [patchActive, proposals],
   );
 
-  const send = async (text: string, context?: AgentChatContext, resume?: ResumeAgentRun) => {
-    if (!text || abortRef.current || loadingDocumentId) return;
+  const send = async (text: string, context?: AgentChatContext, attachments?: ChatAttachment[], resume?: ResumeAgentRun) => {
+    if ((!text && !attachments?.length) || abortRef.current || loadingDocumentId) return;
 
     setError(null);
     setInput('');
@@ -305,11 +306,12 @@ export function useAgentTurn({
     processedToolCallIds.current = new Set();
     runningToolsRef.current = new Map();
 
-    const userMessage = emptyMessage('user', text);
+    const userMessage = emptyMessage('user', text, attachments, resume?.runId);
     const assistantMessage = emptyMessage('assistant');
     setLastExchange({
       text,
       context,
+      attachments,
       userMessageId: userMessage.id,
       assistantMessageId: assistantMessage.id,
       run: resume,
@@ -318,10 +320,23 @@ export function useAgentTurn({
     setActiveMessageId(assistantMessage.id);
     setMessages((prev) => {
       if (resume) {
+        const matchesRun = (message: ChatMessage | undefined, allowLegacy: boolean) => {
+          if (message?.role !== 'user') return false;
+          if (message.runId) return message.runId === resume.runId;
+          // Old transcripts have no run identity. Only an unanswered final
+          // user row is safe to reuse; identical text/files cannot identify a
+          // completed exchange as the active run.
+          return allowLegacy && message.content === text
+            && JSON.stringify((message.attachments ?? []).map(attachmentKey).sort())
+              === JSON.stringify((attachments ?? []).map(attachmentKey).sort());
+        };
         const last = prev.at(-1);
-        if (last?.role === 'user' && last.content === text) return [...prev, assistantMessage];
-        if (last?.role === 'assistant' && prev.at(-2)?.role === 'user' && prev.at(-2)?.content === text) {
-          return [...prev.slice(0, -1), assistantMessage];
+        if (last && matchesRun(last, true)) {
+          return [...prev.slice(0, -1), { ...last, id: userMessage.id, runId: resume.runId }, assistantMessage];
+        }
+        const prompt = prev.at(-2);
+        if (last?.role === 'assistant' && prompt && matchesRun(prompt, false)) {
+          return [...prev.slice(0, -2), { ...prompt, id: userMessage.id, runId: resume.runId }, assistantMessage];
         }
       }
       return [...prev, userMessage, assistantMessage];
@@ -587,6 +602,12 @@ export function useAgentTurn({
           // A CLI that lost its login (or was never ready) re-reads its state,
           // so the composer's engine menu shows why straight away.
           engines.noteRunError(code);
+          if (['ATTACHMENT_EXTRACTION_TIMEOUT', 'ATTACHMENT_EXTRACTION_FAILED', 'ATTACHMENT_PREPARATION_TIMEOUT'].includes(code)) {
+            // This is a confirmed terminal preparation failure, before any
+            // user turn is stored. Retry extraction in a new run; reconnecting
+            // to the failed run would only replay this same error forever.
+            setLastExchange((exchange) => exchange ? { ...exchange, run: undefined } : exchange);
+          }
           // Reattaching observes an existing run; its failure must not reset
           // selection or enter the recovery path that starts a new turn.
           if (!resume && !alreadyRecovered && (code === 'CHAT_NOT_FOUND' || code === 'THREAD_NOT_FOUND')) {
@@ -644,6 +665,7 @@ export function useAgentTurn({
             thread_id: turnThreadId,
             mode: 'assistant',
             context,
+            ...(attachments?.length ? { attachments } : {}),
             ...engineRequest,
           },
           handlers,
@@ -652,7 +674,10 @@ export function useAgentTurn({
             abortBehavior: 'detach',
             resume,
             onRunStarted: (run) => {
-              if (streamIsLive()) setLastExchange((exchange) => exchange ? { ...exchange, run } : exchange);
+              if (!streamIsLive()) return;
+              setLastExchange((exchange) => exchange ? { ...exchange, run } : exchange);
+              if (run.runId) setMessages((current) => current.map((message) =>
+                message.id === userMessage.id ? { ...message, runId: run.runId } : message));
             },
             // The recovered pass already carries its own 401 replay; stacking
             // a fresh pending backoff on top would multiply requests again.
@@ -749,7 +774,10 @@ export function useAgentTurn({
       ),
     );
     setError(null);
-    void send(exchange.text, exchange.context, exchange.run);
+    // A resumed row can carry richer canonical metadata than the saved run's
+    // request references. Keep those filenames through a reconnect retry.
+    const attachments = messages.find((message) => message.id === exchange.userMessageId)?.attachments ?? exchange.attachments;
+    void send(exchange.text, exchange.context, attachments, exchange.run);
   };
 
   const onStop = () => {
@@ -768,7 +796,7 @@ export function useAgentTurn({
     lastExchange,
     send,
     resumeRun: (snapshot) => {
-      if (snapshot.run) void send(snapshot.run.request.message, snapshot.run.request.context,
+      if (snapshot.run) void send(snapshot.run.request.message, snapshot.run.request.context, snapshot.run.request.attachments,
         { sessionId: snapshot.session.id, runId: snapshot.run.id });
     },
     onStop,

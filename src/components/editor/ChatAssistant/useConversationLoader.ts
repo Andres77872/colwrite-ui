@@ -131,6 +131,8 @@ export function useConversationLoader({
             m.role,
             // Legacy rows can still carry EXTRAS_JSON envelopes.
             m.content?.replace(/<EXTRAS_JSON>[\s\S]*?<\/EXTRAS_JSON>/g, '') ?? '',
+            m.attachments,
+            m.run_id,
           ),
         );
         // A conversation the server has nothing for does not overwrite one the

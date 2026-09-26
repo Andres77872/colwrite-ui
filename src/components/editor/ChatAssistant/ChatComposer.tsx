@@ -1,4 +1,4 @@
-import { useCallback, useId, type Dispatch, type RefObject, type SetStateAction } from 'react';
+import { useCallback, useId, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { ArrowUp, FileClock, FileText, Hash, Square, TextSelect, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -7,7 +7,16 @@ import { refLabel } from './ChatRefTags/refTags';
 import type { RefPart } from './ChatTaggedInput/refParts';
 import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
 import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
+import { ChatAttachmentPicker, DraftAttachments } from './ChatAttachments';
+import type { ChatAttachmentDraft } from './useChatAttachments';
 import { EngineSwitcher } from './EngineSwitcher';
+
+/** File data is protected during dragover; browsers still expose the Files type. */
+function hasDraggedFiles(data: DataTransfer) {
+  return Array.from(data.types ?? []).includes('Files')
+    || Array.from(data.items ?? []).some((item) => item.kind === 'file')
+    || data.files?.length > 0;
+}
 
 /** The composer refuses more than this, and warns as it approaches. */
 export const MAX_MESSAGE_LENGTH = 2000;
@@ -37,6 +46,7 @@ export function ChatComposer({
   onStop,
   isStreaming,
   attachment,
+  files,
   selection,
   onDismissSelection,
   inputRef,
@@ -48,12 +58,15 @@ export function ChatComposer({
   onStop: () => void;
   isStreaming: boolean;
   attachment: ComposerAttachment;
+  files: ChatAttachmentDraft;
   selection: string | null;
   onDismissSelection: () => void;
   inputRef: RefObject<ChatTaggedInputHandle | null>;
   pickerRef: RefObject<ChatRefPickerHandle | null>;
 }) {
   const hintId = useId();
+  const dragDepth = useRef(0);
+  const [draggingFiles, setDraggingFiles] = useState(false);
   const { blocks } = useEditor();
   const labelForRef = useCallback((part: RefPart) => refLabel(part, blocks), [blocks]);
   const overLimit = value.length > MAX_MESSAGE_LENGTH;
@@ -71,12 +84,43 @@ export function ChatComposer({
 
   return (
     <div
+      role="group"
+      aria-label="Message composer"
+      onDragEnter={(event) => {
+        if (!hasDraggedFiles(event.dataTransfer)) return;
+        event.preventDefault();
+        dragDepth.current += 1;
+        setDraggingFiles(true);
+      }}
+      onDragOver={(event) => {
+        if (!hasDraggedFiles(event.dataTransfer)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = isStreaming ? 'none' : 'copy';
+      }}
+      onDragLeave={() => {
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (!dragDepth.current) setDraggingFiles(false);
+      }}
+      onDropCapture={(event) => {
+        dragDepth.current = 0;
+        setDraggingFiles(false);
+        if (!hasDraggedFiles(event.dataTransfer)) return;
+        // Intercept files before contenteditable inserts a filename, URL or HTML.
+        event.preventDefault();
+        event.stopPropagation();
+        if (!isStreaming) files.addFiles(Array.from(event.dataTransfer.files));
+      }}
       className={cn(
         'relative rounded-xl bg-background shadow-xs ring-1 ring-inset ring-border-strong transition-shadow duration-120',
         'focus-within:ring-primary/60',
         overLimit && 'ring-destructive focus-within:ring-destructive',
       )}
     >
+      {draggingFiles && (
+        <div role="status" className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-background/95 p-3 text-center text-sm font-medium text-foreground">
+          {isStreaming ? 'Wait for the reply to finish before attaching files' : 'Drop images or PDFs to attach'}
+        </div>
+      )}
       {/* One row: the page chip gives way to a selection rather than pushing
           it onto a second line and making the composer taller. */}
       <div className="flex min-w-0 items-center gap-1 px-2 pt-2">
@@ -117,11 +161,14 @@ export function ChatComposer({
         )}
       </div>
 
+      <DraftAttachments draft={files} />
+
       <ChatTaggedInput
         ref={inputRef}
         value={value}
         onChange={onChange}
         onSubmit={onSend}
+        onPasteImages={isStreaming ? undefined : files.addFiles}
         placeholder="Ask AI anything… # to reference a block"
         aria-describedby={hintId}
         onTriggerPicker={(anchor) => pickerRef.current?.openAt(anchor)}
@@ -132,7 +179,7 @@ export function ChatComposer({
         labelForRef={labelForRef}
       />
       <p id={hintId} className="sr-only">
-        Enter sends. Shift+Enter starts a new line. Type # to reference a block or another document.
+        Enter sends. Shift+Enter starts a new line. Paste images or drop images and PDFs to attach them. Type # to reference a block or another document.
       </p>
 
       <div className="flex items-center gap-1 px-2 pb-2">
@@ -149,6 +196,8 @@ export function ChatComposer({
           </TooltipTrigger>
           <TooltipContent>Reference a block or document · #</TooltipContent>
         </Tooltip>
+
+        <ChatAttachmentPicker draft={files} disabled={isStreaming} />
 
         {/* Local servers only: which engine answers (gateway, Claude Code,
             Codex). Locked while a reply runs; it applies to the next one. */}
@@ -187,7 +236,7 @@ export function ChatComposer({
               <button
                 type="button"
                 onClick={onSend}
-                disabled={!value.trim() || overLimit}
+                disabled={(!value.trim() && !files.attachments.length) || files.blocked || overLimit}
                 aria-label="Send message"
                 className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-primary-strong text-primary-foreground outline-none transition-colors hover:bg-primary-strong/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:bg-active disabled:text-placeholder"
               >

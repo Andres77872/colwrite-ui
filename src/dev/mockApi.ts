@@ -6,6 +6,8 @@
  * without a server, credentials or anyone's real data. Nothing here is
  * imported by `index.html`, so production builds never include it.
  */
+import { uid } from '@/lib/uid';
+import type { ChatAttachment, ChatImage } from '@/services/chatAttachments';
 import agentTools from './agentToolsFixture.json';
 import { installMockAssistantSocket } from './mockAssistantSocket';
 import type { AgentToolSettings } from '@/services/agentTools';
@@ -96,8 +98,11 @@ const PDFS = [
   pdf(42, 'st-moe.pdf', 'ST-MoE: Designing Stable and Transferable Sparse Expert Models'),
 ];
 
+const uploadedImages = new Map<string, { image: ChatImage; file: File }>();
+const uploadedPdfs = new Map<number, File>();
+
 /** Stored conversations per document, so the assistant's chat switcher has history. */
-type MockChat = { chat_id: string; title: string | null; last_thread_id: number; updated_at: string; messages: Array<{ role: 'user' | 'assistant'; content: string }> };
+type MockChat = { chat_id: string; title: string | null; last_thread_id: number; updated_at: string; messages: Array<{ role: 'user' | 'assistant'; content: string; attachments?: ChatAttachment[] }> };
 const chats = new Map<string, MockChat[]>([
   [
     FIXTURE_DOCUMENT_ID,
@@ -127,7 +132,7 @@ const chats = new Map<string, MockChat[]>([
 ]);
 
 /** Keep a turn with its chat, starting one when the request names none. */
-function recordTurn(documentId: string, chatId: string | null, message: string): string {
+function recordTurn(documentId: string, chatId: string | null, message: string, attachments: ChatAttachment[] = []): string {
   const list = chats.get(documentId) ?? [];
   let chat = chatId ? list.find((item) => item.chat_id === chatId) : undefined;
   if (!chat) {
@@ -136,7 +141,7 @@ function recordTurn(documentId: string, chatId: string | null, message: string):
     chats.set(documentId, list);
   }
   chat.messages.push(
-    { role: 'user', content: message },
+    { role: 'user', content: message, attachments },
     { role: 'assistant', content: `Here is what I found about "${message.slice(0, 60)}".` },
   );
   chat.last_thread_id += 2;
@@ -703,10 +708,20 @@ async function handle(method: string, path: string, url: URL, init?: RequestInit
   }
   if (path === '/agent/chat' && method === 'POST') {
     const message = String(body.message ?? '');
+    const attachments: ChatAttachment[] = (Array.isArray(body.attachments) ? body.attachments : []).flatMap<ChatAttachment>((ref) => {
+      if (ref.kind === 'image') {
+        const stored = uploadedImages.get(ref.image_id);
+        return stored ? [{ kind: 'image' as const, image_id: stored.image.id, filename: stored.image.filename,
+          media_type: stored.image.media_type, size_bytes: stored.image.size_bytes }] : [];
+      }
+      const resource = PDFS.find((item) => item.id === ref.resource_id);
+      return resource ? [{ kind: 'resource' as const, resource_id: resource.id, filename: resource.filename,
+        media_type: resource.content_type, size_bytes: resource.byte_size }] : [];
+    });
     // An ephemeral rewrite (Ask AI) keeps no chat; an assistant turn does.
     const chatId = body.ephemeral === true
       ? null
-      : recordTurn(String(body.document_id ?? ''), typeof body.chat_id === 'string' ? body.chat_id : null, message);
+      : recordTurn(String(body.document_id ?? ''), typeof body.chat_id === 'string' ? body.chat_id : null, message, attachments);
     return agentStream(
       message,
       body.mode === 'rewrite' && body.ephemeral === true,
@@ -730,8 +745,36 @@ async function handle(method: string, path: string, url: URL, init?: RequestInit
     }));
     return json({ query: term, scope: url.searchParams.get('scope') ?? 'library', matches, match_count: matches.length, resources_searched: PDFS.length, resources_skipped: [], truncated: false, next_offset: null });
   }
+  if (path === '/users/me/chat-images' && method === 'POST') {
+    const file = init?.body instanceof FormData ? init.body.get('file') : null;
+    if (!(file instanceof File)) return problem(422, 'INVALID_FILE', 'Choose an image.');
+    const image = { id: uid(), filename: file.name, media_type: file.type, size_bytes: file.size };
+    uploadedImages.set(image.id, { image, file });
+    return json({ image });
+  }
+  if ((match = path.match(/^\/users\/me\/chat-images\/([^/]+)\/content$/))) {
+    const stored = uploadedImages.get(decodeURIComponent(match[1]));
+    return stored ? new Response(stored.file, { headers: { 'content-type': stored.image.media_type } })
+      : problem(404, 'IMAGE_NOT_FOUND', 'Image unavailable');
+  }
   if (path === '/users/me/resources') {
-    return json({ resources: PDFS, count: PDFS.length, scope: url.searchParams.get('scope') ?? 'library', limit: 50, offset: 0 });
+    if (method === 'POST') {
+      const file = init?.body instanceof FormData ? init.body.get('file') : null;
+      if (!(file instanceof File)) return problem(422, 'INVALID_FILE', 'Choose a PDF.');
+      const resource = { ...pdf(Math.max(...PDFS.map((item) => item.id)) + 1, file.name, file.name.replace(/\.pdf$/i, '')), byte_size: file.size };
+      PDFS.unshift(resource);
+      uploadedPdfs.set(resource.id, file);
+      return json({ resource, status: 'success', message: 'Resource stored' });
+    }
+    const limit = Number(url.searchParams.get('limit') ?? 20);
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    const resources = PDFS.slice(offset, offset + limit);
+    return json({ resources, count: resources.length, scope: url.searchParams.get('scope') ?? 'library', limit, offset });
+  }
+  if ((match = path.match(/^\/users\/me\/resources\/(\d+)\/content$/))) {
+    const file = uploadedPdfs.get(Number(match[1]));
+    return file ? new Response(file, { headers: { 'content-type': 'application/pdf' } })
+      : problem(404, 'RESOURCE_NOT_FOUND', 'The preview has metadata only for this sample PDF.');
   }
   if ((match = path.match(/^\/users\/me\/resources\/(\d+)$/))) {
     const pdf = PDFS.find((item) => item.id === Number(match![1]));

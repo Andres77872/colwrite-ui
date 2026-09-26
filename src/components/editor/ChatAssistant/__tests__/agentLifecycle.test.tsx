@@ -109,7 +109,7 @@ describe('durable assistant hook lifecycle', () => {
   it.each(['user', 'assistant'] as const)('replays into one assistant row after a saved %s row without saving or starting another turn', async (lastRole) => {
     activeRun.mockResolvedValue(snapshot());
     messages.mockResolvedValue({ messages: [
-      { role: 'user', content: 'Explain this' },
+      { role: 'user', content: 'Explain this', run_id: 'run-1' },
       ...(lastRole === 'assistant' ? [{ role: 'assistant' as const, content: 'Earlier partial text' }] : []),
     ], pivotThreadId: 7, status: 'ok', message: '' });
     hasPendingEdits.mockReturnValue(true);
