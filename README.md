@@ -41,7 +41,16 @@ The project uses Vite 8’s default Rolldown/Oxc toolchain, Lightning CSS proces
 or legacy browser target is configured.
 
 The development proxy keeps `/api/agent` unchanged and rewrites other `/api` requests by removing
-the `/api` prefix. Signing in from another device over plain HTTP needs the API's `DEV_MODE=true`; browsers
+the `/api` prefix. It forwards them to `COLWRITE_API_URL`, which defaults to the production API
+`https://colwrite-api.novus.chat`; set `COLWRITE_API_URL=http://127.0.0.1:5002` in `.env` to use a
+backend on this machine. `npm run preview` uses the same proxy. A production deployment of the
+bundle still needs its own same-origin `/api` route with these rules, or an absolute
+`VITE_API_BASE` that the API allows through `CORS_ALLOWED_ORIGINS`.
+
+Against a remote API the proxy sends the API's own host name, rewrites the refresh cookie's path to
+`/api/auth`, and forwards the assistant WebSocket from this dev page with the session cookie as a
+Bearer credential instead of the page's Origin, which the deployed API would refuse. Signing in from
+another device over plain HTTP needs the API's `DEV_MODE=true`; browsers
 only keep its `Secure` session cookies on HTTPS or `localhost`. Local agent engines (Claude Code,
 Codex) stay available only from this machine. Environment variables supplied by the OS take precedence, while `.env` provides
 local fallback values. Copy `.env.example` to `.env` when local overrides are needed; the supported
