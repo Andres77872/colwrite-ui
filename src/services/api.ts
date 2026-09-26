@@ -2,8 +2,12 @@ import { emitRequireLogin } from './session';
 import { ApiError, isUnknownRecord, problemRetryAfter } from './contracts';
 import { abortableSleep, isRetryableProblem, retryWaitMs } from './retry';
 
-// Prefer relative base during development to avoid browser CORS via Vite proxy
-export const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
+const PRODUCTION_API_BASE = 'https://colwrite-api.novus.chat';
+
+// Production builds call the API directly. The dev server (and tests) use the
+// Vite `/api` proxy, which forwards to the same production API by default.
+export const API_BASE = import.meta.env.VITE_API_BASE
+  ?? (import.meta.env.DEV ? '/api' : PRODUCTION_API_BASE);
 
 export type ApiRequestInit = RequestInit & {
   /**
@@ -41,7 +45,10 @@ function isSelfReporting(path: string): boolean {
 
 export function buildUrl(path: string): string {
   const base = API_BASE.replace(/\/$/, '');
-  const p = path.startsWith('/') ? path : `/${path}`;
+  let p = path.startsWith('/') ? path : `/${path}`;
+  // The API serves the agent routes at /api/agent/* itself. The `/api` proxy
+  // forwards them unchanged; a direct API base needs the prefix spelled out.
+  if (!base.endsWith('/api') && (p === '/agent' || p.startsWith('/agent/'))) p = `/api${p}`;
   return `${base}${p}`;
 }
 
