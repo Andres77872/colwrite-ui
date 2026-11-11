@@ -35,6 +35,17 @@ describe('progressForStatus', () => {
     expect(progressForStatus('something_new', '')).toEqual({ phase: 'thinking', label: 'Thinking…' });
   });
 
+  it('says in the server’s words that a long run is being condensed', () => {
+    // Sent while the oldest part of a conversation is summarised to stay
+    // within the context budget; it can last as long as a short model call.
+    expect(
+      progressForStatus('compacting', 'Condensing earlier steps to stay within the context limit…'),
+    ).toEqual({
+      phase: 'thinking',
+      label: 'Condensing earlier steps to stay within the context limit…',
+    });
+  });
+
   it('leaves tool steps to the tool events', () => {
     expect(progressForStatus('executing_tool', 'Running doc_edit...')).toBeNull();
   });

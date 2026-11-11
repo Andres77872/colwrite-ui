@@ -12,6 +12,32 @@ export function blockRows(root: ParentNode | null = document): HTMLElement[] {
   return root ? Array.from(root.querySelectorAll<HTMLElement>(BLOCK_ROW)) : [];
 }
 
+/** The row of block `id` inside the same canvas as `from`. */
+export function blockRowOf(from: Element | null, id: string): HTMLElement | null {
+  const container = from?.closest('.blocks-container');
+  if (!container) return null;
+  return container.querySelector<HTMLElement>(`:scope > .block-row[data-block-id="${CSS.escape(id)}"]`);
+}
+
+/**
+ * The suggestion that is shown in place of a block row, if there is one.
+ *
+ * A pending rewrite or deletion takes its block's place on the page: the row
+ * is `display: none` and the suggestion card under it carries the text (see
+ * `.review-change` in globals.css, which this mirrors). The block is still in
+ * the document, so anything that walks blocks by id has to ask before it puts
+ * a caret there or merges text into it.
+ */
+export function reviewInPlaceOf(row: Element | null): HTMLElement | null {
+  let next = row?.nextElementSibling ?? null;
+  for (let i = 0; i < 2 && next?.classList.contains('review-change'); i += 1) {
+    const kind = next.getAttribute('data-change-kind');
+    if (kind === 'replace' || kind === 'delete') return next as HTMLElement;
+    next = next.nextElementSibling;
+  }
+  return null;
+}
+
 /** Distance from the scroller's edge at which a drag starts auto-scrolling. */
 export const EDGE = 48;
 

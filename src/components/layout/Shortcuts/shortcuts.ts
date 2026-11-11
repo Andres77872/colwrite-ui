@@ -19,7 +19,7 @@ export type ShortcutId =
   | 'redo'
   | 'help';
 
-export type ShortcutGroup = 'General' | 'Navigation' | 'AI' | 'Editing';
+export type ShortcutGroup = 'General' | 'Navigation' | 'AI' | 'Review' | 'Editing';
 
 export type Shortcut = {
   id: ShortcutId;
@@ -95,6 +95,13 @@ export const EDITOR_SHORTCUTS: ReadonlyArray<{
   { label: 'Insert a block', bindings: [['/']], group: 'Editing' },
   { label: 'Bold, italic, underline', bindings: [['Mod', 'B'], ['Mod', 'I'], ['Mod', 'U']], group: 'Editing', joiner: '·' },
   { label: 'Add a link to the selection', bindings: [['Mod', 'K']], group: 'Editing' },
+  // Handled in Editable: the clipboard's text only, no formatting and no blocks.
+  { label: 'Paste as plain text', bindings: [['Mod', 'Shift', 'V']], group: 'Editing' },
+  // The selection toolbar (FloatingToolbar): strikethrough, inline code, Cite
+  // and the AI actions have no chord of their own. Arrow keys move along the
+  // toolbar; Esc goes back to the text with the selection kept. Not Mod:
+  // Alt+F10 is the WAI-ARIA convention for "go to this field's toolbar".
+  { label: 'Move to the formatting toolbar (with text selected)', bindings: [['Alt', 'F10']], group: 'Editing' },
   { label: 'Select the block', bindings: [['Esc']], group: 'Editing' },
   { label: 'Duplicate the block', bindings: [['Mod', 'D']], group: 'Editing' },
   { label: 'Move the block up or down', bindings: [['Mod', 'Shift', '↑'], ['Mod', 'Shift', '↓']], group: 'Editing', joiner: '·' },
@@ -102,9 +109,16 @@ export const EDITOR_SHORTCUTS: ReadonlyArray<{
   // Tab indents inside a list or code, so it never leaves the text on its own there.
   { label: 'Leave the text for the next control', bindings: [['Esc'], ['Tab']], group: 'Editing', joiner: 'then' },
   { label: 'Turn selected blocks into another type', bindings: [['Mod', 'Alt', '0–9']], group: 'Editing' },
+
+  // Reviewing the assistant's suggestions. Both keys act on the suggestion
+  // card that holds focus and are handled there (ChangeCard), so
+  // `matchShortcut` never sees them: Mod+Enter stays "apply" in Ask AI and
+  // "send" in the composer.
+  { label: 'Accept the focused suggestion', bindings: [['Mod', 'Enter']], group: 'Review' },
+  { label: 'Reject the focused suggestion', bindings: [['Mod', 'Backspace'], ['Mod', 'Delete']], group: 'Review' },
 ];
 
-export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = ['General', 'Navigation', 'AI', 'Editing'];
+export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = ['General', 'Navigation', 'AI', 'Review', 'Editing'];
 
 export type ShortcutRow = { label: string; bindings: string[][]; joiner?: string };
 
@@ -139,6 +153,16 @@ export function modifierLabel(): string {
   return /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent)
     ? '⌘'
     : 'Ctrl';
+}
+
+/**
+ * What a keycap reads in the help dialog: `Mod` is the platform modifier,
+ * and `Alt` is `⌥` where the platform modifier is `⌘` (the Option key).
+ */
+export function keycapLabel(part: string, modifier = modifierLabel()): string {
+  if (part === 'Mod') return modifier;
+  if (part === 'Alt' && modifier === '⌘') return '⌥';
+  return part;
 }
 
 /**

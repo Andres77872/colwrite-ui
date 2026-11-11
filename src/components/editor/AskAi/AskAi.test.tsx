@@ -143,3 +143,28 @@ describe('Ask AI progress while it works', () => {
     expect(screen.getByRole('status').textContent).not.toContain('……');
   });
 });
+
+describe('Ask AI when the author stops a reply part-way', () => {
+  it('says the text is incomplete and does not offer it as the first thing to apply', async () => {
+    mount();
+    const field = await screen.findByRole('combobox', { name: 'Ask AI' });
+    fireEvent.change(field, { target: { value: 'shorter' } });
+    const options = screen.getAllByRole('option');
+    const index = options.findIndex((option) => /Make shorter/.test(option.textContent ?? ''));
+    for (let i = 0; i < index; i += 1) fireEvent.keyDown(field, { key: 'ArrowDown' });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    const stop = await screen.findByRole('button', { name: /Stop/ });
+    await waitFor(() => expect(runHandlers).not.toBeNull());
+    act(() => runHandlers?.onToken?.('A shorter para'));
+
+    fireEvent.click(stop);
+
+    expect(await screen.findByText('Stopped before it finished. This text is incomplete.')).toBeTruthy();
+    const followUp = await screen.findByRole('combobox', { name: 'Ask AI' });
+    const active = followUp.getAttribute('aria-activedescendant');
+    // Enter used to replace the paragraph with the half-written text.
+    expect(active && document.getElementById(active)?.textContent).toMatch(/Try again/);
+    // The author can still choose to use it.
+    expect(screen.getAllByRole('option').some((option) => /Replace/.test(option.textContent ?? ''))).toBe(true);
+  });
+});

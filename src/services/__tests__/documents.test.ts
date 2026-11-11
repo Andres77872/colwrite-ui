@@ -106,6 +106,37 @@ describe('toBackendDocument', () => {
   });
 });
 
+describe('toBackendDocument inline widgets', () => {
+  it('leaves out a widget entry that has no placeholder in the html', () => {
+    const kept = { id: 'c1', type: 'equation', latex: 'x' };
+    const orphan = { id: 'c2', type: 'equation', latex: 'y' };
+    const result = toBackendDocument({
+      version: 3,
+      blocks: [
+        {
+          id: 'p',
+          type: 'paragraph',
+          html: 'See <span data-child-id="c1" contenteditable="false"></span> here',
+          children: [kept, orphan],
+          columns: 1,
+        },
+      ],
+    });
+    expect((result.blocks[0] as { children: unknown[] }).children).toEqual([kept]);
+  });
+
+  it('sends a paragraph whose widgets all have a placeholder unchanged', () => {
+    const block = {
+      id: 'p',
+      type: 'paragraph',
+      html: '<span data-child-id="c1" contenteditable="false"></span>',
+      children: [{ id: 'c1', type: 'equation', latex: 'x' }],
+      columns: 1,
+    };
+    expect(toBackendDocument({ version: 1, blocks: [block] }).blocks[0]).toBe(block);
+  });
+});
+
 // ── toEditorDoc ──
 
 describe('toEditorDoc', () => {

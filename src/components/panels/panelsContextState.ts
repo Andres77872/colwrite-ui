@@ -50,6 +50,12 @@ export type PanelsContextValue = {
   setLeftCollapsed: (collapsed: boolean) => void;
   toggleLeftCollapsed: () => void;
   isDesktop: boolean;
+  /**
+   * Whether the right sidebar sits beside the page (a desktop, or a tablet
+   * from 768px) rather than opening as a sheet over it. What depends on the
+   * page staying in view next to the sidebar asks this, not `isDesktop`.
+   */
+  toolsDocked: boolean;
   mobileNavOpen: boolean;
   setMobileNavOpen: (open: boolean) => void;
   /**

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isBoolean, isNumber, usePersistentState } from '@/hooks/usePersistentState';
-import { useIsDesktop } from '@/hooks/useMediaQuery';
+import { useIsDesktop, useMediaQuery } from '@/hooks/useMediaQuery';
 import { PANEL_CONFIG } from './panelConfig';
 import { isResearchSource, isToolId, tabForTool } from './toolsConfig';
 import {
@@ -47,8 +47,15 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 
 type SetStateAction<T> = T | ((prev: T) => T);
 
+/** From this width the right sidebar docks beside the page. */
+const TOOLS_DOCK_QUERY = '(min-width: 768px)';
+
 export function PanelsProvider({ children }: { children: React.ReactNode }) {
   const isDesktop = useIsDesktop();
+  // From a tablet up, the right sidebar is a column beside the page (narrower
+  // and fixed below the desktop width; see AppShell), not a sheet over it.
+  const tabletUp = useMediaQuery(TOOLS_DOCK_QUERY);
+  const toolsDocked = isDesktop || tabletUp;
 
   // Layout choices survive a reload — re-dragging panels every session was
   // the single most repeated interaction in the app.
@@ -209,6 +216,7 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       setLeftCollapsed,
       toggleLeftCollapsed,
       isDesktop,
+      toolsDocked,
       mobileNavOpen,
       setMobileNavOpen,
       assistantOpen,
@@ -237,6 +245,7 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       setLeftCollapsed,
       toggleLeftCollapsed,
       isDesktop,
+      toolsDocked,
       mobileNavOpen,
     ],
   );

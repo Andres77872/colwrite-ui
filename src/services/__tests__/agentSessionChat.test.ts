@@ -9,6 +9,7 @@ let commands: Command[];
 let runStarts: number;
 let onStart: (socket: MockSocket, command: Command) => void;
 let onSubscribe: (socket: MockSocket, command: Command) => void;
+let onList: (socket: MockSocket, command: Command) => void;
 
 class MockSocket {
   static OPEN = 1;
@@ -39,7 +40,8 @@ class MockSocket {
     queueMicrotask(() => {
       if (this.readyState !== 1) return;
       switch (command.method) {
-        case 'sessions.list': this.reply(command, []); break;
+        case 'sessions.list': onList(this, command); break;
+        case 'sessions.delete': this.reply(command, { deleted: true }); break;
         case 'sessions.create': this.reply(command, { id: 's1', last_seq: 0 }); break;
         case 'sessions.get': this.reply(command, { session: { id: 's1', last_seq: 0 }, run: null }); break;
         case 'sessions.subscribe': this.reply(command, { subscribed: true }); onSubscribe(this, command); break;
@@ -59,6 +61,7 @@ class MockSocket {
 beforeEach(() => {
   commands = []; runStarts = 0; MockSocket.instances = [];
   onSubscribe = () => {};
+  onList = (socket, command) => socket.reply(command, []);
   onStart = (socket, command) => {
     socket.reply(command, { id: 'r1', status: 'running' });
     socket.event(1, 'token', { content: 'Evidence' });
@@ -232,6 +235,77 @@ describe('durable agent sessions', () => {
       socket.message({ type: 'subscription.error', session_id: 's1', error: { code: 'not_found', message: 'Session removed' } });
     };
     await expect(streamAgentSession(params, {})).rejects.toThrow('Session removed');
+  });
+
+  it('deletes a one-shot session when its run has ended, and never a conversation', async () => {
+    await streamAgentSession({ ...params, mode: 'rewrite', ephemeral: true }, {});
+    expect(commands.filter((command) => command.method === 'sessions.delete').map((command) => command.params)).toEqual([{ session_id: 's1' }]);
+    commands = [];
+    await streamAgentSession(params, {});
+    expect(commands.some((command) => command.method === 'sessions.delete')).toBe(false);
+  });
+  it('leaves a one-shot session the author stopped to the server', async () => {
+    const controller = new AbortController();
+    onStart = (socket, command) => {
+      controller.abort('cancel');
+      socket.reply(command, { id: 'r1', status: 'running' });
+    };
+    await streamAgentSession({ ...params, mode: 'rewrite', ephemeral: true }, {}, { signal: controller.signal });
+    // Its run is still stopping, and a session with an active run cannot be deleted.
+    expect(commands.some((command) => command.method === 'sessions.delete')).toBe(false);
+    expect(commands.some((command) => command.method === 'runs.cancel')).toBe(true);
+  });
+  it('counts consecutive failed reconnects, not every drop of a long run', async () => {
+    onStart = (socket, command) => {
+      socket.reply(command, { id: 'r1', status: 'running' });
+      queueMicrotask(() => { socket.event(1, 'token', { content: 'one ' }); socket.close(1006); });
+    };
+    onSubscribe = (socket) => {
+      const connection = MockSocket.instances.length;
+      if (connection === 2) { socket.event(2, 'token', { content: 'two ' }); socket.close(1006); }
+      if (connection === 3) { socket.event(3, 'token', { content: 'three' }); socket.close(1006); }
+      if (connection === 4) socket.finish(4);
+    };
+    const onToken = vi.fn();
+    // Three drops against a limit of two: each reconnect made progress first.
+    const result = await streamAgentSession(params, { onToken }, { retry: { baseDelayMs: 0, maxAttempts: 2 } });
+    expect(result.terminal).toBe('done');
+    expect(onToken.mock.calls.flat()).toEqual(['one ', 'two ', 'three']);
+    expect(runStarts).toBe(1);
+  });
+  it('still gives up when reconnecting gets nowhere', async () => {
+    onStart = (socket, command) => {
+      socket.reply(command, { id: 'r1', status: 'running' });
+      queueMicrotask(() => socket.close(1006));
+    };
+    onSubscribe = (socket) => { if (MockSocket.instances.length > 1) socket.close(1006); };
+    await expect(streamAgentSession(params, {}, { retry: { baseDelayMs: 0, maxAttempts: 3 } })).rejects.toThrow();
+    expect(MockSocket.instances).toHaveLength(3);
+  });
+  it('says when it is back on the run after a reconnect', async () => {
+    onStart = (socket, command) => {
+      socket.reply(command, { id: 'r1', status: 'running' });
+      queueMicrotask(() => { socket.event(1, 'tool_call_start', { tool: 'web_read', tool_call_id: 'c1' }); socket.close(1006); });
+    };
+    onSubscribe = (socket) => { if (MockSocket.instances.length === 2) setTimeout(() => socket.finish(2), 0); };
+    const onStatus = vi.fn();
+    await streamAgentSession(params, { onStatus }, { retry: { baseDelayMs: 0 } });
+    const states = onStatus.mock.calls.map(([state]) => state);
+    // Without the second one the label stayed on "Reconnecting…" for as long
+    // as the tool call was quiet.
+    expect(states.slice(states.indexOf('reconnecting'))).toEqual(['reconnecting', 'reconnected']);
+  });
+  it('reports a deleted chat with the code the caller recovers from', async () => {
+    onList = (socket, command) => socket.message({ id: command.id, error: { code: 'not_found', message: 'Chat not found for this document' } });
+    const onError = vi.fn();
+    const result = await streamAgentSession({ ...params, chat_id: 'gone' }, { onError });
+    expect(onError).toHaveBeenCalledWith('CHAT_NOT_FOUND', 'Chat not found for this document');
+    expect(result.terminal).toBe('error');
+    expect(runStarts).toBe(0);
+  });
+  it('does not mistake a missing document for a deleted chat', async () => {
+    onList = (socket, command) => socket.message({ id: command.id, error: { code: 'not_found', message: 'Document not found' } });
+    await expect(streamAgentSession({ ...params, chat_id: 'c1' }, {})).rejects.toThrow('Document not found');
   });
 
 });

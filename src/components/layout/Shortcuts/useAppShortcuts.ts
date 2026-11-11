@@ -24,11 +24,17 @@ function modalIsOpen(): boolean {
  * Undo in the title field, the chat composer or a search box is that field's
  * own undo. The document journal used to take Mod+Z from every one of them —
  * rewinding the paper while the author was correcting a search.
+ *
+ * The page title sits inside the canvas but is not a block: it commits when
+ * it loses focus, so the journal knows nothing of what is being typed there.
+ * Mod+Z in it used to revert the last edit to the body, possibly off screen,
+ * and leave the typo in the title.
  */
-function inForeignTextField(target: EventTarget | null): boolean {
+export function inForeignTextField(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
   if (!element?.closest) return false;
   if (element.closest('input, textarea, select')) return true;
+  if (element.closest('[data-page-title]')) return true;
   const editable = element.closest('[contenteditable="true"], [contenteditable="plaintext-only"]');
   return Boolean(editable && !editable.closest('.canvas'));
 }

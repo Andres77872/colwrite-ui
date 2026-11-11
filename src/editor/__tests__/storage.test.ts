@@ -8,6 +8,9 @@ import {
   loadDocumentId,
   saveDoc,
   saveDocumentId,
+  clearUnsavedDraft,
+  loadUnsavedDraft,
+  saveUnsavedDraft,
 } from '../storage';
 
 const docFor = (name: string): Doc => ({
@@ -72,6 +75,39 @@ describe('draft cache', () => {
     expect(loadDoc('doc-1')).toBeNull();
     expect(loadDoc('doc-2')).toBeNull();
     expect(loadDocumentId()).toBeNull();
+  });
+
+  it('clears kept edits and review records with them, and leaves other keys alone', () => {
+    saveUnsavedDraft('doc-1', docFor('never saved'), 5);
+    localStorage.setItem('colwrite:review:v1:doc-1:cs-1', '{}');
+    localStorage.setItem('colwrite:agent-engine:v1', 'legacy');
+
+    clearCachedDocs();
+
+    expect(loadUnsavedDraft('doc-1')).toBeNull();
+    expect(localStorage.getItem('colwrite:review:v1:doc-1:cs-1')).toBeNull();
+    expect(localStorage.getItem('colwrite:agent-engine:v1')).toBe('legacy');
+  });
+});
+
+describe('edits that never reached the server', () => {
+  it('are kept per document with the time they were taken', () => {
+    saveUnsavedDraft('doc-1', docFor('mine'), 1234);
+    expect(loadUnsavedDraft('doc-1')).toEqual({ documentId: 'doc-1', doc: docFor('mine'), savedAt: 1234 });
+    expect(loadUnsavedDraft('doc-2')).toBeNull();
+  });
+
+  it('are not read back for another document or from damaged storage', () => {
+    localStorage.setItem('colwrite:unsaved:doc-2', JSON.stringify({ documentId: 'doc-1', doc: docFor('x'), savedAt: 1 }));
+    expect(loadUnsavedDraft('doc-2')).toBeNull();
+    localStorage.setItem('colwrite:unsaved:doc-3', '{not json');
+    expect(loadUnsavedDraft('doc-3')).toBeNull();
+  });
+
+  it('are gone once cleared', () => {
+    saveUnsavedDraft('doc-1', docFor('mine'));
+    clearUnsavedDraft('doc-1');
+    expect(loadUnsavedDraft('doc-1')).toBeNull();
   });
 });
 

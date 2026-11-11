@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/components/ui/toast';
 import type {
@@ -12,6 +13,7 @@ import {
   type AgentToolsContextValue,
 } from './agentToolsContextState';
 import { AgentToolsPreferences } from './AgentToolsPreferences';
+import { ApiError } from '@/services/contracts';
 
 function tool(
   id: string,
@@ -127,35 +129,78 @@ const SETTINGS: AgentToolSettings = {
   categories,
 };
 
-function renderPreferences(
-  updateSettings: AgentToolsContextValue['updateSettings'] = async () => SETTINGS,
-  catalog: AgentToolSettings = SETTINGS,
-) {
+/** The catalog after a PUT, as the API answers it: selections merged in. */
+function applyUpdate(catalog: AgentToolSettings, changes: AgentToolSettingsUpdate): AgentToolSettings {
+  const next = structuredClone(catalog);
+  const set = <T extends { id: string; enabled: boolean; available: boolean; effective_enabled: boolean }>(
+    options: T[] | undefined,
+    selection: Record<string, boolean> | undefined,
+  ) => {
+    for (const option of options ?? []) {
+      if (typeof selection?.[option.id] === 'boolean') option.enabled = selection[option.id];
+      option.effective_enabled = option.enabled && option.available;
+    }
+  };
+  set(next.sources, changes.sources);
+  set(next.categories.flatMap((category) => category.tools), changes.tools);
+  set(next.skills, changes.skills);
+  set(next.features, changes.features);
+  return next;
+}
+
+/**
+ * The preferences inside a context that behaves like the real provider: a
+ * successful save replaces `settings` with the server's answer. `updateSettings`
+ * sees every request first; when it throws, the save fails.
+ */
+function Harness({
+  catalog,
+  updateSettings,
+}: {
+  catalog: AgentToolSettings;
+  updateSettings: (changes: AgentToolSettingsUpdate) => Promise<unknown>;
+}) {
+  const [settings, setSettings] = useState(catalog);
   const value: AgentToolsContextValue = {
-    settings: catalog,
+    settings,
     loading: false,
     loaded: true,
     error: null,
-    refresh: vi.fn(async () => SETTINGS),
-    updateSettings,
-    isSourceEnabled: (id) =>
-      SETTINGS.sources.find((source) => source.id === id)?.effective_enabled === true,
+    refresh: vi.fn(async () => settings),
+    updateSettings: async (changes) => {
+      await updateSettings(changes);
+      let saved = settings;
+      setSettings((current) => (saved = applyUpdate(current, changes)));
+      return saved;
+    },
+    isSourceEnabled: (id) => settings.sources.find((source) => source.id === id)?.effective_enabled === true,
     isToolEnabled: (id) =>
-      SETTINGS.categories
+      settings.categories
         .flatMap((category) => category.tools)
         .find((candidate) => candidate.id === id)?.effective_enabled === true,
   };
+  return (
+    <AgentToolsContext.Provider value={value}>
+      <AgentToolsPreferences />
+    </AgentToolsContext.Provider>
+  );
+}
+
+function renderPreferences(
+  updateSettings: (changes: AgentToolSettingsUpdate) => Promise<unknown> = vi.fn(async () => undefined),
+  catalog: AgentToolSettings = SETTINGS,
+) {
   return {
     updateSettings,
     ...render(
       <ToastProvider>
-        <AgentToolsContext.Provider value={value}>
-          <AgentToolsPreferences />
-        </AgentToolsContext.Provider>
+        <Harness catalog={catalog} updateSettings={updateSettings} />
       </ToastProvider>,
     ),
   };
 }
+
+const state = (name: RegExp) => screen.getByRole('switch', { name }).getAttribute('aria-checked');
 
 afterEach(cleanup);
 
@@ -182,42 +227,53 @@ describe('AgentToolsPreferences', () => {
     expect(screen.queryByText('Account-wide')).toBeNull();
   });
 
-  it('saves source and individual research-tool selections', async () => {
-    const updateSettings = vi.fn(async (_changes: AgentToolSettingsUpdate) => SETTINGS);
+  it('saves each switch as it changes, one request at a time, in order', async () => {
+    let release: () => void = () => {};
+    const updateSettings = vi.fn(
+      (_changes: AgentToolSettingsUpdate) =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
     renderPreferences(updateSettings);
 
-    fireEvent.click(
-      screen.getByRole('switch', { name: /^Semantic Scholar Opt-in/ }),
-    );
-    fireEvent.click(
-      screen.getByRole('switch', { name: /^Search Semantic ScholarSearch/ }),
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
+    fireEvent.click(screen.getByRole('switch', { name: /^Semantic Scholar Opt-in/ }));
+    fireEvent.click(screen.getByRole('switch', { name: /^Search Semantic ScholarSearch/ }));
 
+    // Both show at once; the second waits for the first.
+    expect(state(/^Semantic Scholar Opt-in/)).toBe('true');
+    expect(state(/^Search Semantic ScholarSearch/)).toBe('true');
+    expect(screen.getByText('Saving…')).toBeTruthy();
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
-    const update = updateSettings.mock.calls[0]?.[0];
-    expect(update).toBeDefined();
-    if (!update) return;
-    expect(update?.sources?.semantic_scholar).toBe(true);
-    expect(update?.sources?.arxiv).toBe(true);
-    expect(update?.tools?.semantic_scholar_search).toBe(true);
-    expect(Object.keys(update?.tools ?? {})).toHaveLength(17);
+    expect(updateSettings).toHaveBeenNthCalledWith(1, { sources: { semantic_scholar: true } });
+
+    await act(async () => release());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(2));
+    expect(updateSettings).toHaveBeenNthCalledWith(2, { tools: { semantic_scholar_search: true } });
+    await act(async () => release());
+
+    expect(await screen.findByText('Changes are saved as you make them.')).toBeTruthy();
+    expect(state(/^Semantic Scholar Opt-in/)).toBe('true');
+    expect(state(/^Search Semantic ScholarSearch/)).toBe('true');
+    expect(screen.queryByRole('button', { name: 'Save preferences' })).toBeNull();
   });
 
-  it('shows a save error without discarding the draft', async () => {
+  it('puts a switch back and says why beside it when its save fails', async () => {
     const updateSettings = vi.fn(async () => {
-      throw new Error('Storage unavailable');
+      throw new ApiError('Storage unavailable', 503, null);
     });
     renderPreferences(updateSettings);
 
-    const semantic = screen.getByRole('switch', {
-      name: /^Semantic Scholar Opt-in/,
-    });
-    fireEvent.click(semantic);
-    fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
+    fireEvent.click(screen.getByRole('switch', { name: /^Semantic Scholar Opt-in/ }));
+    expect(state(/^Semantic Scholar Opt-in/)).toBe('true');
 
-    expect((await screen.findByRole('alert')).textContent).toContain('Storage unavailable');
-    expect((semantic as HTMLButtonElement).dataset.state).toBe('checked');
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Not saved');
+    expect(alert.textContent).toContain('Storage unavailable');
+    expect(state(/^Semantic Scholar Opt-in/)).toBe('false');
+    expect(
+      screen.getByRole('switch', { name: /^Semantic Scholar Opt-in/ }).getAttribute('aria-describedby'),
+    ).toContain(alert.id);
   });
 });
 
@@ -232,24 +288,35 @@ const CAPABILITY_SETTINGS: AgentToolSettings = {
 };
 
 describe('skills and planning preferences', () => {
-  it('saves explicit opt-out and opt-in selections with the tool draft', async () => {
-    const update = vi.fn(async () => CAPABILITY_SETTINGS);
+  it('saves explicit opt-out and opt-in selections as they change', async () => {
+    const update = vi.fn(async () => undefined);
     renderPreferences(update, CAPABILITY_SETTINGS);
     fireEvent.click(screen.getByRole('switch', { name: /^Editor tools/ }));
     fireEvent.click(screen.getByRole('switch', { name: /^Research subagents/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save preferences' }));
-    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({
-      skills: { 'editor-tools': false }, features: { subagents: true },
-    })));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update).toHaveBeenNthCalledWith(1, { skills: { 'editor-tools': false } });
+    expect(update).toHaveBeenNthCalledWith(2, { features: { subagents: true } });
   });
-  it('shows unmet tool dependencies immediately and resets feature defaults', () => {
-    renderPreferences(undefined, CAPABILITY_SETTINGS);
+  it('shows unmet tool dependencies immediately, and resets to defaults in one save with an undo', async () => {
+    const update = vi.fn(async (_changes: AgentToolSettingsUpdate) => undefined);
+    renderPreferences(update, CAPABILITY_SETTINGS);
     fireEvent.click(screen.getByRole('switch', { name: /^Reload document snapshot/ }));
     expect(screen.getByText('Needs Reload document snapshot')).toBeTruthy();
     fireEvent.click(screen.getByRole('switch', { name: /^Research subagents/ }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    await screen.findByText('Changes are saved as you make them.');
+
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }));
-    expect(screen.getByRole('switch', { name: /^Research subagents/ }).getAttribute('aria-checked')).toBe('false');
+    expect(state(/^Research subagents/)).toBe('false');
     expect(screen.queryByText('Needs Reload document snapshot')).toBeNull();
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(3));
+    expect(update).toHaveBeenNthCalledWith(3, { tools: { doc_read: true }, features: { subagents: false } });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(4));
+    expect(update).toHaveBeenNthCalledWith(4, { tools: { doc_read: false }, features: { subagents: true } });
+    await waitFor(() => expect(state(/^Research subagents/)).toBe('true'));
+    expect((screen.getByRole('button', { name: 'Reset to defaults' }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
 

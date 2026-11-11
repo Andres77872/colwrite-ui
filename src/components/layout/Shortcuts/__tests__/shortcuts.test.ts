@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SHORTCUTS, matchShortcut, shortcutBindingKey, shortcutReference } from '../shortcuts';
+import { SHORTCUTS, keycapLabel, matchShortcut, shortcutBindingKey, shortcutReference } from '../shortcuts';
 
 /** A KeyboardEvent without needing a DOM target. */
 function key(init: KeyboardEventInit): KeyboardEvent {
@@ -95,7 +95,7 @@ describe('matchShortcut', () => {
 describe('shortcutReference', () => {
   it('groups rows and merges alternate bindings of one action into a single row', () => {
     const sections = shortcutReference();
-    expect(sections.map((section) => section.group)).toEqual(['General', 'Navigation', 'AI', 'Editing']);
+    expect(sections.map((section) => section.group)).toEqual(['General', 'Navigation', 'AI', 'Review', 'Editing']);
     const labels = sections.flatMap((section) => section.rows.map((row) => row.label));
     expect(new Set(labels).size).toBe(labels.length);
     const search = sections[0].rows.find((row) => row.label === 'Search documents and commands');
@@ -107,5 +107,26 @@ describe('shortcutReference', () => {
     expect(redo?.bindings).toHaveLength(2);
     expect(labels).toContain('Ask AI on the current block');
     expect(labels).toContain('Duplicate the block');
+  });
+
+  it('lists the way from selected text to the formatting toolbar', () => {
+    const editing = shortcutReference().find((section) => section.group === 'Editing');
+    const toolbar = editing?.rows.find((row) => row.label.startsWith('Move to the formatting toolbar'));
+    expect(toolbar?.bindings).toEqual([['Alt', 'F10']]);
+    // The editor handles it, not the app-level matcher (it carries no Mod).
+    expect(matchShortcut(new KeyboardEvent('keydown', { key: 'F10', altKey: true }))).toBeNull();
+  });
+});
+
+describe('keycapLabel', () => {
+  it('names the platform modifier and the Option key on Apple platforms', () => {
+    expect(keycapLabel('Mod', '⌘')).toBe('⌘');
+    expect(keycapLabel('Alt', '⌘')).toBe('⌥');
+    expect(keycapLabel('F10', '⌘')).toBe('F10');
+  });
+
+  it('keeps Ctrl and Alt elsewhere', () => {
+    expect(keycapLabel('Mod', 'Ctrl')).toBe('Ctrl');
+    expect(keycapLabel('Alt', 'Ctrl')).toBe('Alt');
   });
 });

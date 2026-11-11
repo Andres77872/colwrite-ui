@@ -87,6 +87,316 @@ function revisionChanges(base: string, against: string): Json[] {
   return changes;
 }
 
+/**
+ * Each document's version tree, as the API keeps it (ColWrite-api
+ * `docs/document-history-api.md`): a save writes a revision under the one the
+ * document sits on, and a restore moves that pointer without writing one.
+ */
+type MockHistory = {
+  /** Newest first, as the API lists them. */
+  revisions: Json[];
+  /** What each revision held. */
+  contents: Map<string, Json>;
+  /** The revision the document sits on. */
+  pointer: string;
+};
+const histories = new Map<string, MockHistory>();
+
+function contentOf(doc: Json): Json {
+  return { schema_version: 1, name: doc.name, tags: doc.tags ?? [], blocks: doc.blocks, sources: doc.sources, citationStyle: doc.citationStyle };
+}
+
+function historyOf(doc: Json): MockHistory {
+  const id = String(doc._id);
+  const existing = histories.get(id);
+  if (existing) return existing;
+  const content = structuredClone(contentOf(doc));
+  const version = Number(doc.version ?? 1);
+  const seeded = id === FIXTURE_DOCUMENT_ID && version === REVISIONS[0].revision_no;
+  const revisions: Json[] = seeded
+    ? REVISIONS.map((revision) => ({ ...revision }))
+    : [{ revision_id: `rev-${version}`, revision_no: version, parent_revision_id: null, kind: 'save', actor_type: 'human', origin: 'human', created_at: now, byte_size: 1200, content_hash: `h${version}`, summary: null }];
+  const contents = new Map<string, Json>(
+    revisions.map((revision) => [
+      String(revision.revision_id),
+      seeded ? revisionContent(content, Number(revision.revision_no)) : content,
+    ]),
+  );
+  const created: MockHistory = { revisions, contents, pointer: String(revisions[0].revision_id) };
+  histories.set(id, created);
+  return created;
+}
+
+/** Record a write as a new revision under the current one, and move onto it. */
+function recordRevision(doc: Json, summary: string | null = null): void {
+  const history = historyOf(doc);
+  const revisionNo = Math.max(...history.revisions.map((revision) => Number(revision.revision_no))) + 1;
+  const revisionId = `rev-${revisionNo}`;
+  const content = structuredClone(contentOf(doc));
+  history.revisions.unshift({
+    revision_id: revisionId,
+    revision_no: revisionNo,
+    parent_revision_id: history.pointer,
+    kind: 'save',
+    actor_type: 'human',
+    origin: 'human',
+    created_at: new Date().toISOString(),
+    byte_size: JSON.stringify(content).length,
+    content_hash: `h${revisionNo}`,
+    summary,
+  });
+  history.contents.set(revisionId, content);
+  history.pointer = revisionId;
+}
+
+/** Block-level changes between two stored states, by stable id as the API does. */
+function blockChanges(base: Json, target: Json): Json[] {
+  const blocksOf = (content: Json) => (content.blocks as Json[] | undefined) ?? [];
+  const before = new Map(blocksOf(base).map((block, index) => [String(block.id), { block, index }]));
+  const after = new Map(blocksOf(target).map((block, index) => [String(block.id), { block, index }]));
+  const changes: Json[] = [];
+  for (const [id, { block, index }] of before) {
+    if (!after.has(id)) changes.push({ entity: 'block', change: 'deleted', entity_id: id, entity_type: block.type, from_index: index, fields: [] });
+  }
+  for (const [id, { block, index }] of after) {
+    const previous = before.get(id);
+    if (!previous) {
+      changes.push({ entity: 'block', change: 'inserted', entity_id: id, entity_type: block.type, to_index: index, fields: [] });
+      continue;
+    }
+    const fields = [...new Set([...Object.keys(previous.block), ...Object.keys(block)])].filter(
+      (field) => JSON.stringify(previous.block[field]) !== JSON.stringify(block[field]),
+    );
+    if (fields.length > 0) changes.push({ entity: 'block', change: 'changed', entity_id: id, entity_type: block.type, fields });
+  }
+  return changes;
+}
+
+/* ----------------------------------------
+   Stored change sets (durable proposals)
+   ---------------------------------------- */
+
+/**
+ * A document whose stored change set was left half-reviewed, so per-operation
+ * review can be seen without a backend: open "Camera-ready edits (review in
+ * progress)" from the documents menu.
+ *
+ * Of its five operations, one was accepted and one rejected before; the
+ * server's record says so, and they are not offered again. Three are left,
+ * and one of those rewrites a paragraph the author changed after the
+ * assistant read it, which the target fingerprints show. Shapes follow
+ * ColWrite-api `docs/document-history-api.md` (Per-operation review,
+ * Operation targets).
+ */
+export const REVIEW_DOCUMENT_ID = '66f0c0ffee0000000000d0c5';
+const REVIEW_CHANGE_SET_ID = '7d1f0c6e-5a0b-4d7e-9f43-2b6f1c0a9e11';
+
+/** What the assistant read in the Results paragraph, before the author changed it. */
+const RESULTS_AS_PROPOSED = 'Sparse routing matches the dense baseline at roughly half the compute.';
+
+const reviewParagraph = (id: string, html: string): Json => ({ id, type: 'paragraph', html, children: [] });
+
+store.set(REVIEW_DOCUMENT_ID, {
+  _id: REVIEW_DOCUMENT_ID,
+  name: 'Camera-ready edits (review in progress)',
+  version: 4,
+  tags: [],
+  blocks: [
+    { id: 'cr-h', type: 'heading', level: 1, html: 'Camera-ready edits' },
+    reviewParagraph('cr-abstract', 'We study sparse routing at long context lengths and find that it scales well.'),
+    reviewParagraph('cr-setup', 'All models are trained for 100k steps on sequences of up to 128k tokens.'),
+    // The insert the author already accepted.
+    reviewParagraph('cr-seeds', 'Each configuration is run with three seeds, and we report the mean.'),
+    // Rewritten by the author after the assistant proposed its own version.
+    reviewParagraph('cr-results', 'Sparse routing matches the dense baseline at 38% of the compute, measured on the 128k split.'),
+    reviewParagraph('cr-limits', 'We did not evaluate sequences longer than 128k tokens.'),
+    // The deletion the author already rejected.
+    reviewParagraph('cr-thanks', 'We thank the anonymous reviewers for their comments.'),
+  ],
+});
+
+/**
+ * A stand-in for the API's block digest. Like the real one it is only ever
+ * compared with another digest from the same function, and it ignores how a
+ * block is shown. It reads the fields the preview's paragraphs and headings
+ * have, so the defaults the editor adds on a save do not count as an edit.
+ */
+function mockFingerprint(block: Json): string {
+  const text = JSON.stringify([
+    block.type ?? '', block.html ?? '', block.text ?? '', block.variant ?? '', block.level ?? 0, block.checked ?? false,
+  ]);
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
+  }
+  return `preview-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+type MockChangeSet = {
+  change_set_id: string;
+  document_id: string;
+  status: string;
+  /** In the API's wire shape (`block_id`, `reference_id`). */
+  operations: Json[];
+  /** The target block as each rewrite or deletion found it; `null` for the rest. */
+  targets: Array<{ block_id: string; fingerprint: string } | null>;
+  decisions: Array<{ index: number; decision: string; decided_at: string; decided_by: string }>;
+  proposed_at: string;
+  expires_at: string;
+  decided_at: string | null;
+  conflict_reason: string | null;
+  rejection_reason: string | null;
+  summary: string | null;
+};
+
+function seededChangeSet(): MockChangeSet {
+  const blocks = new Map(
+    ((store.get(REVIEW_DOCUMENT_ID)?.blocks as Json[] | undefined) ?? []).map((block) => [String(block.id), block]),
+  );
+  const found = (id: string, html?: string) => ({
+    block_id: id,
+    fingerprint: mockFingerprint(html === undefined ? blocks.get(id) ?? {} : { ...blocks.get(id), html }),
+  });
+  return {
+    change_set_id: REVIEW_CHANGE_SET_ID,
+    document_id: REVIEW_DOCUMENT_ID,
+    status: 'pending',
+    operations: [
+      {
+        op: 'replace_block',
+        block_id: 'cr-abstract',
+        block: { html: 'We study sparse routing at context lengths of up to 128k tokens and find that its compute cost grows <strong>sublinearly</strong>.' },
+      },
+      {
+        op: 'insert_block_after',
+        reference_id: 'cr-setup',
+        block: reviewParagraph('cr-seeds', 'Each configuration is run with three seeds, and we report the mean.'),
+      },
+      {
+        op: 'replace_block',
+        block_id: 'cr-results',
+        block: { html: 'Sparse routing matches the dense baseline at 40% of the compute.' },
+      },
+      { op: 'delete_block', block_id: 'cr-thanks' },
+      {
+        op: 'append_block',
+        block: reviewParagraph('cr-future', 'Future work will extend the evaluation beyond 128k tokens.'),
+      },
+    ],
+    targets: [found('cr-abstract'), null, found('cr-results', RESULTS_AS_PROPOSED), found('cr-thanks'), null],
+    decisions: [
+      { index: 1, decision: 'accepted', decided_at: '2026-09-20T13:10:00Z', decided_by: 'preview' },
+      { index: 3, decision: 'rejected', decided_at: '2026-09-20T13:11:00Z', decided_by: 'preview' },
+    ],
+    proposed_at: '2026-09-20T13:05:00Z',
+    expires_at: '2099-01-01T00:00:00Z',
+    decided_at: null,
+    conflict_reason: null,
+    rejection_reason: null,
+    summary: 'Tighten the abstract and the results for the camera-ready version.',
+  };
+}
+
+const changeSets = new Map<string, MockChangeSet[]>([[REVIEW_DOCUMENT_ID, [seededChangeSet()]]]);
+
+/** A change set as the API returns it, compared with the saved document. */
+function changeSetResponse(changeSet: MockChangeSet, duplicate = false): Json {
+  const doc = store.get(changeSet.document_id);
+  const saved = new Map(((doc?.blocks as Json[] | undefined) ?? []).map((block) => [String(block.id), block]));
+  const { targets, decisions, ...row } = changeSet;
+  return {
+    ...row,
+    base_head_seq: 2,
+    base_content_hash: 'h2',
+    base_etag: '"cw:canonical-json-v1:1:2:preview"',
+    base_revision_id: 'rev-2',
+    proposer_id: 'preview-agent',
+    proposer_type: 'agent',
+    origin: 'agent',
+    depends_on_change_set_id: null,
+    run_uuid: 'preview-run',
+    tool_call_id: 'call_edit',
+    decided_by: changeSet.decided_at ? 'preview' : null,
+    accepted_revision_id: null,
+    accepted_head_seq: null,
+    duplicate,
+    operation_targets: targets.map((target) => {
+      const block = target ? saved.get(target.block_id) : undefined;
+      return target && { ...target, head_fingerprint: block ? mockFingerprint(block) : null };
+    }),
+    compared_head_seq: doc?.version ?? null,
+    operation_decisions: decisions,
+  };
+}
+
+function changeSetConflict(changeSet: MockChangeSet, reason: string, detail: string, context: Json = {}): Response {
+  return new Response(
+    JSON.stringify({
+      type: 'https://colwrite.com/problems/change_set_conflict',
+      title: 'Change Set Conflict',
+      status: 409,
+      detail,
+      code: 'change_set_conflict',
+      retryable: false,
+      change_set_id: changeSet.change_set_id,
+      change_set_status: changeSet.status,
+      conflict_reason: reason,
+      ...context,
+    }),
+    { status: 409, headers: { 'content-type': 'application/problem+json' } },
+  );
+}
+
+/**
+ * `POST …/change-sets/{id}/decisions`, with the API's rules: an operation is
+ * decided once, repeating a decision is a duplicate, and the last decision
+ * takes the set out of `pending` without applying anything.
+ */
+function decideOperations(changeSet: MockChangeSet, body: Json): Response {
+  const invalid = (detail: string) =>
+    new Response(
+      JSON.stringify({ type: 'about:blank', title: 'Document Validation Failed', status: 422, detail, code: 'document_validation_failed', retryable: false }),
+      { status: 422, headers: { 'content-type': 'application/problem+json' } },
+    );
+  const requested = Array.isArray(body.decisions) ? (body.decisions as Json[]) : [];
+  if (requested.length === 0) return invalid('decisions must contain at least one item');
+  const seen = new Set<number>();
+  for (const item of requested) {
+    const index = item?.index;
+    if (!Number.isInteger(index) || (index as number) < 0) return invalid('operation index must be a non-negative integer');
+    if (item.decision !== 'accepted' && item.decision !== 'rejected') return invalid('decision must be accepted or rejected');
+    if (seen.has(index as number)) return invalid(`operation index ${index} is decided twice in one request`);
+    if ((index as number) >= changeSet.operations.length) return invalid(`operation index ${index} is outside this change set`);
+    seen.add(index as number);
+  }
+
+  const recorded = new Map(changeSet.decisions.map((item) => [item.index, item.decision]));
+  const contradicted = requested.find(
+    (item) => recorded.has(item.index as number) && recorded.get(item.index as number) !== item.decision,
+  );
+  if (contradicted) {
+    return changeSetConflict(changeSet, 'operation_already_decided', 'That operation was already decided differently', {
+      operation_index: contradicted.index,
+    });
+  }
+  const fresh = requested.filter((item) => !recorded.has(item.index as number));
+  if (fresh.length === 0) return json(changeSetResponse(changeSet, true), { headers: { 'cache-control': 'private, no-store' } });
+  if (changeSet.status !== 'pending') {
+    return changeSetConflict(changeSet, 'terminal_state', 'Only a pending change set can be decided');
+  }
+
+  const decidedAt = new Date().toISOString();
+  for (const item of fresh) {
+    changeSet.decisions.push({ index: item.index as number, decision: String(item.decision), decided_at: decidedAt, decided_by: 'preview' });
+  }
+  if (changeSet.decisions.length === changeSet.operations.length) {
+    changeSet.status = changeSet.decisions.some((item) => item.decision === 'accepted') ? 'superseded' : 'rejected';
+    changeSet.conflict_reason = 'decided_per_operation';
+    changeSet.decided_at = decidedAt;
+  }
+  return json(changeSetResponse(changeSet), { headers: { 'cache-control': 'private, no-store' } });
+}
+
 /** Uploaded PDFs, so Research → My PDFs and the file manager have something to show. */
 const pdf = (id: number, filename: string, title: string) => ({
   id, filename, title, content_type: 'application/pdf', byte_size: 1_840_000 + id * 1000, checksum_sha256: `sha-${id}`,
@@ -150,16 +460,18 @@ function recordTurn(documentId: string, chatId: string | null, message: string, 
 }
 
 function head(doc: Json): Json {
+  const history = historyOf(doc);
+  const current = history.revisions.find((revision) => revision.revision_id === history.pointer);
   return {
     document_id: doc._id,
     head_seq: doc.version,
-    revision_no: doc.version,
-    revision_id: `rev-${doc.version}`,
-    current_revision_id: `rev-${doc.version}`,
+    revision_no: current?.revision_no ?? doc.version,
+    revision_id: history.pointer,
+    current_revision_id: history.pointer,
     created_at: '2026-09-18T17:40:00Z',
     updated_at: now,
     deleted_at: null,
-    content: { schema_version: 1, name: doc.name, tags: doc.tags ?? [], blocks: doc.blocks, sources: doc.sources, citationStyle: doc.citationStyle },
+    content: contentOf(doc),
   };
 }
 
@@ -620,32 +932,126 @@ async function handle(method: string, path: string, url: URL, init?: RequestInit
   if ((match = path.match(/^\/document\/save\/([^/]+)$/)) && method === 'PUT') {
     const id = decodeURIComponent(match[1]);
     const previous = store.get(id);
+    // Saves are optimistically locked on `version`, as in the API: a stale
+    // one is a 409 with this wording (ColWrite-api `document_actions.py`).
+    const sent = (body.document as Json | undefined)?.version;
+    if (previous && typeof sent === 'number' && sent !== previous.version) {
+      return new Response(
+        JSON.stringify({ detail: `Version conflict: the document was modified elsewhere (sent version ${sent}, server has ${previous.version})` }),
+        { status: 409, headers: { 'content-type': 'application/json' } },
+      );
+    }
     const version = Number(previous?.version ?? 0) + 1;
-    store.set(id, { ...(body.document as Json), _id: id, version });
+    // The history is seeded from what was there before this write.
+    if (previous) historyOf(previous);
+    const saved = { ...(body.document as Json), _id: id, version };
+    store.set(id, saved);
+    recordRevision(saved);
     return json({ status: 'ok', message: 'saved', version });
+  }
+  if ((match = path.match(/^\/document\/export\/([^/]+)$/)) && method === 'GET') {
+    // `GET /document/export/{id}?format=tex|pdf` renders the *saved* document
+    // server-side (ColWrite-api docs/document.md). The preview has no LaTeX
+    // renderer, so it answers with a minimal source in the same shape; PDF
+    // reports a missing compiler, as an API without one does.
+    const doc = store.get(decodeURIComponent(match[1]));
+    if (!doc) return new Response(JSON.stringify({ detail: 'Document not found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+    const format = url.searchParams.get('format');
+    if (format === 'pdf') return new Response(JSON.stringify({ detail: 'PDF export is unavailable' }), { status: 503, headers: { 'content-type': 'application/json' } });
+    if (format !== 'tex') return new Response(JSON.stringify({ detail: [{ msg: "Input should be 'tex' or 'pdf'" }] }), { status: 422, headers: { 'content-type': 'application/json' } });
+    const name = String(doc.name ?? 'Untitled document');
+    const escaped = name.replace(/[\\{}$&#^_%~]/g, (character) => `\\${character}`);
+    const source = `\\documentclass{article}\n\\title{${escaped}}\n\\begin{document}\n\\maketitle\n% Dev preview: ColWrite-api renders the full document here.\n\\end{document}\n`;
+    return new Response(source, {
+      status: 200,
+      headers: {
+        'content-type': 'application/x-tex',
+        'content-disposition': `attachment; filename="document.tex"; filename*=UTF-8''${encodeURIComponent(`${name}.tex`)}`,
+        'cache-control': 'private, no-store',
+      },
+    });
   }
   if (path === '/document/create' && method === 'POST') {
     const id = `66f0c0ffee0000000000${String(store.size + 10).padStart(4, '0')}`;
     store.set(id, { ...(body.document as Json), _id: id, version: 1 });
     return json({ document_id: id, version: 1 });
   }
-  if ((match = path.match(/^\/v2\/documents\/([^/]+)\/change-sets$/))) return json({ change_sets: [] });
-  if ((match = path.match(/^\/v2\/documents\/([^/]+)\/revisions$/))) return json({ revisions: REVISIONS, next_cursor: null });
+  if ((match = path.match(/^\/v2\/documents\/([^/]+)\/change-sets$/)) && method === 'GET') {
+    const wanted = url.searchParams.get('status');
+    const rows = (changeSets.get(decodeURIComponent(match[1])) ?? [])
+      .filter((changeSet) => !wanted || changeSet.status === wanted)
+      // Newest first, as the API lists them.
+      .sort((a, b) => b.proposed_at.localeCompare(a.proposed_at));
+    return json({ change_sets: rows.map((changeSet) => changeSetResponse(changeSet)), next_cursor: null });
+  }
+  if ((match = path.match(/^\/v2\/documents\/([^/]+)\/change-sets\/([^/]+)(?:\/(decisions|reject))?$/))) {
+    const changeSet = (changeSets.get(decodeURIComponent(match[1])) ?? []).find(
+      (candidate) => candidate.change_set_id === decodeURIComponent(match![2]),
+    );
+    if (!changeSet) return problem(404, 'change_set_not_found', 'Change set not found');
+    if (!match[3] && method === 'GET') return json(changeSetResponse(changeSet));
+    if (match[3] === 'decisions' && method === 'POST') return decideOperations(changeSet, body);
+    if (match[3] === 'reject' && method === 'POST') {
+      // A whole-set reject closes a partly decided set and keeps its record.
+      if (changeSet.status === 'pending') {
+        changeSet.status = 'rejected';
+        changeSet.decided_at = new Date().toISOString();
+        changeSet.rejection_reason = typeof body.reason === 'string' ? body.reason : null;
+      } else if (changeSet.status !== 'rejected') {
+        return changeSetConflict(changeSet, 'terminal_state', 'Change set cannot be rejected in its current state');
+      }
+      return json(changeSetResponse(changeSet));
+    }
+  }
+  if ((match = path.match(/^\/v2\/documents\/([^/]+)\/revisions$/))) {
+    const doc = store.get(decodeURIComponent(match[1]));
+    return json({ revisions: doc ? historyOf(doc).revisions : [], next_cursor: null });
+  }
   if ((match = path.match(/^\/v2\/documents\/([^/]+)\/revisions\/([^/]+)\/diff$/))) {
+    const doc = store.get(decodeURIComponent(match[1]));
     const base = decodeURIComponent(match[2]);
     const against = url.searchParams.get('against') ?? 'current';
+    if (!doc) return problem(404, 'DOCUMENT_NOT_FOUND', 'No such document');
+    const history = historyOf(doc);
+    const target = against === 'current' ? history.pointer : against;
+    const seeded = (id: string) => REVISIONS.some((revision) => revision.revision_id === id);
+    const from = history.contents.get(base);
+    // Against the live document, which may hold a save that is not a revision
+    // of this tree yet; between two revisions, what each of them held.
+    const to = against === 'current' ? contentOf(doc) : history.contents.get(target);
+    if (!from || !to) return problem(404, 'REVISION_NOT_FOUND', 'No such revision');
     return json({
       base_revision_id: base,
       target_revision_id: against === 'current' ? null : against,
-      target_head_seq: against === 'current' ? 3 : null,
-      diff: { changes: revisionChanges(base, against) },
+      target_head_seq: against === 'current' ? doc.version : null,
+      // The seeded revisions keep their written-out changes (a citation's
+      // sources among them); anything saved in the preview is compared.
+      diff: { changes: seeded(base) && seeded(target) ? revisionChanges(base, target) : blockChanges(from, to) },
     });
+  }
+  if ((match = path.match(/^\/v2\/documents\/([^/]+)\/revisions\/([^/]+)\/restore$/)) && method === 'POST') {
+    // Moves the current-version pointer; no revision is written, and the head
+    // sequence still advances (docs/doc_architecture/13-branching-versions.md).
+    const id = decodeURIComponent(match[1]);
+    const doc = store.get(id);
+    const target = decodeURIComponent(match[2]);
+    if (!doc) return problem(404, 'DOCUMENT_NOT_FOUND', 'No such document');
+    const history = historyOf(doc);
+    const content = history.contents.get(target);
+    if (!content) return problem(404, 'REVISION_NOT_FOUND', 'No such revision');
+    const restored = { ...doc, ...structuredClone(content), _id: id, version: Number(doc.version ?? 1) + 1 };
+    store.set(id, restored);
+    history.pointer = target;
+    return json(head(restored), { headers: { etag: etag(restored) } });
   }
   if ((match = path.match(/^\/v2\/documents\/([^/]+)\/revisions\/([^/]+)$/))) {
     const doc = store.get(decodeURIComponent(match[1]));
-    const revision = REVISIONS.find((item) => item.revision_id === decodeURIComponent(match![2]));
-    if (!doc || !revision) return problem(404, 'REVISION_NOT_FOUND', 'No such revision');
-    return json({ ...revision, content: revisionContent(head(doc).content as Json, revision.revision_no) });
+    const revisionId = decodeURIComponent(match[2]);
+    const history = doc ? historyOf(doc) : null;
+    const revision = history?.revisions.find((item) => item.revision_id === revisionId);
+    const content = history?.contents.get(revisionId);
+    if (!revision || !content) return problem(404, 'REVISION_NOT_FOUND', 'No such revision');
+    return json({ ...revision, content });
   }
   if ((match = path.match(/^\/v2\/documents\/([^/]+)$/))) {
     const doc = store.get(decodeURIComponent(match[1]));
@@ -817,6 +1223,26 @@ export function installMockApi(): void {
     const path = url.pathname.slice('/api'.length);
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
     return handle(method, path, url, init);
+  };
+
+  // For trying the save-conflict flow by hand. `__colwritePreview.editElsewhere()`
+  // in the console changes the open document the way another tab would: the
+  // next autosave is refused, and the page asks which version to keep.
+  (window as unknown as { __colwritePreview?: unknown }).__colwritePreview = {
+    editElsewhere(id: string = new URLSearchParams(window.location.search).get('doc') ?? FIXTURE_DOCUMENT_ID): boolean {
+      const doc = store.get(id);
+      if (!doc) return false;
+      const blocks = [...((doc.blocks as Json[] | undefined) ?? [])];
+      const index = blocks.findIndex((block) => block.type === 'paragraph');
+      if (index >= 0) {
+        blocks[index] = { ...blocks[index], html: `${String(blocks[index].html ?? '')} (Edited in another tab.)` };
+      }
+      historyOf(doc);
+      const edited = { ...doc, blocks, version: Number(doc.version ?? 1) + 1 };
+      store.set(id, edited);
+      recordRevision(edited, 'Edited in another tab');
+      return true;
+    },
   };
 
   try {

@@ -103,8 +103,15 @@ export function PageTitle({
             el.blur();
             return;
           }
+          if (event.key === 'Enter' && event.shiftKey) {
+            // A title is one line. Shift+Enter used to put a line break in
+            // it, which the sidebar and the tab title then showed as a space
+            // or not at all.
+            event.preventDefault();
+            return;
+          }
           const continues =
-            (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) ||
+            (event.key === 'Enter' && !event.nativeEvent.isComposing) ||
             (event.key === 'ArrowDown' && isCaretAtEnd(el));
           if (!continues) return;
           event.preventDefault();

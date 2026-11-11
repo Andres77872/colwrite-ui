@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createRef, StrictMode, useImperativeHandle } from 'react';
 import * as agentSessions from '@/services/agentSessionChat';
 import * as chatAttachments from '@/services/chatAttachments';
@@ -1715,4 +1715,90 @@ it('reconciles the exact saved run and retains canonical PDF metadata across a r
   expect(streamAgentChat.mock.calls[1][0].attachments).toEqual([attachment]);
   expect(screen.getAllByRole('link', { name: 'same-paper.pdf' })).toHaveLength(1);
   vi.restoreAllMocks();
+});
+
+
+describe('a run the server reported as ended', () => {
+  it.each([
+    ['STREAM_ERROR', 'The assistant stream failed.'],
+    ['MODEL_GATEWAY_TRANSIENT', 'The assistant\u2019s model is not responding right now. Try again shortly.'],
+    ['AGENT_INTERRUPTED', 'The assistant run was interrupted. Your saved work is available in the conversation.'],
+  ])('starts a new run on Try again after %s, instead of replaying the failed one', async (code, message) => {
+    streamAgentChat.mockImplementationOnce(async (_params: unknown, handlers: SSEEventHandlers, options: { onRunStarted: (run: agentSessions.ResumeAgentRun) => void }) => {
+      options.onRunStarted({ sessionId: 'session-1', runId: 'failed-run', requestId: 'request-1' });
+      handlers.onToken?.('Half an answer');
+      handlers.onError?.(code, message);
+      return { chatId: null, threadId: null, usage: null, terminal: 'error' };
+    });
+    await mount();
+    await compose('explain attention');
+    await act(async () => screen.getByRole('button', { name: /send message/i }).click());
+    await screen.findByRole('button', { name: 'Try again' });
+
+    answerText('The whole answer.');
+    await act(async () => screen.getByRole('button', { name: 'Try again' }).click());
+
+    // Reattaching to the failed run only replayed its saved error.
+    expect(streamAgentChat.mock.calls[1][2].resume).toBeUndefined();
+    expect(streamAgentChat.mock.calls[1][0].message).toBe('explain attention');
+    expect((await screen.findAllByText('The whole answer.')).length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ['MODEL_GATEWAY_AUTH', 'The assistant cannot reach its model service: the server\u2019s credentials were rejected. This needs the site administrator; trying again will not help.'],
+    ['MODEL_GATEWAY_BILLING', 'The assistant\u2019s model account has run out of credit. This needs the site administrator; trying again will not help.'],
+    ['MODEL_GATEWAY_REJECTED', 'Every configured model refused this request. It may be too large: try a shorter message, fewer attachments or a new conversation.'],
+    ['MODEL_GATEWAY_CONTEXT', 'This conversation is too large for the assistant\u2019s models, even after condensing it. Start a new conversation or remove large attachments, then ask again.'],
+    ['MODEL_CONTEXT_TOO_LARGE', 'This document and request are larger than the assistant can read at once (about 212,000 tokens; the limit is 180,000). Remove or shorten attachments, or split the document, then ask again.'],
+  ])('shows %s as something Try again cannot fix', async (code, message) => {
+    streamAgentChat.mockImplementationOnce(async (_params: unknown, handlers: SSEEventHandlers) => {
+      handlers.onError?.(code, message);
+      return { chatId: null, threadId: null, usage: null, terminal: 'error' };
+    });
+    await mount();
+    await compose('hello');
+    await act(async () => screen.getByRole('button', { name: /send message/i }).click());
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+});
+
+
+describe('the task list of a multi-step request', () => {
+  const tasks = [
+    { id: 'a', content: 'Tighten the abstract', status: 'completed' as const },
+    { id: 'b', content: 'Check the related work', status: 'in_progress' as const },
+    { id: 'c', content: 'Fix the citations', status: 'pending' as const },
+  ];
+
+  it('stays pinned above the composer while the turn runs, then joins the reply', async () => {
+    let finish: (() => void) | null = null;
+    streamAgentChat.mockImplementation((_params: unknown, handlers: SSEEventHandlers) => new Promise((resolve) => {
+      handlers.onTodo?.(tasks);
+      handlers.onToken?.('Working through it.');
+      finish = () => {
+        handlers.onDone?.('chat-1', 1, { promptTokens: 0, completionTokens: 0 });
+        resolve({ chatId: 'chat-1', threadId: 1, usage: null, terminal: 'done' });
+      };
+    }));
+    await mount();
+    await compose('revise the paper');
+    await act(async () => screen.getByRole('button', { name: /send message/i }).click());
+
+    const bar = await screen.findByRole('region', { name: 'Task progress' });
+    // One line: how far, and what is being worked on now.
+    expect(bar.textContent).toContain('1/3');
+    expect(bar.textContent).toContain('Check the related work');
+    expect(screen.queryByRole('list', { name: 'Assistant task list' })).toBeNull();
+    fireEvent.click(within(bar).getByRole('button'));
+    expect(within(bar).getByRole('list', { name: 'Assistant task list' }).textContent).toContain('Fix the citations');
+
+    await act(async () => finish?.());
+
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Task progress' })).toBeNull());
+    expect(screen.getByText(/Tasks · 1 of 3 done/)).toBeTruthy();
+    // Started and never finished is not the same as never started.
+    expect(screen.getByText('Not finished:')).toBeTruthy();
+  });
 });

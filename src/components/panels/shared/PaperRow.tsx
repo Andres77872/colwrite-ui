@@ -19,7 +19,7 @@ import {
   useOptionalEditorActions,
   type CitationSource,
 } from '@/editor';
-import { useCiteAtCursor } from '@/components/editor/References';
+import { useCiteAndAnnounce } from '@/components/editor/References';
 
 /** An external link offered from a row's "…" menu. */
 export type PaperLink = { label: string; href: string | null | undefined };
@@ -220,7 +220,7 @@ function CiteButtons({ source, title }: { source: CitationSource; title: string 
 }
 
 function EditorCiteButtons({ source, title }: { source: CitationSource; title: string }) {
-  const cite = useCiteAtCursor();
+  const cite = useCiteAndAnnounce();
   const { upsertSources } = useEditorActions();
   const bibliography = useBibliography();
   const { toast } = useToast();
@@ -234,7 +234,8 @@ function EditorCiteButtons({ source, title }: { source: CitationSource; title: s
         size="xs"
         aria-label={`Cite ${title} at the cursor`}
         onClick={() => {
-          if (cite([source])) toast({ title: 'Citation inserted', description: source.title });
+          // Says where the citation went, which is not always the caret.
+          cite([source]);
         }}
       >
         <Quote aria-hidden="true" />

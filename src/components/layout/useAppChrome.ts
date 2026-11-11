@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
 import { useEditor } from '@/editor';
+import { useToast } from '@/components/ui/toastContext';
+import { isFileDrag, unplaceableFileMessage } from '@/lib/fileDrop';
 import { APP_NAME } from '@/components/common/Brand';
 import type { AppView } from './viewContextState';
 import { displayTitle } from './displayTitle';
@@ -45,4 +47,35 @@ export function useUnsavedGuard() {
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [hasPendingEdits]);
+}
+
+/**
+ * Catch a file dropped where nothing takes files.
+ *
+ * The browser's own answer to such a drop is to open the file in the tab,
+ * which closes the document mid-sentence. The drop zones (library, assistant
+ * composer) handle their own drops and stop them before they get here; any
+ * other file drop is refused, with a line saying where the file can go.
+ */
+export function useStrayFileDropGuard() {
+  const { toast } = useToast();
+
+  useEffect(() => {
+    const onDragOver = (event: DragEvent) => {
+      if (event.defaultPrevented || !isFileDrag(event.dataTransfer)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'none';
+    };
+    const onDrop = (event: DragEvent) => {
+      if (event.defaultPrevented || !isFileDrag(event.dataTransfer)) return;
+      event.preventDefault();
+      toast({ ...unplaceableFileMessage(event.dataTransfer?.files ?? null), variant: 'warning' });
+    };
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [toast]);
 }

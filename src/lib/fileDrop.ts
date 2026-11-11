@@ -39,6 +39,29 @@ export function pointerLeftElement(
   return !currentTarget.contains(relatedTarget as Node | null);
 }
 
+/**
+ * What to tell an author whose file has nowhere to go on the page.
+ *
+ * The document has no image block and takes no attachments, so a pasted
+ * screenshot or a dropped file used to do nothing at all — or, dropped beside
+ * the text, made the browser leave the app to show the file. Saying where the
+ * file can go is the least the page owes them.
+ */
+export function unplaceableFileMessage(files: FileList | File[] | null): { title: string; description: string } {
+  const chosen = Array.from(files ?? []);
+  const pictures = chosen.length > 0 && chosen.every((file) => file.type.startsWith('image/'));
+  if (pictures) {
+    return {
+      title: 'Pictures cannot go in the page yet',
+      description: 'To ask about one, attach it to a message in the assistant.',
+    };
+  }
+  return {
+    title: 'Files cannot go in the page',
+    description: 'Add PDFs to your library, or attach a file to a message in the assistant.',
+  };
+}
+
 /** A PDF by declared type or, when the browser offers none, by extension. */
 export function isPdf(file: File): boolean {
   return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');

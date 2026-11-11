@@ -3,6 +3,7 @@ import { cn } from '@/lib/utils';
 import { uid } from '@/lib/uid';
 import { sanitizeEditableHtml } from '@/export/sanitize';
 import {
+  focusPageTitle,
   isListItem,
   kindOf,
   markdownPrefixKind,
@@ -10,9 +11,12 @@ import {
   useEditorActions,
   type BlockKindId,
 } from '../../../editor';
-import { useLayoutEffect, useRef } from 'react';
+import { useContext, useLayoutEffect, useRef } from 'react';
+import { ToastContext } from '@/components/ui/toastContext';
+import { unplaceableFileMessage } from '@/lib/fileDrop';
 import { openSlashMenu, isSlashMenuOpen } from '../../editor/SlashMenu/slashMenuEvents';
 import { openAskAi } from '../../editor/AskAi/askAiEvents';
+import { blockRowOf, reviewInPlaceOf } from '../../editor/Canvas/canvasDom';
 import { normalizeEditableHtml, serializeEditableHtml } from './editableHtml';
 import { BLOCKS_MIME, pasteAsBlocks } from './pasteBlocks';
 import { isMod, turnIntoKind } from './blockKeys';
@@ -123,9 +127,13 @@ export function Editable({
     splitBlock,
     updateHtml,
     insertBlocksAfter,
+    batch,
     refs,
     registerEditable,
   } = useEditorActions();
+  // Read directly rather than through `useToast`, which throws without a
+  // provider: an editable is also mounted on its own (previews, tests).
+  const toasts = useContext(ToastContext);
   const { activeId, setActive } = useActiveBlock();
   const pointerDownRef = useRef(false);
   const editableRef = useRef<HTMLDivElement | null>(null);
@@ -134,14 +142,38 @@ export function Editable({
   const composingRef = useRef(false);
   /** A "/" typed at a word boundary: open the menu once it is in the DOM. */
   const slashPendingRef = useRef(false);
+  /**
+   * Set by Mod+Shift+V, read by the paste that follows it. The browser's
+   * "paste and match style" still hands the page the clipboard's html, so the
+   * author's request for plain text has to be remembered from the key.
+   */
+  const plainPasteRef = useRef(false);
 
-  /** Nearest block in `dir` that has an editable element, if any. */
+  /**
+   * Nearest block in `dir` that has an editable element the author can see.
+   *
+   * A block with a pending rewrite or deletion is hidden behind its
+   * suggestion; a caret sent there would vanish from the page.
+   */
   const neighbourBlock = (dir: -1 | 1): string | null => {
     const ids = getBlockIds();
     for (let j = ids.indexOf(id) + dir; j >= 0 && j < ids.length; j += dir) {
-      if (refs.current[ids[j]]) return ids[j];
+      const target = refs.current[ids[j]];
+      if (target && !reviewInPlaceOf(target.closest('.block-row'))) return ids[j];
     }
     return null;
+  };
+
+  /**
+   * The suggestion standing in place of the block right before or after this
+   * one, if any. Merging into such a block would move the author's text into
+   * a row that is not on the page, where accepting the suggestion deletes it.
+   */
+  const adjacentReview = (dir: -1 | 1): HTMLElement | null => {
+    const ids = getBlockIds();
+    const adjacent = ids[ids.indexOf(id) + dir];
+    if (!adjacent) return null;
+    return reviewInPlaceOf(blockRowOf(editableRef.current, adjacent));
   };
 
   /**
@@ -346,14 +378,26 @@ export function Editable({
         // dropped as well: their children don't travel with a copy, so a
         // pasted `data-child-id` span would render as an empty ghost widget.
         e.preventDefault();
-        const html = e.clipboardData.getData('text/html');
+        const plainOnly = plainPasteRef.current;
+        plainPasteRef.current = false;
+        // Plain text only: the clipboard's html and ColWrite's own block
+        // copy are ignored, so the words arrive without their formatting.
+        const html = plainOnly ? '' : e.clipboardData.getData('text/html');
         const text = e.clipboardData.getData('text/plain');
+        // A screenshot, or a picture copied from a page (which arrives as an
+        // `<img>` the sanitizer removes): nothing would be inserted, and the
+        // paste used to end there without a word.
+        const files = Array.from(e.clipboardData.files ?? []);
+        if (files.length > 0 && !text.trim()) {
+          toasts?.toast({ ...unplaceableFileMessage(files), variant: 'warning' });
+          return;
+        }
         // Several lines of structured text — a markdown list, headings,
         // paragraphs copied from elsewhere — become blocks of their own, the
         // way they were written, instead of one paragraph full of line breaks.
         const el = e.currentTarget as HTMLDivElement;
-        const blocksJson = e.clipboardData.getData(BLOCKS_MIME);
-        if (pasteAsBlocks({ el, blockId: id, html, text, blocksJson, getBlock, splitBlock, insertBlocksAfter, commit, focusLater })) {
+        const blocksJson = plainOnly ? '' : e.clipboardData.getData(BLOCKS_MIME);
+        if (pasteAsBlocks({ el, blockId: id, html, text, blocksJson, getBlock, splitBlock, insertBlocksAfter, commit, focusLater, batch })) {
           return;
         }
         if (html) {
@@ -384,6 +428,14 @@ export function Editable({
         if (e.nativeEvent.isComposing || composingRef.current) return;
         // The command menu owns navigation keys while it is open.
         if (isSlashMenuOpen() && ['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key)) return;
+
+        // Mod+Shift+V pastes as plain text (see `plainPasteRef`). The flag
+        // lasts for the paste this key causes and no longer.
+        if (isMod(e) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'v') {
+          plainPasteRef.current = true;
+          setTimeout(() => { plainPasteRef.current = false; }, 500);
+          return;
+        }
 
         // Block selection: Esc lifts the caret out of the text and selects
         // the whole block, the entry point to moving, duplicating or
@@ -579,9 +631,22 @@ export function Editable({
           // block into the one above instead of doing nothing.
           if (atStart) {
             e.preventDefault();
+            // The block above is waiting on a suggestion: decide that first.
+            const review = adjacentReview(-1);
+            if (review) {
+              review.focus();
+              return;
+            }
+            // Where the two texts meet, in the unit the caret is placed by:
+            // the text on the page, widgets included. The html string counts
+            // entities and leaves out what a citation or an equation renders.
+            const ids = getBlockIds();
+            const above = refs.current[ids[ids.indexOf(id) - 1]];
+            const junction = above?.textContent?.length;
             const merged = mergeWithPrevious(id);
             if (merged && merged.targetId !== id) {
-              focusLater(merged.targetId, (target) => restoreCaretOffset(target, merged.caretOffset));
+              const caret = junction ?? merged.caretOffset;
+              focusLater(merged.targetId, (target) => restoreCaretOffset(target, caret));
             }
           }
           return;
@@ -590,15 +655,54 @@ export function Editable({
           // Forward delete at the end pulls the next block up into this one.
           const offset = captureCaretOffset(el);
           if (offset !== null && offset === (el.textContent?.length ?? 0)) {
-            const nextId = neighbourBlock(1);
+            const review = adjacentReview(1);
+            if (review) {
+              e.preventDefault();
+              review.focus();
+              return;
+            }
+            // The block right below, whatever it is: the merge joins a block
+            // with the one above it in the document, so skipping ahead to the
+            // next text block would pull that one into a block in between.
+            const ids = getBlockIds();
+            const nextId = ids[ids.indexOf(id) + 1];
             const next = nextId ? getBlock(nextId) : undefined;
+            if (nextId && next && !next.locked && next.type === 'divider') {
+              // A divider has no text to pull up: forward delete removes it.
+              e.preventDefault();
+              removeBlock(nextId);
+              return;
+            }
             if (nextId && next && !next.locked && (next.type === 'paragraph' || next.type === 'heading')) {
               e.preventDefault();
               const merged = mergeWithPrevious(nextId);
-              if (merged) focusLater(merged.targetId, (target) => restoreCaretOffset(target, merged.caretOffset));
+              // The caret stays where it is: at the end of what was here.
+              if (merged) focusLater(merged.targetId, (target) => restoreCaretOffset(target, offset));
             }
           }
           return;
+        }
+        // Shift+Up with the selection already at the very start of the block
+        // (or Shift+Down at its very end) has no more text to take, and a
+        // browser selection cannot cross into the next block, which is a
+        // contenteditable of its own. The block itself becomes the selection,
+        // and Shift+Arrow goes on growing it block by block.
+        if (
+          (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+          e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey &&
+          selection && selection.focusNode && el.contains(selection.focusNode)
+        ) {
+          const upTo = document.createRange();
+          upTo.selectNodeContents(el);
+          upTo.setEnd(selection.focusNode, selection.focusOffset);
+          const focusAt = upTo.toString().length;
+          const atEdge = e.key === 'ArrowUp' ? focusAt === 0 : focusAt === (el.textContent ?? '').length;
+          if (atEdge) {
+            e.preventDefault();
+            selectBlocks([id]);
+            el.blur();
+            return;
+          }
         }
         // Arrow keys cross block boundaries at the edges of the text: Left and
         // Right at the first and last character, Up and Down on the first and
@@ -625,6 +729,10 @@ export function Editable({
               target.focus();
               if (e.key === 'ArrowUp' && line) placeCaretAtLine(target, 'last', line.x);
               else restoreCaretOffset(target, target.textContent?.length ?? 0);
+            } else if (getBlockIds()[0] === id && el.closest('.blocks-container') && focusPageTitle()) {
+              // Above the first block is the title. ArrowDown already comes
+              // down from it; the way back up used to stop here.
+              e.preventDefault();
             }
           } else if (leaveDown) {
             const nextId = neighbourBlock(1);

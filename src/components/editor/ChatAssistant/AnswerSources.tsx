@@ -3,8 +3,7 @@ import { BookmarkPlus, BookOpen, Check, ChevronRight, FileText, Globe, Library, 
 import { cn } from '@/lib/utils';
 import type { AgentSource } from '@/services/streamParser';
 import { useEditorActions } from '@/editor';
-import { useCiteAtCursor } from '@/components/editor/References';
-import { useToast } from '@/components/ui/toastContext';
+import { useCiteAndAnnounce } from '@/components/editor/References';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { anchorId, useSourceMarkers } from './answerSourceMarkers';
@@ -32,14 +31,14 @@ function recordOf({ id: _id, origin: _origin, ...record }: AgentSource) {
  * metadata, never anything the answer said about it.
  */
 function useSourceActions(source: AgentSource) {
-  const cite = useCiteAtCursor();
+  const cite = useCiteAndAnnounce();
   const { upsertSources } = useEditorActions();
-  const { toast } = useToast();
   const [saved, setSaved] = useState(false);
   return {
     saved,
     cite: () => {
-      if (cite([recordOf(source)])) toast({ title: 'Citation inserted', description: source.title });
+      // Says where the citation went, which is not always the caret.
+      cite([recordOf(source)]);
     },
     save: () => {
       upsertSources([recordOf(source)]);

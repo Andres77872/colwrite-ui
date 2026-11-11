@@ -56,6 +56,9 @@ export function progressForStatus(
       return { phase: 'retrying', label: text || 'Retrying…' };
     case 'reconnecting':
       return { phase: 'reconnecting', label: text || 'Reconnecting…' };
+    case 'reconnected':
+      // Back on the run; what it is doing arrives with its next event.
+      return { phase: 'thinking', label: 'Working…' };
     case 'executing_tool':
       return null;
     default:

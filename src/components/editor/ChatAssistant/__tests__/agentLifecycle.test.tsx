@@ -233,7 +233,9 @@ describe('durable assistant hook lifecycle', () => {
     ['unauthorized', 'Sign in again'],
     ['forbidden', 'Check your access'],
     ['not_found', 'Open another conversation'],
-    ['conflict', 'Reopen it'],
+    ['conflict', 'then send again'],
+    // The server's own sentence says which limit was reached.
+    ['limit_exceeded', 'Server explanation'],
   ])('shows an actionable %s socket error without offering a futile same-run retry', async (code, action) => {
     stream.mockRejectedValue(new AgentSocketError('Server explanation', code));
     const hook = renderHook(() => useHarness());

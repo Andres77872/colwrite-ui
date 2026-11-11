@@ -49,6 +49,7 @@ vi.mock('./components/editor/SlashMenu', () => ({ SlashMenu: () => null }));
 vi.mock('./components/layout/useAppChrome', () => ({
   useDocumentTitle: vi.fn(),
   useUnsavedGuard: vi.fn(),
+  useStrayFileDropGuard: vi.fn(),
 }));
 vi.mock('./components/layout/Shortcuts', () => ({
   ShortcutsDialog: () => null,

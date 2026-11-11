@@ -23,6 +23,7 @@ import { useAgentEngine } from '@/components/preferences/agentEngineContextState
 import { ProposedBlockView, ProposedRewriteView } from '../Review/ProposedBlockView';
 import { previewBibliography } from '../Review/diffText';
 import { toolRunningLabel } from '../ChatAssistant/AgentActivity/toolMeta';
+import { friendlyStreamError } from '../ChatAssistant/chatUtils';
 import {
   AgentStatusLine,
   advanceProgress,
@@ -168,6 +169,8 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
   /** What the running request is doing, and since when; null when idle. */
   const [progress, setProgress] = useState<AgentProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The author stopped the reply part-way: what is shown is unfinished. */
+  const [stopped, setStopped] = useState(false);
   const [preset, setPreset] = useState<AskAiPreset | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -278,6 +281,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
       setResult('');
       setSources([]);
       setError(null);
+      setStopped(false);
       // Nothing is written yet, so this is not "writing": the model reads
       // the passage (and a citation preset searches) before the first word.
       setProgress({
@@ -346,7 +350,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
               }
             },
             onError: (code, message) => {
-              failed = message;
+              failed = friendlyStreamError(code, message).message;
               engines.noteRunError(code);
             },
           },
@@ -372,6 +376,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
   const stop = useCallback(() => {
     abortRef.current?.abort();
     setPhase(result ? 'done' : 'prompt');
+    setStopped(Boolean(result));
     setProgress(null);
     setActiveIndex(0);
   }, [result]);
@@ -502,8 +507,12 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
       disabled: empty,
     });
     if (primary === 'note') actions.push({ id: 'copy', label: 'Copy', icon: Copy, action: { type: 'copy' } });
+    // A reply the author stopped is cut off mid-sentence. It can still be
+    // used, but "Try again" leads and no shortcut applies it: the first row
+    // and ⌘↵ used to replace the selection with the truncated text.
+    if (stopped) return [retry, ...actions.map((action) => ({ ...action, hint: undefined })), discard];
     return [...actions, retry, discard];
-  }, [empty, options, phase, preset, primary, target.kind]);
+  }, [empty, options, phase, preset, primary, stopped, target.kind]);
 
   // Fit (and make room) whenever the menu appears or changes length; keep it
   // fitted while the page scrolls or the window resizes.
@@ -563,7 +572,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
     }
     if (phase === 'done' && mod && event.key === 'Enter') {
       event.preventDefault();
-      apply(primary);
+      if (!stopped) apply(primary);
       return;
     }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -751,6 +760,9 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
             </div>
           ) : null}
           {error && <p className="text-sm text-destructive">{error}</p>}
+          {stopped && phase === 'done' && !empty && !error && (
+            <p className="mt-1.5 text-sm text-muted-foreground">Stopped before it finished. This text is incomplete.</p>
+          )}
           {phase === 'done' && empty && !error && (
             <p className="text-sm text-muted-foreground">The assistant returned nothing to insert.</p>
           )}

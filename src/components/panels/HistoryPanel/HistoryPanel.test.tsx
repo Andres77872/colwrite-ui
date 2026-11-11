@@ -5,8 +5,10 @@ import { HistoryPanel } from './HistoryPanel';
 import { buildVersionGraph } from './versionGraph';
 import { EditorActionsContext, EditorContext, type EditorContextValue } from '@/editor/editorContextState';
 import { ConfirmContext, type ConfirmOptions } from '@/components/ui/confirmContext';
-import { ToastContext } from '@/components/ui/toastContext';
-import type { Doc } from '@/editor/types';
+import { ToastContext, type ToastOptions } from '@/components/ui/toastContext';
+import { ProposalsContext, type ProposalsContextValue } from '@/editor/proposalsContextState';
+import { PanelsContext, type PanelsContextValue, type SidebarTab } from '../panelsContextState';
+import type { Block, Doc } from '@/editor/types';
 import * as historyService from '@/services/documentHistory';
 
 /**
@@ -45,26 +47,33 @@ const adoptRestoredDocument = vi.fn();
 const saveRemote = vi.fn(async () => {});
 let pendingEdits = false;
 
-function editorValue(documentId: string | null): EditorContextValue {
+function editorValue(documentId: string | null, documentListRevision = 0): EditorContextValue {
   return {
     documentId,
     doc: currentDoc,
     hasPendingEdits: () => pendingEdits,
     saveRemote,
     adoptRestoredDocument,
-    documentListRevision: 0,
+    documentListRevision,
   } as unknown as EditorContextValue;
 }
 
-const toast = vi.fn(() => 'toast-1');
+const toast = vi.fn((_options: ToastOptions) => 'toast-1');
 let confirmAnswer = true;
 const confirm = vi.fn(async (_options: ConfirmOptions) => confirmAnswer);
 
-function renderPanel(documentId: string | null = DOC_ID) {
-  const value = editorValue(documentId);
-  return render(
-    // The fake carries both state and actions, so it feeds both halves of the
-    // split context.
+type PanelOptions = {
+  documentListRevision?: number;
+  /** The sidebar's tab, when the panel is mounted inside it. */
+  tab?: SidebarTab;
+  pendingSuggestions?: number;
+};
+
+function panelTree(documentId: string | null, options: PanelOptions = {}): ReactNode {
+  const value = editorValue(documentId, options.documentListRevision ?? 0);
+  // The fake carries both state and actions, so it feeds both halves of the
+  // split context.
+  let tree: ReactNode = (
     <EditorContext.Provider value={value}>
       <EditorActionsContext.Provider value={value}>
         <ConfirmContext.Provider value={confirm}>
@@ -73,8 +82,57 @@ function renderPanel(documentId: string | null = DOC_ID) {
           </ToastContext.Provider>
         </ConfirmContext.Provider>
       </EditorActionsContext.Provider>
-    </EditorContext.Provider>,
-  ) as { container: HTMLElement } & { unmount: () => void; rerender: (ui: ReactNode) => void };
+    </EditorContext.Provider>
+  );
+  if (options.pendingSuggestions !== undefined) {
+    tree = (
+      <ProposalsContext.Provider value={{ pendingCount: options.pendingSuggestions } as ProposalsContextValue}>
+        {tree}
+      </ProposalsContext.Provider>
+    );
+  }
+  if (options.tab) {
+    tree = (
+      <PanelsContext.Provider value={{ isOpen: true, activeTool: options.tab } as PanelsContextValue}>
+        {tree}
+      </PanelsContext.Provider>
+    );
+  }
+  return tree;
+}
+
+function renderPanel(documentId: string | null = DOC_ID, options: PanelOptions = {}) {
+  const view = render(panelTree(documentId, options));
+  return { ...view, update: (next: PanelOptions) => view.rerender(panelTree(documentId, next)) };
+}
+
+/** A one-change diff of block `id`, and the two revisions' blocks it compares. */
+function mockChange(
+  change: Partial<historyService.RevisionChange> & { entityId: string; fields: string[] },
+  before: Block[],
+  after: Block[],
+) {
+  mocked.diffRevision.mockResolvedValue({
+    baseRevisionId: 'rev-1',
+    targetRevisionId: 'rev-2',
+    targetHeadSeq: null,
+    changes: [
+      {
+        entity: 'block',
+        change: 'changed',
+        entityType: 'paragraph',
+        parentId: null,
+        previousParentId: null,
+        fromIndex: null,
+        toIndex: null,
+        ...change,
+      },
+    ],
+  });
+  mocked.getRevision.mockImplementation(async (_docId, revisionId) => ({
+    ...revision({ revisionId }),
+    content: { version: 1, name: 'Findings', blocks: revisionId === 'rev-1' ? before : after },
+  }));
 }
 
 function revision(over: Partial<historyService.RevisionSummary> = {}): historyService.RevisionSummary {
@@ -301,7 +359,7 @@ describe('HistoryPanel', () => {
         expect.anything(),
       );
     });
-    expect(await screen.findByText('Paragraph changed')).toBeTruthy();
+    expect(await screen.findByText('Text changed')).toBeTruthy();
   });
 
   it('shows inline equations in a revision diff as equations, not as a ▦ glyph', async () => {
@@ -353,7 +411,7 @@ describe('HistoryPanel', () => {
     renderPanel();
     fireEvent.click(await screen.findByText('v2'));
 
-    expect(await screen.findByText('Paragraph changed')).toBeTruthy();
+    expect(await screen.findByText('Text changed')).toBeTruthy();
     expect(await screen.findByText(/moved from position/)).toBeTruthy();
     // One equation in the word diff, one in the moved block's snippet.
     expect(screen.getAllByRole('img', { name: 'Equation: x_t' })).toHaveLength(2);
@@ -380,6 +438,7 @@ describe('HistoryPanel', () => {
     await waitFor(() => {
       expect(mocked.restoreRevision).toHaveBeenCalledWith(DOC_ID, 'rev-2', {
         summary: 'Restored version 2',
+        etag: 'cw:3',
       });
     });
     expect(confirm).toHaveBeenCalled();
@@ -511,6 +570,150 @@ describe('HistoryPanel', () => {
     expect(await screen.findByText('2 branches')).toBeTruthy();
     const forkRow = screen.getByText('2 branches').closest('button');
     expect(forkRow?.textContent).toContain('v1');
+  });
+
+  it('names code, diagram and to-do changes by kind and diffs code text', async () => {
+    mocked.diffRevision.mockResolvedValue({
+      baseRevisionId: 'rev-1',
+      targetRevisionId: 'rev-2',
+      targetHeadSeq: null,
+      changes: [
+        { entity: 'block', change: 'changed', entityId: 'c1', entityType: 'code', parentId: null, previousParentId: null, fromIndex: null, toIndex: null, fields: ['text'] },
+        { entity: 'block', change: 'changed', entityId: 't1', entityType: 'paragraph', parentId: null, previousParentId: null, fromIndex: null, toIndex: null, fields: ['checked'] },
+        { entity: 'block', change: 'inserted', entityId: 'd1', entityType: 'code', parentId: null, previousParentId: null, fromIndex: null, toIndex: 2, fields: [] },
+      ],
+    });
+    const blocks = (revisionId: string): Block[] => [
+      { id: 'c1', type: 'code', language: 'python', text: revisionId === 'rev-1' ? 'loss = mse(y, x)' : 'loss = cross_entropy(y, x)' },
+      { id: 't1', type: 'paragraph', variant: 'todo', checked: revisionId !== 'rev-1', html: 'Run the ablation', children: [], columns: 1 },
+      ...(revisionId === 'rev-1' ? [] : [{ id: 'd1', type: 'code' as const, language: 'mermaid', text: '' }]),
+    ];
+    mocked.getRevision.mockImplementation(async (_docId, revisionId) => ({
+      ...revision({ revisionId }),
+      content: { version: 1, name: 'Findings', blocks: blocks(revisionId) },
+    }));
+
+    renderPanel();
+    fireEvent.click(await screen.findByText('v2'));
+
+    expect(await screen.findByText('Code changed')).toBeTruthy();
+    // The code's text is diffed, not just reported.
+    expect(document.querySelector('ins')?.textContent).toContain('cross_entropy');
+    expect(document.querySelector('del')?.textContent).toContain('mse');
+    expect(screen.getByText('To-do list changed')).toBeTruthy();
+    expect(screen.getByText('Ticked.')).toBeTruthy();
+    expect(screen.getByText('Diagram added')).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/checked|variant|Paragraph/);
+  });
+
+  it('says what a kind change and an indent mean instead of listing field names', async () => {
+    mockChange(
+      { entityId: 'p1', fields: ['indent', 'variant'] },
+      [{ id: 'p1', type: 'paragraph', variant: 'bullet', html: 'Point', children: [], columns: 1 }],
+      [{ id: 'p1', type: 'paragraph', variant: 'numbered', indent: 1, html: 'Point', children: [], columns: 1 }],
+    );
+
+    renderPanel();
+    fireEvent.click(await screen.findByText('v2'));
+
+    expect(await screen.findByText('Numbered list changed')).toBeTruthy();
+    expect(screen.getByText('Turned into Numbered list, indented.')).toBeTruthy();
+  });
+
+  it('warns that suggestions waiting for review are discarded by a restore', async () => {
+    mocked.diffRevision.mockResolvedValue({ baseRevisionId: 'rev-1', targetRevisionId: 'rev-2', targetHeadSeq: null, changes: [] });
+    mocked.getRevision.mockResolvedValue({ ...revision(), content: currentDoc });
+    confirmAnswer = false;
+
+    renderPanel(DOC_ID, { pendingSuggestions: 3 });
+    fireEvent.click(await screen.findByText('v2'));
+    fireEvent.click(await screen.findByRole('button', { name: /Restore/ }));
+
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    expect(String(confirm.mock.calls[0][0].description)).toContain(
+      '3 suggestions waiting for review will be discarded.',
+    );
+  });
+
+  it('offers Undo after a restore, which moves back to the version the document was on', async () => {
+    mocked.diffRevision.mockResolvedValue({ baseRevisionId: 'rev-1', targetRevisionId: 'rev-2', targetHeadSeq: null, changes: [] });
+    mocked.getRevision.mockResolvedValue({ ...revision(), content: currentDoc });
+    const restoredDoc: Doc = { version: 1, name: 'Findings', blocks: [] };
+    mocked.restoreRevision.mockImplementation(async (_docId, revisionId) =>
+      head({ headSeq: 4, currentRevisionId: revisionId, content: revisionId === 'rev-2' ? restoredDoc : currentDoc }),
+    );
+
+    renderPanel();
+    fireEvent.click(await screen.findByText('v2'));
+    fireEvent.click(await screen.findByRole('button', { name: /Restore/ }));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Now on version 2' })));
+    const options = toast.mock.calls.find(([call]) => call.title === 'Now on version 2')![0];
+    expect(options.action?.label).toBe('Undo');
+
+    // The head said the document was on rev-3 before the restore.
+    mocked.restoreRevision.mockClear();
+    options.action!.onSelect();
+    await waitFor(() =>
+      expect(mocked.restoreRevision).toHaveBeenCalledWith(
+        DOC_ID,
+        'rev-3',
+        expect.objectContaining({ summary: 'Restored version 3' }),
+      ),
+    );
+    await waitFor(() => expect(adoptRestoredDocument).toHaveBeenLastCalledWith(currentDoc, 4));
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Back on version 3' }));
+  });
+
+  it('shows a failed restore beside its button, not in a toast', async () => {
+    mocked.diffRevision.mockResolvedValue({ baseRevisionId: 'rev-1', targetRevisionId: 'rev-2', targetHeadSeq: null, changes: [] });
+    mocked.getRevision.mockResolvedValue({ ...revision(), content: currentDoc });
+    mocked.restoreRevision.mockRejectedValue(new Error('Storage is unavailable'));
+
+    renderPanel();
+    fireEvent.click(await screen.findByText('v2'));
+    fireEvent.click(await screen.findByRole('button', { name: /Restore/ }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Storage is unavailable');
+    expect(toast).not.toHaveBeenCalled();
+    expect(adoptRestoredDocument).not.toHaveBeenCalled();
+  });
+
+  it('keeps the rows and the open comparison when a refresh fails, with a retry', async () => {
+    mockChange(
+      { entityId: 'p1', fields: ['html'] },
+      [{ id: 'p1', type: 'paragraph', html: 'Hello there', children: [], columns: 1 }],
+      [{ id: 'p1', type: 'paragraph', html: 'Hello world', children: [], columns: 1 }],
+    );
+    const view = renderPanel();
+    fireEvent.click(await screen.findByText('v2'));
+    expect(await screen.findByText('Text changed')).toBeTruthy();
+
+    mocked.listRevisions.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    view.update({ documentListRevision: 1 });
+
+    expect(await screen.findByText('Could not refresh the history.')).toBeTruthy();
+    expect(screen.getByText('v3')).toBeTruthy();
+    expect(screen.getByText('Text changed')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('Failed to fetch');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText('Could not refresh the history.')).toBeNull());
+    expect(screen.getByText('Text changed')).toBeTruthy();
+  });
+
+  it('does not refetch on saves while its tab is hidden, and catches up when shown', async () => {
+    const view = renderPanel(DOC_ID, { tab: 'history' });
+    expect(await screen.findByText('v3')).toBeTruthy();
+    expect(mocked.listRevisions).toHaveBeenCalledTimes(1);
+
+    view.update({ tab: 'assistant', documentListRevision: 1 });
+    view.update({ tab: 'assistant', documentListRevision: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocked.listRevisions).toHaveBeenCalledTimes(1);
+
+    view.update({ tab: 'history', documentListRevision: 2 });
+    await waitFor(() => expect(mocked.listRevisions).toHaveBeenCalledTimes(2));
   });
 
   it('surfaces a failed load with a retry action', async () => {

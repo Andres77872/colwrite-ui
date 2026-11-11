@@ -1,7 +1,8 @@
 import { get, getWithHeaders, postWithHeaders } from './api';
 import type { Doc, ToolOperation } from '../editor/types';
 import { documentTransforms } from './documents';
-import { isUnknownRecord, problemCode } from './contracts';
+import { ApiError, isUnknownRecord, problemCode } from './contracts';
+import { isRetryableProblem } from './retry';
 
 /**
  * Document history — the v2 revision timeline.
@@ -334,6 +335,41 @@ export interface AgentChangeSet {
   toolCallId: string | null;
   summary: string | null;
   expiresAt: string | null;
+  proposedAt: string | null;
+  /** The earlier batch of the same run this one was written on top of. */
+  dependsOnChangeSetId: string | null;
+  /**
+   * The author's decisions on single operations, in the order they were
+   * made. `null` when the API does not record them (an older server), in
+   * which case the editor remembers them in this browser instead.
+   */
+  operationDecisions: ChangeSetOperationDecision[] | null;
+  /**
+   * One entry per stored operation: the server's fingerprint of the block a
+   * rewrite or deletion is aimed at, as the operation found it and as the
+   * saved document holds it now. `null` as a whole when the API sends none
+   * (an older server, or a change set stored before they were recorded).
+   */
+  operationTargets: Array<ChangeSetOperationTarget | null> | null;
+}
+
+/** One recorded decision, by the operation's position in the stored batch. */
+export interface ChangeSetOperationDecision {
+  opIndex: number;
+  decision: 'accepted' | 'rejected';
+}
+
+/**
+ * Server fingerprints of one operation's target block. They are only
+ * comparable with each other: the editor cannot rebuild one from its own
+ * block, because the stored html is the server sanitizer's output.
+ */
+export interface ChangeSetOperationTarget {
+  blockId: string;
+  /** The block as the operation found it when the batch was computed. */
+  fingerprint: string;
+  /** The same block in the saved document, or `null` when it is gone. */
+  headFingerprint: string | null;
 }
 
 /** Map one stored snake_case operation dict onto the editor's ToolOperation. */
@@ -374,6 +410,36 @@ function normalizeChangeSetOperation(value: unknown): ToolOperation | null {
   }
 }
 
+function normalizeOperationDecisions(value: unknown): ChangeSetOperationDecision[] | null {
+  // An API that records decisions always sends the list, empty or not.
+  if (!Array.isArray(value)) return null;
+  const decisions: ChangeSetOperationDecision[] = [];
+  for (const entry of value) {
+    if (!isUnknownRecord(entry) || !Number.isInteger(entry.index)) continue;
+    if (entry.decision !== 'accepted' && entry.decision !== 'rejected') continue;
+    decisions.push({ opIndex: entry.index as number, decision: entry.decision });
+  }
+  return decisions;
+}
+
+function normalizeOperationTargets(
+  value: unknown,
+  operationCount: number,
+): Array<ChangeSetOperationTarget | null> | null {
+  // Entries are addressed by operation index, so a list that does not line
+  // up with the operations says nothing reliable.
+  if (!Array.isArray(value) || value.length !== operationCount) return null;
+  return value.map((entry) => {
+    if (!isUnknownRecord(entry)) return null;
+    if (typeof entry.block_id !== 'string' || typeof entry.fingerprint !== 'string') return null;
+    return {
+      blockId: entry.block_id,
+      fingerprint: entry.fingerprint,
+      headFingerprint: stringOrNull(entry.head_fingerprint),
+    };
+  });
+}
+
 function normalizeChangeSet(payload: unknown): AgentChangeSet {
   if (!isUnknownRecord(payload) || typeof payload.change_set_id !== 'string') {
     throw new Error('The server returned an invalid change set.');
@@ -405,6 +471,13 @@ function normalizeChangeSet(payload: unknown): AgentChangeSet {
     toolCallId: stringOrNull(payload.tool_call_id),
     summary: stringOrNull(payload.summary),
     expiresAt: stringOrNull(payload.expires_at),
+    proposedAt: stringOrNull(payload.proposed_at),
+    dependsOnChangeSetId: stringOrNull(payload.depends_on_change_set_id),
+    operationDecisions: normalizeOperationDecisions(payload.operation_decisions),
+    operationTargets: normalizeOperationTargets(
+      payload.operation_targets,
+      Array.isArray(payload.operations) ? payload.operations.length : 0,
+    ),
   };
 }
 
@@ -465,6 +538,61 @@ export async function rejectChangeSet(
   return normalizeChangeSet(payload.data);
 }
 
+/**
+ * Record the author's decision on single operations of a pending change set.
+ *
+ * Nothing is applied by this: the editor has already applied what the author
+ * accepted, as ordinary edits. The server remembers which operations are
+ * decided, so a reload or another device offers only the rest, and it takes
+ * the set out of `pending` itself when the last one is decided. Sending a
+ * decision again is harmless; contradicting a recorded one is a 409.
+ */
+export async function decideChangeSetOperations(
+  documentId: string,
+  changeSetId: string,
+  decisions: readonly ChangeSetOperationDecision[],
+): Promise<AgentChangeSet> {
+  const payload = await postWithHeaders<unknown>(
+    `/v2/documents/${encodeId(documentId)}/change-sets/${encodeId(changeSetId)}/decisions`,
+    { decisions: decisions.map(({ opIndex, decision }) => ({ index: opIndex, decision })) },
+  );
+  return normalizeChangeSet(payload.data);
+}
+
+/**
+ * What a refused per-operation decision means for the caller.
+ *
+ * - `contradicted`: that operation is already decided the other way, here or
+ *   on another device. Nothing in the request was recorded; the rest can be
+ *   sent again without it.
+ * - `final`: the change set no longer takes decisions (it left `pending`, or
+ *   is gone), so sending again cannot help.
+ * - `transient`: the network, the session or a server still catching up.
+ */
+export type DecisionRefusal =
+  | { kind: 'contradicted'; opIndex: number }
+  | { kind: 'final' }
+  | { kind: 'transient' };
+
+export function decisionRefusal(error: unknown): DecisionRefusal {
+  if (!(error instanceof ApiError) || isRetryableProblem(error)) return { kind: 'transient' };
+  const data = isUnknownRecord(error.data) ? error.data : {};
+  if (error.status === 409) {
+    if (
+      data.conflict_reason === 'operation_already_decided'
+      && Number.isInteger(data.operation_index)
+    ) {
+      return { kind: 'contradicted', opIndex: data.operation_index as number };
+    }
+    // Two requests wrote the record at once and this one ran out of tries.
+    if (data.conflict_reason === 'lifecycle_race') return { kind: 'transient' };
+    return { kind: 'final' };
+  }
+  return error.status === 400 || error.status === 404 || error.status === 422
+    ? { kind: 'final' }
+    : { kind: 'transient' };
+}
+
 /** Pending durable proposals for a document, oldest first. */
 export async function listPendingChangeSets(
   documentId: string,
@@ -477,9 +605,17 @@ export async function listPendingChangeSets(
   if (!isUnknownRecord(payload) || !Array.isArray(payload.change_sets)) {
     throw new Error('The server returned an invalid change set list.');
   }
-  return payload.change_sets
+  const changeSets = payload.change_sets
     .filter(isUnknownRecord)
     .map((entry) => normalizeChangeSet(entry));
+  // The API lists newest first. Batches are staged in the order they are
+  // returned here, and a later batch of a run builds on the earlier ones.
+  const proposed = (changeSet: AgentChangeSet) => Date.parse(changeSet.proposedAt ?? '');
+  if (changeSets.some((changeSet) => Number.isNaN(proposed(changeSet)))) return changeSets;
+  return changeSets
+    .map((changeSet, index) => ({ changeSet, index }))
+    .sort((a, b) => proposed(a.changeSet) - proposed(b.changeSet) || b.index - a.index)
+    .map(({ changeSet }) => changeSet);
 }
 
 /**

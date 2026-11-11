@@ -14,6 +14,7 @@ import { useAgentTurn } from './useAgentTurn';
 import { useConversationLoader } from './useConversationLoader';
 import { currentFocus, useEditorFocus, type EditorFocus } from '@/components/editor/References';
 import { MessageRow } from './MessageRow';
+import { LiveTaskBar } from './TaskList';
 import { AssistantHome } from './AssistantHome';
 import { useChatAttachments } from './useChatAttachments';
 import { ChatComposer, MAX_MESSAGE_LENGTH } from './ChatComposer';
@@ -309,7 +310,7 @@ function DocumentChatAssistant() {
    * away from the card again. The suggestions pill brings the author back.
    */
   const reviewChange = (changeId: string) => {
-    if (!panels || panels.isDesktop) {
+    if (!panels || panels.toolsDocked) {
       proposals.focusChange(changeId);
       return;
     }
@@ -348,6 +349,11 @@ function DocumentChatAssistant() {
   };
 
   const progress = isStreaming ? agentStatus : null;
+  // The running turn's task list, pinned where a growing reply cannot push it
+  // out of view.
+  const liveTasks = isStreaming
+    ? visibleMessages.find((message) => message.id === activeMessageId)?.todos
+    : undefined;
 
   return (
     <section
@@ -489,6 +495,7 @@ function DocumentChatAssistant() {
           </button>
         )}
         <div className="mx-auto w-full max-w-[44rem]">
+          {liveTasks && liveTasks.length > 0 && <LiveTaskBar items={liveTasks} />}
           <ChatComposer
             value={input}
             onChange={setInput}

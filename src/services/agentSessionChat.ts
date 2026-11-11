@@ -73,6 +73,7 @@ export async function streamAgentSession(
   let refreshed = false;
   let finished = false;
   let startMayHaveSucceeded = false;
+  let reconnecting = false;
   let result: AgentChatResult = { chatId: null, threadId: null, usage: null, terminal: null };
   const capturedHandlers: SSEEventHandlers = {
     ...handlers,
@@ -115,6 +116,7 @@ export async function streamAgentSession(
   for (let attempt = 0; !finished; attempt += 1) {
     if (opts.signal?.aborted && !shouldCancel()) return result;
     if (opts.signal?.aborted && !startMayHaveSucceeded && !runId) return result;
+    const cursorAtConnect = cursor;
     let wake!: () => void;
     const changed = new Promise<void>((resolve) => { wake = resolve; });
     const observedGeneration = getRefreshGeneration();
@@ -134,18 +136,29 @@ export async function streamAgentSession(
     try {
       await client.connect();
       if (!sessionId) {
-        // Reuse the durable session for an existing chat, preserving planning state.
-        if (params.chat_id) {
-          const sessions = await client.request<AssistantSession[]>('sessions.list', { document_id: params.document_id, chat_id: params.chat_id, limit: 1 });
-          sessionId = sessions[0]?.id;
-        }
-        if (!sessionId) {
-          const session = await client.request<AssistantSession>('sessions.create', {
-            request_id: createRequestId, document_id: params.document_id,
-            chat_id: params.chat_id ?? null, title: params.message.slice(0, 160) || 'New conversation',
-            ephemeral: params.ephemeral === true,
-          });
-          sessionId = session.id;
+        try {
+          // Reuse the durable session for an existing chat, preserving planning state.
+          if (params.chat_id) {
+            const sessions = await client.request<AssistantSession[]>('sessions.list', { document_id: params.document_id, chat_id: params.chat_id, limit: 1 });
+            sessionId = sessions[0]?.id;
+          }
+          if (!sessionId) {
+            const session = await client.request<AssistantSession>('sessions.create', {
+              request_id: createRequestId, document_id: params.document_id,
+              chat_id: params.chat_id ?? null, title: params.message.slice(0, 160) || 'New conversation',
+              ephemeral: params.ephemeral === true,
+            });
+            sessionId = session.id;
+          }
+        } catch (error) {
+          // The chat was deleted somewhere else. Reported with the code the
+          // caller already recovers from, by starting a new conversation;
+          // as a thrown command error it was a dead end.
+          if (params.chat_id && error instanceof AgentSocketError && error.code === 'not_found' && /chat/i.test(error.message)) {
+            capturedHandlers.onError?.('CHAT_NOT_FOUND', error.message);
+            return result;
+          }
+          throw error;
         }
         const snapshot = await client.request<AssistantSnapshot>('sessions.get', { session_id: sessionId });
         // A new turn observes only its own events; a restored turn replays from zero.
@@ -155,6 +168,11 @@ export async function streamAgentSession(
       // The server accepted this socket's credentials, so a long run may
       // refresh again when this access token expires in turn.
       refreshed = false;
+      if (reconnecting) {
+        // Nothing else clears the label while a long tool call is quiet.
+        reconnecting = false;
+        if (!opts.signal?.aborted) handlers.onStatus?.('reconnected', 'Working…');
+      }
       if (!runId) {
         if (opts.signal?.aborted && !startMayHaveSucceeded) return result;
         // Keep a durable locator even if the acknowledgement is lost and all
@@ -181,6 +199,12 @@ export async function streamAgentSession(
       }
       if (opts.signal?.aborted && shouldCancel()) {
         await client.request('runs.cancel', { session_id: sessionId, run_id: runId });
+      } else if (finished && params.ephemeral) {
+        // A one-shot session is listed nowhere, so nobody else deletes it.
+        // The server also expires them; this keeps a busy day of Ask AI from
+        // filling the account's session and replay limits in the meantime.
+        const removed = client.request('sessions.delete', { session_id: sessionId }).catch(() => undefined);
+        await Promise.race([removed, new Promise((resolve) => setTimeout(resolve, 2_000))]);
       }
       return result;
     } catch (error) {
@@ -194,7 +218,12 @@ export async function streamAgentSession(
         emitRequireLogin('expired');
         throw new AgentSocketError('Your session expired. Sign in again to resume the conversation.', 'unauthorized');
       }
+      // The limit is on consecutive failures. A run of an hour can lose its
+      // connection many times; counting every loss ended the stream on the
+      // eighth one however well each reconnect had gone.
+      if (cursor > cursorAtConnect) attempt = 0;
       if (!failure || !['CONNECTION_LOST', 'unavailable'].includes(failure.code) || attempt + 1 >= maxAttempts) throw error;
+      reconnecting = true;
       if (!opts.signal?.aborted) handlers.onStatus?.('reconnecting', 'Reconnecting to your saved run…');
       // Cancellation may need reconnection after an uncertain start acknowledgement.
       await abortableSleep(Math.min(10_000, (opts.retry?.baseDelayMs ?? 500) * 2 ** attempt), shouldCancel() ? undefined : opts.signal);

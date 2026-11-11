@@ -9,7 +9,7 @@ import { SlashMenu } from './components/editor/SlashMenu'
 import { PanelsProvider, ToolsAside } from './components/panels'
 import { Sidebar } from './components/layout/Sidebar'
 import { ViewProvider } from './components/layout/ViewContext'
-import { useDocumentTitle, useUnsavedGuard } from './components/layout/useAppChrome'
+import { useDocumentTitle, useStrayFileDropGuard, useUnsavedGuard } from './components/layout/useAppChrome'
 import { useView } from './components/layout/viewContextState'
 import { ShortcutsDialog, useAppShortcuts } from './components/layout/Shortcuts'
 import { CommandPalette } from './components/layout/CommandPalette'
@@ -87,6 +87,7 @@ function Surface() {
 
   useDocumentTitle(view);
   useUnsavedGuard();
+  useStrayFileDropGuard();
   useAppShortcuts({
     onShowHelp: () => setShortcutsOpen(true),
     onOpenPalette: () => setPaletteOpen(true),

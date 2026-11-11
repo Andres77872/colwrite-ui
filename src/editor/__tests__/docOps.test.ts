@@ -7,6 +7,8 @@ import {
   placeholderIds,
   reconcileBlocks,
   withoutOrphanChildren,
+  isSaveConflict,
+  sameContent,
 } from '../docOps';
 
 // ── Fixtures ──
@@ -403,7 +405,35 @@ describe('withoutOrphanChildren', () => {
 describe('describeSaveError', () => {
   it('explains a version conflict in terms a writer can act on', () => {
     const err = Object.assign(new Error('conflict'), { status: 409 });
-    expect(describeSaveError(err)).toMatch(/changed elsewhere/i);
+    expect(describeSaveError(err)).toMatch(/changed somewhere else/i);
+  });
+
+  it('does not call an unsupported schema a conflict the author could settle', () => {
+    const schema = Object.assign(new Error('Document schema is not supported'), { status: 409 });
+    expect(isSaveConflict(schema)).toBe(false);
+    expect(describeSaveError(schema)).toMatch(/newer version of ColWrite/i);
+
+    const conflict = Object.assign(
+      new Error('Version conflict: the document was modified elsewhere (sent version 3, server has 4)'),
+      { status: 409 },
+    );
+    expect(isSaveConflict(conflict)).toBe(true);
+    expect(isSaveConflict(new Error('network down'))).toBe(false);
+  });
+
+  it('compares documents by content, not by version', () => {
+    const blocks = [{ id: 'a', type: 'paragraph' as const, html: 'x', children: [] }];
+    expect(sameContent({ version: 1, blocks, name: 'A' }, { version: 9, blocks: structuredClone(blocks), name: 'A' })).toBe(true);
+    expect(sameContent({ version: 1, blocks, name: 'A' }, { version: 1, blocks, name: 'B' })).toBe(false);
+    expect(sameContent({ version: 1, blocks }, { version: 1, blocks, sources: [] })).toBe(true);
+  });
+
+  it('reads a block the same whether or not its defaults are written out', () => {
+    const written = { version: 1, blocks: [{ id: 'a', type: 'paragraph' as const, html: 'x', children: [], columns: 1, checked: false }] };
+    const stored = { version: 2, blocks: [{ type: 'paragraph' as const, html: 'x', id: 'a' }] } as unknown as typeof written;
+    expect(sameContent(written, stored)).toBe(true);
+    expect(sameContent(written, { ...stored, blocks: [{ ...stored.blocks[0], html: 'y' }] })).toBe(false);
+    expect(sameContent(written, { ...stored, blocks: [{ ...stored.blocks[0], columns: 2 }] })).toBe(false);
   });
 
   it('distinguishes a missing document and an expired session', () => {

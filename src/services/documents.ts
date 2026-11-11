@@ -1,6 +1,6 @@
 import { get, getWithHeaders, post, put, del, type ApiRequestInit } from './api';
 import type { Block, CitationSource, Doc } from '../editor/types';
-import { coerceBlock } from '../editor/docOps';
+import { coerceBlock, withoutOrphanChildren } from '../editor/docOps';
 import {
   type DocumentInput,
   type DocumentListOptions,
@@ -88,7 +88,10 @@ function toBackendDocument(input: unknown): BackendDocument {
   if (Array.isArray(input)) return { version: 1, blocks: input, sources: null, citationStyle: null };
   if (isUnknownRecord(input)) {
     const version = typeof input.version === 'number' ? input.version : 1;
-    const blocks = normalizeBlocks(input.blocks);
+    // A widget entry with no placeholder in the html is refused by the server
+    // (422), and one refused block stops every later save of the document.
+    // The author cannot see such an entry, so it is left out of what is sent.
+    const blocks = normalizeBlocks(input.blocks).map(withoutOrphanChildren);
     // `title` is accepted from callers as an alias, but only `name` is sent.
     const name =
       (typeof input.name === 'string' && input.name)

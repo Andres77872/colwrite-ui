@@ -29,6 +29,7 @@ import type {
   DocumentSortOrder,
   DocumentSummary,
 } from '@/services';
+import { ApiError, describeApiError } from '@/services/contracts';
 import {
   ChevronDown,
   ExternalLink,
@@ -63,6 +64,20 @@ const SORT_OPTIONS: {
   { value: 'name:asc', label: 'Title — A–Z', sortBy: 'name', sortOrder: 'asc' },
   { value: 'name:desc', label: 'Title — Z–A', sortBy: 'name', sortOrder: 'desc' },
 ];
+
+/**
+ * What a failed list request means, in words. A failure that never reached the
+ * server surfaces as the browser's bare "Failed to fetch", which says nothing.
+ */
+function listFailure(error: unknown): string {
+  if (error instanceof ApiError) return describeApiError(error, 'The server could not list your documents.');
+  return 'The server could not be reached. Check your connection.';
+}
+
+/** Which list a request asks for; rows on screen belong to one of these. */
+function listIdentity(options: DocumentListOptions): string {
+  return JSON.stringify([options.query ?? '', options.sortBy ?? '', options.sortOrder ?? '']);
+}
 
 function documentLink(id: string): string {
   const url = new URL(window.location.href);
@@ -112,6 +127,10 @@ export function DocumentsMenu({
   const [pages, setPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
+  // Set when a refresh of the rows on screen failed: they are kept, with a
+  // one-line note, rather than replaced by an error and an empty list.
+  const [refreshFailed, setRefreshFailed] = useState<'refresh' | 'more' | null>(null);
+  const shownList = useRef<{ identity: string; limit: number } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -141,16 +160,29 @@ export function DocumentsMenu({
         rememberDocumentSummaries(res.documents);
         setCount(res.count);
         setListError(null);
+        setRefreshFailed(null);
+        shownList.current = { identity: listIdentity(options), limit: options.limit ?? PAGE_SIZE };
         // Once the list is long enough to need a filter, keep offering it —
         // it must not vanish under the caret while the query narrows the list.
         if (!options.query && res.count > FILTER_THRESHOLD) setFilterOpen(true);
       } catch (error) {
         if (controller.signal.aborted || requestId !== requestSequence.current) return;
-        // Background work: report it where the list would have been instead
-        // of interrupting with a toast.
-        setListError(error instanceof Error ? error.message : 'Request failed');
-        setItems([]);
-        setCount(0);
+        // Background work: report it where the list is instead of
+        // interrupting with a toast. A refresh of the same list (after a
+        // save, or "Refresh") keeps the rows: they were valid a moment ago,
+        // and blanking the sidebar under the author is worse than a stale
+        // timestamp. A different filter or sort has no rows to keep.
+        const shown = shownList.current;
+        if (shown?.identity === listIdentity(options)) {
+          setRefreshFailed((options.limit ?? PAGE_SIZE) > shown.limit ? 'more' : 'refresh');
+          setListError(null);
+        } else {
+          setListError(listFailure(error));
+          setRefreshFailed(null);
+          setItems([]);
+          setCount(0);
+          shownList.current = null;
+        }
       } finally {
         if (!controller.signal.aborted && requestId === requestSequence.current) {
           setLoading(false);
@@ -408,6 +440,19 @@ export function DocumentsMenu({
             );
           })}
       </ul>
+
+      {!loading && refreshFailed && (
+        <div role="alert" className="flex items-baseline gap-1.5 px-2 py-1 text-xs text-muted-foreground">
+          <span className="min-w-0">{refreshFailed === 'more' ? 'Could not load more.' : 'Could not refresh.'}</span>
+          <button
+            type="button"
+            className="shrink-0 font-medium text-link hover:underline"
+            onClick={() => setRefreshRevision((revision) => revision + 1)}
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {hasMore && !listError && (
         <button

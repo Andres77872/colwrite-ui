@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   acceptChangeSet,
+  decideChangeSetOperations,
+  decisionRefusal,
   diffRevision,
   fetchDocumentHead,
   getChangeSet,
   getRevision,
   historyErrorCode,
   isStaleHead,
+  listPendingChangeSets,
   listRevisions,
   rejectChangeSet,
   restoreRevision,
@@ -351,6 +354,181 @@ describe('agent change sets', () => {
       `POST /api/v2/documents/${DOC_ID}/change-sets/${CS_ID}/reject`,
     ]);
     expect(changeSet.status).toBe('rejected');
+  });
+
+  describe('per-operation review', () => {
+    const reviewable = (over: Record<string, unknown> = {}) =>
+      changeSetPayload({
+        operations: [
+          { op: 'replace_block', block_id: 'p1', block: { html: 'rewritten' } },
+          { op: 'insert_block_after', reference_id: 'p1', block: { id: 'n1', type: 'divider' } },
+        ],
+        proposed_at: '2026-08-02T12:00:00Z',
+        depends_on_change_set_id: null,
+        operation_targets: [
+          { block_id: 'p1', fingerprint: 'aaa', head_fingerprint: 'bbb' },
+          null,
+        ],
+        compared_head_seq: 9,
+        operation_decisions: [
+          { index: 1, decision: 'rejected', decided_at: '2026-08-02T12:05:00Z', decided_by: 'usr-1' },
+        ],
+        ...over,
+      });
+
+    it('reads the decisions and the target fingerprints the server recorded', async () => {
+      mockRoutes(() => json(reviewable({ depends_on_change_set_id: 'parent-1' })));
+
+      const changeSet = await getChangeSet(DOC_ID, CS_ID);
+
+      expect(changeSet.operationDecisions).toEqual([{ opIndex: 1, decision: 'rejected' }]);
+      expect(changeSet.operationTargets).toEqual([
+        { blockId: 'p1', fingerprint: 'aaa', headFingerprint: 'bbb' },
+        null,
+      ]);
+      expect(changeSet.dependsOnChangeSetId).toBe('parent-1');
+      expect(changeSet.proposedAt).toBe('2026-08-02T12:00:00Z');
+    });
+
+    it('tells an API that records decisions with none made from one that records none', async () => {
+      mockRoutes((url) =>
+        json(url.includes('old') ? changeSetPayload() : reviewable({ operation_decisions: [] })),
+      );
+
+      // An older API sends neither field.
+      const old = await getChangeSet(DOC_ID, 'old');
+      expect(old.operationDecisions).toBeNull();
+      expect(old.operationTargets).toBeNull();
+      expect(old.dependsOnChangeSetId).toBeNull();
+
+      const current = await getChangeSet(DOC_ID, CS_ID);
+      expect(current.operationDecisions).toEqual([]);
+    });
+
+    it('reads a change set stored before targets were recorded as having none', async () => {
+      mockRoutes(() => json(reviewable({ operation_targets: null })));
+      expect((await getChangeSet(DOC_ID, CS_ID)).operationTargets).toBeNull();
+    });
+
+    it('does not trust targets that do not line up with the operations', async () => {
+      mockRoutes(() =>
+        json(reviewable({ operation_targets: [{ block_id: 'p1', fingerprint: 'aaa' }] })),
+      );
+      expect((await getChangeSet(DOC_ID, CS_ID)).operationTargets).toBeNull();
+    });
+
+    it('reads a target whose block is gone from the saved document', async () => {
+      mockRoutes(() =>
+        json(
+          reviewable({
+            operation_targets: [{ block_id: 'p1', fingerprint: 'aaa', head_fingerprint: null }, null],
+          }),
+        ),
+      );
+      expect((await getChangeSet(DOC_ID, CS_ID)).operationTargets?.[0]).toEqual({
+        blockId: 'p1',
+        fingerprint: 'aaa',
+        headFingerprint: null,
+      });
+    });
+
+    it('decideChangeSetOperations posts the decisions by operation index, with no precondition', async () => {
+      const requests: Array<{ path: string; body: unknown; headers: Headers }> = [];
+      mockRoutes((url, init) => {
+        requests.push({
+          path: `${init?.method} ${new URL(url, 'http://x').pathname}`,
+          body: JSON.parse(String(init?.body)),
+          headers: new Headers(init?.headers),
+        });
+        return json(
+          reviewable({
+            status: 'superseded',
+            operation_decisions: [
+              { index: 1, decision: 'rejected' },
+              { index: 0, decision: 'accepted' },
+            ],
+          }),
+        );
+      });
+
+      const changeSet = await decideChangeSetOperations(DOC_ID, CS_ID, [
+        { opIndex: 0, decision: 'accepted' },
+      ]);
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0].path).toBe(
+        `POST /api/v2/documents/${DOC_ID}/change-sets/${CS_ID}/decisions`,
+      );
+      expect(requests[0].body).toEqual({ decisions: [{ index: 0, decision: 'accepted' }] });
+      // The record is its own idempotency, and the head has usually moved.
+      expect(requests[0].headers.get('If-Match')).toBeNull();
+      expect(requests[0].headers.get('Idempotency-Key')).toBeNull();
+      expect(changeSet.status).toBe('superseded');
+      expect(changeSet.operationDecisions).toEqual([
+        { opIndex: 1, decision: 'rejected' },
+        { opIndex: 0, decision: 'accepted' },
+      ]);
+    });
+
+    it('lists pending change sets oldest first, whatever order the API returns', async () => {
+      mockRoutes(() =>
+        json({
+          change_sets: [
+            reviewable({ change_set_id: 'newest', proposed_at: '2026-08-02T12:10:00Z' }),
+            reviewable({ change_set_id: 'tie-b', proposed_at: '2026-08-02T12:05:00Z' }),
+            reviewable({ change_set_id: 'tie-a', proposed_at: '2026-08-02T12:05:00Z' }),
+            reviewable({ change_set_id: 'oldest', proposed_at: '2026-08-02T12:00:00Z' }),
+          ],
+          next_cursor: null,
+        }),
+      );
+
+      const pending = await listPendingChangeSets(DOC_ID);
+
+      // A later batch of a run builds on the earlier ones, and they are
+      // staged in this order.
+      expect(pending.map((changeSet) => changeSet.changeSetId)).toEqual([
+        'oldest',
+        'tie-a',
+        'tie-b',
+        'newest',
+      ]);
+    });
+
+    it('keeps the order it was given when a proposal carries no time', async () => {
+      mockRoutes(() =>
+        json({
+          change_sets: [
+            reviewable({ change_set_id: 'first', proposed_at: undefined }),
+            reviewable({ change_set_id: 'second' }),
+          ],
+        }),
+      );
+      const pending = await listPendingChangeSets(DOC_ID);
+      expect(pending.map((changeSet) => changeSet.changeSetId)).toEqual(['first', 'second']);
+    });
+
+    it('sorts refused decisions into what the caller can do about them', () => {
+      const conflict = (context: Record<string, unknown>) =>
+        new ApiError('conflict', 409, { code: 'change_set_conflict', retryable: false, ...context });
+
+      expect(
+        decisionRefusal(conflict({ conflict_reason: 'operation_already_decided', operation_index: 2 })),
+      ).toEqual({ kind: 'contradicted', opIndex: 2 });
+      expect(decisionRefusal(conflict({ conflict_reason: 'terminal_state' }))).toEqual({ kind: 'final' });
+      expect(decisionRefusal(conflict({ conflict_reason: 'expired' }))).toEqual({ kind: 'final' });
+      expect(decisionRefusal(conflict({ conflict_reason: 'lifecycle_race' }))).toEqual({ kind: 'transient' });
+      expect(
+        decisionRefusal(new ApiError('gone', 404, { code: 'change_set_not_found' })),
+      ).toEqual({ kind: 'final' });
+      // A server still catching up, a dropped connection, an expired session.
+      expect(
+        decisionRefusal(new ApiError('wait', 409, { code: 'history_not_ready', retryable: true })),
+      ).toEqual({ kind: 'transient' });
+      expect(decisionRefusal(new TypeError('Failed to fetch'))).toEqual({ kind: 'transient' });
+      expect(decisionRefusal(new ApiError('sign in', 401, null))).toEqual({ kind: 'transient' });
+      expect(decisionRefusal(new ApiError('down', 503, null))).toEqual({ kind: 'transient' });
+    });
   });
 });
 

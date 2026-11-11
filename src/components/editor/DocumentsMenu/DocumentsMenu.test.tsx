@@ -237,6 +237,32 @@ describe('DocumentsMenu listing controls', () => {
     await waitFor(() => expect(mocks.listRemote).toHaveBeenCalledTimes(2));
   });
 
+  it('keeps the rows when a background refresh fails, with a retry', async () => {
+    const view = render(<DocumentsMenu />);
+    await screen.findByText('Research notes');
+    mocks.listRemote.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    mocks.editorState.documentListRevision += 1;
+    view.rerender(<DocumentsMenu />);
+
+    expect(await screen.findByText('Could not refresh.')).toBeTruthy();
+    expect(screen.getByText('Research notes')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('Failed to fetch');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText('Could not refresh.')).toBeNull());
+    expect(screen.getByText('Research notes')).toBeTruthy();
+  });
+
+  it('says the server could not be reached instead of the browser’s raw error', async () => {
+    mocks.listRemote.mockReset().mockRejectedValue(new TypeError('Failed to fetch'));
+    render(<DocumentsMenu />);
+
+    expect(await screen.findByText('Could not load documents')).toBeTruthy();
+    expect(screen.getByText('The server could not be reached. Check your connection.')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('Failed to fetch');
+  });
+
   it('creates and switches atomically instead of retaining the previous editor body', async () => {
     render(<DocumentsMenu />);
     await screen.findByText('Research notes');

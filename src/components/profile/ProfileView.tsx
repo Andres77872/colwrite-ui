@@ -161,8 +161,8 @@ export function ProfileView() {
             <PreferencesPane />
           </TabsContent>
 
-          {/* Force-mounted: an unsaved draft of tool choices must survive a
-              look at another pane. */}
+          {/* Force-mounted, so the pane keeps its loaded state (and a row's
+              "could not save" note) across a look at another pane. */}
           <TabsContent value="ai" className="mt-0 flex flex-col gap-6" forceMount>
             {/* The preferences title the pane themselves ("AI & tools"). The
                 engine choice leads it, and only exists on a local server. */}

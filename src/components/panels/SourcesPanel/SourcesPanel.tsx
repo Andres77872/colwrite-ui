@@ -53,7 +53,7 @@ import { parseBibtex, toBibtex } from '@/editor/bibtex';
 import { downloadBlob, exportFilename } from '@/export/download';
 import { resolveSource } from '@/services/sources';
 import { ApiError } from '@/services/contracts';
-import { revealCitationUsage, useCiteAtCursor } from '@/components/editor/References';
+import { revealCitationUsage, useCiteAndAnnounce } from '@/components/editor/References';
 import { usePanels } from '../panelsContextState';
 import { scrollBehavior } from '@/lib/motion';
 
@@ -181,6 +181,10 @@ function SourceRow({
   highlighted: boolean;
 }) {
   const [editing, setEditing] = useState(false);
+  // Set when "Remove from sources" was chosen on a source that is still cited:
+  // removing the library entry would leave every citation in place, so the
+  // row would not go anywhere and the action would seem to do nothing.
+  const [stillCited, setStillCited] = useState(false);
   const { toast } = useToast();
   const link = referenceLink(row.source);
 
@@ -277,7 +281,13 @@ function SourceRow({
             {row.inLibrary && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem destructive onSelect={onRemove}>
+                <DropdownMenuItem
+                  destructive
+                  onSelect={() => {
+                    if (row.usages > 0) setStillCited(true);
+                    else onRemove();
+                  }}
+                >
                   <Trash2 />
                   Remove from sources
                 </DropdownMenuItem>
@@ -290,6 +300,29 @@ function SourceRow({
         <p className="mt-1 flex items-center gap-1.5 pl-8 text-xs text-muted-foreground">
           <Spinner /> Checking the registry…
         </p>
+      )}
+      {stillCited && row.usages > 0 && (
+        <div role="status" className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-8 text-xs text-muted-foreground">
+          <span>
+            Still cited {row.usages === 1 ? 'once' : `${row.usages} times`}: remove the citations first.
+          </span>
+          {row.firstUsage && (
+            <button
+              type="button"
+              className="rounded-xs font-medium text-link hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => row.firstUsage && revealCitationUsage(row.firstUsage)}
+            >
+              Show where
+            </button>
+          )}
+          <button
+            type="button"
+            className="rounded-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => setStillCited(false)}
+          >
+            Dismiss
+          </button>
+        </div>
       )}
       {editing && (
         <SourceEditor
@@ -318,7 +351,7 @@ export function SourcesPanel() {
   const { doc } = useEditorState();
   const { upsertSources, updateSource, removeSource, setCitationStyle } = useEditorActions();
   const bibliography = useBibliography();
-  const cite = useCiteAtCursor();
+  const cite = useCiteAndAnnounce();
   const { toast } = useToast();
   const [identifier, setIdentifier] = useState('');
   const [adding, setAdding] = useState(false);
@@ -462,8 +495,7 @@ export function SourcesPanel() {
           verifying={verifying === row.key}
           highlighted={highlighted === row.key}
           onCite={() => {
-            const block = cite([row.source]);
-            if (block) toast({ title: 'Citation inserted' });
+            cite([row.source]);
           }}
           onVerify={resolvableIdentifier(row.source) ? () => void verify(row) : null}
           onEdit={(patch) => edit(row, patch)}

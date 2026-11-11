@@ -94,13 +94,68 @@ export function saveDoc(doc: Doc, documentId: string | null = loadDocumentId()):
   } catch { /* storage unavailable — fall through */ }
 }
 
+const UNSAVED_PREFIX = 'colwrite:unsaved:';
+
+/** Edits of a document that never reached the server, kept on this device. */
+export type UnsavedDraft = {
+  documentId: string;
+  doc: Doc;
+  /** When the copy was taken (ms since the epoch). */
+  savedAt: number;
+};
+
+/**
+ * Keep the body of a document whose save failed.
+ *
+ * The keyed draft record above is not enough for this: it follows the editor
+ * state, so the next load of the document from the server overwrites it and
+ * the edits the server never received are gone. This record is written only
+ * when unsaved work is about to leave the screen, and stays until the author
+ * takes it back or discards it.
+ */
+export function saveUnsavedDraft(documentId: string, doc: Doc, savedAt: number = Date.now()): void {
+  try {
+    const record: UnsavedDraft = { documentId, doc, savedAt };
+    localStorage.setItem(`${UNSAVED_PREFIX}${documentId}`, JSON.stringify(record));
+  } catch { /* storage unavailable or full — nothing more can be done here */ }
+}
+
+export function loadUnsavedDraft(documentId: string): UnsavedDraft | null {
+  try {
+    const raw = localStorage.getItem(`${UNSAVED_PREFIX}${documentId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<UnsavedDraft>;
+    if (parsed?.documentId !== documentId || !isDoc(parsed.doc)) return null;
+    return {
+      documentId,
+      doc: parsed.doc,
+      savedAt: typeof parsed.savedAt === 'number' ? parsed.savedAt : Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function clearUnsavedDraft(documentId: string): void {
+  try {
+    localStorage.removeItem(`${UNSAVED_PREFIX}${documentId}`);
+  } catch { /* storage unavailable — fall through */ }
+}
+
+/**
+ * Everything this browser keeps about a document: its draft, edits that never
+ * saved, and review decisions (`reviewDecisions.ts`, which holds no text but
+ * names documents and change sets).
+ */
+const OWN_PREFIXES = [RECORD_PREFIX, UNSAVED_PREFIX, 'colwrite:review:'];
+
 /** Drop every cached draft. Used on sign-out so drafts do not cross accounts. */
 export function clearCachedDocs(): void {
   try {
     const doomed: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && key.startsWith(RECORD_PREFIX)) doomed.push(key);
+      if (key && OWN_PREFIXES.some((prefix) => key.startsWith(prefix))) doomed.push(key);
     }
     for (const key of [...doomed, STORAGE_KEY, ID_STORAGE_KEY, POINTER_KEY]) {
       localStorage.removeItem(key);

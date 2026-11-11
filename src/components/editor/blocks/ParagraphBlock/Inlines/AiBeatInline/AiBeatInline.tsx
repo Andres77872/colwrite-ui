@@ -14,6 +14,7 @@ import {
   type AgentProgress,
 } from '@/components/editor/AgentProgress';
 import { toolRunningLabel } from '@/components/editor/ChatAssistant/AgentActivity/toolMeta';
+import { friendlyStreamError } from '@/components/editor/ChatAssistant/chatUtils';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import { stopEditorEvents, useInlineChild } from '../shared';
 import { AlertCircle, ChevronDown, ChevronRight, Sparkles, Square, Trash2 } from 'lucide-react';
@@ -105,7 +106,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
           onToolCallStart: (tool) => moveTo({ phase: 'tool', label: `${toolRunningLabel(tool)}…` }),
           onError: (code, detail) => {
             failed = true;
-            setError(detail);
+            setError(friendlyStreamError(code, detail).message);
             engines.noteRunError(code);
           },
         },

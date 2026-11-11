@@ -8,6 +8,9 @@ import type { ApplyPatchResult } from './docOps';
 import type { Block, CitationSource, Doc, ParagraphChild, ToolOperation } from './types';
 import type { BlockKindId } from './blockKinds';
 
+/** Why the open document was replaced by a server copy (see `restoreReason`). */
+export type RestoreReason = 'restore' | 'newer-version';
+
 /**
  * State slices of the editor. A keystroke replaces `doc`/`blocks`, so this
  * value changes identity on every edit — only consumers that actually render
@@ -38,6 +41,16 @@ export type EditorStateContextValue = {
   isAutoSaving: boolean;
   lastSaveSource: 'auto' | 'manual' | null;
   saveError: string | null;
+  /**
+   * The server refused the last save because it holds a newer version of the
+   * open document. Autosave waits until `resolveSaveConflict` is called.
+   */
+  saveConflict: boolean;
+  /**
+   * When edits of the open document that never reached the server were kept
+   * on this device, or null when there are none to offer back.
+   */
+  unsavedDraftAt: number | null;
   /** Whether the open document has a previous local edit state to restore. */
   canUndo: boolean;
   /** Whether an undone local edit can be re-applied. */
@@ -54,6 +67,13 @@ export type EditorStateContextValue = {
    * no longer describes the document on screen.
    */
   restoreEpoch: number;
+  /**
+   * Why the epoch last moved. A History restore puts the document on another
+   * branch, so suggestions made for the old one are retired; opening the
+   * server's newer version after a refused save keeps the same line of
+   * history, so they are staged again against it.
+   */
+  restoreReason: RestoreReason;
   hasAnyRemoteDocs: boolean | null;
   recentlyChanged: ReadonlySet<string>;
   /** Blocks selected as whole blocks, in document order. */
@@ -86,6 +106,8 @@ export type EditorActionsContextValue = {
   mergeWithPrevious: (id: string) => { targetId: string; caretOffset: number } | null;
   removeBlock: (id: string) => void;
   updateHtml: (id: string, html: string) => void;
+  /** Run several edits as one undo step. */
+  batch: <T>(run: () => T) => T;
   setParagraphColumns: (id: string, columns: number) => void;
   toggleAiHidden: (id: string) => void;
   toggleLocked: (id: string) => void;
@@ -181,6 +203,15 @@ export type EditorActionsContextValue = {
    * re-render the editor twice per debounce for nothing.
    */
   hasPendingEdits: () => boolean;
+  /**
+   * Settle a refused save: `mine` writes the open body over the server's newer
+   * version; `theirs` opens that version and keeps the open body on this
+   * device, to be offered back.
+   */
+  resolveSaveConflict: (keep: 'mine' | 'theirs') => Promise<void>;
+  /** Put the kept edits back in the open document (one undo step). */
+  restoreKeptDraft: () => boolean;
+  discardKeptDraft: () => void;
   /** Last server-confirmed head sequence, or null before the first save. */
   savedHeadSeq: () => number | null;
   clearSaveError: () => void;
@@ -191,7 +222,7 @@ export type EditorActionsContextValue = {
    * baseline of the open document — without arming autosave and without
    * starting a new document session.
    */
-  adoptRestoredDocument: (doc: Doc, serverVersion: number) => void;
+  adoptRestoredDocument: (doc: Doc, serverVersion: number, reason?: RestoreReason) => void;
   applyPatch: (
     ops: ToolOperation[],
     options?: { persist?: boolean; base?: Block[] },
@@ -199,6 +230,8 @@ export type EditorActionsContextValue = {
   markRecentlyChanged: (ids: string[]) => void;
   /** Select whole blocks (replaces the current block selection). */
   selectBlocks: (ids: readonly string[]) => void;
+  /** The block selection at call time, in document order. */
+  getSelectedBlockIds: () => readonly string[];
   clearBlockSelection: () => void;
 };
 

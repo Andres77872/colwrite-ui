@@ -5,7 +5,9 @@ import {
   buildChangeSet,
   isReady,
   linkPrecedence,
+  planRejection,
   projectDocument,
+  rejectChange,
   resolveAcceptOp,
   type ChangeSet,
   type ProposedChange,
@@ -384,5 +386,162 @@ describe('a change whose block really is gone', () => {
   it('cannot be accepted, and says so rather than guessing', () => {
     const set = batch([{ op: 'insert_block_after', referenceId: 'deleted', block: para('X') }]);
     expect(resolveAcceptOp(set.changes[0], [set], doc)).toBeNull();
+  });
+});
+
+/**
+ * Rejecting one paragraph of a suggested section. The paragraphs after it are
+ * addressed to it, and they used to be rejected along with it. They now move
+ * onto its place, and the property that matters is that the rest of the
+ * section reads exactly as it did, minus the rejected block.
+ */
+describe('rejecting an insert that others continue from', () => {
+  const projected = (sets: ChangeSet[]) =>
+    projectDocument(doc, sets)
+      .rows.map((row) => (row.kind === 'block' ? row.block.id : row.change.producesBlockId))
+      .join(',');
+
+  const CHAINS: Array<{ name: string; ops: ToolOperation[] }> = [
+    {
+      name: 'a heading and three paragraphs, each after the one before',
+      ops: [
+        { op: 'insert_block_after', referenceId: 'A', block: para('H') },
+        { op: 'insert_block_after', referenceId: 'H', block: para('P1') },
+        { op: 'insert_block_after', referenceId: 'P1', block: para('P2') },
+        { op: 'insert_block_after', referenceId: 'P2', block: para('P3') },
+      ],
+    },
+    {
+      name: 'a continuation whose anchor shares a slot with a later sibling',
+      ops: [
+        { op: 'insert_block_after', referenceId: 'A', block: para('X') },
+        { op: 'insert_block_after', referenceId: 'A', block: para('V') },
+        { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
+      ],
+    },
+    {
+      name: 'continuations on both sides of the rejected block',
+      ops: [
+        { op: 'insert_block_after', referenceId: 'A', block: para('X') },
+        { op: 'insert_block_before', referenceId: 'X', block: para('Q1') },
+        { op: 'insert_block_before', referenceId: 'X', block: para('Q2') },
+        { op: 'insert_block_after', referenceId: 'X', block: para('Y1') },
+        { op: 'insert_block_after', referenceId: 'X', block: para('Y2') },
+      ],
+    },
+    {
+      name: 'a chain that starts before an existing block',
+      ops: [
+        { op: 'insert_block_before', referenceId: 'B', block: para('X') },
+        { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
+        { op: 'insert_block_after', referenceId: 'Y', block: para('Z') },
+      ],
+    },
+    {
+      name: 'a chain at the start of the document, with a later start insert',
+      ops: [
+        { op: 'insert_block_at_start', block: para('X') },
+        { op: 'insert_block_at_start', block: para('W') },
+        { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
+      ],
+    },
+    {
+      name: 'a chain appended to the end',
+      ops: [
+        { op: 'append_block', block: para('X') },
+        { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
+        { op: 'append_block', block: para('Z') },
+      ],
+    },
+  ];
+
+  for (const { name, ops } of CHAINS) {
+    it(`${name}: rejecting any one leaves the others where they were shown`, () => {
+      const set = batch(ops);
+      const before = projected([set]);
+
+      for (const rejectedChange of set.changes) {
+        const { sets, rejected } = rejectChange([set], rejectedChange.id);
+        const label = `rejecting ${rejectedChange.producesBlockId}`;
+        // Only the rejected block goes; nothing else is taken with it.
+        expect(rejected, label).toEqual([rejectedChange.id]);
+
+        const remaining = sets[0].changes.filter((change) => change.status === 'pending');
+        expect(remaining, label).toHaveLength(set.changes.length - 1);
+
+        const expected = before
+          .split(',')
+          .filter((id) => id !== rejectedChange.producesBlockId)
+          .join(',');
+        // The preview shows the section without the rejected paragraph…
+        expect(projected(sets), label).toBe(expected);
+        // …Accept all on what is left produces exactly that…
+        expect(acceptAll(doc, sets[0], remaining), label).toBe(expected);
+        // …and so does accepting the rest one by one, in any order the review
+        // offers: a continuation only once what it continues from is in.
+        const offered = permutations(remaining).filter((order) =>
+          order.every((change, index) =>
+            change.dependsOn.every((id) => order.slice(0, index).some((prior) => prior.id === id)),
+          ),
+        );
+        expect(offered.length, label).toBeGreaterThan(0);
+        for (const order of offered) {
+          expect(acceptOneByOne(doc, sets[0], order), label).toBe(expected);
+        }
+      }
+    });
+  }
+
+  it('makes the next paragraph acceptable straight away', () => {
+    const set = batch(CHAINS[0].ops);
+    const [heading, first, second] = set.changes;
+    expect(isReady(second, [set], doc)).toBe(false);
+
+    const { sets } = rejectChange([set], first.id);
+    const moved = sets[0].changes.find((change) => change.id === second.id)!;
+    // Now addressed to the heading, which is still to be decided.
+    expect(moved).toMatchObject({ anchorBlockId: 'H', placement: 'after', dependsOn: [heading.id] });
+    expect(moved.op).toMatchObject({ op: 'insert_block_after', referenceId: 'H' });
+
+    const { sets: afterHeading } = rejectChange(sets, heading.id);
+    const top = afterHeading[0].changes.find((change) => change.id === second.id)!;
+    expect(top).toMatchObject({ anchorBlockId: 'A', dependsOn: [] });
+    expect(isReady(top, afterHeading, doc)).toBe(true);
+  });
+
+  it('ends in the same document whichever of two linked paragraphs is rejected first', () => {
+    const set = batch(CHAINS[0].ops);
+    const [, first, second] = set.changes;
+
+    const one = rejectChange(rejectChange([set], first.id).sets, second.id).sets;
+    const other = rejectChange(rejectChange([set], second.id).sets, first.id).sets;
+    expect(projected(one)).toBe('A,H,P3,B,C');
+    expect(projected(other)).toBe('A,H,P3,B,C');
+  });
+
+  it('still rejects a change to the block that will never exist, and says so', () => {
+    const set = batch([
+      { op: 'insert_block_after', referenceId: 'A', block: para('X') },
+      { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
+      { op: 'replace_block', blockId: 'X', block: { html: 'X, rewritten' } },
+    ]);
+    const [insert, continuation, rewrite] = set.changes;
+
+    // What the card asks about before rejecting.
+    const plan = planRejection(insert.id, [set]);
+    expect(plan.reanchored.map((change) => change.id)).toEqual([continuation.id]);
+    expect(plan.cascaded.map((change) => change.id)).toEqual([rewrite.id]);
+
+    const { sets, rejected, reanchored } = rejectChange([set], insert.id);
+    expect(rejected).toEqual([insert.id, rewrite.id]);
+    expect(reanchored).toEqual([continuation.id]);
+    expect(sets[0].changes.find((change) => change.id === continuation.id)?.status).toBe('pending');
+  });
+
+  it('changes nothing for a change that is already decided or unknown', () => {
+    const set = batch(CHAINS[0].ops);
+    const decided = rejectChange([set], set.changes[0].id).sets;
+    expect(rejectChange(decided, set.changes[0].id).sets).toBe(decided);
+    expect(rejectChange(decided, 'missing').rejected).toEqual([]);
   });
 });

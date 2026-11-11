@@ -1,7 +1,7 @@
 import { citationYear } from './citations';
 import { sanitizeEditableHtml } from '@/export/sanitize';
 import { MAX_BLOCK_INDENT } from './types';
-import type { Block, ParagraphBlock, ParagraphChild, ParagraphVariant, ToolOperation } from './types';
+import type { Block, Doc, ParagraphBlock, ParagraphChild, ParagraphVariant, ToolOperation } from './types';
 
 /** Block types the canvas knows how to render. */
 const BLOCK_TYPES = new Set<Block['type']>(['paragraph', 'heading', 'divider', 'code']);
@@ -376,11 +376,110 @@ export function applyPatchToBlocks(
   return { blocks: next, desynced, touched };
 }
 
+/** Above this many reordered blocks, only the smaller group is reported. */
+const MOVED_SHOWN = 8;
+
+/**
+ * What going from one document state to another touched: the blocks that are
+ * new or different in `to`; when blocks only changed places, the ones that
+ * moved; and when blocks only went away, the one that now stands where the
+ * first of them was.
+ */
+export function replayFootprint(from: Doc, to: Doc): { changed: string[]; near: string | null } {
+  const before = new Map(from.blocks.map((block) => [block.id, block]));
+  const changed = to.blocks.filter((block) => before.get(block.id) !== block).map((block) => block.id);
+  if (changed.length > 0) return { changed, near: null };
+
+  const kept = new Set(to.blocks.map((block) => block.id));
+  const firstGone = from.blocks.findIndex((block) => !kept.has(block.id));
+  if (firstGone !== -1) {
+    const neighbour = from.blocks.slice(0, firstGone).reverse().find((block) => kept.has(block.id))
+      ?? from.blocks.slice(firstGone).find((block) => kept.has(block.id));
+    return { changed, near: neighbour?.id ?? null };
+  }
+
+  // Same blocks in another order. A block dragged a long way shifts every
+  // block it passed by one place; those are not what the author moved, so
+  // past a handful only the smaller group counts.
+  const was = new Map(from.blocks.map((block, index) => [block.id, index]));
+  const down: string[] = [];
+  const up: string[] = [];
+  to.blocks.forEach((block, index) => {
+    const old = was.get(block.id);
+    if (old === undefined || old === index) return;
+    (index > old ? down : up).push(block.id);
+  });
+  if (down.length + up.length <= MOVED_SHOWN) {
+    const moved = new Set([...down, ...up]);
+    return { changed: to.blocks.filter((block) => moved.has(block.id)).map((block) => block.id), near: null };
+  }
+  return { changed: down.length <= up.length ? down : up, near: null };
+}
+
+/**
+ * Whether a save was refused because the server holds a newer version.
+ *
+ * Trying again cannot help: the same body with the same version number is
+ * refused every time. The author has to choose which version stays.
+ */
+export function isSaveConflict(error: unknown): boolean {
+  if ((error as { status?: number } | null)?.status !== 409) return false;
+  // The save route answers 409 for one other thing: content stored by a newer
+  // server than this one can read. No choice of version settles that.
+  return !isUnsupportedSchema(error);
+}
+
+function isUnsupportedSchema(error: unknown): boolean {
+  return (error as { status?: number } | null)?.status === 409
+    && error instanceof Error
+    && /schema/i.test(error.message);
+}
+
+/**
+ * A value with its keys in order and its default-valued fields left out.
+ *
+ * The editor writes `columns: 1`, `children: []` and `checked: false`; the
+ * server may store a block without them. Both describe the same block.
+ */
+function canonicalContent(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalContent);
+  if (!value || typeof value !== 'object') return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    const item = canonicalContent((value as Record<string, unknown>)[key]);
+    if (item === undefined || item === null || item === false || item === '') continue;
+    if (Array.isArray(item) && item.length === 0) continue;
+    if ((key === 'columns' && item === 1) || (key === 'indent' && item === 0)) continue;
+    out[key] = item;
+  }
+  return out;
+}
+
+/**
+ * Whether two documents hold the same content, whatever their version and
+ * however each writer spelled its defaults.
+ */
+export function sameContent(a: Doc, b: Doc): boolean {
+  if (a.blocks === b.blocks && a.name === b.name && a.sources === b.sources && a.citationStyle === b.citationStyle) {
+    return true;
+  }
+  const content = (doc: Doc) => JSON.stringify(canonicalContent({
+    blocks: doc.blocks,
+    name: doc.name,
+    sources: doc.sources,
+    citationStyle: doc.citationStyle,
+  }));
+  return content(a) === content(b);
+}
+
 /** Turn a save rejection into something worth showing a writer. */
 export function describeSaveError(error: unknown): string {
   const status = (error as { status?: number } | null)?.status;
+  if (isUnsupportedSchema(error)) {
+    return 'This document was saved by a newer version of ColWrite, so it cannot be changed from here.';
+  }
   if (status === 409) {
-    return 'This document changed elsewhere, so your latest edits were not saved. Reload to get the current version.';
+    return 'This document was changed somewhere else, so your latest edits are not saved yet.';
   }
   if (status === 404) {
     return 'This document no longer exists on the server.';

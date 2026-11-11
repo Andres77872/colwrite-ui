@@ -1,6 +1,6 @@
 import { MessageAttachments } from './ChatAttachments';
 import { useMemo } from 'react';
-import { Circle, CircleCheck, LoaderCircle, FileText, Sparkles } from 'lucide-react';
+import { FileText, Sparkles } from 'lucide-react';
 import {
   AgentProgressLine,
   AgentStatusLine,
@@ -13,6 +13,7 @@ import { AgentActivity } from './AgentActivity';
 import { AnswerActions } from './AnswerActions';
 import { AnswerSources, SourceHoverCard } from './AnswerSources';
 import { ReasoningBlock } from './ReasoningBlock';
+import { TaskList } from './TaskList';
 import { useSourceMarkers } from './answerSourceMarkers';
 import type { ChatMessage } from './chatUtils';
 
@@ -101,32 +102,13 @@ export function MessageRow({
         />
       )}
 
-      {message.runs.length > 0 && <AgentActivity runs={message.runs} live={live} />}
+      {(message.runs.length > 0 || !!message.workers?.length) && (
+        <AgentActivity runs={message.runs} live={live} workers={message.workers} />
+      )}
 
-      {!!message.todos?.length && (
-        <details open={live} className="rounded-lg border border-border px-3 py-2 text-xs">
-          <summary className="cursor-pointer font-medium">
-            Task progress · {message.todos.filter((item) => item.status === 'completed').length}/{message.todos.length}
-          </summary>
-          <ol className="mt-2 space-y-2" aria-label="Assistant task list">
-            {message.todos.map((item) => (
-              <li key={item.id} className="flex items-start gap-2">
-                {item.status === 'completed' ? <CircleCheck aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-success" />
-                  : item.status === 'in_progress' && live ? <LoaderCircle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 animate-spin" />
-                    : <Circle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />}
-                <span><span className="sr-only">{item.status.replace('_', ' ')}: </span>{item.content}</span>
-              </li>
-            ))}
-          </ol>
-        </details>
-      )}
-      {!!message.workers?.length && (
-        <p className="text-xs text-muted-foreground" role={live ? 'status' : undefined}>
-          Research workers: {message.workers.filter((worker) => worker.status === 'completed').length} completed
-          {message.workers.some((worker) => worker.status === 'running') && (live ? ' · working' : ' · interrupted')}
-          {message.workers.some((worker) => ['failed', 'budget_exceeded'].includes(worker.status)) && ' · some tasks could not finish'}
-        </p>
-      )}
+      {/* While the turn runs the list is pinned above the composer, where it
+          stays in view; afterwards it is part of the reply. */}
+      {!live && !!message.todos?.length && <TaskList items={message.todos} />}
 
       {/* Before the first word: what it is doing, in a quiet shimmer. */}
       {waiting &&

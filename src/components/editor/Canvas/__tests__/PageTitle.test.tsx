@@ -75,6 +75,19 @@ describe('PageTitle', () => {
     expect(title.rename).toHaveBeenCalledWith('A title');
   });
 
+  it('stays one line: Shift+Enter adds no line break and does not leave the title', () => {
+    title.draftTitle = 'Sparse routing';
+    const onContinue = vi.fn();
+    render(<PageTitle onContinue={onContinue} />);
+    const field = screen.getByRole('textbox', { name: 'Page title' });
+
+    const notPrevented = fireEvent.keyDown(field, { key: 'Enter', shiftKey: true });
+
+    expect(notPrevented).toBe(false);
+    expect(onContinue).not.toHaveBeenCalled();
+    expect(title.rename).not.toHaveBeenCalled();
+  });
+
   it('restores the saved name on Escape', () => {
     title.draftTitle = 'Kept';
     render(<PageTitle onContinue={vi.fn()} />);

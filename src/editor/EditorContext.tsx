@@ -3,13 +3,24 @@ import type { Block, CitationSource, Doc, ParagraphChild, ToolOperation } from '
 import { clampIndent, continuationOf, convertBlock, isListItem, type BlockKindId } from './blockKinds';
 import { buildBibliography, canonicalCitationKey, citationFingerprint } from './citations';
 import { BibliographyContext } from './bibliographyContextState';
-import { loadDoc, saveDoc, loadDocumentId, saveDocumentId } from './storage';
+import {
+  clearUnsavedDraft,
+  loadDoc,
+  loadDocumentId,
+  loadUnsavedDraft,
+  saveDoc,
+  saveDocumentId,
+  saveUnsavedDraft,
+} from './storage';
 import {
   applyPatchToBlocks,
   coerceBlock,
   describeSaveError,
+  isSaveConflict,
   placeholderIds,
   reconcileBlocks,
+  replayFootprint,
+  sameContent,
   withoutOrphanChildren,
   type ApplyPatchResult,
 } from './docOps';
@@ -28,6 +39,7 @@ import {
   type EditorActiveBlockContextValue,
   type EditorContextValue,
   type EditorStateContextValue,
+  type RestoreReason,
 } from './editorContextState';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import { emitDocumentTransitionStart } from './documentTransition';
@@ -43,6 +55,16 @@ type HistoryEntry = {
   key: string | null;
   time: number;
 };
+
+/** Whether a change is one the undo journal records. */
+function journaledChange(before: Doc, next: Doc): boolean {
+  return (
+    next.blocks !== before.blocks ||
+    next.name !== before.name ||
+    next.sources !== before.sources ||
+    next.citationStyle !== before.citationStyle
+  );
+}
 
 /**
  * An empty block of the given type.
@@ -213,6 +235,21 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  /**
+   * The document whose save the server refused as out of date. Retrying
+   * cannot fix that, so autosave stands down until the author picks a version.
+   */
+  const [conflictId, setConflictId] = useState<string | null>(null);
+  /**
+   * Edits of a document that never reached the server and are kept on this
+   * device (see `saveUnsavedDraft`), offered back while that document is open.
+   */
+  const [keptDraft, setKeptDraft] = useState<{ documentId: string; savedAt: number } | null>(null);
+  const keptDraftRef = useRef<{ documentId: string; savedAt: number } | null>(null);
+  const offerKeptDraft = useCallback((next: { documentId: string; savedAt: number } | null) => {
+    keptDraftRef.current = next;
+    setKeptDraft(next);
+  }, []);
   const [loadingDocumentId, setLoadingDocumentId] = useState<string | null>(
     initialRequestedDocumentId,
   );
@@ -239,6 +276,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const saveInFlightRef = useRef<Promise<void> | null>(null);
   const [documentListRevision, setDocumentListRevision] = useState(0);
   const [restoreEpoch, setRestoreEpoch] = useState(0);
+  const [restoreReason, setRestoreReason] = useState<RestoreReason>('restore');
   const autoSaveTimerRef = useRef<number | null>(null);
   // Mirrors `isAutoSaving` for readers that run outside React's render cycle —
   // specifically the beforeunload guard, which has to answer "is there
@@ -404,6 +442,41 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const [canRedo, setCanRedo] = useState(false);
   /** Set while undo/redo replays a state, so the replay is not itself journaled. */
   const applyingHistoryRef = useRef(false);
+  /** The document as it was when the open `batch` began. */
+  const batchRef = useRef<{ before: Doc } | null>(null);
+
+  const journal = useCallback((before: Doc, next: Doc, key: string | null) => {
+    if (!journaledChange(before, next)) return;
+    const now = Date.now();
+    const stack = historyRef.current.undo;
+    const top = stack[stack.length - 1];
+    // An inline widget is two writes: its entry in `children`, then the html
+    // with its placeholder. As two undo steps, one Mod+Z left a child with no
+    // placeholder, which the server refuses, so the document stopped saving
+    // until the author typed in that block again. The html write that follows
+    // a child write on the same block completes that step instead.
+    const completesInsert =
+      key !== null &&
+      key.startsWith('html:') &&
+      top !== undefined &&
+      top.key === `child:${key.slice('html:'.length)}` &&
+      now - top.time < 1000;
+    if (completesInsert) {
+      top.after = next;
+      top.time = now;
+      // Closed: typing after the widget is a step of its own.
+      top.key = null;
+    } else if (key && top && top.key === key && now - top.time < 1000) {
+      top.after = next;
+      top.time = now;
+    } else {
+      stack.push({ before, after: next, key, time: now });
+      if (stack.length > UNDO_LIMIT) stack.shift();
+    }
+    historyRef.current.redo = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  }, []);
 
   const mutateDoc = useCallback((updater: (prev: Doc) => Doc, options?: { coalesceKey?: string }) => {
     if (loadingDocumentIdRef.current !== null) return;
@@ -413,30 +486,30 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     commitDoc(next);
     setDirtyTick(editRevisionRef.current);
     // Journal for undo. Typing bursts coalesce per block (a pause of a second
-    // starts a fresh step); structural changes always start a new entry.
-    if (
-      !applyingHistoryRef.current &&
-      (next.blocks !== before.blocks ||
-        next.name !== before.name ||
-        next.sources !== before.sources ||
-        next.citationStyle !== before.citationStyle)
-    ) {
-      const key = options?.coalesceKey ?? null;
-      const now = Date.now();
-      const stack = historyRef.current.undo;
-      const top = stack[stack.length - 1];
-      if (key && top && top.key === key && now - top.time < 1000) {
-        top.after = next;
-        top.time = now;
-      } else {
-        stack.push({ before, after: next, key, time: now });
-        if (stack.length > UNDO_LIMIT) stack.shift();
-      }
-      historyRef.current.redo = [];
-      setCanUndo(true);
-      setCanRedo(false);
+    // starts a fresh step); structural changes always start a new entry. A
+    // replay is not journaled, and a batch is journaled once, when it closes.
+    if (applyingHistoryRef.current || batchRef.current) return;
+    journal(before, next, options?.coalesceKey ?? null);
+  }, [commitDoc, journal]);
+
+  /**
+   * Run several edits as one undo step.
+   *
+   * Moving, duplicating or converting a run of selected blocks repeats a
+   * one-block action; each used to be its own step, so one Mod+Z split the
+   * run. Nested batches join the outer one.
+   */
+  const batch = useCallback(<T,>(run: () => T): T => {
+    if (batchRef.current || applyingHistoryRef.current) return run();
+    const before = docRef.current;
+    batchRef.current = { before };
+    try {
+      return run();
+    } finally {
+      batchRef.current = null;
+      journal(before, docRef.current, null);
     }
-  }, [commitDoc]);
+  }, [journal]);
 
   const setBlocks = useCallback((updater: (prev: Block[]) => Block[], coalesceKey?: string) =>
     mutateDoc(
@@ -488,7 +561,11 @@ export function EditorProvider({ children }: { children: ReactNode }) {
    * nor a navigation (the document session — and with it the assistant
    * transcript — must survive), so neither path can be reused here.
    */
-  const adoptRestoredDocument = useCallback((next: Doc, serverVersion: number) => {
+  const adoptRestoredDocument = useCallback((
+    next: Doc,
+    serverVersion: number,
+    reason: RestoreReason = 'restore',
+  ) => {
     if (autoSaveTimerRef.current !== null) {
       clearTimeout(autoSaveTimerRef.current);
       autoSaveTimerRef.current = null;
@@ -506,6 +583,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     // The document is now a different version of its tree: anything staged
     // against the pre-restore content (pending proposals, in-flight agent
     // streams) must not apply to it.
+    setRestoreReason(reason);
     setRestoreEpoch(epoch => epoch + 1);
     // The restore changed `updated_at` server-side, so list order can change.
     setDocumentListRevision(revision => revision + 1);
@@ -715,7 +793,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       const exists = children.find(c => c.id === child.id);
       if (!exists) children.push(child);
       return { ...b, children } as Block;
-    }));
+      // The html write that places the widget joins this step (see `journal`).
+    }), `child:${blockId}`);
     return child.id;
   }, [setBlocks]);
 
@@ -1102,6 +1181,10 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const request = (async () => {
       const res = await apiSaveDocument(targetId, payload);
       setDocumentListRevision(revision => revision + 1);
+      // The server has this body now. A copy kept from an earlier failure is
+      // older than it — unless it is on offer, and then the author decides.
+      if (keptDraftRef.current?.documentId !== targetId) clearUnsavedDraft(targetId);
+      setConflictId(current => (current === targetId ? null : current));
 
       // A local reset can happen while a request is in flight. The old
       // document was still saved, but its response must not alter the newly
@@ -1211,11 +1294,21 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     loadedForIdRef.current = id;
     versionRef.current = loaded.version ?? 1;
     setSaveError(null);
+    setConflictId(null);
+    // Edits that never reached the server the last time this document was
+    // open. They are offered, never applied: the server copy may be newer.
+    const kept = loadUnsavedDraft(id);
+    if (kept && !sameContent(kept.doc, loaded)) {
+      offerKeptDraft({ documentId: id, savedAt: kept.savedAt });
+    } else {
+      if (kept) clearUnsavedDraft(id);
+      offerKeptDraft(null);
+    }
     setActiveId(null);
     setOpenMenuBlockId(null);
     setOpenMenuType(null);
     return true;
-  }, [startDocumentSession, commitDoc]);
+  }, [startDocumentSession, commitDoc, offerKeptDraft]);
 
   const loadRemote = useCallback(async (id: string): Promise<boolean> => {
     if (id === documentIdRef.current && loadingDocumentIdRef.current === null) return true;
@@ -1238,6 +1331,37 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   );
   const autoSave = useEffectEvent(() => doRemoteSave('auto'));
   const autoSaveRetryRef = useRef(0);
+
+  /** Show a failed save, and stand autosave down when it was a conflict. */
+  const reportSaveFailure = useCallback((error: unknown) => {
+    setSaveError(describeSaveError(error));
+    if (isSaveConflict(error) && documentIdRef.current) setConflictId(documentIdRef.current);
+  }, []);
+
+  /**
+   * Keep the open document's unsaved body on this device.
+   *
+   * Called when unsaved work is about to leave the screen: a switch whose
+   * flush failed, the tab closing, or the author opening the server's newer
+   * version over their own.
+   */
+  const keepUnsavedEdits = useCallback((): boolean => {
+    const id = documentIdRef.current;
+    // No check for a transition in flight: a switch calls this after its own
+    // transition began, and the body cannot change while one is.
+    if (!id || loadedForIdRef.current !== id) return false;
+    if (editRevisionRef.current <= persistedRevisionRef.current) return false;
+    saveUnsavedDraft(id, docRef.current);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    // `pagehide` rather than `beforeunload`: it also fires when a phone puts
+    // the tab away, and it does not fire when the author cancels leaving.
+    const onPageHide = () => { keepUnsavedEdits(); };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, [keepUnsavedEdits]);
   const autoSaveAttempt = useEffectEvent(async function attemptAutoSave() {
     isAutoSavingRef.current = true;
     setIsAutoSaving(true);
@@ -1245,11 +1369,13 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       await autoSave();
       autoSaveRetryRef.current = 0;
     } catch (error) {
-      setSaveError(describeSaveError(error));
+      reportSaveFailure(error);
       // A transient failure used to leave the server stale until the next
       // keystroke. Retry with capped backoff (15s, 30s, 60s); a new edit
       // re-arms the normal debounce via `dirtyTick` and resets the backoff.
-      if (editRevisionRef.current > persistedRevisionRef.current) {
+      // A version conflict is not transient: the same save is refused every
+      // time, so it waits for the author's choice instead.
+      if (!isSaveConflict(error) && editRevisionRef.current > persistedRevisionRef.current) {
         const attempt = autoSaveRetryRef.current++;
         const delay = Math.min(15000 * 2 ** attempt, 60000);
         autoSaveTimerRef.current = window.setTimeout(() => {
@@ -1316,6 +1442,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     }
 
     if (hasAnyRemoteDocs === false && !documentId) return;
+    // The server refuses every save until the conflict is settled.
+    if (conflictId !== null && conflictId === documentId) return;
 
     // A new edit supersedes any pending retry and starts the backoff over.
     autoSaveRetryRef.current = 0;
@@ -1329,7 +1457,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
         autoSaveTimerRef.current = null;
       }
     };
-  }, [dirtyTick, documentId, hasAnyRemoteDocs, loadingDocumentId]);
+  }, [dirtyTick, documentId, hasAnyRemoteDocs, loadingDocumentId, conflictId]);
 
   /** Flush pending local edits, then switch to another document. */
   const switchTo = useCallback(async (
@@ -1354,8 +1482,11 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       try {
         await doRemoteSave('auto');
       } catch (error) {
-        // A failed flush must not block the switch — the error is already
-        // retained in the keyed local draft, and the user asked to move on.
+        // A failed flush must not block the switch: the author asked to move
+        // on. The edits the server did not take are kept on this device and
+        // offered back the next time this document opens. (The keyed draft
+        // cache cannot do that; the next load from the server overwrites it.)
+        keepUnsavedEdits();
         if (requestToken === documentRequestRef.current) {
           setSaveError(describeSaveError(error));
         }
@@ -1375,7 +1506,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     } finally {
       finishDocumentTransition(requestToken);
     }
-  }, [beginDocumentTransition, doRemoteSave, loadRemoteForRequest, reportDocumentLoadFailure, finishDocumentTransition]);
+  }, [beginDocumentTransition, doRemoteSave, keepUnsavedEdits, loadRemoteForRequest, reportDocumentLoadFailure, finishDocumentTransition]);
 
   const createAndSwitch = useCallback(async (input: DocumentInput): Promise<string> => {
     if (
@@ -1559,6 +1690,13 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       : ordered;
   }, [blocks, selectedIdsRaw]);
   const selectBlocks = useCallback((ids: readonly string[]) => setSelectedIds(ids.slice()), []);
+  // The selection at call time, for commands that act on it without
+  // re-rendering with it (every block's handle menu).
+  const selectedBlockIdsRef = useRef<readonly string[]>(selectedBlockIds);
+  useEffect(() => {
+    selectedBlockIdsRef.current = selectedBlockIds;
+  }, [selectedBlockIds]);
+  const getSelectedBlockIds = useCallback(() => selectedBlockIdsRef.current, []);
   const clearBlockSelection = useCallback(() => setSelectedIds(previous => (previous.length ? [] : previous)), []);
   useEffect(() => {
     // Selection belongs to the document it was made in.
@@ -1573,6 +1711,32 @@ export function EditorProvider({ children }: { children: ReactNode }) {
    * of the journal. `Editable` rebases an active block whose state changed
    * underneath it, so the canvas follows the walk without extra wiring.
    */
+  /**
+   * Show the author what an undo or redo changed.
+   *
+   * The replay swaps the document state; when the change was off screen (an
+   * accepted suggestion further down, a block moved away) nothing visible
+   * happened and the author pressed Mod+Z again. The changed blocks are
+   * tinted for a moment and the first is scrolled into view.
+   */
+  const showReplay = useCallback((from: Doc, to: Doc) => {
+    const { changed, near } = replayFootprint(from, to);
+    // Taking back a few typed words in the block the caret is in needs no
+    // signal: the author is looking at it. Tinting it on every Mod+Z would
+    // only flicker.
+    const focused = document.activeElement?.closest?.('.block-row')?.getAttribute('data-block-id') ?? null;
+    if (changed.length === 1 && changed[0] === focused) return;
+    markRecentlyChanged(changed);
+    const target = changed[0] ?? near;
+    if (!target) return;
+    requestAnimationFrame(() => {
+      const row = document.querySelector<HTMLElement>(
+        `.blocks-container > .block-row[data-block-id="${CSS.escape(target)}"]`,
+      );
+      row?.scrollIntoView?.({ block: 'nearest' });
+    });
+  }, [markRecentlyChanged]);
+
   const undo = useCallback(() => {
     const entry = historyRef.current.undo.pop();
     if (!entry) return;
@@ -1585,7 +1749,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     } finally {
       applyingHistoryRef.current = false;
     }
-  }, [mutateDoc]);
+    showReplay(entry.after, entry.before);
+  }, [mutateDoc, showReplay]);
 
   const redo = useCallback(() => {
     const entry = historyRef.current.redo.pop();
@@ -1599,7 +1764,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     } finally {
       applyingHistoryRef.current = false;
     }
-  }, [mutateDoc]);
+    showReplay(entry.before, entry.after);
+  }, [mutateDoc, showReplay]);
 
   // Another document's history is meaningless here, and a restore replaces
   // the tree wholesale — walking back across it would resurrect text the
@@ -1625,12 +1791,73 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       (hasAnyRemoteDocsRef.current !== false &&
         editRevisionRef.current > persistedRevisionRef.current);
     if (shouldPersistRemote) {
-      void doRemoteSave('manual').catch((error) => setSaveError(describeSaveError(error)));
+      void doRemoteSave('manual').catch(reportSaveFailure);
       return;
     }
     setLastSavedAt(Date.now());
     setLastSaveSource('manual');
-  }, [doRemoteSave]);
+  }, [doRemoteSave, reportSaveFailure]);
+
+  /**
+   * Settle a save the server refused because it holds a newer version.
+   *
+   * `mine` writes this body over the newer version. `theirs` opens the newer
+   * version and keeps this body on the device, where the kept-edits bar offers
+   * it back — so neither choice destroys anything the author wrote.
+   */
+  const resolveSaveConflict = useCallback(async (keep: 'mine' | 'theirs'): Promise<void> => {
+    const id = documentIdRef.current;
+    if (!id || loadedForIdRef.current !== id) return;
+    let latest: Doc;
+    try {
+      latest = await apiLoadDocument(id);
+    } catch (error) {
+      setSaveError(describeSaveError(error));
+      return;
+    }
+    if (documentIdRef.current !== id || loadedForIdRef.current !== id) return;
+    const serverVersion = latest.version ?? versionRef.current;
+
+    if (keep === 'theirs') {
+      if (keepUnsavedEdits()) offerKeptDraft({ documentId: id, savedAt: Date.now() });
+      setConflictId(null);
+      adoptRestoredDocument(latest, serverVersion, 'newer-version');
+      setActiveId(null);
+      return;
+    }
+
+    // Lock on the version that is there now, so this save replaces it.
+    versionRef.current = serverVersion;
+    setConflictId(null);
+    try {
+      await doRemoteSave('manual');
+    } catch (error) {
+      // Refused again when someone wrote in between: the choice comes back.
+      reportSaveFailure(error);
+    }
+  }, [adoptRestoredDocument, doRemoteSave, keepUnsavedEdits, offerKeptDraft, reportSaveFailure]);
+
+  /** Put the kept edits back as one undoable change, which autosave then sends. */
+  const restoreKeptDraft = useCallback((): boolean => {
+    const id = documentIdRef.current;
+    const kept = id ? loadUnsavedDraft(id) : null;
+    offerKeptDraft(null);
+    if (!id || !kept || loadedForIdRef.current !== id) return false;
+    clearUnsavedDraft(id);
+    setActiveId(null);
+    mutateDoc(current => ({
+      ...kept.doc,
+      version: current.version,
+      blocks: reconcileBlocks(kept.doc.blocks),
+    }));
+    return true;
+  }, [mutateDoc, offerKeptDraft]);
+
+  const discardKeptDraft = useCallback(() => {
+    const id = documentIdRef.current;
+    if (id) clearUnsavedDraft(id);
+    offerKeptDraft(null);
+  }, [offerKeptDraft]);
 
   const hasPendingEditsNow = useCallback(() => (
     editRevisionRef.current > persistedRevisionRef.current
@@ -1695,6 +1922,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     mergeWithPrevious,
     removeBlock,
     updateHtml,
+    batch,
     setParagraphColumns,
     toggleAiHidden,
     toggleLocked,
@@ -1735,6 +1963,9 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     deleteRemote,
     listRemote,
     hasPendingEdits: hasPendingEditsNow,
+    resolveSaveConflict,
+    restoreKeptDraft,
+    discardKeptDraft,
     savedHeadSeq,
     clearSaveError,
     clearDocumentLoadNotice,
@@ -1743,6 +1974,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     applyPatch,
     markRecentlyChanged,
     selectBlocks,
+    getSelectedBlockIds,
     clearBlockSelection,
   }), [
     registerEditable,
@@ -1762,6 +1994,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     mergeWithPrevious,
     removeBlock,
     updateHtml,
+    batch,
     setParagraphColumns,
     toggleAiHidden,
     toggleLocked,
@@ -1802,6 +2035,9 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     deleteRemote,
     listRemote,
     hasPendingEditsNow,
+    resolveSaveConflict,
+    restoreKeptDraft,
+    discardKeptDraft,
     savedHeadSeq,
     clearSaveError,
     clearDocumentLoadNotice,
@@ -1810,8 +2046,12 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     applyPatch,
     markRecentlyChanged,
     selectBlocks,
+    getSelectedBlockIds,
     clearBlockSelection,
   ]);
+
+  const saveConflict = conflictId !== null && conflictId === documentId;
+  const unsavedDraftAt = keptDraft && keptDraft.documentId === documentId ? keptDraft.savedAt : null;
 
   const stateValue: EditorStateContextValue = useMemo(() => ({
     doc,
@@ -1827,10 +2067,13 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     isAutoSaving,
     lastSaveSource,
     saveError,
+    saveConflict,
+    unsavedDraftAt,
     canUndo,
     canRedo,
     documentLoadNotice,
     restoreEpoch,
+    restoreReason,
     hasAnyRemoteDocs,
     recentlyChanged,
     selectedBlockIds,
@@ -1848,10 +2091,13 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     isAutoSaving,
     lastSaveSource,
     saveError,
+    saveConflict,
+    unsavedDraftAt,
     canUndo,
     canRedo,
     documentLoadNotice,
     restoreEpoch,
+    restoreReason,
     hasAnyRemoteDocs,
     recentlyChanged,
     selectedBlockIds,

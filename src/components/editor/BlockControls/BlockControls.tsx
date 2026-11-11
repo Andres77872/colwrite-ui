@@ -192,12 +192,16 @@ export const BlockControls = memo(function BlockControls({
   menuOpen: boolean;
 }) {
   const {
+    batch,
     duplicateBlock,
+    getBlock,
+    getBlockIds,
+    getSelectedBlockIds,
     insertBlocksAfter,
     insertBlockBeforeExact,
     moveBlock,
     refs,
-    removeBlock,
+    removeBlocks,
     selectBlocks,
     setBlockKind,
     setBlockMenu,
@@ -218,6 +222,23 @@ export const BlockControls = memo(function BlockControls({
   // target keeps focus instead of the handle.
   const closedOutsideRef = useRef(false);
   const [menuSide, setMenuSide] = useState<'left' | 'right'>('left');
+
+  /**
+   * The blocks a command from this handle applies to: the whole block
+   * selection when this block is part of one, this block alone otherwise.
+   *
+   * The handle used to act on its own block whatever was selected, so
+   * "Delete" on one of five selected blocks removed one. Read when the
+   * command runs: subscribing would re-render every handle with the
+   * selection.
+   */
+  const targetIds = useCallback((): readonly string[] => {
+    const selected = getSelectedBlockIds();
+    return selected.length > 1 && selected.includes(id) ? selected : [id];
+  }, [getSelectedBlockIds, id]);
+  // The selection cannot change while the menu is open (a press outside it
+  // closes it), so the count taken as it renders stays true.
+  const targetCount = menuOpen ? targetIds().length : 1;
 
   const setOpen = useCallback(
     (open: boolean) => setBlockMenu(open ? id : null, open ? 'options' : null),
@@ -277,6 +298,41 @@ export const BlockControls = memo(function BlockControls({
 
   const alt = MOD === '⌘' ? '⌥' : 'Alt-';
 
+  /** Move the target blocks one step, as a run that keeps its order. */
+  const moveTargets = useCallback((dir: -1 | 1) => {
+    const ids = targetIds();
+    const order = getBlockIds();
+    const edge = order.indexOf(dir < 0 ? ids[0] : ids[ids.length - 1]) + dir;
+    if (edge < 0 || edge >= order.length) return;
+    // The far end moves first, and the whole move is one undo step.
+    batch(() => {
+      for (const target of dir < 0 ? ids : [...ids].reverse()) {
+        if (!getBlock(target)?.locked) moveBlock(target, dir);
+      }
+    });
+  }, [batch, getBlock, getBlockIds, moveBlock, targetIds]);
+
+  /** Give every target block the flag state this block is about to take. */
+  const toggleTargets = useCallback((flag: 'aiHidden' | 'locked') => {
+    const now = getBlock(id)?.[flag] === true;
+    const toggle = flag === 'aiHidden' ? toggleAiHidden : toggleLocked;
+    batch(() => {
+      for (const target of targetIds()) {
+        if ((getBlock(target)?.[flag] === true) === now) toggle(target);
+      }
+    });
+  }, [batch, getBlock, id, targetIds, toggleAiHidden, toggleLocked]);
+
+  /** Turn every target block that can change into `kind`. */
+  const turnTargetsInto = useCallback((kind: BlockKindId) => {
+    batch(() => {
+      for (const target of targetIds()) {
+        const found = getBlock(target);
+        if (found && found.type !== 'divider' && !found.locked && kindOf(found) !== kind) setBlockKind(target, kind);
+      }
+    });
+  }, [batch, getBlock, setBlockKind, targetIds]);
+
   /**
    * Every command as data, so the search field can filter them. The menu
    * renders the groups when the query is empty and a flat list of matches
@@ -284,21 +340,31 @@ export const BlockControls = memo(function BlockControls({
    */
   const actions = useMemo<MenuAction[]>(() => {
     const list: MenuAction[] = [
-      { id: 'duplicate', group: 'edit', label: 'Duplicate', icon: Copy, shortcut: `${MOD}D`, onSelect: () => duplicateBlock(id) },
+      {
+        id: 'duplicate', group: 'edit', label: 'Duplicate', icon: Copy, shortcut: `${MOD}D`,
+        onSelect: () => {
+          const ids = targetIds();
+          // Last first, so each copy lands under its own original.
+          const copies = batch(() =>
+            [...ids].reverse().map((target) => duplicateBlock(target)).filter((copy): copy is string => Boolean(copy)),
+          );
+          if (ids.length > 1 && copies.length) selectBlocks(copies.reverse());
+        },
+      },
       { id: 'link', group: 'edit', label: 'Copy link to block', icon: Link2, onSelect: () => void copyText(blockLink(id), 'Link to block') },
-      { id: 'up', group: 'move', label: 'Move up', icon: ArrowUp, shortcut: `${MOD}⇧↑`, disabled: isFirst || locked, onSelect: () => moveBlock(id, -1) },
-      { id: 'down', group: 'move', label: 'Move down', icon: ArrowDown, shortcut: `${MOD}⇧↓`, disabled: isLast || locked, onSelect: () => moveBlock(id, 1) },
+      { id: 'up', group: 'move', label: 'Move up', icon: ArrowUp, shortcut: `${MOD}⇧↑`, disabled: isFirst || locked, onSelect: () => moveTargets(-1) },
+      { id: 'down', group: 'move', label: 'Move down', icon: ArrowDown, shortcut: `${MOD}⇧↓`, disabled: isLast || locked, onSelect: () => moveTargets(1) },
       { id: 'ai', group: 'ai', label: 'Ask AI', icon: Sparkles, shortcut: `${MOD}J`, disabled: locked, className: 'text-ai [&>svg]:text-ai', onSelect: () => openAskAi({ blockId: id }) },
-      { id: 'hide', group: 'flags', label: block.aiHidden ? 'Show to assistant' : 'Hide from assistant', icon: block.aiHidden ? Eye : EyeOff, keywords: 'ai private', onSelect: () => toggleAiHidden(id) },
-      { id: 'lock', group: 'flags', label: block.locked ? 'Unlock block' : 'Lock block', icon: block.locked ? Unlock : Lock, keywords: 'protect', onSelect: () => toggleLocked(id) },
-      { id: 'markdown', group: 'more', label: 'Copy as Markdown', icon: ClipboardCopy, keywords: 'md', onSelect: () => void copyText(blocksToMarkdown([block]), 'Markdown') },
+      { id: 'hide', group: 'flags', label: block.aiHidden ? 'Show to assistant' : 'Hide from assistant', icon: block.aiHidden ? Eye : EyeOff, keywords: 'ai private', onSelect: () => toggleTargets('aiHidden') },
+      { id: 'lock', group: 'flags', label: block.locked ? 'Unlock block' : 'Lock block', icon: block.locked ? Unlock : Lock, keywords: 'protect', onSelect: () => toggleTargets('locked') },
+      { id: 'markdown', group: 'more', label: 'Copy as Markdown', icon: ClipboardCopy, keywords: 'md', onSelect: () => void copyText(blocksToMarkdown(targetIds().map((target) => getBlock(target)).filter((found): found is Block => Boolean(found))), 'Markdown') },
     ];
     if (canCollapse(block)) {
       list.push({ id: 'collapse', group: 'more', label: block.collapsed ? 'Expand' : 'Collapse', icon: block.collapsed ? ChevronDown : ChevronRight, keywords: 'fold', onSelect: () => toggleCollapsed(id) });
     }
-    list.push({ id: 'delete', group: 'delete', label: 'Delete', icon: Trash2, shortcut: 'Del', disabled: locked, destructive: true, keywords: 'remove', onSelect: () => removeBlock(id) });
+    list.push({ id: 'delete', group: 'delete', label: 'Delete', icon: Trash2, shortcut: 'Del', disabled: locked, destructive: true, keywords: 'remove', onSelect: () => removeBlocks(targetIds()) });
     return list;
-  }, [block, copyText, duplicateBlock, id, isFirst, isLast, locked, moveBlock, removeBlock, toggleAiHidden, toggleCollapsed, toggleLocked]);
+  }, [batch, block, copyText, duplicateBlock, getBlock, id, isFirst, isLast, locked, moveTargets, removeBlocks, selectBlocks, targetIds, toggleCollapsed, toggleTargets]);
 
   const [query, setQuery] = useState('');
   const [handleTip, setHandleTip] = useState(false);
@@ -330,14 +396,14 @@ export const BlockControls = memo(function BlockControls({
             label: `Turn into ${kind.label}`,
             icon: kind.icon,
             onSelect: () => {
-              setBlockKind(id, kind.id);
+              turnTargetsInto(kind.id);
               focusBlock(id);
             },
           }));
     return [...actions, ...turnInto].filter((action) =>
       `${action.label} ${action.keywords ?? ''}`.toLowerCase().includes(needle),
     );
-  }, [actions, block.type, current, focusBlock, id, locked, query, setBlockKind]);
+  }, [actions, block.type, current, focusBlock, id, locked, query, turnTargetsInto]);
 
   const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     const items = () =>
@@ -451,9 +517,16 @@ export const BlockControls = memo(function BlockControls({
                 }}
                 onClick={(event) => {
                   if (draggedRef.current) return;
-                  // Shift+click selects the block instead, joining a selection.
+                  // Shift+click selects the block instead, and joins a
+                  // selection that is already there: everything from that
+                  // selection to this block, as Shift+click on the row does.
                   if (event.shiftKey) {
-                    selectBlocks([id]);
+                    const selected = getSelectedBlockIds();
+                    const order = getBlockIds();
+                    const at = order.indexOf(id);
+                    const from = Math.min(at, ...selected.map((other) => order.indexOf(other)).filter((i) => i >= 0));
+                    const to = Math.max(at, ...selected.map((other) => order.indexOf(other)).filter((i) => i >= 0));
+                    selectBlocks(order.slice(from, to + 1));
                     return;
                   }
                   setMenuSide(event.clientX < 260 ? 'right' : 'left');
@@ -499,6 +572,12 @@ export const BlockControls = memo(function BlockControls({
             }}
           >
             <div className="shrink-0 p-1.5 pb-1">
+              {targetCount > 1 && (
+                // Said before any command is chosen: Delete here removes them all.
+                <p className="px-0.5 pb-1.5 text-xs text-muted-foreground" data-block-menu-scope="">
+                  Applies to the {targetCount} selected blocks
+                </p>
+              )}
               <input
                 ref={searchRef}
                 type="text"
@@ -534,7 +613,7 @@ export const BlockControls = memo(function BlockControls({
                             <DropdownMenuItem
                               key={kind.id}
                               onSelect={() => {
-                                setBlockKind(id, kind.id);
+                                turnTargetsInto(kind.id);
                                 focusBlock(id);
                               }}
                             >

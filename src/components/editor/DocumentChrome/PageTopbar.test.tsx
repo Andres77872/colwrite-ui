@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     setMobileNavOpen: vi.fn(),
     close: vi.fn(),
     isDesktop: false,
+    toolsDocked: false,
   },
   sidebarDocked: true,
   proposals: { sets: [] as unknown[], pendingCount: 0 },
@@ -33,6 +34,11 @@ const mocks = vi.hoisted(() => ({
     lastSavedAt: null as number | null,
     isAutoSaving: false,
     saveError: null as string | null,
+    saveConflict: false,
+    unsavedDraftAt: null as number | null,
+    resolveSaveConflict: vi.fn(async (_keep: 'mine' | 'theirs') => undefined),
+    restoreKeptDraft: vi.fn(() => true),
+    discardKeptDraft: vi.fn(),
     canUndo: false,
     canRedo: false,
     undo: vi.fn(),
@@ -115,6 +121,7 @@ beforeEach(() => {
     assistantOpen: false,
     leftCollapsed: false,
     isDesktop: false,
+    toolsDocked: false,
   });
   mocks.panels.setTool.mockReset();
   mocks.panels.close.mockReset();
@@ -128,9 +135,14 @@ beforeEach(() => {
     lastSavedAt: null,
     isAutoSaving: false,
     saveError: null,
+    saveConflict: false,
+    unsavedDraftAt: null,
     canUndo: false,
     canRedo: false,
   });
+  mocks.editor.resolveSaveConflict.mockReset().mockResolvedValue(undefined);
+  mocks.editor.restoreKeptDraft.mockReset().mockReturnValue(true);
+  mocks.editor.discardKeptDraft.mockReset();
   mocks.editor.doc = { version: 1, name: 'Sparse routing', blocks: [] };
   mocks.editor.undo.mockReset();
   mocks.editor.save.mockReset();
@@ -173,18 +185,97 @@ describe('PageTopbar', () => {
     expect(screen.getByText('Saving…')).toBeTruthy();
   });
 
-  it('makes a failed save loud, retryable and announced once', () => {
+  it('makes a failed save loud and retryable, and says so in the bar rather than a toast', () => {
     mocks.editor.saveError = 'Server unavailable';
     renderTopbar();
 
     expect(screen.getByText('Not saved')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(mocks.editor.save).toHaveBeenCalledTimes(1);
-    expect(mocks.toast).toHaveBeenCalledWith({
-      title: 'Autosave failed',
-      description: 'Server unavailable',
-      variant: 'error',
-    });
+    // A toast leaves; this has to stay until it is fixed.
+    expect(mocks.toast).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toBe('Not saved. Server unavailable');
+  });
+
+  it('announces a failure and the recovery, not every autosave', () => {
+    mocks.editor.hasPendingEdits.mockReturnValue(true);
+    const view = () => (
+      <TooltipProvider>
+        <PageTopbar />
+      </TooltipProvider>
+    );
+    const { rerender } = render(view());
+    const announcer = () => screen.getByRole('status');
+    expect(announcer().textContent).toBe('');
+
+    mocks.editor.isAutoSaving = true;
+    rerender(view());
+    mocks.editor.isAutoSaving = false;
+    mocks.editor.hasPendingEdits.mockReturnValue(false);
+    rerender(view());
+    expect(screen.getByText('Saved')).toBeTruthy();
+    expect(announcer().textContent).toBe('');
+
+    mocks.editor.saveError = 'Server unavailable';
+    rerender(view());
+    expect(announcer().textContent).toBe('Not saved. Server unavailable');
+
+    mocks.editor.saveError = null;
+    rerender(view());
+    expect(announcer().textContent).toBe('Saving is working again.');
+  });
+
+  it('does not announce a recovery when another document opens', () => {
+    mocks.editor.saveError = 'Server unavailable';
+    const view = () => (
+      <TooltipProvider>
+        <PageTopbar />
+      </TooltipProvider>
+    );
+    const { rerender } = render(view());
+    mocks.editor.saveError = null;
+    mocks.editor.documentId = 'doc-2';
+    rerender(view());
+    expect(screen.getByRole('status').textContent).toBe('');
+  });
+
+  it('keeps the save state on phones as an icon with the same words', () => {
+    renderTopbar();
+    const label = screen.getByText('Saved');
+    // Read out everywhere, drawn as an icon below the `sm` breakpoint.
+    expect(label.className).toContain('max-sm:sr-only');
+    expect(label.parentElement?.querySelector('svg')).toBeTruthy();
+    expect(label.parentElement?.className).not.toContain('max-sm:hidden');
+  });
+
+  it('asks which version to keep when the server holds a newer one', async () => {
+    mocks.editor.saveError = 'This document was changed somewhere else, so your latest edits are not saved yet.';
+    mocks.editor.saveConflict = true;
+    renderTopbar();
+
+    const bar = screen.getByRole('alert');
+    expect(bar.textContent).toMatch(/changed somewhere else/i);
+    // Retrying the same save cannot work, so it is not offered.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+
+    fireEvent.click(within(bar).getByRole('button', { name: 'Keep my version' }));
+    expect(mocks.editor.resolveSaveConflict).toHaveBeenCalledWith('mine');
+    await waitFor(() => expect(within(bar).getByRole('button', { name: 'Keep my version' })).toBeTruthy());
+
+    fireEvent.click(within(bar).getByRole('button', { name: 'Open the newer version' }));
+    expect(mocks.editor.resolveSaveConflict).toHaveBeenLastCalledWith('theirs');
+  });
+
+  it('offers edits that never reached the server, and lets them go', () => {
+    mocks.editor.unsavedDraftAt = new Date(2026, 10, 3, 14, 32).getTime();
+    renderTopbar();
+
+    const bar = screen.getByText(/were never saved/i).closest('div') as HTMLElement;
+    expect(bar.textContent).toMatch(/Edits from .*3.*:32/);
+    fireEvent.click(within(bar).getByRole('button', { name: 'Bring them back' }));
+    expect(mocks.editor.restoreKeptDraft).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(bar).getByRole('button', { name: 'Discard' }));
+    expect(mocks.editor.discardKeptDraft).toHaveBeenCalledTimes(1);
   });
 
   it('opens the right sidebar tabs and shows which one is showing', () => {
@@ -214,6 +305,7 @@ describe('PageTopbar', () => {
   it('leaves the tab buttons to the docked sidebar’s own tab strip while it is open', () => {
     mocks.panels.isOpen = true;
     mocks.panels.isDesktop = true;
+    mocks.panels.toolsDocked = true;
     mocks.panels.activeTool = 'sources';
     renderTopbar();
 

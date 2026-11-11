@@ -88,7 +88,16 @@ export function installMockAssistantSocket(options: MockAssistantOptions): () =>
         { id: 'preview-synthesis', content: 'Summarize the fixture findings', status: 'pending' },
       ];
       if (plan) append(stored, run, 'todo', { items });
-      if (worker) append(stored, run, 'subagent', { id: workerId, status: 'running', engine: run.request.engine ?? 'legacy' });
+      // A worker's tool calls reach the client namespaced by its id, as the
+      // API sends them (`<worker id>:<call id>`), in between the lead's own.
+      const workerCall = `${workerId}:call_1`;
+      const workerQuery = { query: 'router z-loss stability' };
+      if (worker) {
+        append(stored, run, 'subagent', { id: workerId, status: 'running', engine: run.request.engine ?? 'legacy' });
+        append(stored, run, 'tool_call_start', { tool: 'web_search', tool_call_id: workerCall, arguments: {}, arguments_preview: '{}', arguments_deferred: true });
+        append(stored, run, 'tool_call_args', { tool: 'web_search', tool_call_id: workerCall, arguments: workerQuery, arguments_preview: JSON.stringify(workerQuery) });
+      }
+      let moved = false;
       const response = await options.stream(run.request);
       if (!response.ok || !response.body) throw new Error('Preview stream unavailable');
       run.reader = response.body.getReader();
@@ -110,13 +119,23 @@ export function installMockAssistantSocket(options: MockAssistantOptions): () =>
           const data: unknown = JSON.parse(raw);
           if (!record(data)) throw new Error('Invalid preview event');
           if (event === 'session.chat' && typeof data.chat_id === 'string') stored.session.chat_id = data.chat_id;
+          if (event === 'tool_call_end' && !moved) {
+            // The lead finished its first step: the worker reports back and
+            // the plan moves on, so the pinned task list is seen changing.
+            moved = true;
+            if (worker) {
+              append(stored, run, 'tool_call_end', { tool: 'web_search', tool_call_id: workerCall, duration_ms: 1840, is_error: false, error: null, error_type: null, output_preview: '6 results', output_chars: 2100, output_truncated: false });
+              append(stored, run, 'subagent', { id: workerId, status: 'completed', engine: run.request.engine ?? 'legacy' });
+            }
+            if (plan) append(stored, run, 'todo', { items: [{ ...items[0], status: 'completed' }, { ...items[1], status: 'in_progress' }] });
+          }
           if (event === 'done') {
             if (typeof data.chat_id === 'string') {
               stored.session.chat_id = data.chat_id;
               append(stored, run, 'session.chat', { chat_id: data.chat_id });
             }
             if (plan) append(stored, run, 'todo', { items: items.map((item) => ({ ...item, status: 'completed' })) });
-            if (worker) append(stored, run, 'subagent', { id: workerId, status: 'completed', engine: run.request.engine ?? 'legacy' });
+            if (worker && !moved) append(stored, run, 'subagent', { id: workerId, status: 'completed', engine: run.request.engine ?? 'legacy' });
           }
           append(stored, run, event, data);
           if (event === 'done' || event === 'error') {

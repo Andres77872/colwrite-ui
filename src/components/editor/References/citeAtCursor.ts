@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import {
+  canonicalCitationKey,
+  htmlToText,
   useBibliography,
   useEditorActions,
+  type Block,
   type CitationChild,
   type CitationSource,
   type ParagraphBlock,
 } from '@/editor';
 import { uid } from '@/lib/uid';
+import { scrollBehavior } from '@/lib/motion';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
+import { useToast } from '@/components/ui/toastContext';
+import type { ToastOptions } from '@/components/ui/toastContext';
 
 /**
  * Where the author's caret last was in the document.
@@ -33,6 +39,15 @@ type RememberedCaret = {
   end: number;
   /** The selected text, captured when it was selected. */
   selection: string | null;
+  /**
+   * The widget the caret sits directly after, with nothing between them.
+   *
+   * Widgets count for no prose characters, so the offset right before a
+   * citation and the one right after it are the same number. Rebuilt from
+   * the offset alone, a caret placed after "[1]" lands before it, and the
+   * next citation would go in front of the first.
+   */
+  afterChildId?: string;
 };
 
 let remembered: RememberedCaret | null = null;
@@ -41,6 +56,52 @@ let remembered: RememberedCaret | null = null;
 function insideWidget(node: Node): boolean {
   const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
   return Boolean(element?.closest('[data-child-id]'));
+}
+
+/** The node just before `node` in document order, staying inside `root`. */
+function previousNode(node: Node, root: Node): Node | null {
+  let current: Node | null = node;
+  while (current && current !== root) {
+    if (current.previousSibling) return current.previousSibling;
+    current = current.parentNode;
+  }
+  return null;
+}
+
+/** Nothing at all between the widget and the caret. */
+const NO_GAP = /^$/;
+/** Only spaces between them: "[1] |" still reads as right after the citation. */
+const SPACE_GAP = /^[\s\u00a0]*$/;
+
+/**
+ * The widget placeholder directly before (container, offset), when the text
+ * between them matches `gap`. A line break, or any other character, ends the
+ * search: the caret is then not "after" a widget.
+ */
+function widgetBefore(root: HTMLElement, container: Node, offset: number, gap: RegExp): HTMLElement | null {
+  let node: Node | null;
+  if (container.nodeType === Node.TEXT_NODE) {
+    if (!gap.test((container as Text).data.slice(0, offset))) return null;
+    node = previousNode(container, root);
+  } else {
+    node = offset > 0 ? (container.childNodes[offset - 1] ?? null) : previousNode(container, root);
+  }
+  while (node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!gap.test((node as Text).data)) return null;
+      node = previousNode(node, root);
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node as HTMLElement;
+      if (element.hasAttribute('data-child-id')) return element;
+      if (element.tagName === 'BR') return null;
+      // An inline wrapper (<b>, <span>) that ends right here: its last
+      // character is the one before the caret.
+      node = element.lastChild ?? previousNode(element, root);
+    } else {
+      node = previousNode(node, root);
+    }
+  }
+  return null;
 }
 
 /** Prose characters between the start of `root` and (container, offset). */
@@ -153,12 +214,16 @@ export function useRememberCaret(): void {
       const range = selection.getRangeAt(0);
       if (!editable.contains(range.startContainer) || !editable.contains(range.endContainer)) return;
       const root = editable as HTMLElement;
+      const after = range.collapsed
+        ? widgetBefore(root, range.startContainer, range.startOffset, NO_GAP)?.getAttribute('data-child-id')
+        : null;
       remembered = {
         blockId,
         element: root,
         start: proseOffset(root, range.startContainer, range.startOffset),
         end: proseOffset(root, range.endContainer, range.endOffset),
         selection: rangeText(range),
+        ...(after ? { afterChildId: after } : {}),
       };
       publishFocus();
     };
@@ -183,19 +248,76 @@ export function forgetCaret(): void {
   publishFocus();
 }
 
+/** The API's cap on keys in one citation (`MAX_CITATION_KEYS`). */
+const MAX_CITATION_KEYS = 100;
+
 /**
- * Cite sources at the author's caret — or, failing that, at the end of the
- * last editable paragraph — and add them to the document's library.
+ * Where a cite went, so the caller can say so.
  *
- * Returns the id of the block that received the citation, or null when there
- * was nothing to cite.
+ * - `caret`: a new citation at the author's caret.
+ * - `merged`: the caret sat right after a citation, and the sources joined
+ *   it ("[1]" becomes "[1, 2]"). `added` is 0 when it already cited them all.
+ * - `fallback`: there was no usable caret, so the citation went to the end of
+ *   a paragraph — the caret's own section when the caret was in a block that
+ *   cannot hold one (a heading, a locked paragraph, code), else the last one.
+ * - `new-paragraph`: the document had no paragraph to hold it.
  */
-export function useCiteAtCursor(): (sources: readonly CitationSource[]) => string | null {
+export type CitePlacement =
+  | { where: 'caret'; blockId: string }
+  | { where: 'merged'; blockId: string; added: number }
+  | {
+      where: 'fallback';
+      blockId: string;
+      /** Text of the heading the paragraph sits under, if any. */
+      section: string | null;
+      /** Whether the paragraph is the last one that can hold a citation. */
+      last: boolean;
+      /** Why the caret could not take it, when there was a caret. */
+      caretBlock: 'heading' | 'locked' | 'other' | null;
+    }
+  | { where: 'new-paragraph'; blockId: string };
+
+const SECTION_LABEL_CHARS = 48;
+
+function sectionLabel(block: Block | undefined): string | null {
+  if (block?.type !== 'heading') return null;
+  const text = htmlToText(block.html).replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  return text.length > SECTION_LABEL_CHARS ? `${text.slice(0, SECTION_LABEL_CHARS - 1).trimEnd()}…` : text;
+}
+
+function scrollToBlock(blockId: string): void {
+  if (typeof document === 'undefined') return;
+  const reveal = () => {
+    const node = document.querySelector(`[data-block-id="${CSS.escape(blockId)}"]`);
+    if (node && typeof node.scrollIntoView === 'function') {
+      node.scrollIntoView({ block: 'center', behavior: scrollBehavior() });
+    }
+  };
+  // A new paragraph is only on the page after the next render.
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(reveal);
+  else reveal();
+}
+
+/**
+ * Cite sources at the author's caret — or, failing that, at the end of a
+ * paragraph near it — and add them to the document's library.
+ *
+ * After a cite the caret is remembered right after the citation, so citing
+ * again from a panel lands next to it, and joins it: two cites in a row read
+ * "[1, 2]", not "[1][2]", and never "[1] … [2]" at the end of the document.
+ * When the citation could not go at the caret, the paragraph that took it is
+ * scrolled into view.
+ *
+ * Returns where it went, or null when there was nothing to cite.
+ */
+export function useCiteAtCursor(): (sources: readonly CitationSource[]) => CitePlacement | null {
   const {
     refs,
     getBlock,
     getBlockIds,
     addParagraphChild,
+    updateParagraphChild,
     updateHtml,
     upsertSources,
     insertBlocksAfter,
@@ -219,33 +341,112 @@ export function useCiteAtCursor(): (sources: readonly CitationSource[]) => strin
         block?.type === 'paragraph' && !block.locked && Boolean(refs.current[block.id]);
 
       const caret = remembered;
-      let target = caret ? getBlock(caret.blockId) : undefined;
+      const caretBlock = caret ? getBlock(caret.blockId) : undefined;
+      let target: ParagraphBlock | undefined;
       let range: Range | null = null;
-      if (usable(target) && caret) {
-        // Rebuilt from offsets against the block as it is now, so a markup
-        // rewrite since the caret was recorded does not move the citation.
+      if (usable(caretBlock) && caret) {
+        target = caretBlock;
         const el = refs.current[target.id]!;
-        range = proseRange(el, caret.end, caret.end);
-        range.collapse(true);
-      }
-      if (!range) {
-        const ids = getBlockIds();
-        target = undefined;
-        for (let index = ids.length - 1; index >= 0; index -= 1) {
-          const candidate = getBlock(ids[index]);
-          if (usable(candidate)) {
-            target = candidate;
-            break;
+        // Right after a widget, the offset alone cannot say which side of it
+        // the caret was on; the widget's placeholder can.
+        const anchor = caret.afterChildId
+          ? el.querySelector(`[data-child-id="${CSS.escape(caret.afterChildId)}"]`)
+          : null;
+        if (anchor?.parentNode && caret.start === caret.end) {
+          const index = Array.prototype.indexOf.call(anchor.parentNode.childNodes, anchor) + 1;
+          if (proseOffset(el, anchor.parentNode, index) === caret.end) {
+            range = document.createRange();
+            range.setStart(anchor.parentNode, index);
+            range.collapse(true);
           }
         }
+        if (!range) {
+          // Rebuilt from offsets against the block as it is now, so a markup
+          // rewrite since the caret was recorded does not move the citation.
+          range = proseRange(el, caret.end, caret.end);
+          range.collapse(true);
+        }
+
+        // Right after a citation: join it rather than start a second one.
+        const neighbour = widgetBefore(el, range.startContainer, range.startOffset, SPACE_GAP);
+        const neighbourId = neighbour?.getAttribute('data-child-id');
+        const existing = neighbourId
+          ? target.children?.find((candidate) => candidate.id === neighbourId)
+          : undefined;
+        if (existing?.type === 'citation') {
+          const known = new Set(existing.keys.map((key) => canonicalCitationKey(key)));
+          const fresh = sources.filter((source) => {
+            const key = canonicalCitationKey(source.key);
+            if (known.has(key)) return false;
+            known.add(key);
+            return true;
+          });
+          if (existing.keys.length + fresh.length <= MAX_CITATION_KEYS) {
+            if (fresh.length > 0) {
+              const carried = existing.sources ?? [];
+              const carriedKeys = new Set(carried.map((source) => source.key));
+              updateParagraphChild(target.id, existing.id, {
+                keys: [...existing.keys, ...fresh.map((source) => source.key)],
+                // A citation's `sources` name only its own keys, once each.
+                sources: [...carried, ...fresh.filter((source) => !carriedKeys.has(source.key))],
+              });
+              markRecentlyChanged([target.id]);
+            }
+            remembered = { ...caret, start: caret.end, selection: null };
+            publishFocus();
+            return { where: 'merged', blockId: target.id, added: fresh.length };
+          }
+        }
+      }
+
+      let fallback: Extract<CitePlacement, { where: 'fallback' }> | null = null;
+      if (!range) {
+        const ids = getBlockIds();
+        const lastUsable = (from: number, to: number): ParagraphBlock | undefined => {
+          for (let index = to - 1; index >= from; index -= 1) {
+            const candidate = getBlock(ids[index]);
+            if (usable(candidate)) return candidate;
+          }
+          return undefined;
+        };
+        // The caret was in a block that cannot hold a citation: keep it in
+        // that block's section, from the heading at or above it to the next.
+        const at = caretBlock ? ids.indexOf(caretBlock.id) : -1;
+        if (at >= 0) {
+          let start = at;
+          while (start > 0 && getBlock(ids[start])?.type !== 'heading') start -= 1;
+          let end = at + 1;
+          while (end < ids.length && getBlock(ids[end])?.type !== 'heading') end += 1;
+          target = lastUsable(start, end);
+        }
+        const finalUsable = lastUsable(0, ids.length);
+        target ??= finalUsable;
         if (target) {
           range = document.createRange();
           range.selectNodeContents(refs.current[target.id]!);
           range.collapse(false);
+          let heading: Block | undefined;
+          for (let index = ids.indexOf(target.id); index >= 0 && !heading; index -= 1) {
+            const candidate = getBlock(ids[index]);
+            if (candidate?.type === 'heading') heading = candidate;
+          }
+          fallback = {
+            where: 'fallback',
+            blockId: target.id,
+            section: sectionLabel(heading),
+            last: target.id === finalUsable?.id,
+            caretBlock: !caretBlock
+              ? null
+              : caretBlock.type === 'heading'
+                ? 'heading'
+                : caretBlock.locked
+                  ? 'locked'
+                  : 'other',
+          };
         }
       }
 
-      if (!usable(target) || !range) {
+      if (!target || !range) {
         // Nowhere to put it: a new paragraph holding just the citation.
         const ids = getBlockIds();
         const block: ParagraphBlock = {
@@ -256,8 +457,10 @@ export function useCiteAtCursor(): (sources: readonly CitationSource[]) => strin
           columns: 1,
         };
         const [inserted] = insertBlocksAfter(ids[ids.length - 1] ?? null, [block]);
-        if (inserted) markRecentlyChanged([inserted]);
-        return inserted ?? null;
+        if (!inserted) return null;
+        markRecentlyChanged([inserted]);
+        scrollToBlock(inserted);
+        return { where: 'new-paragraph', blockId: inserted };
       }
 
       const el = refs.current[target.id]!;
@@ -276,8 +479,27 @@ export function useCiteAtCursor(): (sources: readonly CitationSource[]) => strin
       addParagraphChild(target.id, child);
       updateHtml(target.id, serializeEditableHtml(el as HTMLDivElement));
       markRecentlyChanged([target.id]);
-      remembered = null;
-      return target.id;
+
+      // The next cite from a panel goes right after this one, and joins it.
+      const parent = placeholder.parentNode;
+      const offset = parent
+        ? proseOffset(el, parent, Array.prototype.indexOf.call(parent.childNodes, placeholder) + 1)
+        : 0;
+      remembered = {
+        blockId: target.id,
+        element: el,
+        start: offset,
+        end: offset,
+        selection: null,
+        afterChildId: child.id,
+      };
+      publishFocus();
+
+      if (fallback) {
+        scrollToBlock(target.id);
+        return fallback;
+      }
+      return { where: 'caret', blockId: target.id };
     },
     [
       addParagraphChild,
@@ -289,7 +511,57 @@ export function useCiteAtCursor(): (sources: readonly CitationSource[]) => strin
       markRecentlyChanged,
       refs,
       updateHtml,
+      updateParagraphChild,
       upsertSources,
     ],
+  );
+}
+
+/** What to tell the author after a cite: where it went, in their terms. */
+export function citeNotice(placement: CitePlacement, sources: readonly CitationSource[]): ToastOptions {
+  const named = sources.length === 1 ? sources[0].title || sources[0].key : `${sources.length} sources`;
+  switch (placement.where) {
+    case 'caret':
+      return { title: 'Citation inserted', description: named };
+    case 'merged':
+      return placement.added > 0
+        ? { title: 'Added to the citation at the cursor', description: named }
+        : { title: 'Already cited here', description: named };
+    case 'new-paragraph':
+      return { title: 'Cited in a new paragraph at the end', description: named };
+    case 'fallback': {
+      const title = placement.section
+        ? `Cited at the end of “${placement.section}”`
+        : placement.last
+          ? 'Cited at the end of the document'
+          : 'Cited at the end of the nearest paragraph';
+      const why =
+        placement.caretBlock === 'heading'
+          ? 'Headings can’t hold citations.'
+          : placement.caretBlock === 'locked'
+            ? 'The paragraph at the cursor is locked.'
+            : placement.caretBlock === 'other'
+              ? 'This kind of block can’t hold citations.'
+              : 'Click into the text first to cite at a specific place.';
+      return { title, description: `${named}. ${why}` };
+    }
+  }
+}
+
+/**
+ * {@link useCiteAtCursor}, plus the confirmation that says where the citation
+ * went. Every "Cite" button should use this, so a citation that could not go
+ * at the caret is never announced as if it had.
+ */
+export function useCiteAndAnnounce(): (sources: readonly CitationSource[]) => CitePlacement | null {
+  const cite = useCiteAtCursor();
+  const { toast } = useToast();
+  return useCallback(
+    (sources) => {
+      const placement = cite(sources);
+      if (placement) toast(citeNotice(placement, sources));
+      return placement;
+    },
+    [cite, toast],
   );
 }

@@ -12,6 +12,7 @@ vi.mock('@/services', () => ({
 }));
 
 const { EditorProvider, useEditor } = await import('@/editor');
+const { replayFootprint } = await import('@/editor/docOps');
 
 const editorRef = createRef<ReturnType<typeof useEditor>>();
 
@@ -118,6 +119,69 @@ describe('block actions', () => {
     expect(editor().selectedBlockIds).toEqual(['c']);
   });
 
+  it('undoes an inserted widget in one step, leaving no entry without a placeholder', () => {
+    mount([para('a', 'See here')]);
+    const placed = 'See <span data-child-id="c1" contenteditable="false"></span> here';
+    // The slash commands write the entry first and the html that places it second.
+    act(() => {
+      editor().addParagraphChild('a', { id: 'c1', type: 'equation', latex: 'x' });
+      editor().updateHtml('a', placed);
+    });
+    expect(editor().blocks[0]).toMatchObject({ html: placed, children: [{ id: 'c1' }] });
+
+    act(() => editor().undo());
+    expect(editor().blocks[0]).toMatchObject({ html: 'See here', children: [] });
+    expect(editor().canUndo).toBe(false);
+
+    act(() => editor().redo());
+    expect(editor().blocks[0]).toMatchObject({ html: placed, children: [{ id: 'c1' }] });
+  });
+
+  it('keeps typing after an inserted widget as a step of its own', () => {
+    mount([para('a', 'See here')]);
+    const placed = 'See <span data-child-id="c1" contenteditable="false"></span> here';
+    act(() => {
+      editor().addParagraphChild('a', { id: 'c1', type: 'equation', latex: 'x' });
+      editor().updateHtml('a', placed);
+    });
+    act(() => editor().updateHtml('a', `${placed} and more`));
+
+    act(() => editor().undo());
+    expect(editor().blocks[0]).toMatchObject({ html: placed, children: [{ id: 'c1' }] });
+    act(() => editor().undo());
+    expect(editor().blocks[0]).toMatchObject({ html: 'See here', children: [] });
+  });
+
+  it('undoes a batch of edits in one step', () => {
+    mount([para('a'), para('b'), para('c')]);
+    act(() => {
+      editor().batch(() => {
+        editor().moveBlock('b', 1);
+        editor().moveBlock('a', 1);
+      });
+    });
+    expect(editor().blocks.map((b) => b.id)).toEqual(['c', 'a', 'b']);
+
+    act(() => editor().undo());
+    expect(editor().blocks.map((b) => b.id)).toEqual(['a', 'b', 'c']);
+    expect(editor().canUndo).toBe(false);
+  });
+
+  it('records nothing for a batch that changed nothing', () => {
+    mount([para('a')]);
+    act(() => {
+      editor().batch(() => undefined);
+    });
+    expect(editor().canUndo).toBe(false);
+  });
+
+  it('marks what an undo brought back so the author can see it', () => {
+    mount([para('a'), para('b')]);
+    act(() => editor().removeBlock('b'));
+    act(() => editor().undo());
+    expect(editor().recentlyChanged.has('b')).toBe(true);
+  });
+
   it('edits code text as its own undo run', () => {
     mount([{ id: 'k', type: 'code', text: 'a' }]);
     act(() => editor().updateCodeText('k', 'ab'));
@@ -125,5 +189,47 @@ describe('block actions', () => {
     expect(editor().blocks[0]).toEqual({ id: 'k', type: 'code', text: 'ab', language: 'python' });
     act(() => editor().setCodeLanguage('k', null));
     expect(editor().blocks[0]).toEqual({ id: 'k', type: 'code', text: 'ab' });
+  });
+});
+
+describe('replayFootprint', () => {
+  const doc = (blocks: Block[]) => ({ version: 1, blocks });
+
+  it('names the blocks that are new or different', () => {
+    const a = para('a');
+    const b = para('b');
+    expect(replayFootprint(doc([a, b]), doc([a, { ...b, html: 'edited' }, para('c')]))).toEqual({
+      changed: ['b', 'c'],
+      near: null,
+    });
+  });
+
+  it('points at the block before the first one that went away', () => {
+    const [a, b, c] = [para('a'), para('b'), para('c')];
+    expect(replayFootprint(doc([a, b, c]), doc([a, c]))).toEqual({ changed: [], near: 'a' });
+  });
+
+  it('points at the block after when the first block went away', () => {
+    const [a, b] = [para('a'), para('b')];
+    expect(replayFootprint(doc([a, b]), doc([b]))).toEqual({ changed: [], near: 'b' });
+  });
+
+  it('names the blocks that changed places', () => {
+    const [a, b, c, d] = [para('a'), para('b'), para('c'), para('d')];
+    expect(replayFootprint(doc([a, b, c, d]), doc([a, d, b, c]))).toEqual({ changed: ['d', 'b', 'c'], near: null });
+  });
+
+  it('names only the block that travelled when it passed many others', () => {
+    const blocks = Array.from({ length: 12 }, (_, i) => para(`b${i}`));
+    const moved = [...blocks.slice(1), blocks[0]];
+    expect(replayFootprint(doc(blocks), doc(moved))).toEqual({ changed: ['b0'], near: null });
+  });
+
+  it('has nothing to show for a change outside the blocks', () => {
+    const blocks = [para('a')];
+    expect(replayFootprint({ version: 1, blocks, name: 'One' }, { version: 1, blocks, name: 'Two' })).toEqual({
+      changed: [],
+      near: null,
+    });
   });
 });

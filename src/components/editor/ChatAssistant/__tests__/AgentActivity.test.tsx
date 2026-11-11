@@ -128,3 +128,52 @@ describe('AgentActivity', () => {
     expect(screen.getByText('running')).toBeTruthy();
   });
 });
+
+describe('research workers in the activity list', () => {
+  const runs: ToolRun[] = [
+    doneRun({ id: 'call-1', tool: 'delegate_research' }),
+    doneRun({ id: 'w1:call_a', tool: 'web_search' }),
+    doneRun({ id: 'w2:call_a', tool: 'semantic_scholar_search' }),
+    doneRun({ id: 'w1:call_b', tool: 'web_read', state: 'running', durationMs: undefined }),
+  ];
+  const workers = [
+    { id: 'w1', status: 'running', engine: 'legacy' },
+    { id: 'w2', status: 'completed', engine: 'legacy' },
+  ];
+
+  it('gathers each worker\u2019s steps under its own line', () => {
+    render(<AgentActivity live runs={runs} workers={workers} />);
+
+    // The assistant's own list holds its call and the two workers.
+    const own = screen.getByRole('list', { name: 'What the assistant did' });
+    expect(own.querySelectorAll(':scope > li')).toHaveLength(3);
+
+    // A working worker is open; its steps are its own, in order.
+    const first = screen.getByRole('list', { name: "Research worker 1's steps" });
+    expect(first.textContent).toContain('Searched the web');
+    expect(first.textContent).not.toContain('Semantic Scholar');
+    expect(screen.getByRole('button', { name: /Research worker 1.*working.*2 steps/ })).toBeTruthy();
+
+    // A finished one folds to its line, and opens on request.
+    const second = screen.getByRole('button', { name: /Research worker 2.*reported back.*1 step/ });
+    expect(second.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(second);
+    expect(screen.getByRole('list', { name: "Research worker 2's steps" }).textContent).toContain('Searched Semantic Scholar');
+  });
+
+  it.each([
+    ['failed', false, 'could not finish'],
+    ['budget_exceeded', false, 'stopped at its limit'],
+    ['cancelled', false, 'stopped'],
+    ['running', false, 'interrupted'],
+    ['running', true, 'working'],
+  ])('says how a worker with status %s (live: %s) ended', (status, live, text) => {
+    render(<AgentActivity live={live} runs={[]} workers={[{ id: 'w1', status, engine: 'legacy' }]} />);
+    expect(screen.getByText(new RegExp(`Research worker 1.*${text}`))).toBeTruthy();
+  });
+
+  it('counts the workers in the folded summary of a finished turn', () => {
+    render(<AgentActivity live={false} runs={runs.map((run) => ({ ...run, state: 'done' as const }))} workers={workers.map((worker) => ({ ...worker, status: 'completed' }))} />);
+    expect(screen.getByRole('button', { name: /Used 4 tools.*2 research workers/ })).toBeTruthy();
+  });
+});

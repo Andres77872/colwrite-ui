@@ -919,6 +919,201 @@ describe('undo/redo', () => {
   });
 });
 
+describe('a save the server refuses as out of date', () => {
+  const conflict = () => Object.assign(new Error('Version conflict'), { status: 409 });
+
+  async function editIntoConflict() {
+    await mountRemoteDocument();
+    saveDocument.mockClear();
+    saveDocument.mockRejectedValue(conflict());
+    vi.useFakeTimers();
+    act(() => currentEditor().setDocName('My edit'));
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+      await Promise.resolve();
+    });
+    expect(currentEditor().saveConflict).toBe(true);
+  }
+
+  it('stops retrying, because the same save is refused every time', async () => {
+    await editIntoConflict();
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(currentEditor().saveError).toMatch(/changed somewhere else/i);
+
+    await act(async () => {
+      vi.advanceTimersByTime(300000);
+      await Promise.resolve();
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+
+    // Another edit does not start the refused save again either.
+    act(() => currentEditor().setDocName('My second edit'));
+    await act(async () => {
+      vi.advanceTimersByTime(60000);
+      await Promise.resolve();
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes my version over the newer one when I keep mine', async () => {
+    await editIntoConflict();
+    vi.useRealTimers();
+    loadDocument.mockResolvedValueOnce(remoteDoc('Their edit', 9));
+    saveDocument.mockReset().mockResolvedValue({ status: 'ok', message: '', version: 10 });
+
+    await act(async () => {
+      await currentEditor().resolveSaveConflict('mine');
+    });
+
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(saveDocument.mock.calls[0][1]).toMatchObject({ name: 'My edit', version: 9 });
+    expect(currentEditor().saveConflict).toBe(false);
+    expect(currentEditor().saveError).toBeNull();
+    expect(currentEditor().doc.name).toBe('My edit');
+    expect(currentEditor().unsavedDraftAt).toBeNull();
+  });
+
+  it('opens the newer version and keeps my edits to bring back', async () => {
+    await editIntoConflict();
+    vi.useRealTimers();
+    loadDocument.mockResolvedValueOnce(remoteDoc('Their edit', 9));
+    saveDocument.mockReset().mockResolvedValue({ status: 'ok', message: '', version: 10 });
+
+    await act(async () => {
+      await currentEditor().resolveSaveConflict('theirs');
+    });
+
+    expect(currentEditor().doc.name).toBe('Their edit');
+    expect(currentEditor().saveConflict).toBe(false);
+    expect(currentEditor().hasPendingEdits()).toBe(false);
+    expect(saveDocument).not.toHaveBeenCalled();
+    // The same line of history, so pending suggestions are staged again
+    // rather than retired as they are after a History restore.
+    expect(currentEditor().restoreReason).toBe('newer-version');
+    expect(currentEditor().unsavedDraftAt).toEqual(expect.any(Number));
+
+    let restored = false;
+    act(() => {
+      restored = currentEditor().restoreKeptDraft();
+    });
+    expect(restored).toBe(true);
+    expect(currentEditor().doc.name).toBe('My edit');
+    expect(currentEditor().unsavedDraftAt).toBeNull();
+    expect(currentEditor().hasPendingEdits()).toBe(true);
+    // One step back is the newer version again.
+    act(() => currentEditor().undo());
+    expect(currentEditor().doc.name).toBe('Their edit');
+  });
+
+  it('asks again when someone wrote in between', async () => {
+    await editIntoConflict();
+    vi.useRealTimers();
+    loadDocument.mockResolvedValueOnce(remoteDoc('Their edit', 9));
+
+    await act(async () => {
+      await currentEditor().resolveSaveConflict('mine');
+    });
+
+    expect(currentEditor().saveConflict).toBe(true);
+    expect(currentEditor().doc.name).toBe('My edit');
+  });
+});
+
+describe('edits the server never received', () => {
+  it('are kept when a switch could not save them, and offered when the document opens again', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockReset().mockRejectedValue(new Error('network down'));
+    act(() => currentEditor().setDocName('Written offline'));
+
+    loadDocument.mockResolvedValueOnce(remoteDoc('Other document', 1));
+    await act(async () => {
+      await currentEditor().switchTo('doc-2');
+    });
+    expect(currentEditor().doc.name).toBe('Other document');
+    expect(currentEditor().unsavedDraftAt).toBeNull();
+
+    loadDocument.mockResolvedValueOnce(remoteDoc('Remote document'));
+    await act(async () => {
+      await currentEditor().switchTo('doc-1');
+    });
+    // The server copy is what opens; the kept edits are an offer.
+    expect(currentEditor().doc.name).toBe('Remote document');
+    expect(currentEditor().unsavedDraftAt).toEqual(expect.any(Number));
+
+    act(() => {
+      currentEditor().restoreKeptDraft();
+    });
+    expect(currentEditor().doc.name).toBe('Written offline');
+    expect(currentEditor().doc.version).toBe(3);
+  });
+
+  it('are dropped for good when the author discards them', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockReset().mockRejectedValue(new Error('network down'));
+    act(() => currentEditor().setDocName('Written offline'));
+    loadDocument.mockResolvedValueOnce(remoteDoc('Other document', 1));
+    await act(async () => {
+      await currentEditor().switchTo('doc-2');
+    });
+    loadDocument.mockResolvedValueOnce(remoteDoc('Remote document'));
+    await act(async () => {
+      await currentEditor().switchTo('doc-1');
+    });
+
+    act(() => currentEditor().discardKeptDraft());
+    expect(currentEditor().unsavedDraftAt).toBeNull();
+    expect(localStorage.getItem('colwrite:unsaved:doc-1')).toBeNull();
+    expect(currentEditor().doc.name).toBe('Remote document');
+  });
+
+  it('are kept when the tab is put away with unsaved work', async () => {
+    await mountRemoteDocument();
+    act(() => currentEditor().setDocName('Closing soon'));
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    const kept = JSON.parse(localStorage.getItem('colwrite:unsaved:doc-1') ?? 'null');
+    expect(kept).toMatchObject({ documentId: 'doc-1', doc: { name: 'Closing soon' } });
+  });
+
+  it('are not kept for a document that is saved', async () => {
+    await mountRemoteDocument();
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    expect(localStorage.getItem('colwrite:unsaved:doc-1')).toBeNull();
+  });
+
+  it('are forgotten once a later save of the document goes through', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockClear();
+    vi.useFakeTimers();
+    act(() => currentEditor().setDocName('Saved in the end'));
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    expect(localStorage.getItem('colwrite:unsaved:doc-1')).not.toBeNull();
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+      await Promise.resolve();
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('colwrite:unsaved:doc-1')).toBeNull();
+  });
+
+  it('are not offered when the server already has the same text', async () => {
+    localStorage.setItem('colwrite:unsaved:doc-1', JSON.stringify({
+      documentId: 'doc-1',
+      doc: { ...remoteDoc('Remote document'), version: 2 },
+      savedAt: 1,
+    }));
+    await mountRemoteDocument();
+    expect(currentEditor().unsavedDraftAt).toBeNull();
+    expect(localStorage.getItem('colwrite:unsaved:doc-1')).toBeNull();
+  });
+});
+
 describe('setFromJSON', () => {
   it('rejects a document containing a block the canvas cannot render', async () => {
     await mountRemoteDocument();

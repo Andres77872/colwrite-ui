@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
-import { Check, ChevronRight, CircleSlash, TriangleAlert } from 'lucide-react';
+import { Check, ChevronRight, CircleSlash, Network, TriangleAlert } from 'lucide-react';
 import { formatDraftSize, formatElapsed, useNow } from '@/components/editor/AgentProgress';
+import type { AgentWorker } from '@/services/streamParser';
 import { failureLead, formatDuration, metaFor } from './toolMeta';
 import type { ToolRun } from './toolMeta';
 
@@ -30,17 +31,57 @@ function RunningMeta({ run }: { run: ToolRun }) {
 /** Past this many steps a finished turn folds them under one summary line. */
 const FOLD_AFTER = 3;
 
+type Entry =
+  | { kind: 'run'; run: ToolRun }
+  | { kind: 'worker'; worker: AgentWorker; number: number; runs: ToolRun[] };
+
+/**
+ * The turn's steps in order, with each research worker's own steps gathered
+ * under it. A worker's tool calls arrive as `<worker id>:<call id>`, in
+ * between the assistant's own and those of a worker running beside it.
+ */
+function entriesFor(runs: ToolRun[], workers: AgentWorker[]): Entry[] {
+  const entries: Entry[] = [];
+  const groups = new Map<string, ToolRun[]>();
+  const group = (worker: AgentWorker) => {
+    let owned = groups.get(worker.id);
+    if (!owned) {
+      owned = [];
+      groups.set(worker.id, owned);
+      entries.push({ kind: 'worker', worker, number: workers.indexOf(worker) + 1, runs: owned });
+    }
+    return owned;
+  };
+  for (const run of runs) {
+    const worker = workers.find((candidate) => run.id.startsWith(`${candidate.id}:`));
+    if (worker) group(worker).push(run);
+    else entries.push({ kind: 'run', run });
+  }
+  // A worker that has not called a tool yet is still at work.
+  for (const worker of workers) group(worker);
+  return entries;
+}
+
 /**
  * What the agent did on this turn, one quiet line per tool call:
  * "✓ Searched Semantic Scholar · 0.8s". Each line opens onto its query, input
  * and output. A long finished run folds under "Used N tools"; a failure's
- * cause is always on screen, never behind a click.
+ * cause is always on screen, never behind a click. A research worker gets one
+ * line of its own with its steps beneath it.
  */
-export function AgentActivity({ runs, live }: { runs: ToolRun[]; live: boolean }) {
+export function AgentActivity({
+  runs,
+  live,
+  workers = [],
+}: {
+  runs: ToolRun[];
+  live: boolean;
+  workers?: AgentWorker[];
+}) {
   // null = the author hasn't touched it; follow the live default.
   const [expanded, setExpanded] = useState<boolean | null>(null);
 
-  if (runs.length === 0) return null;
+  if (runs.length === 0 && workers.length === 0) return null;
 
   const failed = runs.filter((run) => run.state === 'error').length;
   const interrupted = runs.filter((run) => run.state === 'interrupted').length;
@@ -49,9 +90,13 @@ export function AgentActivity({ runs, live }: { runs: ToolRun[]; live: boolean }
 
   const list = (
     <ol className="flex flex-col" aria-label="What the assistant did">
-      {runs.map((run) => (
-        <ActivityRun key={run.id} run={run} />
-      ))}
+      {entriesFor(runs, workers).map((entry) =>
+        entry.kind === 'run' ? (
+          <ActivityRun key={entry.run.id} run={entry.run} />
+        ) : (
+          <WorkerGroup key={`worker-${entry.worker.id}`} entry={entry} live={live} />
+        ),
+      )}
     </ol>
   );
 
@@ -67,6 +112,11 @@ export function AgentActivity({ runs, live }: { runs: ToolRun[]; live: boolean }
       >
         <Check aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
         <span className="truncate">Used {runs.length} tools</span>
+        {workers.length > 0 && (
+          <span className="shrink-0">
+            · {workers.length} research {workers.length === 1 ? 'worker' : 'workers'}
+          </span>
+        )}
         {failed > 0 && <span className="shrink-0 text-destructive">· {failed} failed</span>}
         {interrupted > 0 && <span className="shrink-0">· {interrupted} interrupted</span>}
         <ChevronRight
@@ -76,6 +126,97 @@ export function AgentActivity({ runs, live }: { runs: ToolRun[]; live: boolean }
       </button>
       {open && <div className="mt-0.5 border-l border-border pl-3">{list}</div>}
     </div>
+  );
+}
+
+/** How a worker ended, or that it has not: the words after its name. */
+function workerOutcome(status: string, live: boolean): { text: string; tone: 'working' | 'done' | 'stopped' | 'failed' } {
+  switch (status) {
+    case 'completed':
+      return { text: 'reported back', tone: 'done' };
+    case 'failed':
+      return { text: 'could not finish', tone: 'failed' };
+    case 'budget_exceeded':
+      return { text: 'stopped at its limit', tone: 'stopped' };
+    case 'cancelled':
+      return { text: 'stopped', tone: 'stopped' };
+    default:
+      // Still `running` in a turn that is over: the turn ended around it.
+      return live ? { text: 'working', tone: 'working' } : { text: 'interrupted', tone: 'stopped' };
+  }
+}
+
+/**
+ * One research worker: a line that says how it is doing, over the steps it
+ * took. The steps used to sit in the assistant's own list, indistinguishable
+ * from it, and the workers were a sentence of counts under the reply.
+ */
+function WorkerGroup({ entry, live }: { entry: Extract<Entry, { kind: 'worker' }>; live: boolean }) {
+  const outcome = workerOutcome(entry.worker.status, live);
+  // Open while it works; a finished worker folds to its line.
+  const [expanded, setExpanded] = useState<boolean | null>(null);
+  const open = expanded ?? outcome.tone === 'working';
+  const steps = entry.runs.length;
+
+  const line = (
+    <>
+      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+        {outcome.tone === 'working' ? (
+          <Spinner className="h-3 w-3" />
+        ) : outcome.tone === 'failed' ? (
+          <TriangleAlert aria-hidden="true" className="h-3.5 w-3.5 text-destructive" />
+        ) : outcome.tone === 'stopped' ? (
+          <CircleSlash aria-hidden="true" className="h-3.5 w-3.5" />
+        ) : (
+          <Network aria-hidden="true" className="h-3.5 w-3.5 text-success" />
+        )}
+      </span>
+      <span className={cn('min-w-0 truncate', outcome.tone === 'working' && 'animate-shimmer text-foreground')}>
+        Research worker {entry.number}
+        <span className="sr-only">: </span>
+        <span aria-hidden="true"> · </span>
+        {outcome.text}
+        {outcome.tone === 'working' && '…'}
+      </span>
+      {steps > 0 && (
+        <span className="shrink-0 tabular-nums">
+          <span className="sr-only">, </span>· {steps} {steps === 1 ? 'step' : 'steps'}
+        </span>
+      )}
+      {steps > 0 && (
+        <ChevronRight
+          aria-hidden="true"
+          className={cn('h-3.5 w-3.5 shrink-0 transition-transform', open && 'rotate-90')}
+        />
+      )}
+    </>
+  );
+
+  const lineClass =
+    'group/line -mx-1 flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[13px] text-muted-foreground';
+
+  return (
+    <li>
+      {steps > 0 ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(!open)}
+          aria-expanded={open}
+          className={cn(lineClass, 'transition-colors duration-120 hover:bg-hover hover:text-foreground')}
+        >
+          {line}
+        </button>
+      ) : (
+        <div className={lineClass}>{line}</div>
+      )}
+      {open && steps > 0 && (
+        <ol className="ml-[7px] flex flex-col border-l border-border pl-3" aria-label={`Research worker ${entry.number}'s steps`}>
+          {entry.runs.map((run) => (
+            <ActivityRun key={run.id} run={run} />
+          ))}
+        </ol>
+      )}
+    </li>
   );
 }
 

@@ -59,6 +59,7 @@ export function useBlockSelection() {
     duplicateBlock,
     moveBlock,
     setBlockKind,
+    batch,
     indentBlock,
     refs,
   } = useEditorActions();
@@ -153,7 +154,10 @@ export function useBlockSelection() {
           const moving = dir < 0 ? selectedBlockIds : [...selectedBlockIds].reverse();
           const edge = order.indexOf(dir < 0 ? first : last) + dir;
           if (edge < 0 || edge >= order.length) return;
-          for (const id of moving) moveBlock(id, dir);
+          // One step for the author, one step to undo.
+          batch(() => {
+            for (const id of moving) moveBlock(id, dir);
+          });
           return;
         }
         if (event.shiftKey) {
@@ -187,19 +191,23 @@ export function useBlockSelection() {
       }
       if (isMod(event) && !event.shiftKey && event.key.toLowerCase() === 'd') {
         event.preventDefault();
-        const copies = [...selectedBlockIds]
-          .reverse()
-          .map((id) => duplicateBlock(id))
-          .filter((id): id is string => Boolean(id));
+        const copies = batch(() =>
+          [...selectedBlockIds]
+            .reverse()
+            .map((id) => duplicateBlock(id))
+            .filter((id): id is string => Boolean(id)),
+        );
         if (copies.length) selectBlocks(copies.reverse());
         return;
       }
       if (isMod(event) && event.altKey && TURN_INTO_DIGITS[event.code]) {
         event.preventDefault();
         const kind = TURN_INTO_DIGITS[event.code];
-        for (const block of selectedBlocks()) {
-          if (kindOf(block) !== kind && block.type !== 'divider') setBlockKind(block.id, kind);
-        }
+        batch(() => {
+          for (const block of selectedBlocks()) {
+            if (kindOf(block) !== kind && block.type !== 'divider') setBlockKind(block.id, kind);
+          }
+        });
         return;
       }
       if (isMod(event) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'j') {
@@ -215,10 +223,13 @@ export function useBlockSelection() {
         // let go and the browser moves on from the selected block's row,
         // which holds focus. Swallowing every Tab trapped keyboard users in
         // the editor (WCAG 2.1.2).
-        let moved = false;
-        for (const block of selectedBlocks()) {
-          if (isListItem(block) && indentBlock(block.id, event.shiftKey ? -1 : 1)) moved = true;
-        }
+        const moved = batch(() => {
+          let any = false;
+          for (const block of selectedBlocks()) {
+            if (isListItem(block) && indentBlock(block.id, event.shiftKey ? -1 : 1)) any = true;
+          }
+          return any;
+        });
         if (moved) {
           event.preventDefault();
           return;
@@ -272,6 +283,7 @@ export function useBlockSelection() {
     duplicateBlock,
     moveBlock,
     setBlockKind,
+    batch,
     indentBlock,
     refs,
   ]);

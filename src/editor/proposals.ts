@@ -12,8 +12,10 @@
  *    to replay the accepted ones in their original order, or an insert lands
  *    in the wrong place.
  * 2. **Dependencies.** An operation may reference a block an earlier operation
- *    in the same batch created. Rejecting the first has to disable the second
- *    rather than let it fail against a block that never existed.
+ *    in the same batch created. Rejecting the first moves an insert that
+ *    continued from it onto its place, and takes a change to the block itself
+ *    with it, rather than let either fail against a block that never existed
+ *    (see `rejectChange`).
  *
  * Both used to be aspirations. `order` was written and never read: accepting
  * one change at a time replayed that single operation against the live
@@ -53,6 +55,25 @@ export type ProposedChange = {
   /** Changes in the same batch that must be accepted before this one can be. */
   dependsOn: string[];
   status: ChangeStatus;
+  /**
+   * Position of the operation in the batch as the server stored it. Unlike
+   * `order`, which a rejection renumbers (see `rejectChange`), this never
+   * changes, so it is how a decision is remembered across reloads.
+   */
+  opIndex?: number;
+  /**
+   * Fingerprint of the block a rewrite or deletion is aimed at, taken when
+   * the change was staged. A block that no longer matches it was edited after
+   * the suggestion was written (see `isStale`).
+   */
+  base?: string;
+  /**
+   * Set when the server's fingerprints say the saved block is not the one
+   * this change was written for (see `markOutdated`). It is the server's
+   * word on what happened between the proposal and the staging, which `base`
+   * cannot see, and nothing done in the editor afterwards takes it back.
+   */
+  outdated?: boolean;
 };
 
 export type ChangeSet = {
@@ -71,6 +92,30 @@ export type ChangeSet = {
    * owns the operations and applies them to the authoritative head.
    */
   changeSetId?: string | null;
+  /**
+   * The server records the decisions on this durable batch one operation at
+   * a time and retires it when the last one is decided. Without it (an older
+   * API) the decisions are remembered in this browser and the batch is
+   * retired by rejecting it (see `reviewDecisions.ts`).
+   */
+  decisionsOnServer?: boolean;
+  /**
+   * The server said, per operation, whether the saved document still holds
+   * the block it was written for. Without it, the staging fingerprints are
+   * kept in this browser across reloads instead.
+   */
+  targetsOnServer?: boolean;
+};
+
+/**
+ * The server's fingerprints of one operation's target block: as the
+ * operation found it, and as the saved document holds it now. They are only
+ * comparable with each other, never with `blockFingerprint`.
+ */
+export type OperationTarget = {
+  blockId: string;
+  fingerprint: string;
+  headFingerprint: string | null;
 };
 
 /** A document the assistant created, offered to the author rather than forced. */
@@ -136,18 +181,189 @@ function producedBlockId(op: ToolOperation): string | null {
   return null;
 }
 
+/* ----------------------------------------
+   Staleness
+   ---------------------------------------- */
+
+/**
+ * Change kinds whose effect depends on the text of their block. A rewrite
+ * replaces it and a deletion removes it, so either one applied to a paragraph
+ * the author has since edited throws that edit away. An insert or a move only
+ * needs its block to exist.
+ */
+const CONTENT_BOUND: ReadonlySet<ChangeKind> = new Set<ChangeKind>(['replace', 'delete']);
+
+/** Fields that change how a block is shown, not what it says. */
+const VIEW_ONLY_FIELDS: ReadonlySet<string> = new Set(['collapsed', 'aiHidden', 'locked']);
+
+function stableStringify(value: unknown, skip?: ReadonlySet<string>): string {
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record)
+      .filter((key) => record[key] !== undefined && !skip?.has(key))
+      .sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** A short, well-mixed 53-bit hash (cyrb53), so a fingerprint stays small enough to store. */
+function hashText(text: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/**
+ * What a block says, reduced to a short string. Key order and view-only
+ * flags (collapsing a block, locking it) do not count as edits.
+ */
+export function blockFingerprint(block: Block): string {
+  return hashText(stableStringify(block, VIEW_ONLY_FIELDS));
+}
+
+/**
+ * Whether a rewrite or deletion was written against text the author has
+ * since changed.
+ *
+ * Applying it anyway is what this guards against: a rewrite merges the
+ * assistant's version over the block, so the author's newer sentence would
+ * be replaced without a word. Such a change can still be rejected; it can no
+ * longer be accepted (see `isReady`).
+ */
+export function isStale(change: ProposedChange, blocks: readonly Block[]): boolean {
+  if (!CONTENT_BOUND.has(change.kind)) return false;
+  const target = blocks.find((block) => block.id === change.anchorBlockId);
+  if (target === undefined) return false;
+  // Changed between the proposal and the staging, by the server's account.
+  if (change.outdated) return true;
+  // Changed since it was staged here.
+  return change.base !== undefined && blockFingerprint(target) !== change.base;
+}
+
+/**
+ * Mark the rewrites and deletions of a durable batch whose block changed
+ * after the assistant read it, going by the server's fingerprints.
+ *
+ * `base` is taken when a batch is staged, so on its own it only notices an
+ * edit made while the batch is on screen. A paragraph the author rewrote
+ * between the proposal and a reload, or on another device, looked untouched,
+ * and accepting the suggestion replaced it. The server records each target as
+ * its operation found it (`fingerprint`) and reports the same digest for the
+ * saved document (`headFingerprint`).
+ *
+ * The fingerprints of the operations on one block, in order, are the stages
+ * that block goes through as the review is accepted. The saved block is
+ * current for an operation when it is at that operation's own stage, or at
+ * the stage of an earlier operation on the block — those are still
+ * undecided, or were rejected. `earlier` carries the stages recorded by the
+ * batches this one was written on top of. Anything else is text the
+ * suggestion was not written for.
+ *
+ * `targets` is addressed by operation index. Changes without a target keep
+ * relying on `base` alone.
+ */
+export function markOutdated(
+  set: ChangeSet,
+  targets: ReadonlyArray<OperationTarget | null>,
+  earlier?: ReadonlyMap<string, ReadonlySet<string>>,
+): ChangeSet {
+  let changed = false;
+  const changes = set.changes.map((change) => {
+    if (change.opIndex === undefined || !CONTENT_BOUND.has(change.kind)) return change;
+    const target = targets[change.opIndex];
+    if (!target || target.blockId !== change.anchorBlockId) return change;
+    let current = target.headFingerprint === target.fingerprint;
+    if (!current && target.headFingerprint !== null) {
+      current = earlier?.get(target.blockId)?.has(target.headFingerprint) === true
+        || targets.slice(0, change.opIndex).some(
+          (before) => before?.blockId === target.blockId
+            && before.fingerprint === target.headFingerprint,
+        );
+    }
+    if (current === !change.outdated) return change;
+    changed = true;
+    return { ...change, outdated: !current };
+  });
+  return changed ? { ...set, changes } : set;
+}
+
+/**
+ * Carry the staging fingerprints forward over an accepted change.
+ *
+ * Accepting a rewrite changes its block, and that is the author's own
+ * decision, not an edit the next suggestion on the same block was written
+ * without. Without this, accepting the first of two rewrites of a paragraph
+ * marked the second one stale. A change that was already stale stays stale.
+ */
+export function rebaseAfterAccept(
+  sets: ChangeSet[],
+  before: readonly Block[],
+  after: readonly Block[],
+  touched: readonly string[],
+): ChangeSet[] {
+  if (touched.length === 0) return sets;
+  const prior = new Map(before.map((block) => [block.id, block]));
+  const next = new Map(after.map((block) => [block.id, block]));
+  const fresh = new Map<string, { was: string | undefined; now: string }>();
+  for (const id of touched) {
+    const landed = next.get(id);
+    if (!landed) continue;
+    const previous = prior.get(id);
+    fresh.set(id, {
+      was: previous ? blockFingerprint(previous) : undefined,
+      now: blockFingerprint(landed),
+    });
+  }
+  if (fresh.size === 0) return sets;
+
+  let changed = false;
+  const rebased = sets.map((set) => {
+    let setChanged = false;
+    const changes = set.changes.map((change) => {
+      if (change.status !== 'pending' || !CONTENT_BOUND.has(change.kind)) return change;
+      const target = change.anchorBlockId ? fresh.get(change.anchorBlockId) : undefined;
+      if (!target || change.base === target.now) return change;
+      // Already out of date before this accept: it stays that way.
+      if (change.outdated) return change;
+      if (change.base !== undefined && change.base !== target.was) return change;
+      setChanged = true;
+      return { ...change, base: target.now };
+    });
+    if (!setChanged) return set;
+    changed = true;
+    return { ...set, changes };
+  });
+  return changed ? rebased : sets;
+}
+
 /**
  * Turn a streamed `tool_action` into a reviewable batch.
  *
  * Operations the editor cannot render — `create_document`, or anything a
  * future server adds — are dropped here rather than surfaced as a change the
  * author has no way to evaluate.
+ *
+ * `blocks` is the document as it stands while the batch is staged. A rewrite
+ * or deletion records what its block looked like then, so an edit the author
+ * makes afterwards is noticed instead of silently overwritten.
  */
-export function buildChangeSet(action: ToolAction): ChangeSet {
+export function buildChangeSet(action: ToolAction, blocks?: readonly Block[]): ChangeSet {
   const changes: ProposedChange[] = [];
   const producedBy = new Map<string, string>();
+  const present = blocks ? new Map(blocks.map((block) => [block.id, block])) : null;
 
-  for (const op of action.actions) {
+  for (const [opIndex, op] of action.actions.entries()) {
     const kind = classify(op);
     if (!kind) continue;
 
@@ -173,7 +389,10 @@ export function buildChangeSet(action: ToolAction): ChangeSet {
       producesBlockId: produces,
       dependsOn,
       status: 'pending',
+      opIndex,
     };
+    const target = CONTENT_BOUND.has(kind) && blockId ? present?.get(blockId) : undefined;
+    if (target) change.base = blockFingerprint(target);
     changes.push(change);
     if (produces) producedBy.set(produces, change.id);
   }
@@ -219,7 +438,10 @@ export function pendingCount(sets: ChangeSet[]): number {
  * 3. **Somewhere to land.** A change whose anchor the author has deleted has
  *    no position to take. Offering Accept for it meant the only thing the
  *    button could do was raise an error, which reads as the app losing the
- *    change rather than as the document having moved on.
+ *    change rather than as the document having moved on. That holds for a
+ *    rewrite, deletion or move of a deleted block as much as for an insert.
+ * 4. **Still current.** A rewrite or deletion of a block the author has
+ *    edited since would throw that edit away (see `isStale`).
  *
  * Reject is never gated on any of this — see `ChangeCard`.
  */
@@ -238,8 +460,16 @@ export function isReady(
     if (byId.get(id)?.status === 'pending') return false;
   }
 
-  if (blocks && resolveAcceptOp(change, sets, blocks) === null) return false;
-  return true;
+  if (!blocks) return true;
+  if (
+    change.placement === null
+    && change.anchorBlockId !== null
+    && !blocks.some((block) => block.id === change.anchorBlockId)
+  ) {
+    return false;
+  }
+  if (isStale(change, blocks)) return false;
+  return resolveAcceptOp(change, sets, blocks) !== null;
 }
 
 /** Change kinds that move blocks around, and so cannot be freely reordered. */
@@ -531,6 +761,283 @@ export function resolveAcceptOp(
   const block = (change.op as { block?: Record<string, unknown> }).block ?? {};
   if (index === 0) return { op: 'insert_block_at_start', block };
   return { op: 'insert_block_after', referenceId: blocks[index - 1].id, block };
+}
+
+/* ----------------------------------------
+   Rejection
+   ---------------------------------------- */
+
+/** What rejecting a change does to the rest of its batch. */
+export type RejectionPlan = {
+  /**
+   * Inserts that continued from the rejected one (the next paragraph of a
+   * suggested section). They take its place and stay reviewable.
+   */
+  reanchored: ProposedChange[];
+  /**
+   * Changes to the block the rejected insert would have created — a rewrite
+   * or deletion of it. There is nothing left for them to apply to, so they
+   * are rejected with it.
+   */
+  cascaded: ProposedChange[];
+};
+
+const byOrder = (a: ProposedChange, b: ProposedChange) => a.order - b.order;
+
+/** Whether `change` continues from the block `rejected` would have added. */
+function continuesFrom(change: ProposedChange, rejected: ProposedChange): boolean {
+  return (
+    change.kind === 'insert'
+    && (change.placement === 'after' || change.placement === 'before')
+    && rejected.kind === 'insert'
+    && rejected.placement !== null
+    && rejected.producesBlockId !== null
+    && change.anchorBlockId === rejected.producesBlockId
+  );
+}
+
+/**
+ * Work out, without changing anything, what rejecting `changeId` takes with it.
+ *
+ * Rejecting one paragraph of a suggested section used to reject every
+ * paragraph after it, because each one is addressed to the block before it.
+ * Those inserts only need *a* place, and the rejected paragraph's own address
+ * is the place it was going to take, so they move onto it instead. Only a
+ * change to the rejected block itself has nowhere to go.
+ */
+export function planRejection(changeId: string, sets: ChangeSet[]): RejectionPlan {
+  const set = sets.find((candidate) => candidate.changes.some((change) => change.id === changeId));
+  const target = set?.changes.find((change) => change.id === changeId);
+  if (!set || !target || target.status !== 'pending') return { reanchored: [], cascaded: [] };
+
+  const reanchored: ProposedChange[] = [];
+  const cascaded: ProposedChange[] = [];
+  const queue = [target];
+  const seen = new Set([target.id]);
+  while (queue.length) {
+    const current = queue.shift()!;
+    for (const change of set.changes) {
+      if (change.status !== 'pending' || seen.has(change.id)) continue;
+      if (!change.dependsOn.includes(current.id)) continue;
+      seen.add(change.id);
+      if (current === target && continuesFrom(change, target)) {
+        reanchored.push(change);
+      } else {
+        // Built on something that will never exist: it goes too, and so does
+        // anything built on it in turn.
+        cascaded.push(change);
+        queue.push(change);
+      }
+    }
+  }
+  return { reanchored, cascaded };
+}
+
+/** The rejected insert's own address, given to a change that continued from it. */
+function readdress(change: ProposedChange, rejected: ProposedChange): ToolOperation {
+  const block = (change.op as { block?: Record<string, unknown> }).block ?? {};
+  const anchor = rejected.anchorBlockId ?? '';
+  switch (rejected.placement) {
+    case 'before':
+      return { op: 'insert_block_before', referenceId: anchor, block };
+    case 'start':
+      return { op: 'insert_block_at_start', block };
+    case 'end':
+      return { op: 'append_block', block };
+    default:
+      return { op: 'insert_block_after', referenceId: anchor, block };
+  }
+}
+
+/**
+ * Reject a change, moving the inserts that continued from it onto its place.
+ *
+ * The continuations also take the rejected change's place in authoring
+ * order. Position inside a slot is decided by that order (see
+ * `slotIsReversed`), so a continuation that kept its own, later rank would
+ * jump ahead of any sibling authored in between: rejecting X in
+ * `after(A, X)`, `after(A, V)`, `after(X, Y)` must leave `A, V, Y`, not
+ * `A, Y, V`. They are slotted in so that replaying them gives the order they
+ * were shown in — the ones before X, then the ones after it.
+ *
+ * Returns the ids that are now rejected (the change itself first) and the ids
+ * that were re-anchored. Unknown or already-decided ids change nothing.
+ */
+export function rejectChange(
+  sets: ChangeSet[],
+  changeId: string,
+): { sets: ChangeSet[]; rejected: string[]; reanchored: string[] } {
+  const setIndex = sets.findIndex((set) => set.changes.some((change) => change.id === changeId));
+  const set = sets[setIndex];
+  const target = set?.changes.find((change) => change.id === changeId);
+  if (!set || !target || target.status !== 'pending') {
+    return { sets, rejected: [], reanchored: [] };
+  }
+
+  const { reanchored, cascaded } = planRejection(changeId, sets);
+  const rejected = new Set([changeId, ...cascaded.map((change) => change.id)]);
+
+  const moved = new Map<string, ProposedChange>(
+    reanchored.map((change) => [
+      change.id,
+      {
+        ...change,
+        op: readdress(change, target),
+        anchorBlockId: target.anchorBlockId,
+        placement: target.placement,
+        // Its anchor is now the rejected insert's anchor, which may itself be
+        // a pending insert of this batch.
+        dependsOn: [...target.dependsOn],
+      },
+    ]),
+  );
+
+  // Document order of the continuations: before-X inserts keep their order,
+  // after-X inserts replay back-to-front.
+  const shown = [
+    ...reanchored.filter((change) => change.placement === 'before').sort(byOrder),
+    ...reanchored.filter((change) => change.placement === 'after').sort(byOrder).reverse(),
+  ];
+  const slotted = slotIsReversed(target.placement) ? [...shown].reverse() : shown;
+
+  const rest = [...set.changes].sort(byOrder).filter((change) => !moved.has(change.id));
+  const at = rest.findIndex((change) => change.id === changeId);
+  const sequence = [
+    ...rest.slice(0, at + 1),
+    ...slotted.map((change) => moved.get(change.id)!),
+    ...rest.slice(at + 1),
+  ];
+
+  const changes = sequence.map((change, index) => ({
+    ...change,
+    order: index,
+    status: rejected.has(change.id) ? ('rejected' as const) : change.status,
+  }));
+
+  const next = [...sets];
+  next[setIndex] = { ...set, changes };
+  return {
+    sets: next,
+    rejected: [changeId, ...cascaded.map((change) => change.id)],
+    reanchored: reanchored.map((change) => change.id),
+  };
+}
+
+/** Mark changes decided without touching anything else. */
+export function markChanges(
+  sets: ChangeSet[],
+  ids: ReadonlySet<string>,
+  status: 'accepted' | 'rejected',
+): ChangeSet[] {
+  if (ids.size === 0) return sets;
+  return sets.map((set) =>
+    set.changes.some((change) => ids.has(change.id))
+      ? {
+          ...set,
+          changes: set.changes.map((change) =>
+            ids.has(change.id) ? { ...change, status } : change,
+          ),
+        }
+      : set,
+  );
+}
+
+/* ----------------------------------------
+   Resuming a review
+   ---------------------------------------- */
+
+/** One decision on a durable batch, by the operation's stored position. */
+export type ReviewDecision = [opIndex: number, status: 'accepted' | 'rejected'];
+
+/**
+ * Whether the document already holds what a change asks for.
+ *
+ * Only meaningful when a durable batch is staged again: this browser may
+ * have lost its record of the decision, or it was made in another one. An
+ * insert whose block is there has landed — accepting it again is refused as
+ * a duplicate id, which read as the change having lost its place. A rewrite
+ * that leaves its block exactly as it is, and a deletion of a block that is
+ * gone, have nothing left to do either.
+ *
+ * The caller checks prerequisites first: a deletion of a block the batch has
+ * not created yet is not "already done".
+ */
+export function alreadyInDocument(change: ProposedChange, blocks: readonly Block[]): boolean {
+  if (change.kind === 'insert') {
+    return change.producesBlockId !== null
+      && blocks.some((block) => block.id === change.producesBlockId);
+  }
+  if (change.kind === 'delete') {
+    return !blocks.some((block) => block.id === change.anchorBlockId);
+  }
+  if (change.kind === 'replace') {
+    const current = blocks.find((block) => block.id === change.anchorBlockId);
+    const merged = mergedBlock(change, current);
+    // Every field, view-only ones included: this asks whether applying it
+    // would change anything at all.
+    return current !== undefined && merged !== null
+      && stableStringify(merged) === stableStringify(current);
+  }
+  return false;
+}
+
+/**
+ * A durable batch staged again, with the decisions already made on it.
+ *
+ * The server keeps a batch pending until every change in it is decided, and
+ * hands back all of its operations on the next load. Without this, a review
+ * left half-done came back whole: accepted and rejected changes were pending
+ * again, and accepting an insert that had already landed failed.
+ *
+ * Decisions replay in the order they were made, so a rejection re-anchors
+ * its continuations exactly as it did the first time. `bases` restores the
+ * staging fingerprints, so an edit made before the reload still marks its
+ * suggestion stale. With `blocks`, changes the document already holds are
+ * marked accepted too (see `alreadyInDocument`); without, nothing is decided
+ * beyond what was stored. Returns the batch and the operations found already
+ * in the document, which the caller records as accepted.
+ */
+export function resumeReview(
+  set: ChangeSet,
+  stored: { decisions: readonly ReviewDecision[]; bases: Readonly<Record<string, string>> } | null,
+  blocks: readonly Block[] | null,
+): { set: ChangeSet; landed: number[] } {
+  let sets: ChangeSet[] = [
+    stored
+      ? {
+          ...set,
+          changes: set.changes.map((change) => {
+            const base = change.opIndex === undefined ? undefined : stored.bases[change.opIndex];
+            return base === undefined ? change : { ...change, base };
+          }),
+        }
+      : set,
+  ];
+
+  for (const [opIndex, status] of stored?.decisions ?? []) {
+    const change = sets[0].changes.find((candidate) => candidate.opIndex === opIndex);
+    if (!change || change.status !== 'pending') continue;
+    sets = status === 'rejected'
+      ? rejectChange(sets, change.id).sets
+      : markChanges(sets, new Set([change.id]), 'accepted');
+  }
+
+  // In authoring order, so an insert that landed satisfies the dependency of
+  // the next one before that one is looked at.
+  const landed: number[] = [];
+  if (!blocks) return { set: sets[0], landed };
+  for (const change of orderedChanges(sets)) {
+    const live = sets[0].changes.find((candidate) => candidate.id === change.id)!;
+    if (live.status !== 'pending' || live.opIndex === undefined) continue;
+    const ready = live.dependsOn.every(
+      (id) => sets[0].changes.find((candidate) => candidate.id === id)?.status === 'accepted',
+    );
+    if (!ready || !alreadyInDocument(live, blocks)) continue;
+    landed.push(live.opIndex);
+    sets = markChanges(sets, new Set([live.id]), 'accepted');
+  }
+
+  return { set: sets[0], landed };
 }
 
 /**

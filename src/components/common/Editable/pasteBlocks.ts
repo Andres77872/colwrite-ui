@@ -57,6 +57,8 @@ type PasteContext = {
   ) => string[];
   commit: (el: HTMLDivElement) => string;
   focusLater: (id: string, place: (el: HTMLElement) => void) => void;
+  /** Runs the split and the insert as one undo step. */
+  batch?: <T>(run: () => T) => T;
 };
 
 /**
@@ -94,15 +96,19 @@ export function pasteAsBlocks(context: PasteContext): boolean {
   const beforeEmpty = isEditableEmpty(el);
   const afterEmpty = isEditableEmpty(holder);
 
-  if (!afterEmpty) {
-    const beforeHtml = serializeEditableHtml(el);
-    el.setAttribute('data-serialized', beforeHtml);
-    context.splitBlock(blockId, beforeHtml, serializeEditableHtml(holder));
-  } else {
-    context.commit(el);
-  }
-
-  const ids = context.insertBlocksAfter(blockId, blocks, { replaceAnchor: beforeEmpty });
+  // A paste is one thing to the author: undoing it must not leave the block
+  // split in two with the pasted blocks gone.
+  const batch = context.batch ?? (<T,>(run: () => T) => run());
+  const ids = batch(() => {
+    if (!afterEmpty) {
+      const beforeHtml = serializeEditableHtml(el);
+      el.setAttribute('data-serialized', beforeHtml);
+      context.splitBlock(blockId, beforeHtml, serializeEditableHtml(holder));
+    } else {
+      context.commit(el);
+    }
+    return context.insertBlocksAfter(blockId, blocks, { replaceAnchor: beforeEmpty });
+  });
   const last = ids[ids.length - 1];
   if (last) context.focusLater(last, (target) => restoreCaretOffset(target, Number.MAX_SAFE_INTEGER));
   return true;

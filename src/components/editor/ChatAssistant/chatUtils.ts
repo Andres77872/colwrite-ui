@@ -135,6 +135,53 @@ export function friendlyStreamError(code: string, message: string): ChatError {
         detail: code,
         retryable: true,
       };
+    // The hosted model service. Its credentials and credit are the site's,
+    // not the author's, so there is nothing to retry until an administrator
+    // has acted; a refused request needs a different request.
+    case 'MODEL_GATEWAY_AUTH':
+    case 'MODEL_GATEWAY_BILLING':
+      return {
+        message: message || 'The assistant’s model service is unavailable. This needs the site administrator.',
+        detail: code,
+        retryable: false,
+      };
+    case 'MODEL_GATEWAY_REJECTED':
+      return {
+        message:
+          message || 'The model refused this request. Try a shorter message, fewer attachments or a new conversation.',
+        detail: code,
+        retryable: false,
+      };
+    // The conversation, the document and the attachments together are more
+    // than the assistant can read, even after it condensed what it could.
+    // Sending the same thing again ends the same way.
+    case 'MODEL_GATEWAY_CONTEXT':
+    case 'MODEL_CONTEXT_TOO_LARGE':
+      return {
+        message:
+          message ||
+          'This conversation is too large for the assistant. Start a new conversation or remove large attachments, then ask again.',
+        detail: code,
+        retryable: false,
+      };
+    case 'MODEL_GATEWAY_RATE_LIMITED':
+    case 'MODEL_GATEWAY_TRANSIENT':
+    case 'MODEL_GATEWAY_INTERRUPTED':
+      return {
+        message: message || 'The assistant’s model is not responding right now. Try again shortly.',
+        detail: code,
+        retryable: true,
+      };
+    // The run's own endings, reported by the durable session.
+    case 'AGENT_CANCELLED':
+      return { message: message || 'The assistant was stopped.', detail: code, retryable: true };
+    case 'AGENT_INTERRUPTED':
+    case 'AGENT_FAILED':
+      return {
+        message: 'The assistant stopped before it finished. What it wrote so far is above; try again to continue.',
+        detail: message || code,
+        retryable: true,
+      };
     default:
       return {
         // The server writes these messages for people now; an empty one is a

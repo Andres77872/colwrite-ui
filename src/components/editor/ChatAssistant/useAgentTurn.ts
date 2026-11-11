@@ -269,7 +269,9 @@ export function useAgentTurn({
       // send none at all. The previous fallback keyed on the document version,
       // which a proposal deliberately leaves unchanged — so two staged batches
       // in one run collapsed into one and the second edit vanished.
-      const dedupKey = `${action.toolCallId}:${action.status}:${JSON.stringify(action.actions)}`;
+      // A stored proposal carries no operations (the review layer fetches
+      // them by id), so its change-set id is what tells two of them apart.
+      const dedupKey = `${action.toolCallId}:${action.status}:${action.changeSetId ?? ''}:${JSON.stringify(action.actions)}`;
       if (processedToolCallIds.current.has(dedupKey)) return;
       processedToolCallIds.current.add(dedupKey);
 
@@ -426,9 +428,16 @@ export function useAgentTurn({
           if (streamIsLive()) patchActive((message) => ({ ...message, todos }));
         },
         onSubagent: (worker) => {
-          if (streamIsLive()) patchActive((message) => ({ ...message,
-            workers: [...(message.workers ?? []).filter((item) => item.id !== worker.id), worker],
-          }));
+          // Updated in place: a worker keeps its position, and so its number,
+          // from "working" to "reported back".
+          if (streamIsLive()) patchActive((message) => {
+            const workers = message.workers ?? [];
+            return { ...message,
+              workers: workers.some((item) => item.id === worker.id)
+                ? workers.map((item) => (item.id === worker.id ? worker : item))
+                : [...workers, worker],
+            };
+          });
         },
         onToken: (content) => {
           if (!streamIsLive()) return;
@@ -455,9 +464,16 @@ export function useAgentTurn({
         onStatus: (status, detail) => {
           if (!streamIsLive()) return;
           const next = progressForStatus(status, detail);
+          if (!next) return;
           // A running tool is the more specific news; only a retry or a
           // reconnect is worth saying over it.
-          if (!next || (next.phase === 'thinking' && runningToolsRef.current.size > 0)) return;
+          if (next.phase === 'thinking' && runningToolsRef.current.size > 0) {
+            // Back from a reconnect, though, the tool's own label returns:
+            // nothing else would replace "Reconnecting…" until it finished.
+            const running = status === 'reconnected' ? [...runningToolsRef.current.values()].at(-1) : undefined;
+            if (running) moveTo({ phase: 'tool', label: `${toolRunningLabel(running)}…` });
+            return;
+          }
           moveTo(next);
         },
         onToolCallStart: (tool, toolCallId, args) => {
@@ -602,10 +618,12 @@ export function useAgentTurn({
           // A CLI that lost its login (or was never ready) re-reads its state,
           // so the composer's engine menu shows why straight away.
           engines.noteRunError(code);
-          if (['ATTACHMENT_EXTRACTION_TIMEOUT', 'ATTACHMENT_EXTRACTION_FAILED', 'ATTACHMENT_PREPARATION_TIMEOUT'].includes(code)) {
-            // This is a confirmed terminal preparation failure, before any
-            // user turn is stored. Retry extraction in a new run; reconnecting
-            // to the failed run would only replay this same error forever.
+          if (code !== 'INCOMPLETE_STREAM') {
+            // The server has reported how this run ended: a failed model
+            // call, a limit, a stop, a PDF that could not be prepared. "Try
+            // again" must start a new run. Reattaching to this one replays
+            // its saved events, so it showed the same error every time.
+            // Only a run whose ending never arrived is worth reattaching to.
             setLastExchange((exchange) => exchange ? { ...exchange, run: undefined } : exchange);
           }
           // Reattaching observes an existing run; its failure must not reset
@@ -723,7 +741,10 @@ export function useAgentTurn({
           unauthorized: 'Sign in again to resume this conversation.',
           forbidden: 'The assistant cannot access this conversation. Check your access before reconnecting.',
           not_found: 'This saved conversation or run is no longer available. Open another conversation or start a new one.',
-          conflict: 'This conversation changed or already has an active run. Reopen it to check the saved run.',
+          conflict: 'This conversation already has a reply in progress. Wait for it to finish, then send again; reopen the conversation to follow it.',
+          // The server's sentence says which limit: replies in progress, or
+          // saved conversations.
+          limit_exceeded: raw || 'The assistant is at a limit for this account. Wait for a reply in progress to finish, then send again.',
         };
         const action = e instanceof AgentSocketError && Object.hasOwn(socketActions, e.code)
           ? socketActions[e.code] : undefined;

@@ -1,17 +1,23 @@
+import type { KeyboardEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { Kbd } from '@/components/ui/kbd';
+import { useConfirm } from '@/components/ui/confirmContext';
+import { modifierLabel } from '@/components/layout/Shortcuts/shortcuts';
 import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
 import {
   blockText,
   describeChange,
+  isStale,
   mergedBlock,
+  planRejection,
   proposedBlock,
   type ProposedChange,
 } from '@/editor/proposals';
 import { ProposedBlockView, ProposedRewriteView, STRIKE_WIDGETS } from './ProposedBlockView';
 import { previewBibliography } from './diffText';
-import { ArrowDownUp, Check, Lock, Pencil, Plus, TextCursorInput, Trash2, X } from 'lucide-react';
+import { ArrowDownUp, Check, History, Lock, Pencil, Plus, TextCursorInput, Trash2, X } from 'lucide-react';
 
 /**
  * One proposed change, rendered in the document at the position it would take.
@@ -140,32 +146,120 @@ function HoverLabel({ children }: { children: string }) {
   return <span className="hidden group-hover/change:inline group-focus-within/change:inline">{children}</span>;
 }
 
+/**
+ * The card's own shortcut, shown while the card holds focus — the only time
+ * it works. Hidden on narrow screens, where there is rarely a keyboard and
+ * never the room. `aria-keyshortcuts` on the button carries it for screen
+ * readers, so this copy is not read twice.
+ */
+function KeyHint({ keys }: { keys: readonly string[] }) {
+  return (
+    <span aria-hidden="true" className="hidden items-center gap-0.5 sm:group-focus-within/change:inline-flex">
+      {keys.map((key) => (
+        <Kbd key={key}>{key}</Kbd>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * Accept and reject from the keyboard while a card has focus.
+ *
+ * Both carry the platform modifier, like every app shortcut, and neither is
+ * one the app or the browser already uses: Mod+Enter is "apply" in Ask AI
+ * too, and Mod+Backspace does nothing outside text. They are handled on the
+ * card, so they never fire from the document's own text.
+ */
+function reviewKeys() {
+  const shown = modifierLabel();
+  const aria = shown === '⌘' ? 'Meta' : 'Control';
+  return {
+    accept: { aria: `${aria}+Enter`, keys: [shown, 'Enter'], hint: `${shown}+Enter` },
+    reject: {
+      aria: `${aria}+Backspace ${aria}+Delete`,
+      keys: [shown, 'Backspace'],
+      hint: `${shown}+Backspace`,
+    },
+  };
+}
+
 export function ChangeCard({ change }: { change: ProposedChange }) {
   const { blocks } = useEditor();
-  const { accept, reject, ready, focusedChangeId } = useProposals();
+  const { accept, reject, ready, focusedChangeId, sets, pending } = useProposals();
+  const confirm = useConfirm();
 
   const style = KIND[change.kind];
   const isReady = ready(change);
   const isFocused = focusedChangeId === change.id;
   const Icon = style.icon;
   const summary = describeChange(change, blocks);
+  const stale = isStale(change, blocks);
+  const keys = reviewKeys();
 
   /**
    * Why Accept is not offered.
    *
    * A lock with no explanation is worse than no lock: the author cannot tell
    * whether the app is broken, whether they are meant to wait, or whether the
-   * change is dead. Each of the three reasons has a different answer.
+   * change is dead. Each of the reasons has a different answer.
    */
   const blockedReason = (() => {
-    if (change.dependsOn.length > 0) {
-      return 'This continues the addition above — accept that one first.';
+    if (change.dependsOn.some((id) => pending.some((candidate) => candidate.id === id))) {
+      // Rejecting that one moves this one onto its place, so either decision
+      // unlocks it.
+      return 'This continues the addition above. Accept or reject that one first.';
     }
     if (change.anchorBlockId && !blocks.some((block) => block.id === change.anchorBlockId)) {
       return 'The block this was written for is no longer in the document.';
     }
+    if (stale) return 'The text changed after this was suggested.';
     return 'Decide the change above it first — the two would not combine cleanly.';
   })();
+  const BlockedIcon = stale && !isReady ? History : Lock;
+
+  /**
+   * Reject, saying first what goes with it.
+   *
+   * The paragraphs that continue from a rejected addition move onto its
+   * place and stay to be decided. A rewrite or deletion of the block it would
+   * have added has nothing left to apply to, so it goes too — and the author
+   * is told before rather than finding it gone.
+   */
+  const onReject = async () => {
+    const { cascaded } = planRejection(change.id, sets);
+    const count = cascaded.length;
+    if (count > 0) {
+      const ok = await confirm({
+        title: count === 1
+          ? 'Reject this addition and the change to it?'
+          : `Reject this addition and the ${count} changes to it?`,
+        description: count === 1
+          ? 'Another suggestion edits the block this would add, so it is rejected too. This cannot be undone.'
+          : `${count} other suggestions edit the block this would add, so they are rejected too. This cannot be undone.`,
+        confirmLabel: count === 1 ? 'Reject both' : `Reject all ${count + 1}`,
+        destructive: true,
+      });
+      if (!ok) return;
+    }
+    reject(change.id);
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (isReady) accept(change.id);
+      return;
+    }
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      event.preventDefault();
+      event.stopPropagation();
+      void onReject();
+    }
+  };
 
   return (
     <div
@@ -173,9 +267,11 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
       // A pending rewrite takes its block's place on the page (see
       // `.review-change` in globals.css), so the text appears once, as a diff.
       data-change-kind={change.kind}
+      data-stale={stale || undefined}
       // The review menu's Next/Previous puts DOM focus here (see `focusChange`), so
       // the card must be focusable — but as a target only, never a tab stop.
       tabIndex={-1}
+      onKeyDown={onKeyDown}
       // Deliberately not `.block-row`: the canvas measures those to place the
       // drag indicator, and a proposal is not a drop target.
       className={cn(
@@ -200,7 +296,7 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
         {!isReady && (
           <span className="flex min-w-0 items-center gap-1 truncate">
             <span aria-hidden="true">·</span>
-            <Lock aria-hidden="true" className="h-3 w-3 shrink-0" />
+            <BlockedIcon aria-hidden="true" className="h-3 w-3 shrink-0" />
             <span className="truncate">{blockedReason}</span>
           </span>
         )}
@@ -213,10 +309,12 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
               className="font-normal text-diff-add-fg hover:bg-diff-add hover:text-diff-add-fg"
               onClick={() => accept(change.id)}
               aria-label={`Accept: ${summary}`}
-              title="Accept"
+              aria-keyshortcuts={keys.accept.aria}
+              title={`Accept (${keys.accept.hint})`}
             >
               <Check />
               <HoverLabel>Accept</HoverLabel>
+              <KeyHint keys={keys.accept.keys} />
             </Button>
           )}
           {/* Always available. A blocked change previously offered neither
@@ -226,12 +324,14 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
             size="xs"
             variant="ghost"
             className="font-normal text-muted-foreground hover:text-foreground"
-            onClick={() => reject(change.id)}
+            onClick={() => void onReject()}
             aria-label={`Reject: ${summary}`}
-            title="Reject"
+            aria-keyshortcuts={keys.reject.aria}
+            title={`Reject (${keys.reject.hint})`}
           >
             <X />
             <HoverLabel>Reject</HoverLabel>
+            <KeyHint keys={keys.reject.keys} />
           </Button>
         </span>
       </div>

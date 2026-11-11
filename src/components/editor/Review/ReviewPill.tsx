@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirmContext';
@@ -6,7 +6,13 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { menuItem, menuSeparator } from '@/components/ui/menuStyles';
 import { useEditor } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
-import { describeChange, pendingInDocumentOrder, type ProposedChange } from '@/editor/proposals';
+import {
+  describeChange,
+  isStale,
+  pendingInDocumentOrder,
+  type ChangeSet,
+  type ProposedChange,
+} from '@/editor/proposals';
 import {
   ArrowDownUp,
   Check,
@@ -29,6 +35,64 @@ const KIND_ICON: Record<ProposedChange['kind'], typeof Plus> = {
   rename: TextCursorInput,
 };
 
+/** How long an arrival announcement stays in the live region. */
+const ANNOUNCEMENT_MS = 6000;
+
+function pendingIds(sets: readonly ChangeSet[]): string[] {
+  return sets.flatMap((set) =>
+    set.changes.filter((change) => change.status === 'pending').map((change) => change.id),
+  );
+}
+
+/**
+ * What a screen reader hears when suggestions arrive: once per arrival, and
+ * never for the author's own decisions.
+ *
+ * The count in the pill changes silently, so a non-sighted author had no way
+ * to know the assistant had proposed anything. Only ids not seen before
+ * count as an arrival: accepting or rejecting removes ids and says nothing,
+ * and a re-render with the same suggestions says nothing either. Whatever is
+ * pending when the pill first mounts is taken as already known.
+ */
+function useArrivalAnnouncement(sets: readonly ChangeSet[]): string {
+  const ids = pendingIds(sets);
+  const key = ids.join('\n');
+  const seenRef = useRef<Set<string> | null>(null);
+  const timerRef = useRef<number | null>(null);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    const current = key ? key.split('\n') : [];
+    const seen = seenRef.current;
+    seenRef.current = new Set([...(seen ?? []), ...current]);
+    if (!seen) return;
+    const arrived = current.filter((id) => !seen.has(id)).length;
+    if (arrived === 0) return;
+    const total = current.length;
+    const noun = (count: number) => `suggestion${count === 1 ? '' : 's'}`;
+    setMessage(
+      arrived === total
+        ? `${total} ${noun(total)} to review.`
+        : `${arrived} new ${noun(arrived)}, ${total} to review.`,
+    );
+    // Cleared again so the same sentence is read out the next time it is
+    // true, rather than being a no-op change to the region. Not tied to this
+    // effect's cleanup: deciding a change a moment later must not leave the
+    // sentence stuck in the region.
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      setMessage('');
+    }, ANNOUNCEMENT_MS);
+  }, [key]);
+
+  useEffect(() => () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+  }, []);
+
+  return message;
+}
+
 /**
  * "3 suggestions" in the page topbar: the one place a pending batch is
  * announced, and the one place its batch controls live.
@@ -44,8 +108,19 @@ export function ReviewPill() {
   const { sets, pendingCount, acceptAll, rejectAll, focusChange, focusedChangeId } = useProposals();
   const confirm = useConfirm();
   const [open, setOpen] = useState(false);
+  const announcement = useArrivalAnnouncement(sets);
 
-  if (pendingCount === 0) return null;
+  // Mounted whatever the count: a live region only speaks for changes made
+  // after it is in the page, so it cannot arrive together with the pill.
+  // A bare polite region rather than `role="status"`: the topbar's save
+  // state is the page's status, and this is not a second one.
+  const liveRegion = (
+    <span aria-live="polite" aria-atomic="true" data-review-announcer="" className="sr-only">
+      {announcement}
+    </span>
+  );
+
+  if (pendingCount === 0) return liveRegion;
 
   // Reading order, so Next always means "further down the page".
   const pending = pendingInDocumentOrder(blocks, sets);
@@ -67,9 +142,16 @@ export function ReviewPill() {
   // ask first — rejecting all used to discard a whole batch on one click.
   const onAcceptAll = async () => {
     setOpen(false);
+    // Suggestions written against text the author has changed since are
+    // left out of Accept all (see `acceptAll`), so the question says so.
+    const stale = pending.filter((change) => isStale(change, blocks)).length;
     const ok = await confirm({
       title: `Accept all ${plural}?`,
-      description: 'Every pending suggestion will be applied to the document.',
+      description: stale === 0
+        ? 'Every pending suggestion will be applied to the document.'
+        : stale === 1
+          ? 'Every pending suggestion will be applied to the document, except 1 whose text changed after it was suggested.'
+          : `Every pending suggestion will be applied to the document, except ${stale} whose text changed after they were suggested.`,
       confirmLabel: 'Accept all',
     });
     if (ok) acceptAll();
@@ -87,96 +169,99 @@ export function ReviewPill() {
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={`${label}, review`}
-          className={cn(
-            'mr-1 flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-ai/10 pl-2.5 pr-2 text-sm font-medium text-ai transition-colors hover:bg-ai/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            open && 'bg-ai/15',
-          )}
+    <>
+      {liveRegion}
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={`${label}, review`}
+            className={cn(
+              'mr-1 flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-ai/10 pl-2.5 pr-2 text-sm font-medium text-ai transition-colors hover:bg-ai/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              open && 'bg-ai/15',
+            )}
+          >
+            <Sparkles aria-hidden="true" className="size-3.5" />
+            <span className="tabular-nums">
+              {pendingCount}
+              <span className="max-sm:hidden"> suggestion{pendingCount === 1 ? '' : 's'}</span>
+            </span>
+            <ChevronDown aria-hidden="true" className={cn('size-3.5 opacity-70 transition-transform', open && 'rotate-180')} />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          sideOffset={6}
+          collisionPadding={8}
+          className="w-80 max-w-[calc(100vw-16px)] p-1.5"
+          aria-label="Suggested changes"
+          // Stepping moves focus onto the change in the page (so the next Tab
+          // continues from what was just revealed). That is not a reason to
+          // close the menu: the author is still stepping through the batch.
+          onFocusOutside={(event) => {
+            const target = event.target as Element | null;
+            if (target?.closest?.('[data-change-id]')) event.preventDefault();
+          }}
         >
-          <Sparkles aria-hidden="true" className="size-3.5" />
-          <span className="tabular-nums">
-            {pendingCount}
-            <span className="max-sm:hidden"> suggestion{pendingCount === 1 ? '' : 's'}</span>
-          </span>
-          <ChevronDown aria-hidden="true" className={cn('size-3.5 opacity-70 transition-transform', open && 'rotate-180')} />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        sideOffset={6}
-        collisionPadding={8}
-        className="w-80 max-w-[calc(100vw-16px)] p-1.5"
-        aria-label="Suggested changes"
-        // Stepping moves focus onto the change in the page (so the next Tab
-        // continues from what was just revealed). That is not a reason to
-        // close the menu: the author is still stepping through the batch.
-        onFocusOutside={(event) => {
-          const target = event.target as Element | null;
-          if (target?.closest?.('[data-change-id]')) event.preventDefault();
-        }}
-      >
-        <div className="flex h-8 items-center gap-1 pl-2">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">{label}</span>
-          <Button size="icon-xs" variant="icon" onClick={() => step(-1)} aria-label="Previous change">
-            <ChevronLeft />
-          </Button>
-          <span className="min-w-[3.25rem] text-center text-xs tabular-nums text-muted-foreground" aria-live="polite">
-            {current >= 0 ? `${current + 1} of ${pending.length}` : `– of ${pending.length}`}
-          </span>
-          <Button size="icon-xs" variant="icon" onClick={() => step(1)} aria-label="Next change">
-            <ChevronRight />
-          </Button>
-        </div>
+          <div className="flex h-8 items-center gap-1 pl-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">{label}</span>
+            <Button size="icon-xs" variant="icon" onClick={() => step(-1)} aria-label="Previous change">
+              <ChevronLeft />
+            </Button>
+            <span className="min-w-[3.25rem] text-center text-xs tabular-nums text-muted-foreground" aria-live="polite">
+              {current >= 0 ? `${current + 1} of ${pending.length}` : `– of ${pending.length}`}
+            </span>
+            <Button size="icon-xs" variant="icon" onClick={() => step(1)} aria-label="Next change">
+              <ChevronRight />
+            </Button>
+          </div>
 
-        <div role="separator" className={menuSeparator} />
+          <div role="separator" className={menuSeparator} />
 
-        <ul aria-label="All suggestions" className="max-h-64 overflow-y-auto">
-          {pending.map((change, index) => {
-            const Icon = KIND_ICON[change.kind] ?? Pencil;
-            const active = index === current;
-            return (
-              <li key={change.id}>
-                <button
-                  type="button"
-                  aria-current={active || undefined}
-                  onClick={() => focusChange(change.id)}
-                  className={cn(menuItem, 'w-full text-left', active && 'bg-active')}
-                >
-                  <Icon aria-hidden="true" />
-                  <span className="min-w-0 flex-1 truncate">{describeChange(change, blocks)}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+          <ul aria-label="All suggestions" className="max-h-64 overflow-y-auto">
+            {pending.map((change, index) => {
+              const Icon = KIND_ICON[change.kind] ?? Pencil;
+              const active = index === current;
+              return (
+                <li key={change.id}>
+                  <button
+                    type="button"
+                    aria-current={active || undefined}
+                    onClick={() => focusChange(change.id)}
+                    className={cn(menuItem, 'w-full text-left', active && 'bg-active')}
+                  >
+                    <Icon aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate">{describeChange(change, blocks)}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
 
-        <div role="separator" className={menuSeparator} />
+          <div role="separator" className={menuSeparator} />
 
-        <div className="flex items-center gap-1">
-          <Button
-            size="sm"
-            variant="ghost"
-            className="flex-1 text-diff-add-fg hover:bg-diff-add hover:text-diff-add-fg"
-            onClick={() => void onAcceptAll()}
-          >
-            <Check />
-            Accept all
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="flex-1 font-normal text-muted-foreground hover:text-foreground"
-            onClick={() => void onRejectAll()}
-          >
-            <X />
-            Reject all
-          </Button>
-        </div>
-      </PopoverContent>
-    </Popover>
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="flex-1 text-diff-add-fg hover:bg-diff-add hover:text-diff-add-fg"
+              onClick={() => void onAcceptAll()}
+            >
+              <Check />
+              Accept all
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="flex-1 font-normal text-muted-foreground hover:text-foreground"
+              onClick={() => void onRejectAll()}
+            >
+              <X />
+              Reject all
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </>
   );
 }

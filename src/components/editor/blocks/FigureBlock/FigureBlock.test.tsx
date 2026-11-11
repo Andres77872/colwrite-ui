@@ -144,6 +144,9 @@ describe('FigureBlock', () => {
     expect(screen.getByText(/Figure 2\./)).toBeTruthy();
     expect(screen.getByText('Two steps.')).toBeTruthy();
 
+    // Revealed by hover with a mouse; on touch, globals.css shows
+    // `.block-action` for the active block instead, since nothing hovers.
+    expect(screen.getByRole('button', { name: 'Edit' }).classList.contains('block-action')).toBe(true);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     });

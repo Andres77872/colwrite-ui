@@ -29,6 +29,7 @@ import { FigureBlock } from '../blocks/FigureBlock';
 import { figureMeta } from '@/lib/figure/compile';
 import { useBlockSelection } from './useBlockSelection';
 import { useBlockDrag } from './useBlockDrag';
+import { observeStickyTop } from './stickyTop';
 import { ReorderMotion } from './ReorderMotion';
 import { AskAiPanel, useAskAiTarget } from '../AskAi';
 import { DocumentOutline } from '../Outline';
@@ -356,8 +357,9 @@ export function Canvas() {
     >
       {/* The review bar pins to the top of the page while there is
           something to review; the page's own chrome is the topbar above
-          the canvas. */}
-      <div className="sticky top-0 z-[var(--z-chrome)]">
+          the canvas. Its height is the canvas's scroll padding, so focus
+          never lands under it. */}
+      <div ref={observeStickyTop} className="sticky top-0 z-[var(--z-chrome)]">
         <ReviewBar />
       </div>
 
@@ -438,7 +440,9 @@ export function Canvas() {
                       data-block-id={block.id}
                       data-selected={selected.has(block.id) || undefined}
                       data-ai-target={(aiTargets.has(block.id) && askAi.target?.kind !== 'selection' && askAi.target?.kind !== 'empty') || undefined}
-                      aria-selected={selected.size > 0 ? selected.has(block.id) : undefined}
+                      // No `aria-selected`: a row has no role that supports it,
+                      // so it announced nothing. The status line above says how
+                      // many blocks are selected.
                       // A selected block holds focus itself (see useBlockSelection).
                       tabIndex={selected.has(block.id) ? -1 : undefined}
                       onMouseDown={(event) => {
