@@ -1098,7 +1098,15 @@ async function handle(method: string, path: string, url: URL, init?: RequestInit
     return json({ messages: chat?.messages ?? [], pivotThreadId: chat?.last_thread_id ?? null, status: 'ok', message: '' });
   }
   if (path === '/agent/engines' && method === 'GET') {
-    return json({ runtime: 'local', default_engine: 'legacy', engines: Object.values(engines) });
+    return json({
+      runtime: 'local',
+      default_engine: 'legacy',
+      engines: Object.values(engines),
+      gateway_models: {
+        main: ['openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5', 'google/gemini-4-hydrogen'],
+        lite: ['openai/gpt-6-luna', 'anthropic/claude-haiku-5.5', 'google/gemini-4-hydrogen'],
+      },
+    });
   }
   if ((match = path.match(/^\/agent\/engines\/([^/]+)\/check$/)) && method === 'POST') {
     const id = decodeURIComponent(match[1]);

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   checkAgentEngine,
   engineModelProblem,
+  gatewayModelsFor,
   getAgentEngines,
   isAgentEngineId,
 } from '../agentEngines';
@@ -65,6 +66,14 @@ describe('agent engines service', () => {
     expect(engineModelProblem('legacy', '~anthropic/claude-haiku-latest')).toBeNull();
     expect(engineModelProblem('legacy', 'two words')).not.toBeNull();
   });
+
+  it('uses only valid server catalog entries, deduplicated within each tier', () => {
+    expect(gatewayModelsFor({
+      runtime: 'deployed', default_engine: 'legacy', engines: [],
+      gateway_models: { main: ['openai/gpt-6.1-sol', '', 'two words', 'openai/gpt-6.1-sol'], lite: ['openai/gpt-6-luna'] },
+    }, 'main')).toEqual(['openai/gpt-6.1-sol']);
+    expect(gatewayModelsFor(null, 'lite')).toEqual([]);
+  });
 });
 
 describe('agent chat engine field', () => {
@@ -87,5 +96,13 @@ describe('agent chat engine field', () => {
 
     const body = JSON.parse(String((fetchSpy.mock.calls[0][1] as RequestInit).body));
     expect(body).toEqual({ message: 'hi', document_id: 'doc' });
+  });
+
+  it('preserves gateway selections on the compatibility SSE transport too', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(sse());
+    const gateway_models = { main: 'google/gemini-4-hydrogen', lite: 'anthropic/claude-haiku-5.5' };
+    await streamAgentChat({ message: 'hi', document_id: 'doc', gateway_models }, {});
+    expect(JSON.parse(String((fetchSpy.mock.calls[0][1] as RequestInit).body)))
+      .toEqual({ message: 'hi', document_id: 'doc', gateway_models });
   });
 });

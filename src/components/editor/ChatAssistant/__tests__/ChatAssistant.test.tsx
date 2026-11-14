@@ -1412,6 +1412,7 @@ describe('agent engine', () => {
       setChatEngine: () => {},
       setInlineEngine: () => {},
       setModel: () => null,
+      setGatewayModel: () => null,
       checking: null,
       checkError: {},
       check: async () => null,
@@ -1748,6 +1749,7 @@ describe('a run the server reported as ended', () => {
     ['MODEL_GATEWAY_AUTH', 'The assistant cannot reach its model service: the server\u2019s credentials were rejected. This needs the site administrator; trying again will not help.'],
     ['MODEL_GATEWAY_BILLING', 'The assistant\u2019s model account has run out of credit. This needs the site administrator; trying again will not help.'],
     ['MODEL_GATEWAY_REJECTED', 'Every configured model refused this request. It may be too large: try a shorter message, fewer attachments or a new conversation.'],
+    ['MODEL_NOT_CONFIGURED', 'The selected lite model is no longer configured. Choose a model again in Settings → AI & tools.'],
     ['MODEL_GATEWAY_CONTEXT', 'This conversation is too large for the assistant\u2019s models, even after condensing it. Start a new conversation or remove large attachments, then ask again.'],
     ['MODEL_CONTEXT_TOO_LARGE', 'This document and request are larger than the assistant can read at once (about 212,000 tokens; the limit is 180,000). Remove or shorten attachments, or split the document, then ask again.'],
   ])('shows %s as something Try again cannot fix', async (code, message) => {

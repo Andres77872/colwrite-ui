@@ -22,20 +22,25 @@ import {
   inlineCodeParts,
 } from './agentEngineCopy';
 import { useAgentEngine } from './agentEngineContextState';
+import { GatewayModelPreferences } from './GatewayModelPreferences';
 
 /**
- * Settings → AI & tools → Agent engine.
- *
- * Rendered only when the API runs locally: a deployed ColWrite has one engine
- * and nothing to choose, and Claude Code / Codex cannot be turned on there.
- * The choice applies at once and is kept on this device.
+ * Settings → AI & tools: gateway models everywhere, local engines only locally.
  */
 export function AgentEnginePreferences() {
-  const engines = useAgentEngine();
-  const { prefs, selectable, statusOf, setChatEngine, setInlineEngine } = engines;
-  const inlineId = useId();
+  const { selectable } = useAgentEngine();
+  return (
+    <div className="space-y-6">
+      <GatewayModelPreferences />
+      {selectable && <LocalEnginePreferences />}
+    </div>
+  );
+}
 
-  if (!selectable) return null;
+function LocalEnginePreferences() {
+  const engines = useAgentEngine();
+  const { prefs, statusOf, setChatEngine, setInlineEngine } = engines;
+  const inlineId = useId();
 
   const chatStatus = statusOf(prefs.chat);
   const inlineOptions = AGENT_ENGINE_IDS.filter(
@@ -180,7 +185,7 @@ function EngineRow({
           </Button>
         )}
       </div>
-      {available && (
+      {available && isCli && (
         <div className="pl-7">
           <ModelField engine={engine} />
         </div>
@@ -247,7 +252,7 @@ function LoginCommand({ command }: { command: string }) {
 const OTHER = '__other__';
 
 /** Per-engine model override. Empty means the engine's own default. */
-function ModelField({ engine }: { engine: AgentEngineId }) {
+function ModelField({ engine }: { engine: 'claude' | 'codex' }) {
   const { prefs, setModel } = useAgentEngine();
   const saved = prefs.models[engine] ?? '';
   const [draft, setDraft] = useState(saved);
@@ -263,14 +268,11 @@ function ModelField({ engine }: { engine: AgentEngineId }) {
     if (!next) setDraft(value.trim());
   };
 
-  const placeholder =
-    engine === 'legacy' ? 'Server default' : engine === 'claude' ? 'claude-sonnet-5' : 'Codex default';
+  const placeholder = engine === 'claude' ? 'claude-sonnet-5' : 'Codex default';
   const hint =
-    engine === 'legacy'
-      ? 'A gateway model id for this server. Empty uses the server default.'
-      : engine === 'claude'
-        ? 'Empty uses Claude Code’s own default. Your Claude Code settings file is not read.'
-        : 'A Codex model id. Empty uses Codex’s own default for your plan.';
+    engine === 'claude'
+      ? 'Empty uses Claude Code’s own default. Your Claude Code settings file is not read.'
+      : 'A Codex model id. Empty uses Codex’s own default for your plan.';
 
   const textField = (
     <Input

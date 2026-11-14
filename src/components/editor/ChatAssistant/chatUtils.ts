@@ -152,6 +152,12 @@ export function friendlyStreamError(code: string, message: string): ChatError {
         detail: code,
         retryable: false,
       };
+    case 'MODEL_NOT_CONFIGURED':
+      return {
+        message: message || 'The selected model is no longer configured. Choose a model again in Settings → AI & tools.',
+        detail: code,
+        retryable: false,
+      };
     // The conversation, the document and the attachments together are more
     // than the assistant can read, even after it condensed what it could.
     // Sending the same thing again ends the same way.

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import type { Doc } from '@/editor/types';
 
 vi.mock('@/services', () => ({
@@ -14,11 +15,13 @@ vi.mock('@/services', () => ({
 let finishRun: (() => void) | null = null;
 /** The running request's handlers, to drive its progress events. */
 let runHandlers: import('@/services/streamParser').SSEEventHandlers | null = null;
+let runSignal: AbortSignal | undefined;
 vi.mock('@/services/agentChat', () => ({
   streamAgentChat: vi.fn(
-    (_params: unknown, handlers: import('@/services/streamParser').SSEEventHandlers) =>
+    (_params: unknown, handlers: import('@/services/streamParser').SSEEventHandlers, options?: { signal?: AbortSignal }) =>
       new Promise((resolve) => {
         runHandlers = handlers;
+        runSignal = options?.signal;
         finishRun = () => {
           handlers.onToken?.('A shorter paragraph.');
           resolve({ terminal: 'done' });
@@ -27,8 +30,47 @@ vi.mock('@/services/agentChat', () => ({
   ),
 }));
 
-const { EditorProvider } = await import('@/editor');
+const { EditorProvider, useEditorActions } = await import('@/editor');
 const { AskAiPanel } = await import('./AskAi');
+
+function PanelHarness({ onClose }: { onClose: () => void }) {
+  const { registerEditable } = useEditorActions();
+  const [open, setOpen] = useState(true);
+  return (
+    <>
+      <div className="canvas">
+        <div
+          ref={(element) => registerEditable('p1', element)}
+          contentEditable
+          suppressContentEditableWarning
+          role="textbox"
+          aria-label="Document text"
+        >
+          A long paragraph.
+        </div>
+        {open && (
+          <AskAiPanel
+            target={{
+              key: 't1',
+              kind: 'block',
+              blockIds: ['p1'],
+              anchorId: 'p1',
+              markdown: 'A long paragraph.',
+              text: 'A long paragraph.',
+              locked: false,
+              citations: new Map(),
+            }}
+            onClose={() => {
+              setOpen(false);
+              onClose();
+            }}
+          />
+        )}
+      </div>
+      <button type="button">Outside action</button>
+    </>
+  );
+}
 
 function mount() {
   const doc: Doc = {
@@ -40,19 +82,7 @@ function mount() {
   const onClose = vi.fn();
   render(
     <EditorProvider>
-      <AskAiPanel
-        target={{
-          key: 't1',
-          kind: 'block',
-          blockIds: ['p1'],
-          anchorId: 'p1',
-          markdown: 'A long paragraph.',
-          text: 'A long paragraph.',
-          locked: false,
-          citations: new Map(),
-        }}
-        onClose={onClose}
-      />
+      <PanelHarness onClose={onClose} />
     </EditorProvider>,
   );
   return { onClose };
@@ -62,9 +92,124 @@ beforeEach(() => {
   localStorage.clear();
   finishRun = null;
   runHandlers = null;
+  runSignal = undefined;
 });
 
 afterEach(cleanup);
+
+describe('Ask AI dismissal', () => {
+  it('offers a close button and returns focus to the document without editing it', async () => {
+    const { onClose } = mount();
+    const paragraph = screen.getByRole('textbox', { name: 'Document text' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close Ask AI' }));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('dialog', { name: 'Ask AI' })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(paragraph));
+    expect(paragraph.textContent).toBe('A long paragraph.');
+  });
+
+  it.each(['mouse', 'touch'])('dismisses the prompt with an outside %s press without taking focus back', async (pointerType) => {
+    const { onClose } = mount();
+    const outside = screen.getByRole('button', { name: 'Outside action' });
+
+    fireEvent.pointerDown(outside, { pointerType });
+    act(() => outside.focus());
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('dialog', { name: 'Ask AI' })).toBeNull();
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it('does not steal focus if another control is focused immediately after closing', async () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Close Ask AI' }));
+    const outside = screen.getByRole('button', { name: 'Outside action' });
+    act(() => outside.focus());
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it('keeps the prompt open when interacting inside it', () => {
+    const { onClose } = mount();
+    const field = screen.getByRole('combobox', { name: 'Ask AI' });
+    fireEvent.pointerDown(field);
+    const tone = screen.getByRole('option', { name: 'Change tone' });
+    fireEvent.pointerDown(tone);
+    fireEvent.mouseDown(tone);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('option', { name: 'Professional' })).toBeTruthy();
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(screen.getByRole('option', { name: 'Change tone' })).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('leaves Enter on the close button to its native button action', () => {
+    mount();
+    const close = screen.getByRole('button', { name: 'Close Ask AI' });
+    act(() => close.focus());
+
+    expect(fireEvent.keyDown(close, { key: 'Enter' })).toBe(true);
+    expect(runSignal).toBeUndefined();
+  });
+
+  it('handles Escape after keyboard focus moves back into the document', () => {
+    const { onClose } = mount();
+    const paragraph = screen.getByRole('textbox', { name: 'Document text' });
+    const editorKeyDown = vi.fn();
+    paragraph.addEventListener('keydown', editorKeyDown);
+    act(() => paragraph.focus());
+
+    fireEvent.keyDown(paragraph, { key: 'Escape' });
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(editorKeyDown).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: 'Ask AI' })).toBeNull();
+  });
+
+  it('leaves keys in other controls alone', () => {
+    const { onClose } = mount();
+    const outside = screen.getByRole('button', { name: 'Outside action' });
+    act(() => outside.focus());
+    fireEvent.keyDown(outside, { key: 'Escape' });
+    fireEvent.keyDown(outside, { key: 'Enter' });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps a running reply on outside presses, but lets the close button cancel it', async () => {
+    const { onClose } = mount();
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Make shorter' }));
+    await waitFor(() => expect(runSignal).toBeDefined());
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside action' }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(runSignal?.aborted).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close Ask AI' }));
+    expect(runSignal?.aborted).toBe(true);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('dialog', { name: 'Ask AI' })).toBeNull();
+  });
+
+  it('keeps a completed reply on an outside press until explicitly closed', async () => {
+    const { onClose } = mount();
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Make shorter' }));
+    await waitFor(() => expect(finishRun).not.toBeNull());
+    await act(async () => finishRun?.());
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside action' }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('listbox', { name: 'Result actions' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close Ask AI' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+});
 
 describe('Ask AI keyboard focus across a run', () => {
   it('keeps focus in the panel from choosing a preset to acting on the result', async () => {

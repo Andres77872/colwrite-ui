@@ -20,7 +20,7 @@ export type AssistantSnapshot = { session: AssistantSession; run: AssistantRun |
 export type ResumeAgentRun = { sessionId: string; runId?: string; requestId?: string };
 function requestBody(params: AgentChatParams): Record<string, unknown> {
   const body: Record<string, unknown> = { message: params.message, document_id: params.document_id };
-  for (const key of ['chat_id', 'thread_id', 'model', 'engine', 'mode', 'context'] as const) {
+  for (const key of ['chat_id', 'thread_id', 'model', 'gateway_models', 'engine', 'mode', 'context'] as const) {
     if (params[key] != null) body[key] = params[key];
   }
   if (params.ephemeral) body.ephemeral = true;

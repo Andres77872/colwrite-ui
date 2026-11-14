@@ -1,10 +1,13 @@
 import { createContext, useContext } from 'react';
 import {
   engineModelProblem,
+  gatewayModelsFor,
   isAgentEngineId,
   type AgentEngineCatalog,
   type AgentEngineId,
   type AgentEngineStatus,
+  type GatewayModelSelection,
+  type GatewayModelTier,
 } from '@/services/agentEngines';
 
 /**
@@ -23,8 +26,10 @@ export type AgentEnginePrefs = {
   chat: AgentEngineId;
   /** `'chat'` follows the chat assistant's engine. */
   inline: AgentEngineId | 'chat';
-  /** Per-engine model override; missing or empty means the engine's default. */
+  /** Per-engine model; `legacy` is the gateway's general choice. Empty uses defaults. */
   models: Partial<Record<AgentEngineId, string>>;
+  /** Optional for compatibility with preferences saved before tier selection. */
+  liteModel?: string;
 };
 
 export const DEFAULT_ENGINE_PREFS: AgentEnginePrefs = { chat: 'legacy', inline: 'chat', models: {} };
@@ -35,13 +40,18 @@ export function isAgentEnginePrefs(value: unknown): value is AgentEnginePrefs {
   if (!isAgentEngineId(prefs.chat)) return false;
   if (prefs.inline !== 'chat' && !isAgentEngineId(prefs.inline)) return false;
   if (!prefs.models || typeof prefs.models !== 'object') return false;
+  if (prefs.liteModel !== undefined && typeof prefs.liteModel !== 'string') return false;
   return Object.entries(prefs.models as Record<string, unknown>).every(
     ([engine, model]) => isAgentEngineId(engine) && typeof model === 'string',
   );
 }
 
 /** What `streamAgentChat` gets: nothing at all for the plain default. */
-export type AgentEngineRequest = { engine?: AgentEngineId; model?: string };
+export type AgentEngineRequest = {
+  engine?: AgentEngineId;
+  model?: string;
+  gateway_models?: GatewayModelSelection;
+};
 
 /** The engine a surface uses, before the runtime is taken into account. */
 export function selectedEngine(prefs: AgentEnginePrefs, surface: AgentEngineSurface): AgentEngineId {
@@ -72,10 +82,19 @@ export function resolveEngineRequest(
   surface: AgentEngineSurface,
 ): AgentEngineRequest {
   const engine = effectiveEngine(prefs, catalog, surface);
-  const model = (prefs.models[engine] ?? '').trim();
-  const usableModel = model && engineModelProblem(engine, model) === null ? model : '';
-  if (engine === 'legacy' && !usableModel) return {};
-  return usableModel ? { engine, model: usableModel } : { engine };
+  const request: AgentEngineRequest = {};
+  if (engine !== 'legacy') {
+    request.engine = engine;
+    const model = (prefs.models[engine] ?? '').trim();
+    if (model && engineModelProblem(engine, model) === null) request.model = model;
+  }
+  const selected: GatewayModelSelection = {};
+  const main = prefs.models.legacy?.trim();
+  const lite = prefs.liteModel?.trim();
+  if (main && gatewayModelsFor(catalog, 'main').includes(main)) selected.main = main;
+  if (lite && gatewayModelsFor(catalog, 'lite').includes(lite)) selected.lite = lite;
+  if (Object.keys(selected).length) request.gateway_models = selected;
+  return request;
 }
 
 export type AgentEngineContextValue = {
@@ -92,12 +111,13 @@ export type AgentEngineContextValue = {
   setInlineEngine: (engine: AgentEngineId | 'chat') => void;
   /** Saves a valid override (or clears it with `''`); returns why not otherwise. */
   setModel: (engine: AgentEngineId, model: string) => string | null;
+  setGatewayModel: (tier: GatewayModelTier, model: string) => string | null;
   /** Engine being re-checked right now, if any. */
   checking: AgentEngineId | null;
   checkError: Partial<Record<AgentEngineId, string>>;
   check: (engine: AgentEngineId) => Promise<AgentEngineStatus | null>;
   refresh: () => Promise<void>;
-  /** A run ended with this SSE error code; `ENGINE_*` re-reads the statuses. */
+  /** Engine errors and stale gateway selections re-read the server catalog. */
   noteRunError: (code: string) => void;
 };
 
@@ -119,6 +139,7 @@ const DEFAULT_CONTEXT: AgentEngineContextValue = {
   setChatEngine: noop,
   setInlineEngine: noop,
   setModel: () => null,
+  setGatewayModel: () => null,
   checking: null,
   checkError: {},
   check: async () => null,

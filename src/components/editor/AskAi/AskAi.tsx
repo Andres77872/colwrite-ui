@@ -12,6 +12,7 @@ import {
   Square,
   StickyNote,
   Trash2,
+  X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { menuItem, menuItemDestructive, menuLabel, menuSeparator, menuSurface } from '@/components/ui/menuStyles';
@@ -91,6 +92,9 @@ function markRange(range: Range | undefined): () => void {
   if (!range || !registry) return () => {};
   const HighlightCtor = (globalThis as unknown as { Highlight: new (...ranges: Range[]) => unknown }).Highlight;
   registry.set(HIGHLIGHT, new HighlightCtor(range));
+  // The highlight owns the target now. A retained native selection can keep
+  // the formatting toolbar open over the prompt on touch browsers.
+  window.getSelection()?.removeAllRanges();
   return () => registry.delete(HIGHLIGHT);
 }
 
@@ -254,6 +258,9 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
     requestAnimationFrame(() => {
       const el = refs.current[target.anchorId];
       if (!el) return;
+      // Another control or a newly opened prompt may already own focus.
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== el) return;
       el.focus({ preventScroll: true });
       restoreCaretOffset(el, Number.MAX_SAFE_INTEGER);
     });
@@ -264,6 +271,19 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
     onClose();
     if (restoreFocus) focusBack();
   }, [focusBack, onClose]);
+
+  // A prompt should yield to the document on an outside press. Keep a run
+  // or an unapplied reply open until it is explicitly closed or discarded.
+  useEffect(() => {
+    if (phase !== 'prompt') return;
+    const onOutsidePointerDown = (event: PointerEvent) => {
+      const panel = panelRef.current;
+      if (!panel || !(event.target instanceof Node) || panel.contains(event.target)) return;
+      close(false);
+    };
+    document.addEventListener('pointerdown', onOutsidePointerDown, true);
+    return () => document.removeEventListener('pointerdown', onOutsidePointerDown, true);
+  }, [close, phase]);
 
   const run = useCallback(
     async (chosen: AskAiPreset, previous?: string) => {
@@ -549,7 +569,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
     } else close();
   };
 
-  type PanelKey = Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'preventDefault' | 'stopPropagation'>;
+  type PanelKey = Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'target' | 'preventDefault' | 'stopPropagation'>;
   /**
    * A typed prompt as a preset. On a figure it asks for the figure back, and
    * so does a refinement of a result that was a figure ("add a legend" after
@@ -570,6 +590,8 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
       else close();
       return;
     }
+    // Enter and Space on Close, Stop and Back belong to those buttons.
+    if (event.target instanceof Element && event.target.closest('button')) return;
     if (phase === 'done' && mod && event.key === 'Enter') {
       event.preventDefault();
       if (!stopped) apply(primary);
@@ -642,7 +664,8 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
    * A safety net for a stray blur: if focus falls to <body> while the panel
    * is open, Escape still closes (or stops) it and Mod+Enter still applies —
    * and any navigation key brings focus back to the field it belongs in.
-   * Keys aimed anywhere else (the page, another field) are left alone.
+   * Escape also works after keyboard focus returns to the document. Other
+   * fields and controls keep their own keys.
    */
   const keyHandlerRef = useRef(onKeyDown);
   useLayoutEffect(() => {
@@ -650,8 +673,14 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
   });
   useEffect(() => {
     const onDocumentKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       const active = document.activeElement;
-      if (active && active !== document.body) return;
+      if (active && active !== document.body) {
+        const inDocument =
+          panelRef.current?.closest('.canvas')?.contains(active) &&
+          active.matches('.editable, .code-editable, [contenteditable]:not([contenteditable="false"])');
+        if (event.key !== 'Escape' || !inDocument) return;
+      }
       const mod = event.metaKey || event.ctrlKey;
       const handled =
         event.key === 'Escape' ||
@@ -853,6 +882,15 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
               </button>
             </>
           )}
+          <button
+            type="button"
+            aria-label="Close Ask AI"
+            title="Close Ask AI"
+            onClick={() => close()}
+            className="-mr-1 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
+          >
+            <X aria-hidden="true" className="size-4" />
+          </button>
         </div>
 
         {/* Suggestions or result actions, floating over the text below like any

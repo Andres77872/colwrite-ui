@@ -3,10 +3,12 @@ import { usePersistentState } from '@/hooks/usePersistentState';
 import {
   checkAgentEngine,
   engineModelProblem,
+  gatewayModelsFor,
   getAgentEngines,
   type AgentEngineCatalog,
   type AgentEngineId,
   type AgentEngineStatus,
+  type GatewayModelTier,
 } from '@/services/agentEngines';
 import { errorMessage } from '@/services/contracts';
 import {
@@ -100,8 +102,31 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
     (engine: AgentEngineId | 'chat') => setPrefs((previous) => ({ ...previous, inline: engine })),
     [setPrefs],
   );
+  const setGatewayModel = useCallback(
+    (tier: GatewayModelTier, model: string): string | null => {
+      const trimmed = model.trim();
+      if (trimmed && !gatewayModelsFor(catalog, tier).includes(trimmed)) {
+        return 'Choose one of the models configured on this server.';
+      }
+      setPrefs((previous) => {
+        if (tier === 'lite') {
+          const next = { ...previous };
+          if (trimmed) next.liteModel = trimmed;
+          else delete next.liteModel;
+          return next;
+        }
+        const models = { ...previous.models };
+        if (trimmed) models.legacy = trimmed;
+        else delete models.legacy;
+        return { ...previous, models };
+      });
+      return null;
+    },
+    [catalog, setPrefs],
+  );
   const setModel = useCallback(
     (engine: AgentEngineId, model: string): string | null => {
+      if (engine === 'legacy') return setGatewayModel('main', model);
       const trimmed = model.trim();
       const problem = engineModelProblem(engine, trimmed);
       if (problem) return problem;
@@ -113,12 +138,12 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
       });
       return null;
     },
-    [setPrefs],
+    [setGatewayModel, setPrefs],
   );
 
   const noteRunError = useCallback(
     (code: string) => {
-      if (code.startsWith('ENGINE_')) void refresh();
+      if (code.startsWith('ENGINE_') || code === 'MODEL_NOT_CONFIGURED') void refresh();
     },
     [refresh],
   );
@@ -137,6 +162,7 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
       setChatEngine,
       setInlineEngine,
       setModel,
+      setGatewayModel,
       checking,
       checkError,
       check,
@@ -156,6 +182,7 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
     setChatEngine,
     setInlineEngine,
     setModel,
+    setGatewayModel,
   ]);
 
   return <AgentEngineContext.Provider value={value}>{children}</AgentEngineContext.Provider>;

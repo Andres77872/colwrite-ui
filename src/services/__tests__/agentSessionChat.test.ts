@@ -229,6 +229,12 @@ describe('durable agent sessions', () => {
     await streamAgentSession({ ...params, engine: 'claude', model: 'sonnet', chat_id: null }, {});
     expect(commands.find((command) => command.method === 'runs.start')?.params.request).toEqual({ ...params, engine: 'claude', model: 'sonnet' });
   });
+  it('sends general/lite gateway selections without confusing them with a CLI model', async () => {
+    const gateway_models = { main: 'anthropic/claude-sonnet-5.5', lite: 'google/gemini-4-hydrogen' };
+    await streamAgentSession({ ...params, engine: 'claude', model: 'sonnet', gateway_models }, {});
+    expect(commands.find((command) => command.method === 'runs.start')?.params.request)
+      .toEqual({ ...params, engine: 'claude', model: 'sonnet', gateway_models });
+  });
   it('surfaces subscription failures instead of waiting forever', async () => {
     onStart = (socket, command) => {
       socket.reply(command, { id: 'r1' });

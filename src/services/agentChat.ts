@@ -1,6 +1,6 @@
 import { streamAgentSession, type ResumeAgentRun } from './agentSessionChat';
 import { attachmentRef, type ChatAttachment } from './chatAttachments';
-import type { AgentEngineId } from './agentEngines';
+import type { AgentEngineId, GatewayModelSelection } from './agentEngines';
 import { buildUrl, ensureRefreshed, getRefreshGeneration } from './api';
 import { ApiError, problemRetryAfter } from './contracts';
 import { abortableSleep, isRetryableProblem, retryDelayMs } from './retry';
@@ -45,6 +45,8 @@ export type AgentChatParams = {
   chat_id?: string | null;
   thread_id?: number | null;
   model?: string | null;
+  /** First choices from the server's configured main/lite gateway catalogs. */
+  gateway_models?: GatewayModelSelection;
   /**
    * Which backend runs the turn. Omitted means the server default
    * (`legacy`). `claude` / `codex` exist only on a local API reached from
@@ -149,6 +151,9 @@ export async function streamAgentChatSSE(
   }
   if (params.model != null) {
     body.model = params.model;
+  }
+  if (params.gateway_models != null) {
+    body.gateway_models = params.gateway_models;
   }
   if (params.engine != null) {
     body.engine = params.engine;

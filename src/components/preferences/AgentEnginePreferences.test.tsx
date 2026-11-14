@@ -44,7 +44,13 @@ function radio(element: HTMLElement): HTMLInputElement {
 }
 
 function catalog(runtime: 'local' | 'deployed', engines: AgentEngineStatus[]): AgentEngineCatalog {
-  return { runtime, default_engine: 'legacy', engines };
+  return {
+    runtime, default_engine: 'legacy', engines,
+    gateway_models: {
+      main: ['openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5', 'google/gemini-4-hydrogen'],
+      lite: ['openai/gpt-6-luna', 'anthropic/claude-haiku-5.5', 'google/gemini-4-hydrogen'],
+    },
+  };
 }
 
 function renderPreferences() {
@@ -66,7 +72,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('AgentEnginePreferences', () => {
-  it('shows nothing for a deployed server', async () => {
+  it('offers gateway models but no local engines on a deployed server', async () => {
     api.list.mockResolvedValue(
       catalog('deployed', [
         LEGACY,
@@ -74,10 +80,9 @@ describe('AgentEnginePreferences', () => {
         { ...CODEX_SIGNED_OUT, state: 'disabled', login_command: undefined },
       ]),
     );
-    const { container } = renderPreferences();
-    await waitFor(() => expect(api.list).toHaveBeenCalled());
-    await Promise.resolve();
-    expect(container.textContent).toBe('');
+    renderPreferences();
+    expect(await screen.findByRole('combobox', { name: 'General model' })).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'Lite model' })).toBeTruthy();
     expect(screen.queryByRole('radiogroup')).toBeNull();
   });
 
@@ -194,5 +199,79 @@ describe('AgentEnginePreferences', () => {
         'legacy',
       ),
     );
+  });
+
+  it('offers exactly the configured models for each tier, with no gateway text input', async () => {
+    const server = catalog('deployed', [LEGACY]);
+    api.list.mockResolvedValue(server);
+    renderPreferences();
+    const general = await screen.findByRole('combobox', { name: 'General model' });
+    const lite = screen.getByRole('combobox', { name: 'Lite model' });
+    const values = (select: HTMLElement) => within(select).getAllByRole('option')
+      .map((option) => (option as HTMLOptionElement).value).filter(Boolean);
+    expect(values(general)).toEqual(server.gateway_models?.main);
+    expect(values(lite)).toEqual(server.gateway_models?.lite);
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('saves independent general/lite choices, restores them, and resets one without changing the other', async () => {
+    api.list.mockResolvedValue(catalog('deployed', [LEGACY]));
+    const first = renderPreferences();
+    fireEvent.change(await screen.findByRole('combobox', { name: 'General model' }), {
+      target: { value: 'anthropic/claude-sonnet-5.5' },
+    });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Lite model' }), {
+      target: { value: 'google/gemini-4-hydrogen' },
+    });
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('colwrite:agent-engine:v1') ?? '{}'))
+      .toMatchObject({ models: { legacy: 'anthropic/claude-sonnet-5.5' }, liteModel: 'google/gemini-4-hydrogen' }));
+
+    first.unmount();
+    renderPreferences();
+    const general = await screen.findByRole('combobox', { name: 'General model' }) as HTMLSelectElement;
+    expect(general.value).toBe('anthropic/claude-sonnet-5.5');
+    expect((screen.getByRole('combobox', { name: 'Lite model' }) as HTMLSelectElement).value).toBe('google/gemini-4-hydrogen');
+    fireEvent.change(general, { target: { value: '' } });
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('colwrite:agent-engine:v1') ?? '{}'))
+      .toMatchObject({ models: {}, liteModel: 'google/gemini-4-hydrogen' }));
+  });
+
+  it('does not offer a stale model saved against a different server', async () => {
+    localStorage.setItem('colwrite:agent-engine:v1', JSON.stringify({
+      chat: 'legacy', inline: 'chat', models: { legacy: 'old/general' }, liteModel: 'old/lite',
+    }));
+    api.list.mockResolvedValue(catalog('deployed', [LEGACY]));
+    renderPreferences();
+    const general = await screen.findByRole('combobox', { name: 'General model' }) as HTMLSelectElement;
+    expect(general.value).toBe('');
+    expect((screen.getByRole('combobox', { name: 'Lite model' }) as HTMLSelectElement).value).toBe('');
+    expect(screen.getAllByText(/saved model is no longer configured/)).toHaveLength(2);
+    expect(screen.queryByRole('option', { name: 'old/general' })).toBeNull();
+    expect(screen.queryByRole('option', { name: 'old/lite' })).toBeNull();
+  });
+
+  it('explains when an older server does not expose choices instead of inventing models', async () => {
+    const older = catalog('deployed', [LEGACY]);
+    delete older.gateway_models;
+    api.list.mockResolvedValue(older);
+    renderPreferences();
+    expect(await screen.findByText(/does not expose model choices yet/)).toBeTruthy();
+    expect(screen.queryByRole('combobox')).toBeNull();
+  });
+
+  it('shows a configuration warning when the gateway has no configured models', async () => {
+    api.list.mockResolvedValue({ ...catalog('deployed', [LEGACY]), gateway_models: { main: [], lite: [] } });
+    renderPreferences();
+    expect(await screen.findByText('Gateway models are not configured on this server.')).toBeTruthy();
+    expect(screen.queryByRole('combobox')).toBeNull();
+  });
+
+  it('can reload the catalog after a loading failure', async () => {
+    api.list.mockRejectedValueOnce(new Error('Models unavailable'));
+    renderPreferences();
+    expect(await screen.findByText('Models unavailable')).toBeTruthy();
+    api.list.mockResolvedValue(catalog('deployed', [LEGACY]));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload models' }));
+    expect(await screen.findByRole('combobox', { name: 'General model' })).toBeTruthy();
   });
 });

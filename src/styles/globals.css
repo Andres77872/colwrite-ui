@@ -1241,6 +1241,12 @@
      ---------------------------------------- */
 
   @media (pointer: coarse) {
+    /* Keep the inline AI panel's dismissal easy to tap beside Send/Stop. */
+    .ask-ai-panel button[aria-label="Close Ask AI"] {
+      width: 44px;
+      height: 44px;
+    }
+
     .block-row[data-active] > .block-controls,
     .block-row[data-active] .block-action,
     .block-row[data-active] :is(.mermaid-diagram, .structured-figure) > .opacity-0 {

@@ -38,6 +38,10 @@ function catalog(runtime: 'local' | 'deployed', codex: AgentEngineStatus['state'
       status('claude', runtime === 'local' ? 'ready' : 'disabled'),
       status('codex', runtime === 'local' ? codex : 'disabled'),
     ],
+    gateway_models: {
+      main: ['openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5', 'google/gemini-4-hydrogen'],
+      lite: ['openai/gpt-6-luna', 'anthropic/claude-haiku-5.5', 'google/gemini-4-hydrogen'],
+    },
   };
 }
 
@@ -74,7 +78,33 @@ describe('resolveEngineRequest', () => {
     const prefs = { chat: 'claude' as const, inline: 'chat' as const, models: { claude: '~gateway/id' } };
     expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({ engine: 'claude' });
     const legacy = { chat: 'legacy' as const, inline: 'chat' as const, models: { legacy: '~anthropic/x' } };
-    expect(resolveEngineRequest(legacy, local, 'chat')).toEqual({ engine: 'legacy', model: '~anthropic/x' });
+    expect(resolveEngineRequest(legacy, local, 'chat')).toEqual({});
+  });
+
+  it('sends tier choices to gateway and CLI runs on both surfaces', () => {
+    const prefs = {
+      chat: 'claude' as const, inline: 'legacy' as const,
+      models: { legacy: 'anthropic/claude-sonnet-5.5', claude: 'sonnet' },
+      liteModel: 'anthropic/claude-haiku-5.5',
+    };
+    const gateway_models = { main: 'anthropic/claude-sonnet-5.5', lite: 'anthropic/claude-haiku-5.5' };
+    expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({ engine: 'claude', model: 'sonnet', gateway_models });
+    expect(resolveEngineRequest(prefs, local, 'inline')).toEqual({ gateway_models });
+    expect(resolveEngineRequest(prefs, catalog('deployed'), 'chat')).toEqual({ gateway_models });
+  });
+
+  it('does not send unknown, cross-tier, or unverified stored choices', () => {
+    const prefs = {
+      ...DEFAULT_ENGINE_PREFS,
+      models: { legacy: 'openai/gpt-6-luna' },
+      liteModel: 'openai/gpt-6.1-sol',
+    };
+    expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({});
+    const valid = { ...prefs, models: { legacy: 'openai/gpt-6.1-sol' }, liteModel: 'openai/gpt-6-luna' };
+    expect(resolveEngineRequest(valid, null, 'chat')).toEqual({});
+    const older = { ...local };
+    delete older.gateway_models;
+    expect(resolveEngineRequest(valid, older, 'chat')).toEqual({});
   });
 
   it('validates persisted preferences', () => {
@@ -82,6 +112,8 @@ describe('resolveEngineRequest', () => {
     expect(isAgentEnginePrefs({ chat: 'gpt', inline: 'chat', models: {} })).toBe(false);
     expect(isAgentEnginePrefs({ chat: 'claude', inline: 'claude', models: { claude: 3 } })).toBe(false);
     expect(isAgentEnginePrefs(null)).toBe(false);
+    expect(isAgentEnginePrefs({ ...DEFAULT_ENGINE_PREFS, liteModel: 'openai/gpt-6-luna' })).toBe(true);
+    expect(isAgentEnginePrefs({ ...DEFAULT_ENGINE_PREFS, liteModel: 1 })).toBe(false);
   });
 });
 
@@ -200,6 +232,32 @@ describe('AgentEngineProvider', () => {
     act(() => latest?.noteRunError('STREAM_ERROR'));
     act(() => latest?.noteRunError('ENGINE_AUTH_REQUIRED'));
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
+    act(() => latest?.noteRunError('MODEL_NOT_CONFIGURED'));
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(3));
+  });
+
+  it('validates each gateway tier against its own catalog and keeps existing preferences intact', async () => {
+    api.list.mockResolvedValue(catalog('deployed'));
+    render(<AgentEngineProvider><Probe /></AgentEngineProvider>);
+    await waitFor(() => expect(latest?.catalog?.gateway_models).toBeTruthy());
+    let problem: string | null = null;
+    act(() => { problem = latest?.setGatewayModel('main', 'openai/gpt-6-luna') ?? null; });
+    expect(problem).toMatch(/configured/);
+    act(() => { problem = latest?.setGatewayModel('lite', 'openai/gpt-6.1-sol') ?? null; });
+    expect(problem).toMatch(/configured/);
+    expect(latest?.requestFor('chat')).toEqual({});
+
+    act(() => { latest?.setModel('legacy', ' anthropic/claude-sonnet-5.5 '); });
+    act(() => { latest?.setGatewayModel('lite', 'google/gemini-4-hydrogen'); });
+    expect(latest?.requestFor('chat')).toEqual({
+      gateway_models: { main: 'anthropic/claude-sonnet-5.5', lite: 'google/gemini-4-hydrogen' },
+    });
+    act(() => { latest?.setGatewayModel('main', 'unknown/model'); });
+    expect(latest?.prefs.models.legacy).toBe('anthropic/claude-sonnet-5.5');
+    act(() => { latest?.setGatewayModel('lite', ''); });
+    expect(latest?.requestFor('inline')).toEqual({ gateway_models: { main: 'anthropic/claude-sonnet-5.5' } });
+    act(() => { latest?.setGatewayModel('main', ''); });
+    expect(latest?.requestFor('chat')).toEqual({});
   });
 
   it('keeps working on the default engine when an older API has no engines route', async () => {

@@ -16,6 +16,10 @@ export type AgentEngineId = 'legacy' | 'claude' | 'codex';
 export const AGENT_ENGINE_IDS: readonly AgentEngineId[] = ['legacy', 'claude', 'codex'];
 export const LOCAL_CLI_ENGINE_IDS: readonly AgentEngineId[] = ['claude', 'codex'];
 
+export type GatewayModelTier = 'main' | 'lite';
+export type GatewayModelCatalog = Record<GatewayModelTier, string[]>;
+export type GatewayModelSelection = Partial<Record<GatewayModelTier, string>>;
+
 export type AgentEngineState =
   | 'ready'
   | 'disabled'
@@ -43,7 +47,17 @@ export type AgentEngineCatalog = {
   runtime: 'local' | 'deployed';
   default_engine: AgentEngineId;
   engines: AgentEngineStatus[];
+  /** Missing on older APIs: never invent choices the server did not offer. */
+  gateway_models?: GatewayModelCatalog;
 };
+
+export function gatewayModelsFor(catalog: AgentEngineCatalog | null, tier: GatewayModelTier): string[] {
+  const models = catalog?.gateway_models?.[tier];
+  if (!Array.isArray(models)) return [];
+  return [...new Set(models.filter(
+    (model): model is string => typeof model === 'string' && model !== '' && engineModelProblem('legacy', model) === null,
+  ))];
+}
 
 /** Every engine as the server sees this request. */
 export async function getAgentEngines(): Promise<AgentEngineCatalog> {
