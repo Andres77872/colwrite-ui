@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { ActivityDay } from '@/services/userProfile';
+import type { ActivityDay } from '@/data/userProfile';
 import { ActivityChart } from '../ActivityChart';
 
 afterEach(cleanup);
@@ -30,7 +30,7 @@ describe('ActivityChart', () => {
   it('always shows a legend, so identity never rests on colour alone', () => {
     render(<ActivityChart activity={SAMPLE} days={30} />);
 
-    for (const label of ['Document edits', 'Assistant runs', 'Resources']) {
+    for (const label of ['Page edits', 'Assistant runs', 'PDFs']) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
   });
@@ -38,7 +38,7 @@ describe('ActivityChart', () => {
   it('totals each series in the legend', () => {
     render(<ActivityChart activity={SAMPLE} days={30} />);
 
-    // 4 + 9 document edits across the window.
+    // 4 + 9 page edits across the window.
     expect(screen.getByText('13')).toBeTruthy();
   });
 
@@ -77,9 +77,9 @@ describe('ActivityChart', () => {
       columnLabels().some(
         (label) =>
           label.includes(': 7 events — ') &&
-          label.includes('4 document edits') &&
+          label.includes('4 page edits') &&
           label.includes('2 assistant runs') &&
-          label.includes('1 resources'),
+          label.includes('1 PDF events'),
       ),
     ).toBe(true);
     expect(columnLabels().some((label) => label.includes(': 9 events — '))).toBe(true);
@@ -94,7 +94,7 @@ describe('ActivityChart', () => {
     fireEvent.focus(busiest!);
 
     const tooltip = screen.getByRole('status');
-    expect(within(tooltip).getByText('Resources')).toBeTruthy();
+    expect(within(tooltip).getByText('PDFs')).toBeTruthy();
   });
 
   it('offers a table twin so values are reachable without hovering', () => {

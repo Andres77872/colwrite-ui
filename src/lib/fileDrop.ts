@@ -42,7 +42,7 @@ export function pointerLeftElement(
 /**
  * What to tell an author whose file has nowhere to go on the page.
  *
- * The document has no image block and takes no attachments, so a pasted
+ * The page has no image block and takes no attachments, so a pasted
  * screenshot or a dropped file used to do nothing at all — or, dropped beside
  * the text, made the browser leave the app to show the file. Saying where the
  * file can go is the least the page owes them.
@@ -58,7 +58,7 @@ export function unplaceableFileMessage(files: FileList | File[] | null): { title
   }
   return {
     title: 'Files cannot go in the page',
-    description: 'Add PDFs to your library, or attach a file to a message in the assistant.',
+    description: 'Add PDFs to your Library, or attach a file to a message in the assistant.',
   };
 }
 
@@ -89,6 +89,6 @@ export function skippedNonPdfMessage(skipped: number): { title: string; descript
   if (skipped <= 0) return null;
   return {
     title: `Skipped ${skipped} file${skipped === 1 ? '' : 's'}`,
-    description: 'Only PDFs can be added to your library.',
+    description: 'Only PDFs can be added to your Library.',
   };
 }

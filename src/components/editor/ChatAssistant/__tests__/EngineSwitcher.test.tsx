@@ -1,13 +1,11 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEngineCatalog, AgentEngineStatus } from '@/services/agentEngines';
+import { mockAgentEngines } from '@/data/__tests__/agentEngineFixtures';
+import type { AgentEngineCatalog, AgentEngineStatus } from '@/data/agentEngines';
 
-const api = vi.hoisted(() => ({ list: vi.fn(), check: vi.fn() }));
-
-vi.mock('@/services/agentEngines', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/services/agentEngines')>();
-  return { ...actual, getAgentEngines: api.list, checkAgentEngine: api.check };
-});
+/** The server's engine routes. */
+const api = { list: vi.fn(), check: vi.fn() };
 
 const { AgentEngineProvider } = await import('@/components/preferences/AgentEngineContext');
 const { TooltipProvider } = await import('@/components/ui/tooltip');
@@ -18,7 +16,7 @@ const { EngineSwitcher } = await import('../EngineSwitcher');
 function status(engine: AgentEngineStatus['engine'], ready: boolean): AgentEngineStatus {
   return {
     engine,
-    name: { legacy: 'ColWrite model gateway', claude: 'Claude Code', codex: 'Codex' }[engine],
+    name: { gateway: 'ColWrite model gateway', claude: 'Claude Code', codex: 'Codex' }[engine],
     state: ready ? 'ready' : 'unauthenticated',
     available: ready,
     message: ready ? 'Ready.' : `Run \`${engine} login\` in your terminal, then check again.`,
@@ -29,17 +27,18 @@ function status(engine: AgentEngineStatus['engine'], ready: boolean): AgentEngin
 function catalog(runtime: 'local' | 'deployed'): AgentEngineCatalog {
   return {
     runtime,
-    default_engine: 'legacy',
-    engines: [status('legacy', true), status('claude', true), status('codex', false)],
+    default_engine: 'gateway',
+    engines: [status('gateway', true), status('claude', true), status('codex', false)],
+    gateway_models: { main: [], lite: [] },
   };
 }
 
 const setView = vi.fn();
 
 function renderSwitcher(prefs?: object) {
-  if (prefs) window.localStorage.setItem('colwrite:agent-engine:v1', JSON.stringify(prefs));
+  if (prefs) window.localStorage.setItem('colwrite:device:agent-engine', JSON.stringify(prefs));
   return render(
-    <ViewContext.Provider value={{ view: 'workspace', setView }}>
+    <ViewContext.Provider value={{ view: 'editor', setView }}>
       <TooltipProvider>
         <AgentEngineProvider>
           <EngineSwitcher />
@@ -60,10 +59,14 @@ beforeEach(() => {
   window.localStorage.clear();
   api.list.mockReset();
   api.check.mockReset();
+  mockAgentEngines(api);
   setView.mockReset();
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe('EngineSwitcher', () => {
   it('renders nothing outside a local server', async () => {
@@ -120,7 +123,7 @@ describe('EngineSwitcher', () => {
     openMenu(await screen.findByRole('button', { name: 'Assistant engine: ColWrite model gateway' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Engine settings…' }));
 
-    expect(setView).toHaveBeenCalledWith('profile');
+    expect(setView).toHaveBeenCalledWith('settings');
     expect(takeRequestedSettingsPane()).toBe('ai');
   });
 });

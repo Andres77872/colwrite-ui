@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 import {
   useEditorActions,
   type CodeBlock as CodeBlockModel,
+  usePageReadOnly,
 } from '@/editor';
 import {
   DropdownMenu,
@@ -37,7 +38,8 @@ export const CodeBlock = memo(function CodeBlock({ block }: { block: CodeBlockMo
   const { setCodeLanguage } = useEditorActions();
   const toaster = useContext(ToastContext);
   const [copied, setCopied] = useState(false);
-  const locked = block.locked === true;
+  const readOnly = usePageReadOnly();
+  const locked = block.locked === true || readOnly;
   const current = findCodeLanguage(block.language);
   const label = codeLanguageLabel(block.language);
 

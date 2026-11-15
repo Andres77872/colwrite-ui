@@ -1,16 +1,22 @@
 import { MessageAttachments } from './ChatAttachments';
 import { useMemo } from 'react';
-import { FileText, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { useEditorActions, type Block } from '@/editor';
+import type { AutoAppliedSet } from '@/editor/proposalsContextState';
+import { AutoAppliedNote } from './AutoAppliedNote';
 import {
   AgentProgressLine,
   AgentStatusLine,
   type AgentProgress,
 } from '@/components/editor/AgentProgress';
-import { ChatRefTags } from './ChatRefTags';
+import { ChatRefTags, messageForClipboard } from './ChatRefTags';
 import { ChatMarkdown } from './ChatMarkdown';
 import type { SourceMarkers } from './ChatMarkdown/ChatMarkdown';
 import { AgentActivity } from './AgentActivity';
 import { AnswerActions } from './AnswerActions';
+import { CopyButton, REVEAL_ON_HOVER } from './MessageActions';
+import { replyMetaOf } from './replyMeta';
 import { AnswerSources, SourceHoverCard } from './AnswerSources';
 import { ReasoningBlock } from './ReasoningBlock';
 import { TaskList } from './TaskList';
@@ -32,6 +38,7 @@ export function MessageRow({
   openChangeIds,
   onFocusChange,
   onRetry,
+  autoApplied,
 }: {
   message: ChatMessage;
   live: boolean;
@@ -42,6 +49,12 @@ export function MessageRow({
   openChangeIds: string[];
   onFocusChange: (changeId: string) => void;
   onRetry?: () => void;
+  /** The change sets the editor applied from this reply, with Auto on. */
+  autoApplied?: {
+    sets: readonly AutoAppliedSet[];
+    onUndo: (id: string) => void;
+    onReview: (id: string) => void;
+  };
 }) {
   const isUser = message.role === 'user';
   const { markers } = useSourceMarkers(message.id, message.content, message.sources);
@@ -66,11 +79,12 @@ export function MessageRow({
 
   if (isUser) {
     return (
-      <div className="flex justify-end">
+      <div className="group/message relative mb-1.5 flex justify-end">
         <div className="min-w-0 max-w-[85%] whitespace-pre-wrap break-words rounded-xl bg-subtle px-3 py-2 text-[14.5px] leading-[1.6] text-foreground">
           <MessageAttachments attachments={message.attachments} />
           <ChatRefTags text={message.content} />
         </div>
+        {message.content && <UserMessageActions text={message.content} />}
       </div>
     );
   }
@@ -130,13 +144,10 @@ export function MessageRow({
         <AgentStatusLine progress={progress} debounceMs={STEP_DEBOUNCE_MS} />
       )}
 
-      {/* A server in auto-apply mode writes to the document during the turn.
+      {/* With Auto on, the editor applies the reply's edits as they arrive.
           Without this line the only evidence was a highlight that faded. */}
-      {message.applied > 0 && (
-        <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
-          <FileText aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-          Applied {message.applied} {message.applied === 1 ? 'change' : 'changes'} to the document.
-        </p>
+      {autoApplied && (
+        <AutoAppliedNote sets={autoApplied.sets} onUndo={autoApplied.onUndo} onReview={autoApplied.onReview} />
       )}
 
       {message.content && message.sources && message.sources.length > 0 && (
@@ -148,12 +159,48 @@ export function MessageRow({
           text={message.content}
           sources={message.sources ?? []}
           openChangeCount={openChangeIds.length}
-          onReviewChanges={() => onFocusChange(openChangeIds[0])}
+          onReviewChanges={() => {
+            const [first] = openChangeIds;
+            if (first) onFocusChange(first);
+          }}
           onRetry={onRetry}
-          usage={message.usage}
+          meta={replyMetaOf(message)}
           pinned={latest}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Under a question: Copy, on hover or focus like the reply's actions.
+ *
+ * It hangs below the bubble in the gap before the reply instead of adding a
+ * row: on the right, where the reply's first line ("ColWrite AI") leaves
+ * room. A row of its own pushed every answer half a line away from its
+ * question. Its top padding keeps the pointer inside the turn on the way
+ * from bubble to button, so the button does not blink out between them.
+ *
+ * The page's blocks name the message's references, read at the click rather
+ * than kept in step with every keystroke in the page.
+ */
+function UserMessageActions({ text }: { text: string }) {
+  const { getBlockIds, getBlock } = useEditorActions();
+  const read = () =>
+    messageForClipboard(
+      text,
+      getBlockIds()
+        .map((id) => getBlock(id))
+        .filter((block): block is Block => block !== undefined),
+    );
+  return (
+    <div
+      className={cn(
+        'absolute -right-1.5 top-full z-[1] flex items-center pt-0.5 transition-opacity duration-120',
+        REVEAL_ON_HOVER,
+      )}
+    >
+      <CopyButton label="Copy message" read={read} className="flex-row-reverse" />
     </div>
   );
 }

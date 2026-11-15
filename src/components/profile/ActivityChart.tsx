@@ -6,7 +6,7 @@ import {
   formatNumber,
   seriesColor,
 } from '@/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/chartScale';
-import type { ActivityDay } from '@/services/userProfile';
+import type { ActivityDay } from '@/data/userProfile';
 import { Activity, BarChart3, Table2 } from 'lucide-react';
 
 /**
@@ -15,9 +15,9 @@ import { Activity, BarChart3, Table2 } from 'lucide-react';
  * repaint the others.
  */
 const SERIES = [
-  { key: 'document_events', label: 'Document edits', slot: 0 },
-  { key: 'agent_run_events', label: 'Assistant runs', slot: 1 },
-  { key: 'resource_events', label: 'Resources', slot: 2 },
+  { key: 'document_events', label: 'Page edits', spoken: 'page edits', slot: 0 },
+  { key: 'agent_run_events', label: 'Assistant runs', spoken: 'assistant runs', slot: 1 },
+  { key: 'resource_events', label: 'PDFs', spoken: 'PDF events', slot: 2 },
 ] as const;
 
 type SeriesKey = (typeof SERIES)[number]['key'];
@@ -94,6 +94,9 @@ export function ActivityChart({
   const [asTable, setAsTable] = useState(false);
 
   const series = useMemo(() => densify(activity, days), [activity, days]);
+  const firstDay = series[0];
+  const lastDay = series.at(-1);
+  const hoveredDay = hovered === null ? undefined : series[hovered];
   const max = useMemo(
     () => series.reduce((peak, day) => Math.max(peak, day.total), 0),
     [series],
@@ -139,7 +142,7 @@ export function ActivityChart({
           title="No activity yet"
           // Interpolated: this said "last 30 days" while the heading right above
           // it read from `days`, so any other window contradicted itself.
-          description={`Edits, assistant runs, and resource activity from the last ${days} days appear here.`}
+          description={`Edits, assistant runs, and PDF activity from the last ${days} days appear here.`}
         />
       </section>
     );
@@ -202,11 +205,11 @@ export function ActivityChart({
               </div>
 
               <div className="mt-1.5 flex justify-between text-2xs text-muted-foreground">
-                <span>{shortDate(series[0].date)}</span>
-                <span>{shortDate(series[series.length - 1].date)}</span>
+                <span>{firstDay && shortDate(firstDay.date)}</span>
+                <span>{lastDay && shortDate(lastDay.date)}</span>
               </div>
 
-              {hovered !== null && <Tooltip day={series[hovered]} index={hovered} count={series.length} />}
+              {hoveredDay && <Tooltip day={hoveredDay} index={hovered ?? 0} count={series.length} />}
             </div>
           </div>
         </div>
@@ -237,7 +240,7 @@ function Column({
     day.total === 0
       ? `${shortDate(day.date)}: no activity`
       : `${shortDate(day.date)}: ${day.total} event${day.total === 1 ? '' : 's'} — ${present
-          .map((entry) => `${day.values[entry.key]} ${entry.label.toLowerCase()}`)
+          .map((entry) => `${day.values[entry.key]} ${entry.spoken}`)
           .join(', ')}`;
   // The surface gaps are part of the column's height, so the scale has to pay
   // for them. Scaling against the full plot height instead let the busiest

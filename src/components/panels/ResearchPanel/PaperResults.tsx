@@ -1,12 +1,13 @@
 import { useMemo } from 'react';
 import { ScanSearch, Search, SearchX } from 'lucide-react';
-import type { ArxivResult } from '@/services/arxiv';
-import type { ColpaliArxivResult } from '@/services/colpali';
+import type { ArxivResult } from '@/data/arxiv';
+import type { ColpaliArxivResult } from '@/data/colpali';
 import { Alert } from '@/components/ui/alert';
 import { EmptyState } from '@/components/ui/empty-state';
 import { yearOf } from '@/editor';
 import { cn } from '@/lib/utils';
-import { PaperRow, ResultsSkeleton, sourceFromArxiv, sourceFromColpali } from '../shared';
+import { PaperRow, sourceFromArxiv, sourceFromColpali } from '../shared';
+import { ListSkeleton } from '@/components/ui/list-skeleton';
 import type { PaperSearch } from './usePaperSearch';
 
 /**
@@ -31,7 +32,7 @@ export function ResultList({
           {summary}
         </p>
       )}
-      {loading && count === 0 && <ResultsSkeleton />}
+      {loading && count === 0 && <ListSkeleton rows={3} />}
       <div className={cn('flex flex-col', loading && count > 0 && 'pointer-events-none opacity-50 transition-opacity')}>
         {children}
       </div>

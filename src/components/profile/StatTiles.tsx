@@ -1,10 +1,9 @@
 import type { ElementType } from 'react';
-import { formatBytes, formatCompact } from '@/lib/text';
-import type { UsageSummary } from '@/services/userProfile';
+import { formatCompact } from '@/lib/text';
+import type { UsageSummary } from '@/data/userProfile';
 import {
   Bot,
   Coins,
-  FileStack,
   FileText,
   MessagesSquare,
   Save,
@@ -21,7 +20,7 @@ function tiles(summary: UsageSummary): Tile[] {
   const tokens = summary.tokens_input + summary.tokens_output;
   return [
     {
-      label: 'Documents',
+      label: 'Pages',
       value: formatCompact(summary.documents_active),
       hint:
         summary.documents_deleted > 0
@@ -58,28 +57,23 @@ function tiles(summary: UsageSummary): Tile[] {
       )} out`,
       icon: Coins,
     },
-    {
-      label: 'Resources',
-      value: formatCompact(summary.resources_active),
-      hint: formatBytes(summary.resources_bytes),
-      icon: FileStack,
-    },
   ];
 }
 
 /**
  * StatTiles — the KPI row.
  *
- * Six headline numbers, so this is a row of tiles rather than a chart: each
- * value is a single current quantity, and a bar chart of six unrelated units
- * would say less than the numbers do.
+ * Five headline numbers, so this is a row of tiles rather than a chart: each
+ * value is a single current quantity, and a bar chart of five unrelated units
+ * would say less than the numbers do. The PDF count and size are the Storage
+ * section's, beside the way to the Library.
  */
 export function StatTiles({ summary }: { summary: UsageSummary }) {
   return (
     <section aria-label="Usage summary">
-      {/* Six across from `lg`, not `xl`: the page is capped at max-w-5xl, so the
-          whole lg range was rendering a 3×2 block with room for one row. */}
-      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {/* One row of five once the dialog is wide enough beside its pane
+          list; below that, three across. */}
+      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
         {tiles(summary).map((tile) => (
           <li
             key={tile.label}
@@ -95,7 +89,7 @@ export function StatTiles({ summary }: { summary: UsageSummary }) {
                 like 121 read loose at this size. */}
             <p className="mt-1.5 text-2xl font-semibold leading-none">{tile.value}</p>
             {tile.hint && (
-              // Titled because it truncates: at six columns "12.9K in · 4.2M
+              // Titled because it truncates: at five columns "12.9K in · 4.2M
               // out" loses its second half with nothing to reveal it.
               <p className="mt-1.5 truncate text-2xs text-muted-foreground" title={tile.hint}>
                 {tile.hint}

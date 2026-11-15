@@ -1,4 +1,4 @@
-import type { AgentEngineId, AgentEngineStatus } from '@/services/agentEngines';
+import type { AgentEngineId, AgentEngineStatus } from '@/data/agentEngines';
 
 export type EngineBadge = {
   label: string;
@@ -26,7 +26,7 @@ export function engineBadge(status: AgentEngineStatus | null): EngineBadge {
 }
 
 const FALLBACK_NAMES: Record<AgentEngineId, string> = {
-  legacy: 'ColWrite model gateway',
+  gateway: 'ColWrite model gateway',
   claude: 'Claude Code',
   codex: 'Codex',
 };
@@ -37,17 +37,17 @@ export function engineName(engine: AgentEngineId, status: AgentEngineStatus | nu
 
 /** What each engine is, in the author's terms. */
 export const ENGINE_SUMMARY: Record<AgentEngineId, string> = {
-  legacy: 'The model gateway this ColWrite server is configured with.',
+  gateway: 'The model gateway this ColWrite server is configured with.',
   claude: 'Your own Claude Code CLI on this machine, under your Claude account.',
   codex: 'Your own Codex CLI on this machine, under your ChatGPT account.',
 };
 
 /** One line under a ready CLI: how it is signed in, plan and version. */
 export function engineSignedInLine(status: AgentEngineStatus | null): string | null {
-  if (!status || status.state !== 'ready' || status.engine === 'legacy') return null;
+  if (!status || status.state !== 'ready' || status.engine === 'gateway') return null;
   const parts = [
     'Signed in',
-    status.plan ? `${status.plan[0].toUpperCase()}${status.plan.slice(1)} plan` : null,
+    status.plan ? `${status.plan.charAt(0).toUpperCase()}${status.plan.slice(1)} plan` : null,
     status.version,
   ];
   return parts.filter(Boolean).join(' · ');

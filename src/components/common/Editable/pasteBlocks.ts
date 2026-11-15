@@ -79,7 +79,8 @@ export function pasteAsBlocks(context: PasteContext): boolean {
   if (blocks.length === 0 && html) blocks = htmlToBlocks(html);
   if (blocks.length === 0 && text && looksLikeMarkdownBlocks(text)) blocks = markdownToBlocks(text);
   if (blocks.length === 0) return false;
-  if (blocks.length === 1 && blocks[0].type === 'paragraph' && !blocks[0].variant && !(blocks[0].children ?? []).length) {
+  const [only] = blocks;
+  if (blocks.length === 1 && only?.type === 'paragraph' && !only.variant && !(only.children ?? []).length) {
     return false;
   }
 

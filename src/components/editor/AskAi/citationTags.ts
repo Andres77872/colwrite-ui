@@ -66,7 +66,7 @@ function parseAttributes(source: string): Record<string, string> | null {
   ATTRIBUTE.lastIndex = 0;
   for (let match = ATTRIBUTE.exec(source); match; match = ATTRIBUTE.exec(source)) {
     if (source.slice(cursor, match.index).trim()) return null;
-    const name = match[1].toLocaleLowerCase();
+    const name = (match[1] ?? '').toLocaleLowerCase();
     if (!ALLOWED_ATTRIBUTES.has(name) || name in attributes) return null;
     attributes[name] = decodeXmlEntities(match[2] ?? match[3] ?? '').trim();
     cursor = ATTRIBUTE.lastIndex;
@@ -228,7 +228,7 @@ export function parseCitationSuggestion(text: string): CitationSuggestion | null
   for (let match = CITATION_TAG.exec(text); match; match = CITATION_TAG.exec(text)) {
     pushText(text.slice(cursor, match.index));
 
-    const citation = citationPart(match[1]);
+    const citation = citationPart(match[1] ?? '');
     if (citation) {
       parts.push(citation);
       citations += 1;

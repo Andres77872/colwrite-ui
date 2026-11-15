@@ -1,12 +1,13 @@
 import { useMemo, useRef, useState } from 'react';
-import type { AiBeatChild } from '@/editor';
+import { usePageReadOnly, type AiBeatChild } from '@/editor';
 import type { AiBeatWidgetProps } from '../types';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { streamAgentChat } from '@/services/agentChat';
+import { runAgentTurn } from '@/api/assistant/agentChat';
 import { useAgentEngine } from '@/components/preferences/agentEngineContextState';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import {
   AgentStatusLine,
   advanceProgress,
@@ -35,7 +36,9 @@ export function AiBeatInline({ child, ...rest }: AiBeatWidgetProps) {
 function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
   const { blockId, child, updateHtml, refs, documentId, ensureRemoteDocument } = props;
   const { patch, remove } = useInlineChild(props);
+  const readOnly = usePageReadOnly();
   const engines = useAgentEngine();
+  const workspaceId = useWorkspaceId();
 
   // Only the streamed output is local: it arrives token by token, and writing
   // every token into the document would put thousands of entries through the
@@ -76,11 +79,12 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
       // several of them reach for at once is created exactly once.
       const docId = documentId ?? (await ensureRemoteDocument());
       if (!docId) {
-        setError('This document could not be saved, so nothing could be generated for it.');
+        setError('This page could not be saved, so nothing could be generated for it.');
         return;
       }
-      const outcome = await streamAgentChat(
+      const outcome = await runAgentTurn(
         {
+          workspace_id: workspaceId,
           message: `Use this prompt: ${prompt}\n\nGenerate response for: ${message}`,
           document_id: docId,
           // Without this the agent runs with the document tools and can edit
@@ -162,6 +166,26 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
     const text = (output || message).trim();
     return text.length > 72 ? `${text.slice(0, 72)}…` : text || 'Empty';
   }, [output, message]);
+
+  // A read-only page (a viewer): what the passage holds, and nothing that
+  // generates, inserts or changes it.
+  if (readOnly) {
+    return (
+      <span
+        className="ai-beat-widget my-3 block overflow-hidden rounded-lg bg-subtle px-3 py-2 ring-1 ring-inset ring-border"
+        role="group"
+        aria-label="AI passage"
+        contentEditable={false}
+        {...stopEditorEvents}
+      >
+        <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+          <Sparkles aria-hidden="true" className="h-3.5 w-3.5 text-ai" />
+          AI passage
+        </span>
+        <span className="mt-1 block whitespace-pre-wrap text-sm text-muted-foreground">{output.trim() || message.trim() || 'Empty'}</span>
+      </span>
+    );
+  }
 
   /* A quiet well rather than a tinted card: the violet sparkle is what marks
      it as AI-owned, as it does everywhere else in the app. The header stays

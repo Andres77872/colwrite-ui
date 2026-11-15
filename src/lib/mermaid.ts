@@ -87,9 +87,9 @@ const FALLBACK_FONT = 'Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 
 const PARSEABLE_COLOR = /^(#[0-9a-f]{3,8}|rgba?\([^)]*\))$/i;
 
 function relativeLuminance(hex: string): number {
-  const match = /^#([0-9a-f]{6})/i.exec(hex);
-  if (!match) return 1;
-  const value = parseInt(match[1], 16);
+  const digits = /^#([0-9a-f]{6})/i.exec(hex)?.[1];
+  if (!digits) return 1;
+  const value = parseInt(digits, 16);
   const channel = (shift: number) => {
     const c = ((value >> shift) & 0xff) / 255;
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;

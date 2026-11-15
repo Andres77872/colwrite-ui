@@ -26,7 +26,7 @@
   "include": [
     "vite.config.ts",
     "vite.raw-katex.ts",
-    "vitest.config.ts",
-    "vitest.setup.ts"
+    "vite.msw-worker.ts",
+    "vitest.config.ts"
   ]
 }

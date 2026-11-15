@@ -81,30 +81,33 @@ export type ChangeSet = {
   tool: string;
   toolCallId: string;
   documentId: string;
-  /** Version the server held when it staged this. Untouched by a proposal. */
-  version: number;
   message?: string;
   receivedAt: number;
   changes: ProposedChange[];
   /**
-   * Set when this batch is a durable server-side change set. Such a batch is
-   * atomic: accept or reject decides the whole set against the server, which
-   * owns the operations and applies them to the authoritative head.
+   * The stored change set this batch is. Each decision on one of its
+   * changes is recorded against it, by operation index.
    */
-  changeSetId?: string | null;
-  /**
-   * The server records the decisions on this durable batch one operation at
-   * a time and retires it when the last one is decided. Without it (an older
-   * API) the decisions are remembered in this browser and the batch is
-   * retired by rejecting it (see `reviewDecisions.ts`).
-   */
-  decisionsOnServer?: boolean;
+  changeSetId: string;
   /**
    * The server said, per operation, whether the saved document still holds
    * the block it was written for. Without it, the staging fingerprints are
    * kept in this browser across reloads instead.
    */
   targetsOnServer?: boolean;
+  /**
+   * A set the server stored with `apply_policy: "auto"` that the editor did
+   * not apply: it arrived while the page was closed, or after Auto was
+   * turned off. Nothing is applied while the author is not looking, so it
+   * waits for them under "‹n› changes from an Auto turn are waiting" (D18).
+   */
+  autoWaiting?: boolean;
+  /**
+   * The block with the caret, when an Auto set the editor applied left a
+   * change because of it (D18). It is applied once the caret leaves that
+   * block, while Auto is still on for the page and chat.
+   */
+  autoHeldAt?: string;
 };
 
 /**
@@ -348,7 +351,7 @@ export function rebaseAfterAccept(
 }
 
 /**
- * Turn a streamed `tool_action` into a reviewable batch.
+ * Turn a stored change set's operations into a reviewable batch.
  *
  * Operations the editor cannot render — `create_document`, or anything a
  * future server adds — are dropped here rather than surfaced as a change the
@@ -358,7 +361,10 @@ export function rebaseAfterAccept(
  * or deletion records what its block looked like then, so an edit the author
  * makes afterwards is noticed instead of silently overwritten.
  */
-export function buildChangeSet(action: ToolAction, blocks?: readonly Block[]): ChangeSet {
+export function buildChangeSet(
+  action: ToolAction & { changeSetId: string },
+  blocks?: readonly Block[],
+): ChangeSet {
   const changes: ProposedChange[] = [];
   const producedBy = new Map<string, string>();
   const present = blocks ? new Map(blocks.map((block) => [block.id, block])) : null;
@@ -402,11 +408,10 @@ export function buildChangeSet(action: ToolAction, blocks?: readonly Block[]): C
     tool: action.tool,
     toolCallId: action.toolCallId,
     documentId: action.documentId,
-    version: action.version,
     message: action.message,
     receivedAt: Date.now(),
     changes,
-    changeSetId: action.changeSetId ?? null,
+    changeSetId: action.changeSetId,
   };
 }
 
@@ -504,11 +509,8 @@ export function linkPrecedence(sets: ChangeSet[]): Map<string, string[]> {
   const all = orderedChanges(sets);
   const after = new Map<string, string[]>(all.map((change) => [change.id, []]));
 
-  for (let i = 0; i < all.length; i += 1) {
-    for (let j = 0; j < i; j += 1) {
-      const later = all[i];
-      const earlier = all[j];
-
+  all.forEach((later, i) => {
+    for (const earlier of all.slice(0, i)) {
       const bothPositional = POSITIONAL.has(later.kind) && POSITIONAL.has(earlier.kind);
       const reorderInvolved = later.kind === 'reorder' || earlier.kind === 'reorder';
       const deleteInvolved = later.kind === 'delete' || earlier.kind === 'delete';
@@ -519,8 +521,80 @@ export function linkPrecedence(sets: ChangeSet[]): Map<string, string[]> {
         after.get(later.id)!.push(earlier.id);
       }
     }
-  }
+  });
   return after;
+}
+
+/**
+ * Whether Auto must leave this change to the author (D18): it was written
+ * against text that has changed since, or it rewrites, deletes or moves the
+ * block the author is typing in, or a block they locked or hid from the AI.
+ * An insert next to such a block leaves the block itself alone.
+ */
+function needsAuthor(change: ProposedChange, blocks: readonly Block[], caretBlockId: string | null): boolean {
+  if (isStale(change, blocks)) return true;
+  if (change.placement !== null || change.anchorBlockId === null) return false;
+  if (change.anchorBlockId === caretBlockId) return true;
+  const target = blocks.find((block) => block.id === change.anchorBlockId);
+  return target?.locked === true || target?.aiHidden === true;
+}
+
+/**
+ * Which pending changes of an `apply_policy: "auto"` set the editor applies
+ * at once, in authoring order, and which stay for the author.
+ *
+ * A change stays when it needs the author (`needsAuthor`), and so does
+ * everything that cannot go without it: a change to a block a held insert
+ * creates, or one that must not be decided before a held or still pending
+ * change (`linkPrecedence`). `sets` holds every staged batch, this one
+ * included. The caller resolves the result with `resolveAcceptPlan`; a change
+ * that finds no place there stays as well.
+ */
+export function planAutoApply(
+  set: ChangeSet,
+  sets: ChangeSet[],
+  blocks: readonly Block[],
+  caretBlockId: string | null,
+): { apply: ProposedChange[]; held: ProposedChange[] } {
+  const after = linkPrecedence(sets);
+  const byId = new Map<string, ProposedChange>();
+  for (const batch of sets) for (const change of batch.changes) byId.set(change.id, change);
+  const taken = new Set<string>();
+  const apply: ProposedChange[] = [];
+  const held: ProposedChange[] = [];
+  for (const change of orderedChanges([set])) {
+    if (change.status !== 'pending') continue;
+    const prerequisites = change.dependsOn.every(
+      (id) => taken.has(id) || byId.get(id)?.status === 'accepted',
+    );
+    const inOrder = (after.get(change.id) ?? []).every(
+      (id) => taken.has(id) || byId.get(id)?.status !== 'pending',
+    );
+    if (prerequisites && inOrder && !needsAuthor(change, blocks, caretBlockId)) {
+      taken.add(change.id);
+      apply.push(change);
+    } else {
+      held.push(change);
+    }
+  }
+  return { apply, held };
+}
+
+/**
+ * The block whose caret holds back a change of an Auto set: `caretBlockId`,
+ * when the set would apply more with the caret elsewhere. `null` otherwise.
+ */
+export function caretHeldBlock(
+  set: ChangeSet,
+  sets: ChangeSet[],
+  blocks: readonly Block[],
+  caretBlockId: string | null,
+): string | null {
+  if (caretBlockId === null) return null;
+  const withCaret = new Set(planAutoApply(set, sets, blocks, caretBlockId).apply.map((change) => change.id));
+  return planAutoApply(set, sets, blocks, null).apply.some((change) => !withCaret.has(change.id))
+    ? caretBlockId
+    : null;
 }
 
 /*
@@ -759,8 +833,9 @@ export function resolveAcceptOp(
   const index = Math.max(0, Math.min(lower, upper, blocks.length));
 
   const block = (change.op as { block?: Record<string, unknown> }).block ?? {};
-  if (index === 0) return { op: 'insert_block_at_start', block };
-  return { op: 'insert_block_after', referenceId: blocks[index - 1].id, block };
+  const previous = index > 0 ? blocks[index - 1] : undefined;
+  if (!previous) return { op: 'insert_block_at_start', block };
+  return { op: 'insert_block_after', referenceId: previous.id, block };
 }
 
 /* ----------------------------------------
@@ -1002,7 +1077,8 @@ export function resumeReview(
   stored: { decisions: readonly ReviewDecision[]; bases: Readonly<Record<string, string>> } | null,
   blocks: readonly Block[] | null,
 ): { set: ChangeSet; landed: number[] } {
-  let sets: ChangeSet[] = [
+  // The helpers below work on lists of batches; this one is the only one.
+  let current: ChangeSet = (
     stored
       ? {
           ...set,
@@ -1011,33 +1087,36 @@ export function resumeReview(
             return base === undefined ? change : { ...change, base };
           }),
         }
-      : set,
-  ];
+      : set
+  );
+  const update = ([next]: ChangeSet[]) => {
+    if (next) current = next;
+  };
 
   for (const [opIndex, status] of stored?.decisions ?? []) {
-    const change = sets[0].changes.find((candidate) => candidate.opIndex === opIndex);
+    const change = current.changes.find((candidate) => candidate.opIndex === opIndex);
     if (!change || change.status !== 'pending') continue;
-    sets = status === 'rejected'
-      ? rejectChange(sets, change.id).sets
-      : markChanges(sets, new Set([change.id]), 'accepted');
+    update(status === 'rejected'
+      ? rejectChange([current], change.id).sets
+      : markChanges([current], new Set([change.id]), 'accepted'));
   }
 
   // In authoring order, so an insert that landed satisfies the dependency of
   // the next one before that one is looked at.
   const landed: number[] = [];
-  if (!blocks) return { set: sets[0], landed };
-  for (const change of orderedChanges(sets)) {
-    const live = sets[0].changes.find((candidate) => candidate.id === change.id)!;
-    if (live.status !== 'pending' || live.opIndex === undefined) continue;
+  if (!blocks) return { set: current, landed };
+  for (const change of orderedChanges([current])) {
+    const live = current.changes.find((candidate) => candidate.id === change.id);
+    if (!live || live.status !== 'pending' || live.opIndex === undefined) continue;
     const ready = live.dependsOn.every(
-      (id) => sets[0].changes.find((candidate) => candidate.id === id)?.status === 'accepted',
+      (id) => current.changes.find((candidate) => candidate.id === id)?.status === 'accepted',
     );
     if (!ready || !alreadyInDocument(live, blocks)) continue;
     landed.push(live.opIndex);
-    sets = markChanges(sets, new Set([live.id]), 'accepted');
+    update(markChanges([current], new Set([live.id]), 'accepted'));
   }
 
-  return { set: sets[0], landed };
+  return { set: current, landed };
 }
 
 /**
@@ -1254,6 +1333,6 @@ export function describeChange(change: ProposedChange, blocks: Block[]): string 
     case 'reorder':
       return `Move ${label(target)}${quoted(target)}`;
     case 'rename':
-      return 'Rename document';
+      return 'Rename page';
   }
 }

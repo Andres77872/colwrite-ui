@@ -1,4 +1,6 @@
+import { takeItems } from '@/lib/itemAt';
 import { describe, it, expect } from 'vitest';
+import { ApiError } from '@/api/errors';
 import type { Block, ParagraphBlock, ToolOperation } from '../types';
 import {
   applyPatchToBlocks,
@@ -42,7 +44,7 @@ describe('applyPatchToBlocks', () => {
     expect(result).toHaveLength(3);
     expect(htmlOf(result[1])).toBe('<p>Updated B</p>');
     // Unspecified fields survive the merge, matching the server.
-    expect(result[1].type).toBe('paragraph');
+    expect(result[1]?.type).toBe('paragraph');
   });
 
   it('validates the merged block, not just the inserted ones', () => {
@@ -143,7 +145,7 @@ describe('applyPatchToBlocks', () => {
     const result = blocksOf(initialBlocks, [
       { op: 'reorder_block', blockId: 'c', toIndex: 99 },
     ]);
-    expect(result[2].id).toBe('c');
+    expect(result[2]?.id).toBe('c');
   });
 
   it('treats update_meta and create_document as no-ops on blocks', () => {
@@ -396,44 +398,46 @@ describe('withoutOrphanChildren', () => {
       makeBlock('p', { html: '', children: [{ id: 'gone', type: 'citation', keys: [] }] }),
     ];
     const repaired = reconcileBlocks(dirty) as ParagraphBlock[];
-    expect(repaired[0].children).toEqual([]);
+    expect(repaired[0]?.children).toEqual([]);
   });
 });
 
 // ── save errors ──
 
 describe('describeSaveError', () => {
-  it('explains a version conflict in terms a writer can act on', () => {
-    const err = Object.assign(new Error('conflict'), { status: 409 });
-    expect(describeSaveError(err)).toMatch(/changed somewhere else/i);
+  const problem = (code: string, status: number, detail: string) =>
+    new ApiError(detail, status, { code, status, detail, retryable: false });
+
+  it('explains a stale head in terms a writer can act on', () => {
+    expect(describeSaveError(problem('stale_head', 412, 'The document changed since it was read'))).toMatch(/changed somewhere else/i);
   });
 
   it('does not call an unsupported schema a conflict the author could settle', () => {
-    const schema = Object.assign(new Error('Document schema is not supported'), { status: 409 });
+    const schema = problem('schema_unsupported', 409, 'Document schema is not supported');
     expect(isSaveConflict(schema)).toBe(false);
     expect(describeSaveError(schema)).toMatch(/newer version of ColWrite/i);
 
-    const conflict = Object.assign(
-      new Error('Version conflict: the document was modified elsewhere (sent version 3, server has 4)'),
-      { status: 409 },
-    );
+    const conflict = problem('stale_head', 412, 'The document changed since it was read');
     expect(isSaveConflict(conflict)).toBe(true);
     expect(isSaveConflict(new Error('network down'))).toBe(false);
+    // The code decides, not the status.
+    expect(isSaveConflict(Object.assign(new Error('Precondition failed'), { status: 412 }))).toBe(false);
   });
 
-  it('compares documents by content, not by version', () => {
+  it('compares documents by content', () => {
     const blocks = [{ id: 'a', type: 'paragraph' as const, html: 'x', children: [] }];
-    expect(sameContent({ version: 1, blocks, name: 'A' }, { version: 9, blocks: structuredClone(blocks), name: 'A' })).toBe(true);
-    expect(sameContent({ version: 1, blocks, name: 'A' }, { version: 1, blocks, name: 'B' })).toBe(false);
-    expect(sameContent({ version: 1, blocks }, { version: 1, blocks, sources: [] })).toBe(true);
+    expect(sameContent({ blocks, name: 'A' }, { blocks: structuredClone(blocks), name: 'A' })).toBe(true);
+    expect(sameContent({ blocks, name: 'A' }, { blocks, name: 'B' })).toBe(false);
+    expect(sameContent({ blocks }, { blocks, sources: [] })).toBe(true);
   });
 
   it('reads a block the same whether or not its defaults are written out', () => {
     const written = { version: 1, blocks: [{ id: 'a', type: 'paragraph' as const, html: 'x', children: [], columns: 1, checked: false }] };
     const stored = { version: 2, blocks: [{ type: 'paragraph' as const, html: 'x', id: 'a' }] } as unknown as typeof written;
     expect(sameContent(written, stored)).toBe(true);
-    expect(sameContent(written, { ...stored, blocks: [{ ...stored.blocks[0], html: 'y' }] })).toBe(false);
-    expect(sameContent(written, { ...stored, blocks: [{ ...stored.blocks[0], columns: 2 }] })).toBe(false);
+    const [storedBlock] = takeItems(stored.blocks, 1);
+    expect(sameContent(written, { ...stored, blocks: [{ ...storedBlock, html: 'y' }] })).toBe(false);
+    expect(sameContent(written, { ...stored, blocks: [{ ...storedBlock, columns: 2 }] })).toBe(false);
   });
 
   it('distinguishes a missing document and an expired session', () => {

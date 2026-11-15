@@ -1,7 +1,7 @@
 import { canonicalArxivId, canonicalCitationKey, canonicalDoi, yearOf, type CitationSource } from '@/editor';
-import type { ArxivResult } from '@/services/arxiv';
-import type { ColpaliArxivResult } from '@/services/colpali';
-import { researchAuthorsLabel, researchExternalId, type ResearchPaper } from '@/services/semanticScholar';
+import type { ArxivResult } from '@/data/arxiv';
+import type { ColpaliArxivResult } from '@/data/colpali';
+import { researchAuthorsLabel, researchExternalId, type ResearchPaper } from '@/data/semanticScholar';
 
 /**
  * Search results as library sources.

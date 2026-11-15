@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isBoolean, isNumber, usePersistentState } from '@/hooks/usePersistentState';
 import { useIsDesktop, useMediaQuery } from '@/hooks/useMediaQuery';
 import { PANEL_CONFIG } from './panelConfig';
-import { isResearchSource, isToolId, tabForTool } from './toolsConfig';
+import { isPersistedTab, isResearchSource, tabForTool } from './toolsConfig';
+import { panelKey } from '@/lib/storageKeys';
 import {
   PanelsContext,
   type ResearchSourceId,
@@ -11,29 +12,6 @@ import {
   type ToolId,
 } from './panelsContextState';
 export type { ToolId } from './panelsContextState';
-
-/**
- * The persisted tool, as a tab.
- *
- * The old rail stored one id per research provider, `chats` and `json`, and
- * `null` for "nothing chosen". Those all still load: a provider opens
- * Research, `chats` opens the assistant, and the developer JSON view is not
- * restored on its own, so it falls back to the assistant as well.
- */
-function persistedTab(tool: ToolId): Exclude<SidebarTab, 'json'> {
-  const tab = tabForTool(tool);
-  return tab === 'json' ? 'assistant' : tab;
-}
-
-/** A research source saved by the old rail, read once as the new default. */
-function legacyResearchSource(): ResearchSourceId {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem('panels.activeTool') ?? 'null') as unknown;
-    return isResearchSource(stored) ? stored : 'arxiv';
-  } catch {
-    return 'arxiv';
-  }
-}
 
 /* ============================================
    PANEL DIMENSIONS
@@ -59,22 +37,21 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
 
   // Layout choices survive a reload — re-dragging panels every session was
   // the single most repeated interaction in the app.
-  const [storedTool, setStoredTool] = usePersistentState<ToolId>(
-    'panels.activeTool',
-    // A fresh workspace opens the sidebar on the assistant; from then on the
+  const [storedTab, setStoredTab] = usePersistentState<Exclude<SidebarTab, 'json'>>(
+    panelKey('tab'),
+    // A fresh browser opens the sidebar on the assistant; from then on the
     // sidebar reopens on whichever tab the author used last.
     'assistant',
-    isToolId,
+    isPersistedTab,
   );
-  const [legacySource] = useState(legacyResearchSource);
   const [researchSource, setResearchSource] = usePersistentState<ResearchSourceId>(
-    'panels.researchSource',
-    legacySource,
+    panelKey('researchSource'),
+    'arxiv',
     isResearchSource,
   );
   // Transient, never persisted: the JSON view is a developer detour.
   const [jsonOpen, setJsonOpen] = useState(false);
-  const activeTool: SidebarTab = jsonOpen ? 'json' : persistedTab(storedTool);
+  const activeTool: SidebarTab = jsonOpen ? 'json' : storedTab;
   const [intent, setIntent] = useState<(SidebarIntent & { id: number }) | null>(null);
   const intentId = useRef(0);
 
@@ -83,7 +60,7 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   //   • mobile  — a full-height overlay, which must never be restored open on
   //     load or the document is covered before the user has asked for anything.
   const [desktopToolsOpen, setDesktopToolsOpen] = usePersistentState<boolean>(
-    'panels.rightOpen',
+    panelKey('rightOpen'),
     // The sidebar is opt-in on a new account so the document owns the
     // initial visual hierarchy. Existing preferences still restore normally.
     false,
@@ -94,17 +71,17 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   const isOpen = isDesktop ? desktopToolsOpen : mobileToolsOpen;
   const setIsOpen = isDesktop ? setDesktopToolsOpen : setMobileToolsOpen;
   const [leftWidth, setLeftWidthState] = usePersistentState<number>(
-    'panels.leftWidth',
+    panelKey('leftWidth'),
     PANEL_CONFIG.left.default,
     isNumber,
   );
   const [rightWidth, setRightWidthState] = usePersistentState<number>(
-    'panels.rightWidth',
+    panelKey('rightWidth'),
     PANEL_CONFIG.right.default,
     isNumber,
   );
   const [leftCollapsed, setLeftCollapsed] = usePersistentState<boolean>(
-    'panels.leftCollapsed',
+    panelKey('leftCollapsed'),
     false,
     isBoolean,
   );
@@ -135,12 +112,13 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
         setJsonOpen(true);
       } else {
         setJsonOpen(false);
-        setStoredTool(tabForTool(tool));
+        // Research sources open Research; JSON (handled above) is never stored.
+        setStoredTab(tabForTool(tool) as Exclude<SidebarTab, 'json'>);
         if (isResearchSource(tool)) setResearchSource(tool);
       }
       setIsOpen(true);
     },
-    [setIsOpen, setResearchSource, setStoredTool],
+    [setIsOpen, setResearchSource, setStoredTab],
   );
 
   const openSidebar = useCallback(

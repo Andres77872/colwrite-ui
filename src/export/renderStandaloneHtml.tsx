@@ -522,17 +522,17 @@ function ListRun({
   options: DocumentExportOptions;
 }) {
   const lists: React.ReactNode[] = [];
+  const nestedAt = (at: number) => (items[at]?.indent ?? 0) > depth;
   let index = 0;
-  while (index < items.length) {
-    const tag = listTag(items[index]);
+  for (let head = items[index]; head; head = items[index]) {
+    const tag = listTag(head);
     const entries: React.ReactNode[] = [];
-    while (index < items.length) {
-      const item = items[index];
+    for (let item = items[index]; item; item = items[index]) {
       const itemDepth = item.indent ?? 0;
       let end = index + 1;
       if (itemDepth === depth) {
         if (listTag(item) !== tag) break;
-        while (end < items.length && (items[end].indent ?? 0) > depth) end += 1;
+        while (end < items.length && nestedAt(end)) end += 1;
         const nested = items.slice(index + 1, end);
         entries.push(
           <li
@@ -550,7 +550,7 @@ function ListRun({
         );
       } else {
         end = index;
-        while (end < items.length && (items[end].indent ?? 0) > depth) end += 1;
+        while (end < items.length && nestedAt(end)) end += 1;
         entries.push(
           <li key={`spacer-${item.id}`} className="list-spacer">
             <ListRun items={items.slice(index, end)} depth={depth + 1} numbering={numbering} options={options} />
@@ -559,7 +559,7 @@ function ListRun({
       }
       index = end;
     }
-    const key = `list-${lists.length}-${items[0].id}`;
+    const key = `list-${lists.length}-${head.id}`;
     if (tag === 'ol') lists.push(<ol key={key} className="export-list">{entries}</ol>);
     else lists.push(<ul key={key} className={cn('export-list', tag === 'todo' && 'todo-list')}>{entries}</ul>);
   }
@@ -588,7 +588,7 @@ function DocumentView({
   const blockIds = new Set<string>();
   return (
     <main className={`document-export profile-${options.profile}`}>
-      {options.include_title && <h1 className="document-title">{doc.name?.trim() || 'Untitled document'}</h1>}
+      {options.include_title && <h1 className="document-title">{doc.name?.trim() || 'Untitled page'}</h1>}
       {doc.blocks.map((block, index) => {
         if (blockIds.has(block.id)) throw new ExportValidationError(`Duplicate block ID: ${block.id}`);
         blockIds.add(block.id);
@@ -649,14 +649,11 @@ export function renderStandaloneHtml(
   /** Diagram blocks already drawn to SVG, by block id (`renderDocumentDiagrams`). */
   diagrams?: RenderedDiagrams,
 ): string {
-  if (!Number.isInteger(doc.version) || doc.version < 1) {
-    throw new ExportValidationError('Document version must be a positive integer');
-  }
   if (!Array.isArray(doc.blocks) || doc.blocks.length > 2000) {
     throw new ExportValidationError('Document contains too many blocks');
   }
   const body = renderToStaticMarkup(<DocumentView doc={doc} options={options} diagrams={diagrams} />);
-  const title = escapeAttribute(doc.name?.trim() || 'Untitled document');
+  const title = escapeAttribute(doc.name?.trim() || 'Untitled page');
   const styles = exportStyles(options);
   return `<!doctype html>
 <html lang="en" dir="ltr">
@@ -665,7 +662,6 @@ export function renderStandaloneHtml(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:; base-uri 'none'; form-action 'none'">
 <meta name="generator" content="ColWrite document-renderer/${DOCUMENT_RENDERER_VERSION}">
-<meta name="colwrite-document-version" content="${doc.version}">
 <meta name="colwrite-local-revision" content="${snapshot.local_revision}">
 <meta name="colwrite-export-profile" content="${options.profile}">
 <title>${title}</title>

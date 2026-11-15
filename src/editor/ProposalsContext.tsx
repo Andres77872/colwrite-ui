@@ -7,8 +7,10 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { useEditor } from './editorContextState';
-import type { Block, ToolAction, ToolOperation } from './types';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
+import { useActiveBlock, useEditorActions } from './editorContextState';
+import { useDocumentSession, useEditorDoc } from './documentSessionState';
+import type { Block, Doc, ToolAction, ToolOperation } from './types';
 import {
   decideChangeSetOperations,
   decisionRefusal,
@@ -16,10 +18,12 @@ import {
   listPendingChangeSets,
   rejectChangeSet,
   type AgentChangeSet,
-} from '../services';
-import { isRetryableProblem } from '../services/retry';
+  type DecisionOrigin,
+} from '@/data/documentHistory';
+import { isRetryableProblem } from '@/api/retry';
 import {
   buildChangeSet,
+  caretHeldBlock,
   isReady,
   isStale,
   linkPrecedence,
@@ -28,6 +32,7 @@ import {
   orderedChanges,
   pendingChanges,
   pendingInDocumentOrder,
+  planAutoApply,
   pruneSettledSets,
   rebaseAfterAccept,
   rejectChange,
@@ -51,8 +56,31 @@ import { uid } from '../lib/uid';
 import { revealElement } from '../lib/reveal';
 import { scrollBehavior } from '../lib/motion';
 import { lastInputWasPointer } from '../lib/inputModality';
-import { ProposalsContext, type ProposalsContextValue } from './proposalsContextState';
+import {
+  ProposalsContext,
+  type AutoAppliedSet,
+  type ProposalsContextValue,
+  type ReceiveOptions,
+} from './proposalsContextState';
+import { registerModuleReset } from '@/lib/moduleState';
 export type { ProposalsContextValue } from './proposalsContextState';
+
+/**
+ * What the editor applied of an Auto set, as one undo step: the set as it
+ * arrived, or a change the caret held, once the caret left its block.
+ * `after` is the page the step left: while the page is still exactly that,
+ * the step is the newest one in the undo journal, so Undo takes back this
+ * step and nothing else.
+ */
+type AutoAppliedRecord = {
+  id: string;
+  setId: string;
+  changeSetId: string;
+  applied: number;
+  touched: string[];
+  after: Pick<Doc, 'blocks' | 'name' | 'sources' | 'citationStyle'>;
+  undone: boolean;
+};
 
 type DocumentProposalsState = {
   documentId: string | null;
@@ -60,6 +88,7 @@ type DocumentProposalsState = {
   invites: DocumentInvite[];
   focusedChangeId: string | null;
   error: string | null;
+  autoApplied: AutoAppliedRecord[];
 };
 
 function emptyState(documentId: string | null): DocumentProposalsState {
@@ -69,8 +98,33 @@ function emptyState(documentId: string | null): DocumentProposalsState {
     invites: [],
     focusedChangeId: null,
     error: null,
+    autoApplied: [],
   };
 }
+
+/** Whether the page is still exactly as an Auto step left it. */
+function isLatestStep(record: AutoAppliedRecord, doc: Doc): boolean {
+  return doc.blocks === record.after.blocks
+    && doc.name === record.after.name
+    && doc.sources === record.after.sources
+    && doc.citationStyle === record.after.citationStyle;
+}
+
+/**
+ * How an Auto set should be staged: applied at once, with what says whether
+ * Auto is still on for its page and chat, or left waiting.
+ */
+type AutoStaging = { stillOn: () => boolean } | 'wait' | null;
+
+/** The set with the block whose caret holds back one of its changes, or with none. */
+function heldAt(set: ChangeSet, blockId: string | null): ChangeSet {
+  if (blockId) return set.autoHeldAt === blockId ? set : { ...set, autoHeldAt: blockId };
+  if (set.autoHeldAt === undefined) return set;
+  const { autoHeldAt: _released, ...rest } = set;
+  return rest;
+}
+
+const NO_AUTO_APPLIED: AutoAppliedSet[] = [];
 
 /**
  * A durable batch that uses an operation with no editor mapping fails closed:
@@ -88,8 +142,8 @@ const STALE_CHANGE_ERROR =
 
 function staleSkippedError(count: number): string {
   return count === 1
-    ? '1 suggestion was not applied because its text changed after it was suggested. It is still in the document for you to reject.'
-    : `${count} suggestions were not applied because their text changed after they were suggested. They are still in the document for you to reject.`;
+    ? '1 suggestion was not applied because its text changed after it was suggested. It is still on the page for you to reject.'
+    : `${count} suggestions were not applied because their text changed after they were suggested. They are still on the page for you to reject.`;
 }
 
 /** An insert whose block is already in the document has nothing left to apply. */
@@ -114,6 +168,7 @@ function basesOf(set: ChangeSet): Record<string, string> {
 
 /** Requests recording decisions, one chain per change set. */
 const decisionChains = new Map<string, Promise<void>>();
+registerModuleReset(() => decisionChains.clear());
 
 /**
  * Record decisions on the server.
@@ -128,11 +183,17 @@ const decisionChains = new Map<string, Promise<void>>();
  * was decided the other way on another device, or the set has left
  * `pending`. The rest of a request refused over one contradicted operation is
  * sent again without it.
+ *
+ * `origin` is `auto` for the operations the editor applied from an
+ * `apply_policy: "auto"` set. One kept to be sent again goes as the author's
+ * own (`manual`): this browser's record does not keep who decided.
  */
 function sendDecisions(
+  workspaceId: string,
   documentId: string,
   changeSetId: string,
   decisions: readonly ReviewDecision[],
+  origin: DecisionOrigin = 'manual',
 ): Promise<void> {
   if (decisions.length === 0) return Promise.resolve();
   const send = async () => {
@@ -140,15 +201,17 @@ function sendDecisions(
     while (rest.length > 0) {
       try {
         await decideChangeSetOperations(
+          workspaceId,
           documentId,
           changeSetId,
           rest.map(([opIndex, decision]) => ({ opIndex, decision })),
+          origin,
         );
         break;
       } catch (cause) {
         const refusal = decisionRefusal(cause);
         if (refusal.kind === 'transient') {
-          saveReview(documentId, changeSetId, { decisions: rest });
+          saveReview(workspaceId, documentId, changeSetId, { decisions: rest });
           return;
         }
         if (refusal.kind === 'final') break;
@@ -157,7 +220,7 @@ function sendDecisions(
         rest = others;
       }
     }
-    forgetDecisions(documentId, changeSetId, decisions.map(([opIndex]) => opIndex));
+    forgetDecisions(workspaceId, documentId, changeSetId, decisions.map(([opIndex]) => opIndex));
   };
   const queued = (decisionChains.get(changeSetId) ?? Promise.resolve()).then(send);
   decisionChains.set(changeSetId, queued);
@@ -167,25 +230,20 @@ function sendDecisions(
   return queued;
 }
 
-/**
- * Record these decisions for each durable batch they belong to: on the
- * server when it keeps them, otherwise in this browser.
- */
+/** Record these decisions on the server, for each durable batch they belong to. */
 function rememberDecisions(
+  workspaceId: string,
   sets: ChangeSet[],
   decided: ReadonlyArray<readonly [string, 'accepted' | 'rejected']>,
 ): void {
   for (const set of sets) {
-    if (!set.changeSetId || !set.documentId) continue;
     const byId = new Map(set.changes.map((change) => [change.id, change]));
     const decisions: ReviewDecision[] = [];
     for (const [id, status] of decided) {
       const opIndex = byId.get(id)?.opIndex;
       if (opIndex !== undefined) decisions.push([opIndex, status]);
     }
-    if (decisions.length === 0) continue;
-    if (set.decisionsOnServer) void sendDecisions(set.documentId, set.changeSetId, decisions);
-    else saveReview(set.documentId, set.changeSetId, { decisions });
+    if (decisions.length > 0) void sendDecisions(workspaceId, set.documentId, set.changeSetId, decisions);
   }
 }
 
@@ -194,18 +252,17 @@ function rememberDecisions(
  * with server targets needs none: a reload asks the server what each block
  * looks like then.
  */
-function rememberRebased(before: ChangeSet[], rebased: ChangeSet[]): void {
+function rememberRebased(workspaceId: string, before: ChangeSet[], rebased: ChangeSet[]): void {
   rebased.forEach((set, index) => {
-    if (set === before[index] || !set.changeSetId || !set.documentId) return;
-    if (set.targetsOnServer) return;
-    saveReview(set.documentId, set.changeSetId, { bases: basesOf(set) });
+    if (set === before[index] || set.targetsOnServer) return;
+    saveReview(workspaceId, set.documentId, set.changeSetId, { bases: basesOf(set) });
   });
 }
 
 /** What the server said about a durable batch when it was read. */
 type ServerReview = {
-  /** In the order they were made; `null` when the API keeps no such record. */
-  decisions: ReviewDecision[] | null;
+  /** In the order they were made. */
+  decisions: ReviewDecision[];
   /** By operation index; `null` when the API sent none for this batch. */
   targets: ReadonlyArray<OperationTarget | null> | null;
   /** Stages recorded by the batches this one was written on top of. */
@@ -222,10 +279,9 @@ function serverReview(
   earlier: ReadonlyMap<string, ReadonlySet<string>> = NO_STAGES,
 ): ServerReview {
   return {
-    decisions:
-      changeSet.operationDecisions?.map(
-        ({ opIndex, decision }): ReviewDecision => [opIndex, decision],
-      ) ?? null,
+    decisions: changeSet.operationDecisions.map(
+      ({ opIndex, decision }): ReviewDecision => [opIndex, decision],
+    ),
     targets: changeSet.operationTargets ?? null,
     earlier,
   };
@@ -254,6 +310,7 @@ function needsAncestors(changeSet: AgentChangeSet): boolean {
  * the operation then reads as changed, which can still be rejected.
  */
 async function ancestorStages(
+  workspaceId: string,
   documentId: string,
   changeSet: AgentChangeSet,
   known: ReadonlyMap<string, AgentChangeSet>,
@@ -266,7 +323,7 @@ async function ancestorStages(
     let parent = known.get(parentId);
     if (!parent) {
       try {
-        parent = await getChangeSet(documentId, parentId);
+        parent = await getChangeSet(workspaceId, documentId, parentId);
       } catch {
         break;
       }
@@ -288,53 +345,47 @@ async function ancestorStages(
  * operations the document already holds marked as such. A batch that has just
  * arrived from the stream is shown as the assistant wrote it.
  *
- * The decisions come from the server when it records them. This browser's
- * record then only holds the ones that could not be sent, which are applied
- * after the server's and sent again. Without a server record (an older API)
- * the browser's is all there is.
+ * The decisions come from the server. This browser's record only holds the
+ * ones that could not be sent, which are applied after the server's and sent
+ * again.
  *
  * The same goes for staleness: with the server's targets, a change whose
  * block was edited after the proposal is marked from them; without, the
  * staging fingerprints kept in this browser are restored.
  */
 function resumeDurableSet(
+  workspaceId: string,
   built: ChangeSet,
   blocks: readonly Block[] | null,
-  server: ServerReview | null,
+  server: ServerReview,
+  canDecide: boolean,
 ): ChangeSet {
-  if (!built.changeSetId || !built.documentId) return built;
   const { documentId, changeSetId } = built;
-  const recorded = server?.decisions ?? null;
-  const targets = server?.targets ?? null;
-  const set: ChangeSet = {
-    ...built,
-    ...(recorded ? { decisionsOnServer: true } : null),
-    ...(targets ? { targetsOnServer: true } : null),
-  };
+  const recorded = server.decisions;
+  const targets = server.targets;
+  const set: ChangeSet = { ...built, ...(targets ? { targetsOnServer: true } : null) };
 
-  const local = loadReview(documentId, changeSetId);
-  const onServer = new Set((recorded ?? []).map(([opIndex]) => opIndex));
+  const local = loadReview(workspaceId, documentId, changeSetId);
+  const onServer = new Set(recorded.map(([opIndex]) => opIndex));
   const unsent = (local?.decisions ?? []).filter(([opIndex]) => !onServer.has(opIndex));
   const stored = local || onServer.size > 0
     ? {
-        decisions: [...(recorded ?? []), ...unsent],
+        decisions: [...recorded, ...unsent],
         bases: targets ? {} : local?.bases ?? {},
       }
     : null;
   const { set: resumed, landed } = resumeReview(set, stored, blocks);
   const found = landed.map((opIndex): ReviewDecision => [opIndex, 'accepted']);
 
-  if (recorded) {
-    // The server already has these; whatever this browser held for them,
-    // the same or not, is no longer needed.
-    forgetDecisions(documentId, changeSetId, [...onServer]);
-    void sendDecisions(documentId, changeSetId, [...unsent, ...found]);
-  }
-  saveReview(documentId, changeSetId, {
-    decisions: recorded ? [] : found,
-    bases: targets ? {} : basesOf(resumed),
-  });
-  return targets ? markOutdated(resumed, targets, server?.earlier) : resumed;
+  // The server already has these; whatever this browser held for them, the
+  // same or not, is no longer needed.
+  forgetDecisions(workspaceId, documentId, changeSetId, [...onServer]);
+  // A viewer decides nothing (D6): this browser's unsent decisions wait for
+  // an open that can send them, and nothing is sent from here.
+  if (!canDecide) return targets ? markOutdated(resumed, targets, server.earlier) : resumed;
+  void sendDecisions(workspaceId, documentId, changeSetId, [...unsent, ...found]);
+  saveReview(workspaceId, documentId, changeSetId, { decisions: [], bases: targets ? {} : basesOf(resumed) });
+  return targets ? markOutdated(resumed, targets, server.earlier) : resumed;
 }
 
 /* ----------------------------------------
@@ -415,23 +466,29 @@ function focusDecidedBlock(fallback: FocusFallback): void {
 /**
  * Holds the agent's proposed edits until the author decides on them.
  *
- * The assistant does not apply anything. `doc_edit` stages operations
- * server-side and streams them here; the document renders each one in place
- * with accept and reject controls, and only an accept writes to the editor
- * state that autosave persists. That keeps the decision where the author can
- * see its consequences — on the paragraph — instead of behind a summary in a
- * chat bubble.
+ * The assistant does not apply anything. `doc_edit` stores its operations as
+ * a change set and the stream names it; the set is read here and the
+ * document renders each change in place with accept and reject controls, and
+ * only an accept writes to the editor state that autosave persists — or, for
+ * a set the server stored as `auto`, the editor's own accept (D18). That
+ * keeps the decision where the author can see its consequences — on the
+ * paragraph — instead of behind a summary in a chat bubble.
  */
 export function ProposalsProvider({ children }: { children: ReactNode }) {
-  const {
-    blocks,
-    documentId,
-    applyPatch,
-    adoptServerVersion,
-    markRecentlyChanged,
-    restoreEpoch,
-    restoreReason,
-  } = useEditor();
+  const { doc, blocks } = useEditorDoc();
+  const { documentId, restoreEpoch, restoreReason, readOnly } = useDocumentSession();
+  const workspaceId = useWorkspaceId();
+  /**
+   * A read-only page (a viewer, D6): the suggestions are shown, and nothing
+   * accepts, rejects or applies them, by hand or by Auto, since each would
+   * be an edit or a decision the server refuses.
+   */
+  const readOnlyRef = useRef(readOnly);
+  useLayoutEffect(() => {
+    readOnlyRef.current = readOnly;
+  }, [readOnly]);
+  const { applyPatch, batch, markRecentlyChanged, undo } = useEditorActions();
+  const { activeId } = useActiveBlock();
   const ownerDocumentId = documentId;
   const activeDocumentIdRef = useRef(ownerDocumentId);
 
@@ -442,9 +499,14 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
    * the callback was created with.
    */
   const blocksRef = useRef(blocks);
+  const docRef = useRef(doc);
+  /** The block with the caret, which Auto leaves alone (D18). */
+  const activeIdRef = useRef<string | null>(activeId ?? null);
   useLayoutEffect(() => {
     blocksRef.current = blocks;
-  }, [blocks]);
+    docRef.current = doc;
+    activeIdRef.current = activeId ?? null;
+  }, [activeId, blocks, doc]);
 
   // Keep one mounted provider while making its value document-scoped. The
   // render-phase reset is conditional on the identity mismatch, which React
@@ -456,8 +518,14 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
   if (needsReset) setStoredState(resetState);
   const state = needsReset ? resetState : storedState;
 
+  /** The staged batches as last rendered, for an Auto set applied after an await. */
+  const setsRef = useRef(state.sets);
+  useLayoutEffect(() => {
+    setsRef.current = state.sets;
+  }, [state.sets]);
+
   /**
-   * Batches already taken, keyed by tool call and payload.
+   * Change sets already taken, keyed by their id.
    *
    * Held in a ref rather than derived from state because `receive` has to
    * answer "how many changes did this add?" synchronously — the chat transcript
@@ -466,6 +534,12 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
    * changes, so the reply claimed edits the document did not have.
    */
   const seenBatchesRef = useRef<Set<string>>(new Set());
+
+  /**
+   * For each Auto set with a change the caret holds back (`autoHeldAt`):
+   * whether Auto is still on for its page and chat.
+   */
+  const autoStillOnRef = useRef<Map<string, () => boolean>>(new Map());
 
   /** Where focus goes once the decision just made has been rendered. */
   const advanceRef = useRef<FocusIntent | null>(null);
@@ -479,6 +553,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     activeDocumentIdRef.current = ownerDocumentId;
     seenBatchesRef.current = new Set();
+    autoStillOnRef.current = new Map();
     knownChangeSetsRef.current = new Map();
     advanceRef.current = null;
   }, [ownerDocumentId]);
@@ -509,75 +584,197 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     [ownerDocumentId],
   );
 
-  /** Change sets with a server resolution in flight; blocks double submission. */
-  const decidingSetsRef = useRef<Set<string>>(new Set());
+  /** Change sets with a rejection in flight; blocks double submission. */
+  const supersedingSetsRef = useRef<Set<string>>(new Set());
 
   /**
-   * Retire the server-side record of a durable batch once the author has
-   * decided everything in it.
+   * Retire the server-side record of a durable batch a restore left
+   * undecided.
    *
    * The review itself is per change, in the editor, exactly like any other
    * batch: accepted operations are applied locally and autosaved as author
-   * edits. Accepting the stored change set server-side would re-apply
-   * operations the editor already holds, and leaving it pending re-stages
-   * the whole batch on the next document load and blocks the agent's next
-   * proposal.
-   *
-   * A server that records decisions per operation retires the set itself
-   * when the last one is recorded (`rememberDecisions` sends them), so there
-   * is nothing to do here. Two cases still reject the set by hand: a restore,
-   * which leaves operations undecided, and an API without that record, where
-   * a rejection with a note is the only way to close the set.
+   * edits, and each decision is recorded on the server
+   * (`rememberDecisions`), which retires the set itself when the last one is
+   * recorded. A restore leaves operations undecided, so it rejects the set
+   * with a note instead.
    */
-  const resolveDurableSet = useCallback(
-    async (set: ChangeSet, outcome: 'rejected' | 'decided' | 'superseded') => {
+  const supersedeDurableSet = useCallback(
+    async (set: ChangeSet) => {
       const changeSetId = set.changeSetId;
-      if (!changeSetId || !set.documentId) return;
-      if (set.decisionsOnServer && outcome !== 'superseded') return;
-      if (decidingSetsRef.current.has(changeSetId)) return;
-      decidingSetsRef.current.add(changeSetId);
+      if (supersedingSetsRef.current.has(changeSetId)) return;
+      supersedingSetsRef.current.add(changeSetId);
       try {
-        await rejectChangeSet(
-          set.documentId,
-          changeSetId,
-          outcome === 'rejected'
-            ? 'Rejected in the editor'
-            : outcome === 'superseded'
-              ? 'Superseded: the document was restored to another version'
-              : 'Decided per change in the editor; accepted changes were applied as author edits',
-        );
+        await rejectChangeSet(workspaceId, set.documentId, changeSetId, 'Superseded: the page was restored to another version');
         // Kept until now on purpose: if the request fails, the next load
-        // finds every operation already decided and retires the batch again
-        // instead of staging it whole.
-        forgetReview(set.documentId, changeSetId);
+        // stages the batch again, where it can simply be rejected.
+        forgetReview(workspaceId, set.documentId, changeSetId);
       } catch {
-        // Cleanup only: the author's decisions are already in the document.
-        // The worst case is this batch reappearing on the next load, where
-        // it can simply be rejected again.
+        // Cleanup only: the restore has already replaced the page. The worst
+        // case is this batch reappearing on the next load.
       } finally {
-        decidingSetsRef.current.delete(changeSetId);
+        supersedingSetsRef.current.delete(changeSetId);
       }
     },
-    [],
+    [workspaceId],
   );
+
+  /**
+   * Apply an `apply_policy: "auto"` set (D18): every change that is current
+   * and editable, in one `batch()` so it is one undo step, through the accept
+   * path, each one an ordinary edit. Their decisions are recorded with
+   * `origin: "auto"`. The rest stays staged for the author (`planAutoApply`),
+   * and so does anything that finds no place.
+   *
+   * `staged` is false for a set as it arrives and true for one already on
+   * the page, whose change the caret held back. A change still held by the
+   * caret is marked with its block (`autoHeldAt`), and `stillOn` is kept to
+   * ask, when the caret leaves it, whether Auto is still on.
+   */
+  const applyAutoSet = useCallback((set: ChangeSet, stillOn: () => boolean, staged: boolean) => {
+    if (readOnlyRef.current) return;
+    const { documentId: setDocumentId, changeSetId } = set;
+    const sets = [...setsRef.current.filter((candidate) => candidate.id !== set.id), set];
+
+    const outcome = batch(() => {
+      let base = blocksRef.current;
+      // Twice at most: the author can type between the render these blocks
+      // come from and now, and the plan is then made again on the live ones.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const { apply } = planAutoApply(set, sets, base, activeIdRef.current);
+        const plan = resolveAcceptPlan(apply, sets, base);
+        if (plan.ops.length === 0) return null;
+        const result = applyPatch(plan.ops, { persist: true, base });
+        if (result.stale) {
+          base = result.blocks;
+          continue;
+        }
+        const missed = new Set(result.desynced);
+        return {
+          applied: plan.applied.filter((_, index) => {
+            const op = plan.ops[index];
+            return op !== undefined && !missed.has(op);
+          }),
+          before: base,
+          after: result.blocks,
+          touched: result.touched,
+          renamed: plan.ops.reduce<string | undefined>(
+            (name, op) => (op.op === 'update_meta' && op.meta?.name ? op.meta.name : name),
+            undefined,
+          ),
+        };
+      }
+      return null;
+    });
+
+    const applied = outcome?.applied ?? [];
+    const appliedIds = new Set(applied.map((change) => change.id));
+    const firstHeld = set.changes.find(
+      (change) => change.status === 'pending' && !appliedIds.has(change.id),
+    );
+    const page = docRef.current;
+    const record: AutoAppliedRecord | null = outcome && applied.length > 0
+      ? {
+          id: uid(),
+          setId: set.id,
+          changeSetId,
+          applied: applied.length,
+          touched: outcome.touched,
+          after: {
+            blocks: outcome.after,
+            name: outcome.renamed ?? page.name,
+            sources: page.sources,
+            citationStyle: page.citationStyle,
+          },
+          undone: false,
+        }
+      : null;
+    const settle = (current: ChangeSet[]): ChangeSet[] => {
+      const accepted = markChanges(current, appliedIds, 'accepted');
+      return outcome ? rebaseAfterAccept(accepted, outcome.before, outcome.after, outcome.touched) : accepted;
+    };
+
+    // What the caret still holds back, on the page this step left.
+    const left = settle(sets);
+    const settled = left.find((candidate) => candidate.id === set.id);
+    const holdAt = settled
+      ? caretHeldBlock(settled, left, outcome?.after ?? blocksRef.current, activeIdRef.current)
+      : null;
+    if (holdAt) autoStillOnRef.current.set(set.id, stillOn);
+    else autoStillOnRef.current.delete(set.id);
+
+    updateForDocument((current) => {
+      const focused = current.focusedChangeId !== null && !appliedIds.has(current.focusedChangeId)
+        ? current.focusedChangeId
+        : null;
+      return {
+        ...current,
+        sets: pruneSettledSets(
+          settle(staged ? current.sets : [...current.sets, set])
+            .map((candidate) => (candidate.id === set.id ? heldAt(candidate, holdAt) : candidate)),
+        ),
+        // What is left is for the author; the first of it is where to look.
+        focusedChangeId: focused ?? firstHeld?.id ?? null,
+        autoApplied: record ? [...current.autoApplied, record] : current.autoApplied,
+      };
+    });
+
+    if (outcome) markRecentlyChanged(outcome.touched);
+    void sendDecisions(
+      workspaceId,
+      setDocumentId,
+      changeSetId,
+      applied.flatMap((change): ReviewDecision[] => (change.opIndex === undefined ? [] : [[change.opIndex, 'accepted']])),
+      'auto',
+    );
+    if (outcome) {
+      const accepted = markChanges(sets, appliedIds, 'accepted');
+      rememberRebased(workspaceId, accepted, rebaseAfterAccept(accepted, outcome.before, outcome.after, outcome.touched));
+    }
+  }, [applyPatch, batch, markRecentlyChanged, updateForDocument, workspaceId]);
+
+  /**
+   * A change of an Auto set held because the caret was in its block is
+   * applied once the caret leaves that block, as a step of its own, while
+   * Auto is still on for the page and chat. Otherwise it stays for the
+   * author. One that went stale meanwhile stays as well (`planAutoApply`).
+   */
+  useEffect(() => {
+    const caret = activeId ?? null;
+    for (const set of state.sets) {
+      if (set.autoHeldAt === undefined || set.autoHeldAt === caret) continue;
+      const stillOn = autoStillOnRef.current.get(set.id);
+      autoStillOnRef.current.delete(set.id);
+      if (stillOn?.()) {
+        applyAutoSet(set, stillOn, true);
+      } else {
+        updateForDocument((current) => ({
+          ...current,
+          sets: current.sets.map((candidate) => (candidate.id === set.id ? heldAt(candidate, null) : candidate)),
+        }));
+      }
+    }
+  }, [activeId, applyAutoSet, state.sets, updateForDocument]);
 
   /**
    * Stage a durable batch, or retire it if nothing in it is left to decide
    * (the request that would have retired it failed last time, or the
    * decisions were made in another tab and the document already holds them).
+   * An Auto set is applied instead (`auto: 'apply'`), or marked as waiting.
    */
   const stageDurableSet = useCallback(
     (
       built: ChangeSet,
-      { restaged, server }: { restaged: boolean; server: ServerReview | null },
+      { restaged, server, auto = null }: { restaged: boolean; server: ServerReview; auto?: AutoStaging },
     ) => {
-      const set = resumeDurableSet(built, restaged ? blocksRef.current : null, server);
-      const first = set.changes.find((change) => change.status === 'pending');
-      if (!first) {
-        const anyAccepted = set.changes.some((change) => change.status === 'accepted');
-        void resolveDurableSet(set, anyAccepted ? 'decided' : 'rejected');
+      const resumed = resumeDurableSet(workspaceId, built, restaged ? blocksRef.current : null, server, !readOnlyRef.current);
+      const first = resumed.changes.find((change) => change.status === 'pending');
+      // Nothing left to decide: the decisions `resumeDurableSet` sent retire it.
+      if (!first) return;
+      if (auto !== null && auto !== 'wait' && !readOnlyRef.current) {
+        applyAutoSet(resumed, auto.stillOn, false);
         return;
       }
+      const set = auto === 'wait' ? { ...resumed, autoWaiting: true } : resumed;
       updateForDocument((current) => ({
         ...current,
         sets: [...current.sets, set],
@@ -586,7 +783,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         focusedChangeId: restaged ? current.focusedChangeId : current.focusedChangeId ?? first.id,
       }));
     },
-    [resolveDurableSet, updateForDocument],
+    [applyAutoSet, updateForDocument, workspaceId],
   );
 
   /**
@@ -597,7 +794,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
    * fetched for a document the author has since left is dropped.
    */
   const stageDurableProposal = useCallback(
-    async (action: ToolAction, changeSetId: string) => {
+    async (action: ToolAction, changeSetId: string, options: ReceiveOptions) => {
       const targetDocumentId = action.documentId || ownerDocumentId;
       if (!targetDocumentId) return;
       // A restore that lands while the fetch is in flight moves the document
@@ -605,7 +802,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       // staged onto it.
       const epochAtStart = restoreEpochRef.current;
       try {
-        const fetched = await getChangeSet(targetDocumentId, changeSetId);
+        const fetched = await getChangeSet(workspaceId, targetDocumentId, changeSetId);
         if (activeDocumentIdRef.current !== ownerDocumentId) return;
         if (restoreEpochRef.current !== epochAtStart) return;
         // Another tab may have decided it while the stream was still open.
@@ -617,7 +814,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         knownChangeSetsRef.current.set(fetched.changeSetId, fetched);
         let earlier = NO_STAGES;
         if (needsAncestors(fetched)) {
-          earlier = await ancestorStages(targetDocumentId, fetched, knownChangeSetsRef.current);
+          earlier = await ancestorStages(workspaceId, targetDocumentId, fetched, knownChangeSetsRef.current);
           if (activeDocumentIdRef.current !== ownerDocumentId) return;
           if (restoreEpochRef.current !== epochAtStart) return;
         }
@@ -631,7 +828,13 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
           blocksRef.current,
         );
         if (set.changes.length === 0) return;
-        stageDurableSet(set, { restaged: false, server: serverReview(fetched, earlier) });
+        // The server's record decides, never the stream or the switch: only a
+        // set stored as `auto` is applied, and only while Auto is still on.
+        const stillOn = options.autoApply;
+        const auto: AutoStaging = fetched.applyPolicy !== 'auto'
+          ? null
+          : stillOn?.() ? { stillOn } : 'wait';
+        stageDurableSet(set, { restaged: false, server: serverReview(fetched, earlier), auto });
       } catch (cause) {
         // The request layer already waited out a server still catching up with
         // the save this batch was computed against, so reaching here means the
@@ -640,12 +843,12 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         updateForDocument((current) => ({
           ...current,
           error: isRetryableProblem(cause)
-            ? 'The assistant prepared changes, but the server is still catching up. Reopen the document in a moment to review them.'
-            : 'The assistant prepared changes, but they could not be loaded for review. Reopen the document to try again.',
+            ? 'The assistant prepared changes, but the server is still catching up. Reopen the page in a moment to review them.'
+            : 'The assistant prepared changes, but they could not be loaded for review. Reopen the page to try again.',
         }));
       }
     },
-    [ownerDocumentId, stageDurableSet, updateForDocument],
+    [ownerDocumentId, stageDurableSet, updateForDocument, workspaceId],
   );
 
   /**
@@ -667,10 +870,11 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         const listedAt = Date.now();
-        const pending = await listPendingChangeSets(ownerDocumentId);
+        const pending = await listPendingChangeSets(workspaceId, ownerDocumentId);
         if (cancelled || activeDocumentIdRef.current !== ownerDocumentId) return;
         if (restoreEpochRef.current !== epochAtStart) return;
         pruneReviews(
+          workspaceId,
           ownerDocumentId,
           new Set(pending.map((changeSet) => changeSet.changeSetId)),
           listedAt,
@@ -683,7 +887,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
           if (seenBatchesRef.current.has(signature)) continue;
           let earlier = NO_STAGES;
           if (changeSet.unmappableOperations.length === 0 && needsAncestors(changeSet)) {
-            earlier = await ancestorStages(ownerDocumentId, changeSet, knownChangeSetsRef.current);
+            earlier = await ancestorStages(workspaceId, ownerDocumentId, changeSet, knownChangeSetsRef.current);
             if (cancelled || activeDocumentIdRef.current !== ownerDocumentId) return;
             if (restoreEpochRef.current !== epochAtStart) return;
             // The stream may have staged it while the chain was being read.
@@ -699,7 +903,6 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
               tool: 'doc_edit',
               toolCallId: changeSet.toolCallId ?? '',
               documentId: ownerDocumentId,
-              version: changeSet.baseHeadSeq,
               status: 'proposed',
               actions: changeSet.operations,
               changeSetId: changeSet.changeSetId,
@@ -707,7 +910,13 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
             blocksRef.current,
           );
           if (set.changes.length === 0) continue;
-          stageDurableSet(set, { restaged: true, server: serverReview(changeSet, earlier) });
+          // An Auto turn's set found on opening the page was not seen by the
+          // author, and leaving the page turned Auto off: it waits (D18).
+          stageDurableSet(set, {
+            restaged: true,
+            server: serverReview(changeSet, earlier),
+            auto: changeSet.applyPolicy === 'auto' ? 'wait' : null,
+          });
         }
       } catch {
         // Silent: live proposals still arrive over the stream, and a document
@@ -717,7 +926,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [ownerDocumentId, relistTick, stageDurableSet, updateForDocument]);
+  }, [ownerDocumentId, relistTick, stageDurableSet, updateForDocument, workspaceId]);
 
   // A restore moved the document onto another version of its tree. Every
   // staged change was computed against the pre-restore content — its anchors
@@ -742,36 +951,32 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       }
     } else {
       for (const set of state.sets) {
-        if (!set.changeSetId) continue;
         if (!set.changes.some((change) => change.status === 'pending')) continue;
-        void resolveDurableSet(set, 'superseded');
+        void supersedeDurableSet(set);
       }
     }
     advanceRef.current = null;
+    autoStillOnRef.current = new Map();
     setStoredState(emptyState(activeDocumentIdRef.current));
     if (sameHistory) setRelistTick((tick) => tick + 1);
-  }, [restoreEpoch, restoreReason, state, resolveDurableSet]);
+  }, [restoreEpoch, restoreReason, state, supersedeDurableSet]);
 
   /**
-   * Server records whose local review just concluded with these decisions.
-   * Returns the durable sets that no longer have an undecided change.
+   * Take one `tool_action` from a turn.
+   *
+   * A `proposed` action names the change set the server stored; the stream
+   * carries none of its operations. It is read and staged, or applied for an
+   * Auto turn: `options.autoApply` says whether the turn's chat has Auto on,
+   * and it is asked once the set has been read, so a set that arrives after
+   * Auto was turned off waits. The server-counted size is reported at once,
+   * so the transcript can say what was prepared.
+   *
+   * `applied` is a page `doc_create` made, announced by its
+   * `create_document` operation and offered rather than opened. `error`
+   * describes work the server did not do. `doc_edit` never commits by itself.
    */
-  const concludedDurableSets = useCallback(
-    (decidedIds: ReadonlySet<string>): ChangeSet[] =>
-      state.sets.filter((set) => {
-        if (!set.changeSetId) return false;
-        if (!set.changes.some((change) => decidedIds.has(change.id))) return false;
-        return set.changes.every(
-          (change) => change.status !== 'pending' || decidedIds.has(change.id),
-        );
-      }),
-    [state.sets],
-  );
-
-  const receive = useCallback<ProposalsContextValue['receive']>((action) => {
-    if (activeDocumentIdRef.current !== ownerDocumentId) {
-      return { changes: 0, changeIds: [], applied: 0, invited: false };
-    }
+  const receive = useCallback<ProposalsContextValue['receive']>((action, options = {}) => {
+    if (activeDocumentIdRef.current !== ownerDocumentId) return { changes: 0, invited: false };
 
     const createOp = action.actions.find(
       (op): op is Extract<ToolOperation, { op: 'create_document' }> =>
@@ -784,10 +989,10 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
      * not always this one. `doc_create` names the document it just made — by
      * definition a different id — and its whole payload is the announcement.
      * Anything else carrying a foreign id is a stray event from a run against
-     * another document, whose operations must never be staged here.
+     * another document, whose change set must never be staged here.
      *
-     * So the two halves are scoped separately: block operations require an
-     * exact match, invitations do not.
+     * So the two halves are scoped separately: change sets require an exact
+     * match, invitations do not.
      */
     const targetsThisDocument =
       ownerDocumentId !== null
@@ -798,138 +1003,39 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         // done nothing.
         || action.documentId === '');
 
-    /**
-     * Only a `proposed` batch is something to decide on.
-     *
-     * `skipped` and `error` describe work the server did not do; staging them
-     * offered the author an Accept button for operations that were never
-     * carried out, and accepting one wrote the agent's abandoned draft into
-     * the document.
-     */
-    /**
-     * A durable proposal arrives as an id, not as operations: the server
-     * stored the batch as a change set and redacted the content out of the
-     * stream. Fetch and stage it asynchronously; report the server-counted
-     * size so the transcript can still say what was prepared.
-     */
-    if (
-      targetsThisDocument
-      && action.status === 'proposed'
-      && action.changeSetId
-      && action.actions.length === 0
-    ) {
+    let changes = 0;
+    if (targetsThisDocument && action.status === 'proposed' && action.changeSetId) {
       const signature = `change-set:${action.changeSetId}`;
-      if (seenBatchesRef.current.has(signature)) {
-        return { changes: 0, changeIds: [], applied: 0, invited };
+      // A redelivery adds nothing, and saying otherwise made the reply claim
+      // changes the document does not have.
+      if (!seenBatchesRef.current.has(signature)) {
+        seenBatchesRef.current.add(signature);
+        void stageDurableProposal(action, action.changeSetId, options);
+        changes = action.proposalOperationCount ?? 0;
       }
-      seenBatchesRef.current.add(signature);
-      void stageDurableProposal(action, action.changeSetId);
-      return {
-        changes: action.proposalOperationCount ?? 0,
-        changeIds: [],
-        applied: 0,
-        invited,
-      };
     }
 
-    const reviewable =
-      targetsThisDocument && (action.status === 'proposed' || action.status === 'applied');
-    const set = reviewable ? buildChangeSet(action, blocksRef.current) : null;
-
-    // Some providers number tool calls per request (call_0, call_1…), so the
-    // id alone repeats across runs. Only identical operations are a redelivery.
-    let duplicate = false;
-    if (set && set.changes.length > 0) {
-      const signature = `${set.toolCallId}:${action.status}:${JSON.stringify(
-        set.changes.map((change) => change.op),
-      )}`;
-      duplicate = seenBatchesRef.current.has(signature);
-      if (!duplicate) seenBatchesRef.current.add(signature);
-    }
-
-    updateForDocument((current) => {
-      let invites = current.invites;
-      if (
-        createOp
-        && createOp.documentId
-        && createOp.documentId !== ownerDocumentId
-        && !invites.some((invite) => invite.documentId === createOp.documentId)
-      ) {
-        invites = [
-          ...invites,
-          { id: uid(), documentId: createOp.documentId, receivedAt: Date.now() },
-        ];
-      }
-
-      let error = current.error;
-      if (action.status === 'error' && (targetsThisDocument || invited)) {
-        error = action.message || 'The assistant could not prepare that edit.';
-      }
-
-      if (!set || action.status === 'applied' || set.changes.length === 0) {
-        return invites === current.invites && error === current.error
+    const invite = createOp?.documentId && createOp.documentId !== ownerDocumentId ? createOp.documentId : null;
+    const error = action.status === 'error' && (targetsThisDocument || invited)
+      ? action.message || 'The assistant could not prepare that edit.'
+      : null;
+    if (invite || error) {
+      updateForDocument((current) => {
+        const invites = invite && !current.invites.some((candidate) => candidate.documentId === invite)
+          ? [...current.invites, { id: uid(), documentId: invite, receivedAt: Date.now() }]
+          : current.invites;
+        const nextError = error ?? current.error;
+        return invites === current.invites && nextError === current.error
           ? current
-          : { ...current, invites, error };
-      }
-
-      return {
-        ...current,
-        invites,
-        error,
-        sets: duplicate ? current.sets : [...current.sets, set],
-        focusedChangeId:
-          duplicate
-            ? current.focusedChangeId
-            : current.focusedChangeId ?? set.changes[0].id,
-      };
-    });
-
-    // A server running in `auto` apply mode has already committed; replaying
-    // it as a proposal would ask the author to approve something already saved.
-    if (set && action.status === 'applied' && set.changes.length > 0) {
-      if (activeDocumentIdRef.current !== ownerDocumentId || duplicate) {
-        return { changes: 0, changeIds: [], applied: 0, invited };
-      }
-      const { desynced, touched } = applyPatch(
-        set.changes.map((change) => change.op),
-        { persist: false },
-      );
-      adoptServerVersion(action.version);
-      markRecentlyChanged(touched);
-      if (desynced.length > 0) {
-        updateForDocument((current) => ({
-          ...current,
-          error:
-            'Some of the assistant’s changes could not be shown here. Reload the document to see the saved version.',
-        }));
-      }
-      // Reported so the reply can say the document was changed. An auto-applied
-      // batch left no trace in the transcript at all: the only sign was a
-      // four-second highlight the author had to be looking at to catch.
-      return { changes: 0, changeIds: [], applied: set.changes.length - desynced.length, invited };
+          : { ...current, invites, error: nextError };
+      });
     }
-
-    // A redelivery adds nothing, and saying otherwise made the reply claim
-    // changes the document does not have.
-    if (duplicate || !set) return { changes: 0, changeIds: [], applied: 0, invited };
-    return {
-      changes: set.changes.length,
-      changeIds: set.changes.map((change) => change.id),
-      applied: 0,
-      invited,
-    };
-  }, [
-    adoptServerVersion,
-    applyPatch,
-    markRecentlyChanged,
-    stageDurableProposal,
-    ownerDocumentId,
-    updateForDocument,
-  ]);
+    return { changes, invited };
+  }, [stageDurableProposal, ownerDocumentId, updateForDocument]);
 
   const settle = useCallback(
     (changeId: string, status: 'accepted' | 'rejected') => {
-      if (activeDocumentIdRef.current !== ownerDocumentId) return;
+      if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
       const target = pendingChanges(state.sets).find((change) => change.id === changeId);
       if (!target) return;
       // Taken before the decision, so "the next one" means the next one the
@@ -985,7 +1091,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
             // and reject it. Marking it accepted while applying nothing threw
             // the operation away and told them it had landed.
             applyError =
-              'That change refers to a part of the document that is no longer there, so it was not applied. Reject it to clear it.';
+              'That change refers to a part of the page that is no longer there, so it was not applied. Reject it to clear it.';
           }
         }
       }
@@ -1019,20 +1125,10 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
 
       // Durable batches outlive this page. Without a record, a reload stages
       // every one of their operations again, decided or not.
-      rememberDecisions(state.sets, decided);
+      rememberDecisions(workspaceId, state.sets, decided);
       if (landed) {
         const accepted = markChanges(state.sets, new Set([changeId]), 'accepted');
-        rememberRebased(accepted, rebaseAfterAccept(accepted, landed.before, landed.after, landed.touched));
-      }
-
-      // This decision may have been the batch's last one — retire the server
-      // record so it neither re-stages on reload nor blocks the next run.
-      const decidedIds = new Set(decided.map(([id]) => id));
-      for (const set of concludedDurableSets(decidedIds)) {
-        const anyAccepted =
-          set.changes.some((change) => change.status === 'accepted')
-          || (settled && status === 'accepted' && set.changes.some((c) => c.id === changeId));
-        void resolveDurableSet(set, anyAccepted ? 'decided' : 'rejected');
+        rememberRebased(workspaceId, accepted, rebaseAfterAccept(accepted, landed.before, landed.after, landed.touched));
       }
 
       // The card that held focus is gone with its buttons; focus moves on to
@@ -1049,24 +1145,22 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     [
       applyPatch,
       blocks,
-      concludedDurableSets,
       markRecentlyChanged,
       ownerDocumentId,
-      resolveDurableSet,
       state.sets,
       updateForDocument,
+      workspaceId,
     ],
   );
 
   const accept = useCallback((id: string) => settle(id, 'accepted'), [settle]);
   const reject = useCallback((id: string) => settle(id, 'rejected'), [settle]);
 
-  const acceptAll = useCallback(() => {
-    if (activeDocumentIdRef.current !== ownerDocumentId) return;
-    // Original authoring order, across batches: a later batch may build on an
-    // earlier one, and replaying them out of order puts blocks in the wrong
-    // place even though each operation on its own is valid.
-    const open = orderedChanges(state.sets).filter((change) => change.status === 'pending');
+  /**
+   * Accept these pending changes in one patch, except the ones written
+   * against text the author has changed since. `open` is in authoring order.
+   */
+  const acceptOpen = useCallback((open: ProposedChange[]) => {
     if (open.length === 0) return;
 
     // A suggestion written against text the author has changed since stays
@@ -1109,7 +1203,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     const failed = plan.desynced.length + applyDesynced;
     const messages = [
       failed > 0
-        ? `${failed} change${failed === 1 ? '' : 's'} could not be applied — the document has moved on since the assistant read it.`
+        ? `${failed} change${failed === 1 ? '' : 's'} could not be applied — the page has moved on since the assistant read it.`
         : null,
       stale.length > 0 ? staleSkippedError(stale.length) : null,
     ].filter((message): message is string => message !== null);
@@ -1129,6 +1223,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     }));
 
     rememberDecisions(
+      workspaceId,
       state.sets,
       orderedChanges(state.sets)
         .filter((change) => decided.has(change.id))
@@ -1136,24 +1231,65 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     );
     if (landed) {
       const accepted = markChanges(state.sets, decided, 'accepted');
-      rememberRebased(accepted, rebaseAfterAccept(accepted, landed.before, landed.after, landed.touched));
-    }
-
-    for (const set of concludedDurableSets(decided)) {
-      void resolveDurableSet(set, 'decided');
+      rememberRebased(workspaceId, accepted, rebaseAfterAccept(accepted, landed.before, landed.after, landed.touched));
     }
   }, [
     applyPatch,
     blocks,
-    concludedDurableSets,
     markRecentlyChanged,
-    ownerDocumentId,
-    resolveDurableSet,
     state.sets,
     updateForDocument,
+    workspaceId,
   ]);
 
+  const acceptAll = useCallback(() => {
+    if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
+    // Original authoring order, across batches: a later batch may build on an
+    // earlier one, and replaying them out of order puts blocks in the wrong
+    // place even though each operation on its own is valid.
+    acceptOpen(orderedChanges(state.sets).filter((change) => change.status === 'pending'));
+  }, [acceptOpen, ownerDocumentId, state.sets]);
+
+  /**
+   * "Apply all" on the changes an Auto turn left waiting: one undo step, and
+   * the author's own decision. What it cannot apply stays as ordinary
+   * suggestions, no longer singled out.
+   */
+  const applyWaiting = useCallback(() => {
+    if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
+    const waiting = new Set(state.sets.filter((set) => set.autoWaiting).map((set) => set.id));
+    if (waiting.size === 0) return;
+    batch(() => acceptOpen(
+      orderedChanges(state.sets.filter((set) => waiting.has(set.id)))
+        .filter((change) => change.status === 'pending'),
+    ));
+    updateForDocument((current) => ({
+      ...current,
+      sets: current.sets.map((set) => (waiting.has(set.id) ? { ...set, autoWaiting: false } : set)),
+    }));
+  }, [acceptOpen, batch, ownerDocumentId, state.sets, updateForDocument]);
+
+  /**
+   * Take back an Auto step from the chat. Only while it is the newest step
+   * in the undo journal, which is when the page is still exactly as it left
+   * it: an older one would be reached only by undoing the author's own edits
+   * first. Returns whether it was undone.
+   */
+  const undoAutoApplied = useCallback((id: string): boolean => {
+    const record = state.autoApplied.find((candidate) => candidate.id === id);
+    if (!record || !isLatestStep(record, docRef.current)) return false;
+    undo();
+    updateForDocument((current) => ({
+      ...current,
+      autoApplied: current.autoApplied.map((candidate) => (
+        candidate.id === id ? { ...candidate, undone: true } : candidate
+      )),
+    }));
+    return true;
+  }, [state.autoApplied, undo, updateForDocument]);
+
   const rejectAll = useCallback(() => {
+    if (readOnlyRef.current) return;
     // Same reasoning as `acceptAll`: reject what was on screen, not whatever
     // has arrived since.
     const decided = new Set(pendingChanges(state.sets).map((change) => change.id));
@@ -1163,22 +1299,15 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       focusedChangeId: null,
     }));
 
-    // Recorded first: if retiring the batch fails, the next load finds it
-    // fully decided and retires it again instead of staging it whole.
+    // Durable batches are retired by the server once every decision is in.
     rememberDecisions(
+      workspaceId,
       state.sets,
       orderedChanges(state.sets)
         .filter((change) => decided.has(change.id))
         .map((change) => [change.id, 'rejected'] as const),
     );
-
-    // Rejected batches must clear their server record too — a pending change
-    // set re-stages on reload and blocks the agent's next proposal.
-    for (const set of concludedDurableSets(decided)) {
-      const anyAccepted = set.changes.some((change) => change.status === 'accepted');
-      void resolveDurableSet(set, anyAccepted ? 'decided' : 'rejected');
-    }
-  }, [concludedDurableSets, resolveDurableSet, state.sets, updateForDocument]);
+  }, [state.sets, updateForDocument, workspaceId]);
 
   /**
    * Mark a change as the one under review and bring its card to focus.
@@ -1215,6 +1344,31 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     (changeId: string) => showChange(changeId, 'reveal'),
     [showChange],
   );
+
+  /**
+   * Show an Auto step in the page: the first change it left for the author,
+   * or else the blocks it changed, highlighted.
+   */
+  const revealAutoApplied = useCallback((id: string) => {
+    const record = state.autoApplied.find((candidate) => candidate.id === id);
+    if (!record) return;
+    const held = new Set(state.sets.find((set) => set.id === record.setId)?.changes
+      .filter((change) => change.status === 'pending')
+      .map((change) => change.id));
+    const firstHeld = pendingInDocumentOrder(blocks, state.sets).find((change) => held.has(change.id));
+    if (firstHeld) {
+      focusChange(firstHeld.id);
+      return;
+    }
+    const present = record.touched.filter((id) => blocks.some((block) => block.id === id));
+    const [first] = present;
+    if (!first) return;
+    markRecentlyChanged(present);
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(`.block-row[data-block-id="${attributeValue(first)}"]`)
+        ?.scrollIntoView?.({ behavior: scrollBehavior(), block: 'center' });
+    });
+  }, [blocks, focusChange, markRecentlyChanged, state.autoApplied, state.sets]);
 
   /**
    * After Accept or Reject, focus moves to the next suggestion further down
@@ -1264,6 +1418,30 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
 
   const pending = useMemo(() => pendingChanges(state.sets), [state.sets]);
 
+  const waiting = useMemo(
+    () => pendingChanges(state.sets.filter((set) => set.autoWaiting)),
+    [state.sets],
+  );
+
+  const autoApplied = useMemo<AutoAppliedSet[]>(() => {
+    if (state.autoApplied.length === 0) return NO_AUTO_APPLIED;
+    // What a set still leaves for the author is told once, under its newest step.
+    const newest = new Map(state.autoApplied.map((record) => [record.setId, record.id]));
+    return state.autoApplied.map((record) => ({
+      id: record.id,
+      changeSetId: record.changeSetId,
+      applied: record.applied,
+      heldIds: newest.get(record.setId) !== record.id
+        ? []
+        : state.sets.find((set) => set.id === record.setId)?.changes
+          .filter((change) => change.status === 'pending')
+          .map((change) => change.id) ?? [],
+      canUndo: isLatestStep(record, doc),
+      // Redone since (Mod+Shift+Z): the page is as the step left it again.
+      undone: record.undone && !isLatestStep(record, doc),
+    }));
+  }, [doc, state.autoApplied, state.sets]);
+
   const value = useMemo<ProposalsContextValue>(
     () => ({
       sets: state.sets,
@@ -1281,10 +1459,17 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       dismissInvite,
       error: state.error,
       clearError,
+      autoApplied,
+      undoAutoApplied,
+      revealAutoApplied,
+      waiting,
+      applyWaiting,
     }),
     [
       accept,
       acceptAll,
+      applyWaiting,
+      autoApplied,
       clearError,
       dismissInvite,
       focusChange,
@@ -1293,7 +1478,10 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       receive,
       reject,
       rejectAll,
+      revealAutoApplied,
       state,
+      undoAutoApplied,
+      waiting,
     ],
   );
 

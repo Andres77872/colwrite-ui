@@ -27,8 +27,6 @@ export type SlashContext = {
   applyKind: (kind: BlockKindId) => string;
   /** Put the caret in a block once React has rendered it. */
   focusBlock: (id: string) => void;
-  documentId: string | null;
-  createRemote: () => Promise<string>;
 };
 
 export type SlashItem = {

@@ -1,3 +1,4 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import { MAX_FIGURE_EDGES, MAX_FIGURE_ITEMS, MAX_LABEL_CHARS, MAX_TENSOR_CELLS } from '../constants';
 import { labelText } from '../labels';
@@ -42,11 +43,11 @@ const find = (result: Result, code: string) => result.diagnostics.filter((d) => 
 const one = (result: Result, code: string): FigureDiagnostic => {
   const found = find(result, code);
   expect(found, `${code} in ${JSON.stringify(codes(result))}`).toHaveLength(1);
-  return found[0];
+  return itemAt(found, 0);
 };
 const clean = (result: Result) =>
   expect(result.diagnostics.filter((d) => d.severity !== 'info'), JSON.stringify(result.diagnostics, null, 2)).toEqual([]);
-const text = (label: { lines: unknown[] } | null) => (label ? labelText(label as never) : null);
+const text = (label: { lines: unknown[] } | null | undefined) => (label ? labelText(label as never) : null);
 const pairs = (m: FigureModel) => m.edges.map((e) => `${e.from}->${e.to}`);
 const edge = (m: FigureModel, from: string, to: string): EdgeModel => {
   const found = m.edges.find((e) => e.from === from && e.to === to);
@@ -222,10 +223,10 @@ describe('normalizeFigure: top level', () => {
     const result = run({ nodes: ['a', 'b'], edgs: ['a -> b'], links: [], captoin: 'x' });
     const unknown = find(result, 'spec.unknown-key');
     expect(unknown.map((d) => d.path)).toEqual(['edgs', 'links', 'captoin']);
-    expect(unknown[0].message).toContain('Did you mean "edges"?');
-    expect(unknown[1].message).toContain('Did you mean "edges"?');
-    expect(unknown[2].message).toContain('Did you mean "caption"?');
-    expect(covered(result, unknown[0])).toBe('"edgs"');
+    expect(unknown[0]?.message).toContain('Did you mean "edges"?');
+    expect(unknown[1]?.message).toContain('Did you mean "edges"?');
+    expect(unknown[2]?.message).toContain('Did you mean "caption"?');
+    expect(covered(result, itemAt(unknown, 0))).toBe('"edgs"');
   });
 
   it('never suggests a name inherited from Object.prototype', () => {
@@ -371,7 +372,7 @@ describe('normalizeFigure: ids and labels', () => {
 
   it('shortens very long derived ids at a word boundary', () => {
     const m = model(run({ nodes: [{ label: 'a very long label that keeps going well past forty characters' }] }));
-    const [id] = m.root.children;
+    const [id] = takeItems(m.root.children, 1);
     expect(id.length).toBeLessThanOrEqual(40);
     expect(id.endsWith('-')).toBe(false);
     expect('a-very-long-label-that-keeps-going-well-past-forty-characters'.startsWith(id)).toBe(true);
@@ -384,9 +385,9 @@ describe('normalizeFigure: ids and labels', () => {
     expect(text(node(m, 'a-2').label)).toBe('Second');
     const warnings = find(result, 'item.duplicate-id');
     expect(warnings).toHaveLength(2);
-    expect(warnings[0].message).toContain('renamed "a-2"');
-    expect(warnings[0].message).toContain('nodes[0]');
-    expect(covered(result, warnings[0])).toBe('"a"');
+    expect(warnings[0]?.message).toContain('renamed "a-2"');
+    expect(warnings[0]?.message).toContain('nodes[0]');
+    expect(covered(result, itemAt(warnings, 0))).toBe('"a"');
   });
 
   it('skips over an explicit id when renaming', () => {
@@ -816,7 +817,7 @@ describe('normalizeFigure: groups and containment', () => {
     const result = run({ nodes: [{ id: 'g', shape: 'box', stack: 3, children: ['a'] }, { id: 'n', layout: 'row', columns: 2 }] });
     const misplaced = find(result, 'item.misplaced-key');
     expect(misplaced.map((d) => d.path)).toEqual(['nodes[0].shape', 'nodes[0].stack', 'nodes[1].layout', 'nodes[1].columns']);
-    expect(misplaced[0].message).toContain('group');
+    expect(misplaced[0]?.message).toContain('group');
   });
 
   it('warns about a type that does not apply to a group', () => {
@@ -1083,7 +1084,7 @@ describe('normalizeFigure: node properties', () => {
 
   it('warns about unknown node keys with a suggestion, naming the node', () => {
     const result = run({ nodes: [{ id: 'a', lable: 'A', fillColor: 'red' }] });
-    const [typo, synonym] = find(result, 'item.unknown-key');
+    const [typo, synonym] = takeItems(find(result, 'item.unknown-key'), 2);
     expect(typo.message).toContain('on node "a"');
     expect(typo.message).toContain('Did you mean "label"?');
     expect(synonym.message).toContain('Did you mean "tone"?');
@@ -1435,7 +1436,7 @@ describe('normalizeFigure: edges', () => {
   it('carries the shorthand style and label', () => {
     const m = model(run({ nodes: ['x', 'add'], edges: ['x ==> add: $h$'] }));
     expect(m.edges[0]).toMatchObject({ weight: 'thick', arrow: 'end' });
-    expect(m.edges[0].label?.hasMath).toBe(true);
+    expect(m.edges[0]?.label?.hasMath).toBe(true);
   });
 
   it('resolves endpoints by id, then case-insensitive id, then label', () => {
@@ -1519,13 +1520,13 @@ describe('normalizeFigure: edges', () => {
     const m = model(declared);
     expect(pairs(m)).toEqual(['enc:out->dec', 'dec->enc:out', 'dec->enc:out', 'enc:out->dec']);
     expect(m.edges.map((e) => text(e.label))).toEqual([null, null, null, 'skip']);
-    expect(m.edges[2].toSide).toBe('left');
+    expect(m.edges[2]?.toSide).toBe('left');
 
     // "enc" alone would match x by its label: the whole id must win, not a self-loop labelled "out".
     const misrouted = run({ nodes: [{ id: 'x', label: 'Enc' }, { id: 'enc:out', label: 'Encoder output' }], edges: ['x -> enc:out'] });
     clean(misrouted);
     expect(pairs(model(misrouted))).toEqual(['x->enc:out']);
-    expect(model(misrouted).edges[0].label).toBeNull();
+    expect(model(misrouted).edges[0]?.label).toBeNull();
   });
 
   it('warns about malformed shorthand and drops it', () => {
@@ -1559,7 +1560,7 @@ describe('normalizeFigure: edges', () => {
   it('reads comma lists and side suffixes in object ends', () => {
     const m = model(run({ nodes: ['a', 'b', 'c'], edges: [{ from: 'a.bottom', to: 'b, c' }] }));
     expect(pairs(m)).toEqual(['a->b', 'a->c']);
-    expect(m.edges[0].fromSide).toBe('bottom');
+    expect(m.edges[0]?.fromSide).toBe('bottom');
   });
 
   it('reads line, weight and arrow from values and flags', () => {
@@ -1613,7 +1614,7 @@ describe('normalizeFigure: edges', () => {
     ['ortho', 'ortho'], ['orthogonal', 'ortho'], ['straight', 'straight'], ['line', 'straight'], ['direct', 'straight'],
     ['curved', 'curved'], ['curve', 'curved'], ['spline', 'curved'], ['bezier', 'curved'],
   ])('route %s → %s', (route, expected) => {
-    expect(model(run({ nodes: ['a', 'b'], edges: [{ from: 'a', to: 'b', route }] })).edges[0].route).toBe(expected);
+    expect(model(run({ nodes: ['a', 'b'], edges: [{ from: 'a', to: 'b', route }] })).edges[0]?.route).toBe(expected);
   });
 
   it('reads the edge kind and its effect on ranking', () => {
@@ -1645,7 +1646,7 @@ describe('normalizeFigure: edges', () => {
       nodes: ['a', 'b'],
       edges: [{ from: 'a', to: 'b', exit: 'east', enter: 'N', color: 'red', text: 'x' }, { from: 'a', to: 'b', fromSide: 'middle' }],
     });
-    const [first, second] = model(result).edges;
+    const [first, second] = takeItems(model(result).edges, 2);
     expect(first).toMatchObject({ fromSide: 'right', toSide: 'top', tone: 'red' });
     expect(text(first.label)).toBe('x');
     expect(second.fromSide).toBeNull();
@@ -1667,14 +1668,14 @@ describe('normalizeFigure: edges', () => {
     const result = run({ nodes: ['a', 'b'], edges: [{ from: 'a', to: 'b', lable: 'x', thickness: 2 }] });
     const warnings = find(result, 'edge.unknown-key');
     expect(warnings.map((d) => d.path)).toEqual(['edges[0].lable', 'edges[0].thickness']);
-    expect(warnings[0].message).toContain('Did you mean "label"?');
-    expect(warnings[1].message).toContain('Did you mean "weight"?');
+    expect(warnings[0]?.message).toContain('Did you mean "label"?');
+    expect(warnings[1]?.message).toContain('Did you mean "weight"?');
   });
 
   it('reads [from, to, label] tuples', () => {
     const m = model(run({ nodes: ['a', 'b'], edges: [['a', 'b'], ['b', 'a', 'back']] }));
     expect(pairs(m)).toEqual(['a->b', 'b->a']);
-    expect(text(m.edges[1].label)).toBe('back');
+    expect(text(m.edges[1]?.label)).toBe('back');
   });
 
   it('warns about edge entries it cannot read', () => {
@@ -1687,8 +1688,8 @@ describe('normalizeFigure: edges', () => {
     clean(result);
     const m = model(result);
     expect(pairs(m)).toEqual(['a->b', 'b->c', 'c->a']);
-    expect(m.edges[2].line).toBe('dashed');
-    expect(m.edges[2].label?.source).toBe('$x;y$');
+    expect(m.edges[2]?.line).toBe('dashed');
+    expect(m.edges[2]?.label?.source).toBe('$x;y$');
   });
 
   it('points at the exact name on any line of a multi-line edges string', () => {
@@ -1708,7 +1709,7 @@ describe('normalizeFigure: edges', () => {
     const label = 'x'.repeat(MAX_LABEL_CHARS + 1);
     const result = run({ nodes: ['a', 'b'], edges: [`a -> b: ${label}`] });
     expect(covered(result, one(result, 'label.too-long'))).toBe(label);
-    expect(model(result).edges[0].label?.source.endsWith('…')).toBe(true);
+    expect(model(result).edges[0]?.label?.source.endsWith('…')).toBe(true);
   });
 
   it('adds edges from a node\'s "to" key', () => {
@@ -1724,7 +1725,7 @@ describe('normalizeFigure: edges', () => {
   it('reads edges listed inside a group', () => {
     const m = model(run({ nodes: [{ id: 'g', children: ['a', 'b'], edges: ['a -> b'] }] }));
     expect(pairs(m)).toEqual(['a->b']);
-    expect(m.edges[0].path).toBe('nodes[0].edges[0]');
+    expect(m.edges[0]?.path).toBe('nodes[0].edges[0]');
   });
 
   it('orders edges by where they are written', () => {
@@ -1760,7 +1761,7 @@ describe('normalizeFigure: edges', () => {
 describe('normalizeFigure: item limit', () => {
   it('drops items past the limit with one error, and edges to them quietly', () => {
     const ids = Array.from({ length: MAX_FIGURE_ITEMS + 5 }, (_, i) => `n${i}`);
-    const last = ids[ids.length - 1];
+    const last = itemAt(ids, ids.length - 1);
     const result = run({ nodes: ids, edges: [`n0 -> n1`, `n0 -> ${last}`], groups: [{ id: 'late', children: ['n0'] }] });
     const m = model(result);
     expect(m.items.size).toBe(MAX_FIGURE_ITEMS);
@@ -1904,7 +1905,7 @@ describe('normalizeFigure: diagnostics', () => {
     const result = run({ nodes });
     expect(result.diagnostics).toHaveLength(200);
     expect(result.diagnostics[199]).toMatchObject({ code: 'spec.more-problems', severity: 'info' });
-    expect(result.diagnostics[199].message).toContain('101 more');
+    expect(result.diagnostics[199]?.message).toContain('101 more');
   });
 
   it('is deterministic', () => {

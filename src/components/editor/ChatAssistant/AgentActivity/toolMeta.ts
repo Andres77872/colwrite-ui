@@ -67,9 +67,9 @@ const TOOL_META: Record<string, { label: string; running: string; icon: typeof W
   todo_read: { label: 'Checked task progress', running: 'Checking task progress', icon: SearchCheck },
   todo_write: { label: 'Updated task progress', running: 'Updating task progress', icon: SearchCheck },
   delegate_research: { label: 'Delegated research', running: 'Running focused research', icon: Network },
-  doc_read: { label: 'Read the document', running: 'Reading your document', icon: FileSearch },
+  doc_read: { label: 'Read the page', running: 'Reading your page', icon: FileSearch },
   doc_edit: { label: 'Prepared changes', running: 'Drafting changes', icon: PenLine },
-  doc_create: { label: 'Created a document', running: 'Creating a document', icon: FilePlus2 },
+  doc_create: { label: 'Created a page', running: 'Creating a page', icon: FilePlus2 },
   cite_sources: { label: 'Prepared citations', running: 'Adding citations', icon: BookMarked },
   search_citations: { label: 'Searched for sources', running: 'Searching for sources', icon: BookMarked },
   semantic_scholar_search: {
@@ -173,6 +173,16 @@ export function failureLead(errorType?: string): string {
       return 'The assistant wrote an invalid request';
     case 'UnknownToolError':
       return 'This tool is not available';
+    // The workspace's policy turned the tool off during the run (M5).
+    case 'workspace_policy':
+      return 'Switched off in this workspace';
+    // The account was removed from the workspace during the run, or the
+    // workspace was deleted: the tool did not run (M6).
+    case 'no_workspace_context':
+      return 'This workspace is no longer available';
+    // The run's page left the workspace (the Trash, a purge) during the run.
+    case 'no_document_context':
+      return 'This page is no longer available';
     default:
       return 'Failed';
   }

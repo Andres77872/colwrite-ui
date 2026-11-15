@@ -1,16 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { AGENT_ENGINE_KEY } from '@/lib/storageKeys';
 import { usePersistentState } from '@/hooks/usePersistentState';
 import {
-  checkAgentEngine,
+  agentEnginesQuery,
   engineModelProblem,
   gatewayModelsFor,
-  getAgentEngines,
-  type AgentEngineCatalog,
+  useCheckAgentEngine,
   type AgentEngineId,
   type AgentEngineStatus,
   type GatewayModelTier,
-} from '@/services/agentEngines';
-import { errorMessage } from '@/services/contracts';
+} from '@/data/agentEngines';
+import { errorMessage } from '@/api/errors';
 import {
   AgentEngineContext,
   DEFAULT_ENGINE_PREFS,
@@ -21,68 +22,36 @@ import {
   type AgentEngineSurface,
 } from './agentEngineContextState';
 
-const PREFS_KEY = 'colwrite:agent-engine:v1';
+const PREFS_KEY = AGENT_ENGINE_KEY;
 
 /**
  * The agent engines this server offers, and which one each surface uses.
  *
- * The server decides what may run: a deployed API reports only `legacy`, and
+ * The server decides what may run: a deployed API reports only `gateway`, and
  * a local one reports the `claude` / `codex` CLIs with their sign-in state.
  * This provider never signs anyone in — when a CLI needs a login it shows the
  * command to run in a terminal and re-checks when asked.
  */
 export function AgentEngineProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = usePersistentState(PREFS_KEY, DEFAULT_ENGINE_PREFS, isAgentEnginePrefs);
-  const [catalog, setCatalog] = useState<AgentEngineCatalog | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const engines = useQuery(agentEnginesQuery());
+  const catalog = engines.data ?? null;
+  const loading = engines.isFetching;
+  // The catalog failed to load: the default engine keeps working.
+  const error = engines.isError ? errorMessage(engines.error, 'Could not load the agent engines') : null;
+  const refetchEngines = engines.refetch;
+  const refresh = useCallback(async () => {
+    await refetchEngines();
+  }, [refetchEngines]);
+
   const [checking, setChecking] = useState<AgentEngineId | null>(null);
   const [checkError, setCheckError] = useState<Partial<Record<AgentEngineId, string>>>({});
-  const requestEpoch = useRef(0);
-
-  const refresh = useCallback(async () => {
-    const epoch = ++requestEpoch.current;
-    setLoading(true);
-    try {
-      const next = await getAgentEngines();
-      if (epoch !== requestEpoch.current) return;
-      setCatalog(next);
-      setError(null);
-    } catch (caught) {
-      if (epoch !== requestEpoch.current) return;
-      // An older API without engines: the default engine keeps working.
-      setError(errorMessage(caught, 'Could not load the agent engines'));
-    } finally {
-      if (epoch === requestEpoch.current) setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void refresh();
-    }, 0);
-    return () => {
-      window.clearTimeout(timer);
-      requestEpoch.current += 1;
-    };
-  }, [refresh]);
-
+  const checkEngine = useCheckAgentEngine().mutateAsync;
   const check = useCallback(async (engine: AgentEngineId): Promise<AgentEngineStatus | null> => {
     setChecking(engine);
     setCheckError((previous) => ({ ...previous, [engine]: undefined }));
     try {
-      const status = await checkAgentEngine(engine);
-      // A re-check supersedes any list request still in flight.
-      requestEpoch.current += 1;
-      setCatalog((previous) =>
-        previous
-          ? {
-              ...previous,
-              engines: previous.engines.map((item) => (item.engine === engine ? status : item)),
-            }
-          : previous,
-      );
-      return status;
+      return await checkEngine(engine);
     } catch (caught) {
       setCheckError((previous) => ({
         ...previous,
@@ -92,7 +61,7 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
     } finally {
       setChecking((current) => (current === engine ? null : current));
     }
-  }, []);
+  }, [checkEngine]);
 
   const setChatEngine = useCallback(
     (engine: AgentEngineId) => setPrefs((previous) => ({ ...previous, chat: engine })),
@@ -116,8 +85,8 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
           return next;
         }
         const models = { ...previous.models };
-        if (trimmed) models.legacy = trimmed;
-        else delete models.legacy;
+        if (trimmed) models.gateway = trimmed;
+        else delete models.gateway;
         return { ...previous, models };
       });
       return null;
@@ -126,7 +95,7 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
   );
   const setModel = useCallback(
     (engine: AgentEngineId, model: string): string | null => {
-      if (engine === 'legacy') return setGatewayModel('main', model);
+      if (engine === 'gateway') return setGatewayModel('main', model);
       const trimmed = model.trim();
       const problem = engineModelProblem(engine, trimmed);
       if (problem) return problem;

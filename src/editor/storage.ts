@@ -1,31 +1,33 @@
 import type { Doc } from './types';
+import {
+  draftKey,
+  lastPageKey,
+  readItem,
+  readJson,
+  removeItem,
+  unsavedKey,
+  writeItem,
+  writeJson,
+} from '@/lib/storageKeys';
 
 /**
- * Local draft cache.
+ * Local copies of pages, under the workspace they belong to.
  *
- * The body and the document id used to live in two independent, unkeyed slots
- * written by two separate effects. Any disagreement between them — a crash
- * mid-switch, two tabs on different documents, a second account signing in —
- * left one document's text cached under another's id, and the next boot would
- * happily save it there. Records are now keyed by document id and carry that
- * id inside them, so a mismatch is detectable instead of silent.
+ * Records are keyed by workspace and page id and carry the page id inside
+ * them, so a body cached under one page can never be adopted under another
+ * (a crash mid-switch, two tabs on different pages, a second account signing
+ * in). Sign-out removes them with every other workspace key
+ * (`clearUserStorage`).
  */
-
-const RECORD_PREFIX = 'colwrite:doc:';
-const POINTER_KEY = 'colwrite:lastDocId';
-
-/** Retained so drafts cached by older builds are not orphaned on upgrade. */
-export const STORAGE_KEY = 'colwrite:doc';
-export const ID_STORAGE_KEY = 'colwrite:docId';
-
-/** Storage key for a document id, or for the not-yet-saved local draft. */
-function recordKey(documentId: string | null): string {
-  return `${RECORD_PREFIX}${documentId ?? 'local'}`;
-}
 
 export type CachedDoc = {
   documentId: string | null;
   doc: Doc;
+  /**
+   * The head the body was based on, so edits made while the server could not
+   * be read are saved over that head, and refused (412) if it moved since.
+   */
+  etag: string | null;
 };
 
 function isDoc(value: unknown): value is Doc {
@@ -36,67 +38,33 @@ function isDoc(value: unknown): value is Doc {
   );
 }
 
-export function loadDocumentId(): string | null {
-  try {
-    return localStorage.getItem(POINTER_KEY) || localStorage.getItem(ID_STORAGE_KEY) || null;
-  } catch {
-    return null;
-  }
+export function loadDocumentId(workspaceId: string): string | null {
+  return readItem(lastPageKey(workspaceId)) || null;
 }
 
-export function saveDocumentId(id: string | null): void {
-  try {
-    if (id) localStorage.setItem(POINTER_KEY, id);
-    else localStorage.removeItem(POINTER_KEY);
-    // The legacy slot is cleared, never written — nothing reads it except this
-    // module's own migration path.
-    localStorage.removeItem(ID_STORAGE_KEY);
-  } catch { /* storage unavailable — fall through */ }
+export function saveDocumentId(workspaceId: string, id: string | null): void {
+  if (id) writeItem(lastPageKey(workspaceId), id);
+  else removeItem(lastPageKey(workspaceId));
 }
 
 /**
- * Read the cached draft for *documentId*.
+ * Read the cached copy of *documentId*.
  *
  * Returns null when nothing is cached for that id, so a stale body can never
- * be adopted under the wrong document.
+ * be adopted under the wrong page.
  */
-export function loadDoc(documentId: string | null = loadDocumentId()): Doc | null {
-  try {
-    const raw = localStorage.getItem(recordKey(documentId));
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<CachedDoc>;
-      if (isDoc(parsed?.doc) && (parsed.documentId ?? null) === documentId) {
-        return parsed.doc;
-      }
-      return null;
-    }
-
-    // Migration: a draft in the old single-slot format is only safe to adopt
-    // if its id slot still agrees with the id being asked for.
-    const legacy = localStorage.getItem(STORAGE_KEY);
-    if (!legacy) return null;
-    const legacyId = localStorage.getItem(ID_STORAGE_KEY) || localStorage.getItem(POINTER_KEY);
-    if ((legacyId || null) !== documentId) return null;
-    const parsed = JSON.parse(legacy);
-    return isDoc(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+export function loadDoc(workspaceId: string, documentId: string | null): CachedDoc | null {
+  const parsed = readJson(draftKey(workspaceId, documentId)) as Partial<CachedDoc> | undefined;
+  if (!parsed || !isDoc(parsed.doc) || (parsed.documentId ?? null) !== documentId) return null;
+  return { documentId, doc: parsed.doc, etag: typeof parsed.etag === 'string' ? parsed.etag : null };
 }
 
-export function saveDoc(doc: Doc, documentId: string | null = loadDocumentId()): void {
-  try {
-    const record: CachedDoc = { documentId, doc };
-    localStorage.setItem(recordKey(documentId), JSON.stringify(record));
-    // Once a keyed record exists, the legacy slot would only be a second,
-    // diverging copy of the same document.
-    localStorage.removeItem(STORAGE_KEY);
-  } catch { /* storage unavailable — fall through */ }
+export function saveDoc(workspaceId: string, doc: Doc, documentId: string | null, etag: string | null): void {
+  const record: CachedDoc = { documentId, doc, etag: documentId === null ? null : etag };
+  writeJson(draftKey(workspaceId, documentId), record);
 }
 
-const UNSAVED_PREFIX = 'colwrite:unsaved:';
-
-/** Edits of a document that never reached the server, kept on this device. */
+/** Edits of a page that never reached the server, kept on this device. */
 export type UnsavedDraft = {
   documentId: string;
   doc: Doc;
@@ -105,60 +73,29 @@ export type UnsavedDraft = {
 };
 
 /**
- * Keep the body of a document whose save failed.
+ * Keep the body of a page whose save failed.
  *
- * The keyed draft record above is not enough for this: it follows the editor
- * state, so the next load of the document from the server overwrites it and
- * the edits the server never received are gone. This record is written only
- * when unsaved work is about to leave the screen, and stays until the author
- * takes it back or discards it.
+ * The cached copy above is not enough for this: it follows the editor state,
+ * so the next load of the page from the server overwrites it and the edits
+ * the server never received are gone. This record is written only when
+ * unsaved work is about to leave the screen, and stays until the author takes
+ * it back or discards it.
  */
-export function saveUnsavedDraft(documentId: string, doc: Doc, savedAt: number = Date.now()): void {
-  try {
-    const record: UnsavedDraft = { documentId, doc, savedAt };
-    localStorage.setItem(`${UNSAVED_PREFIX}${documentId}`, JSON.stringify(record));
-  } catch { /* storage unavailable or full — nothing more can be done here */ }
+export function saveUnsavedDraft(workspaceId: string, documentId: string, doc: Doc, savedAt: number = Date.now()): void {
+  const record: UnsavedDraft = { documentId, doc, savedAt };
+  writeJson(unsavedKey(workspaceId, documentId), record);
 }
 
-export function loadUnsavedDraft(documentId: string): UnsavedDraft | null {
-  try {
-    const raw = localStorage.getItem(`${UNSAVED_PREFIX}${documentId}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<UnsavedDraft>;
-    if (parsed?.documentId !== documentId || !isDoc(parsed.doc)) return null;
-    return {
-      documentId,
-      doc: parsed.doc,
-      savedAt: typeof parsed.savedAt === 'number' ? parsed.savedAt : Date.now(),
-    };
-  } catch {
-    return null;
-  }
+export function loadUnsavedDraft(workspaceId: string, documentId: string): UnsavedDraft | null {
+  const parsed = readJson(unsavedKey(workspaceId, documentId)) as Partial<UnsavedDraft> | undefined;
+  if (parsed?.documentId !== documentId || !isDoc(parsed.doc)) return null;
+  return {
+    documentId,
+    doc: parsed.doc,
+    savedAt: typeof parsed.savedAt === 'number' ? parsed.savedAt : Date.now(),
+  };
 }
 
-export function clearUnsavedDraft(documentId: string): void {
-  try {
-    localStorage.removeItem(`${UNSAVED_PREFIX}${documentId}`);
-  } catch { /* storage unavailable — fall through */ }
-}
-
-/**
- * Everything this browser keeps about a document: its draft, edits that never
- * saved, and review decisions (`reviewDecisions.ts`, which holds no text but
- * names documents and change sets).
- */
-const OWN_PREFIXES = [RECORD_PREFIX, UNSAVED_PREFIX, 'colwrite:review:'];
-
-/** Drop every cached draft. Used on sign-out so drafts do not cross accounts. */
-export function clearCachedDocs(): void {
-  try {
-    const doomed: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && OWN_PREFIXES.some((prefix) => key.startsWith(prefix))) doomed.push(key);
-    }
-    for (const key of [...doomed, STORAGE_KEY, ID_STORAGE_KEY, POINTER_KEY]) {
-      localStorage.removeItem(key);
-    }
-  } catch { /* storage unavailable — fall through */ }
+export function clearUnsavedDraft(workspaceId: string, documentId: string): void {
+  removeItem(unsavedKey(workspaceId, documentId));
 }

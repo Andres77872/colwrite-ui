@@ -115,7 +115,7 @@ export function holdsCodeText(el: HTMLElement, text: string): boolean {
   if (text === '') return nodes.length === 0;
   const first = nodes[0];
   if (!first || first.nodeType !== Node.TEXT_NODE || (first as Text).data !== text) return false;
-  return text.endsWith('\n') ? nodes.length === 2 && nodes[1].nodeName === 'BR' : nodes.length === 1;
+  return text.endsWith('\n') ? nodes.length === 2 && nodes[1]?.nodeName === 'BR' : nodes.length === 1;
 }
 
 /** Control characters the API refuses in a code block (tab and newlines stay). */
@@ -218,8 +218,7 @@ export function outdentEdit(text: string, start: number, end: number): CodeEdit 
     .filter((removal) => removal.count > 0);
   if (removals.length === 0) return { text, start, end };
   let next = text;
-  for (let i = removals.length - 1; i >= 0; i--) {
-    const { at, count } = removals[i];
+  for (const { at, count } of [...removals].reverse()) {
     next = next.slice(0, at) + next.slice(at + count);
   }
   // A position inside removed indentation lands where the line now starts.

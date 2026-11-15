@@ -1,31 +1,44 @@
+import { itemAt } from '@/lib/itemAt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup, waitFor } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useImperativeHandle } from 'react';
 import type { Block } from '@/editor/types';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
 
-const streamAgentChat = vi.fn((..._args: unknown[]) => new Promise(() => {}));
-vi.mock('@/services/agentChat', () => ({
-  streamAgentChat: (...args: unknown[]) => streamAgentChat(...args),
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const runAgentTurn = vi.fn((..._args: unknown[]) => new Promise(() => {}));
+vi.mock('@/api/assistant/agentChat', () => ({
+  runAgentTurn: (...args: unknown[]) => runAgentTurn(...args),
 }));
 
-const { EditorProvider, useEditor } = await import('@/editor');
+const { EditorProvider } = await import('@/editor');
+const { useEditorProbe } = await import('@/editor/__tests__/editorHarness');
 const { useAskAiTarget } = await import('./useAskAiTarget');
 const { AskAiPanel } = await import('./AskAi');
 const { openAskAi } = await import('./askAiEvents');
 
-type Hook = { editor: ReturnType<typeof useEditor>; askAi: ReturnType<typeof useAskAiTarget> };
+type Hook = { editor: ReturnType<typeof useEditorProbe>; askAi: ReturnType<typeof useAskAiTarget> };
 const hookRef = createRef<Hook>();
 
 function Harness() {
-  const editor = useEditor();
+  const editor = useEditorProbe();
   const askAi = useAskAiTarget();
   useImperativeHandle(hookRef, () => ({ editor, askAi }), [editor, askAi]);
   return askAi.target ? <AskAiPanel key={askAi.target.key} target={askAi.target} onClose={askAi.close} /> : null;
@@ -37,7 +50,7 @@ function hook(): Hook {
 }
 
 async function mount(blocks: Block[]) {
-  localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc: { version: 1, blocks } }));
+  localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: null, doc: { version: 1, blocks } }));
   render(
     <EditorProvider>
       <Harness />
@@ -53,7 +66,7 @@ const para: Block = { id: 'p', type: 'paragraph', html: 'Some text.', children: 
 
 beforeEach(() => {
   localStorage.clear();
-  streamAgentChat.mockClear();
+  runAgentTurn.mockClear();
 });
 afterEach(cleanup);
 
@@ -83,8 +96,8 @@ describe('useAskAiTarget', () => {
     act(() => hook().editor.selectBlocks(['fig']));
     act(() => openAskAi({ blockId: 'fig', actionId: 'figure-fix' }));
 
-    await waitFor(() => expect(streamAgentChat).toHaveBeenCalled());
-    const { message } = streamAgentChat.mock.calls[0][0] as { message: string };
+    await waitFor(() => expect(runAgentTurn).toHaveBeenCalled());
+    const { message } = itemAt(runAgentTurn.mock.calls, 0)[0] as { message: string };
     expect(message).toContain('Fix these problems in the figure spec');
     expect(message).toMatch(/- line 3:\d+ — Edge "a -> bb": No node or group "bb"\. Did you mean "b"\?/);
   });

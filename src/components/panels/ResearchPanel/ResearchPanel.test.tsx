@@ -1,53 +1,28 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect } from 'react';
 import { ToastProvider } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { http, server } from '@/__tests__/server';
 
 const mocks = vi.hoisted(() => ({
   arxiv: vi.fn(),
   colpali: vi.fn(),
+  /** Any request for the account's PDFs: a list or a search, by its query. */
   resources: vi.fn(),
-  getResource: vi.fn(),
 }));
 
-vi.mock('@/services/arxiv', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/services/arxiv')>()),
+vi.mock('@/data/arxiv', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/data/arxiv')>()),
   searchArxiv: mocks.arxiv,
 }));
-vi.mock('@/services/colpali', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/services/colpali')>()),
+vi.mock('@/data/colpali', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/data/colpali')>()),
   searchColpaliArxiv: mocks.colpali,
 }));
-vi.mock('@/services/resources', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/services/resources')>()),
-  searchResources: mocks.resources,
-  listResources: vi.fn().mockResolvedValue({ resources: [], count: 0 }),
-}));
-// The file manager is covered by its own tests; here it only has to open,
-// and hand back through the way out it draws in its own header.
-vi.mock('../LibraryPanel/LibraryPanel', () => ({
-  LibraryPanel: ({
-    initialResource,
-    onExit,
-  }: {
-    initialResource: { resourceId: number } | null;
-    onExit: () => void;
-  }) => (
-    <>
-      <button type="button" onClick={onExit}>
-        Back to search
-      </button>
-      <p>File manager{initialResource ? ` on ${initialResource.resourceId}` : ''}</p>
-    </>
-  ),
-}));
 vi.mock('@/components/preferences', () => ({
-  useAgentTools: () => ({ isSourceEnabled: () => true }),
-}));
-vi.mock('@/editor', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/editor')>()),
-  useEditor: () => ({ documentId: null }),
+  useAgentTools: () => ({ isSourceEnabled: () => true, switchedOffBy: () => null }),
 }));
 
 import { PanelsProvider } from '../panelsContext';
@@ -93,14 +68,27 @@ beforeEach(() => {
       abstract: null, url: 'https://arxiv.org/abs/2202.08906', version: 'v2', page_image: null,
     },
   ]);
-  mocks.resources.mockReset().mockResolvedValue({
-    query: 'router', scope: 'library', resources_searched: 1, resources_skipped: [], truncated: false,
-    next_offset: null, match_count: 1,
-    matches: [{ resource_id: 41, filename: 'moe.pdf', title: 'MoE notes', offset: 120, excerpt: 'the router picks' }],
-  });
+  mocks.resources.mockReset();
+  const queryOf = (request: Request) => Object.fromEntries(new URL(request.url).searchParams);
+  server.use(
+    http.get('/workspaces/{workspace_id}/resources', ({ request, response }) => {
+      mocks.resources(queryOf(request));
+      return response(200).json({ items: [], next_cursor: null });
+    }),
+    http.get('/workspaces/{workspace_id}/resources/search', ({ request, query, response }) => {
+      mocks.resources(queryOf(request));
+      return response(200).json({
+        query: query.get('query') ?? '', scope: 'library', items: [], next_cursor: null,
+        resources_searched: 0, resources_skipped: [], truncated: false,
+      });
+    }),
+  );
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe('ResearchPanel', () => {
   it('keeps each source’s results while another source is searched', async () => {
@@ -109,9 +97,9 @@ describe('ResearchPanel', () => {
     await screen.findByText('Switch Transformers');
     expect(mocks.arxiv).toHaveBeenCalledWith({ query: 'sparse experts', limit: 20, lite_search: true });
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Pages' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Paper pages' }));
     // One query box: what was typed carries over to the next source.
-    expect((screen.getByPlaceholderText('Find pages that answer a question…') as HTMLInputElement).value).toBe(
+    expect((screen.getByPlaceholderText('Find paper pages that answer a question…') as HTMLInputElement).value).toBe(
       'sparse experts',
     );
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
@@ -149,33 +137,36 @@ describe('ResearchPanel', () => {
 
     fireEvent.click(screen.getByRole('radio', { name: 'Semantic Scholar' }));
     // Every source keeps its name; the modes are spelled out, not icons.
-    for (const name of ['arXiv', 'Semantic Scholar', 'Pages', 'My PDFs']) {
+    for (const name of ['arXiv', 'Semantic Scholar', 'Paper pages', 'Inside my PDFs']) {
       expect(screen.getByRole('radio', { name })).toBeTruthy();
     }
     expect(screen.getByRole('radio', { name: 'Find papers' }).getAttribute('aria-checked')).toBe('true');
     fireEvent.click(screen.getByRole('radio', { name: 'Check a claim' }));
     expect(screen.getByRole('textbox', { name: 'Claim to check' })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('radio', { name: 'My PDFs' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Inside my PDFs' }));
     expect(screen.queryByRole('radiogroup', { name: 'Semantic Scholar mode' })).toBeNull();
-    // Nothing to filter in My PDFs, but the button's slot is kept.
+    // Nothing to filter in a PDF search, but the button's slot is kept.
     expect(screen.queryByRole('button', { name: 'Search filters' })).toBeNull();
   });
 
-  it('searches inside My PDFs and opens a match in the file manager', async () => {
+  it('hands “Search inside my PDFs” to the Library instead of searching here', async () => {
     renderPanel();
-    fireEvent.click(screen.getByRole('radio', { name: 'My PDFs' }));
-    search('Search inside your PDFs…', 'router');
+    fireEvent.click(screen.getByRole('radio', { name: 'Inside my PDFs' }));
+    expect(screen.getByRole('button', { name: 'Open Library' })).toBeTruthy();
+    search('Search inside my PDFs…', ' router ');
 
-    fireEvent.click(await screen.findByText('MoE notes'));
-    expect(mocks.resources).toHaveBeenCalledWith({ query: 'router', scope: 'library' });
-    expect(screen.getByText('File manager on 41')).toBeTruthy();
+    // One PDF search, in the Library: Research neither queries nor lists PDFs.
+    expect(mocks.resources).not.toHaveBeenCalled();
+    expect(handle.current!.activeTool).toBe('library');
+    expect(handle.current!.intent).toMatchObject({ tab: 'library', query: 'router' });
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Back to search' }));
-    // The search is still there to go back to.
-    expect(screen.getByText('MoE notes')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Manage files' }));
-    expect(screen.getByText('File manager')).toBeTruthy();
+  it('opens the Library from the PDF source', () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole('radio', { name: 'Inside my PDFs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Library' }));
+    expect(handle.current!.activeTool).toBe('library');
+    expect(handle.current!.isOpen).toBe(true);
   });
 });

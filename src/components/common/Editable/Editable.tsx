@@ -9,6 +9,7 @@ import {
   markdownPrefixKind,
   useActiveBlock,
   useEditorActions,
+  usePageReadOnly,
   type BlockKindId,
 } from '../../../editor';
 import { useContext, useLayoutEffect, useRef } from 'react';
@@ -78,7 +79,7 @@ export function Editable({
   className,
   style,
   slashEnabled = false,
-  locked = false,
+  locked: lockedBlock = false,
 }: {
   id: string;
   html: string;
@@ -107,6 +108,10 @@ export function Editable({
    */
   locked?: boolean;
 }) {
+  // A read-only page (a viewer, M6.UI-2) is every block locked: readable,
+  // selectable and copyable, focusable for arrow keys, never edited.
+  const readOnly = usePageReadOnly();
+  const locked = lockedBlock || readOnly;
   // Actions plus the active-block context: the full state value changes on
   // every keystroke anywhere in the document, and subscribing to it made every
   // editable re-render on every edit. Block order is read at keydown time via
@@ -157,11 +162,12 @@ export function Editable({
    */
   const neighbourBlock = (dir: -1 | 1): string | null => {
     const ids = getBlockIds();
-    for (let j = ids.indexOf(id) + dir; j >= 0 && j < ids.length; j += dir) {
-      const target = refs.current[ids[j]];
-      if (target && !reviewInPlaceOf(target.closest('.block-row'))) return ids[j];
-    }
-    return null;
+    const at = ids.indexOf(id);
+    const candidates = dir < 0 ? ids.slice(0, Math.max(at, 0)).reverse() : ids.slice(at + 1);
+    return candidates.find((candidate) => {
+      const target = refs.current[candidate];
+      return target && !reviewInPlaceOf(target.closest('.block-row'));
+    }) ?? null;
   };
 
   /**
@@ -285,9 +291,9 @@ export function Editable({
       contentEditable={!locked}
       // A contenteditable div has inconsistent implicit semantics across
       // browser/assistive-technology pairs. Expose the editing contract
-      // explicitly so every prose block is discoverable as a document field.
+      // explicitly so every prose block is discoverable as a text field.
       role="textbox"
-      aria-label={ariaLabel ?? placeholder ?? 'Document text'}
+      aria-label={ariaLabel ?? placeholder ?? 'Page text'}
       aria-multiline="true"
       // A non-editable div is not in the tab order, and `refs.current[id].focus()`
       // on one does nothing — which would strand arrow-key navigation on the
@@ -478,7 +484,7 @@ export function Editable({
         // blocks too, except those that would convert or move them.
         if (isMod(e) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'd') {
           e.preventDefault();
-          duplicateBlock(id);
+          if (!readOnly) duplicateBlock(id);
           return;
         }
         if (isMod(e) && e.shiftKey && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -641,7 +647,8 @@ export function Editable({
             // the text on the page, widgets included. The html string counts
             // entities and leaves out what a citation or an equation renders.
             const ids = getBlockIds();
-            const above = refs.current[ids[ids.indexOf(id) - 1]];
+            const aboveId = ids[ids.indexOf(id) - 1];
+            const above = aboveId === undefined ? undefined : refs.current[aboveId];
             const junction = above?.textContent?.length;
             const merged = mergeWithPrevious(id);
             if (merged && merged.targetId !== id) {

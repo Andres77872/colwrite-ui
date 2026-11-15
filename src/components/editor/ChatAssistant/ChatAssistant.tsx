@@ -1,16 +1,19 @@
 import { useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useEditor } from '@/editor';
+import { useDocumentActions, useDocumentSession, useEditorDoc, usePageReadOnly } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
-import type { ChatItem } from '@/services/chats';
+import type { ChatItem } from '@/data/chats';
 import { useChatSessions } from '../../chat/chatSessionsState';
 import { useChatHistory } from '@/components/panels/ChatsPanel';
-import { PanelsContext } from '@/components/panels/panelsContextState';
+import { PanelsContext, type PanelsContextValue } from '@/components/panels/panelsContextState';
 import { PANEL_CONFIG } from '@/components/panels/panelConfig';
 import type { ChatRefPickerHandle } from './ChatRefPicker';
 import type { ChatTaggedInputHandle } from './ChatTaggedInput';
 import { useAgentTurn } from './useAgentTurn';
+import { useAutoMode } from './useAutoMode';
+import { AgentToolsContext } from '@/components/preferences/agentToolsContextState';
 import { useConversationLoader } from './useConversationLoader';
 import { currentFocus, useEditorFocus, type EditorFocus } from '@/components/editor/References';
 import { MessageRow } from './MessageRow';
@@ -37,6 +40,38 @@ function focusComposer(host: ChatTaggedInputHandle | null) {
 const AUTOSCROLL_THRESHOLD_PX = 64;
 
 /** A chat with no stored title is named by what it first asked. */
+/** The newest assistant message in a transcript. */
+function lastAssistantMessage<T extends { role: string }>(messages: readonly T[]): T | undefined {
+  return [...messages].reverse().find((message) => message.role === 'assistant');
+}
+
+/**
+ * Show something in the page from the chat. On a phone the AI sheet covers
+ * the page, so it closes first; `reveal` runs once the sheet is gone and has
+ * handed focus back, or that would pull focus away again. `host` is the
+ * transcript, which leaves the page with the sheet.
+ */
+function showInPage(
+  panels: PanelsContextValue | null | undefined,
+  host: HTMLElement | null,
+  reveal: () => void,
+): void {
+  if (!panels || panels.toolsDocked) {
+    reveal();
+    return;
+  }
+  const started = performance.now();
+  panels.setAssistantOpen(false);
+  const whenClosed = () => {
+    if (host?.isConnected && performance.now() - started < 1000) {
+      requestAnimationFrame(whenClosed);
+      return;
+    }
+    setTimeout(reveal, 0);
+  };
+  requestAnimationFrame(whenClosed);
+}
+
 function titleFromPrompt(prompt: string): string {
   const line = prompt.replace(/#(?:this|doc)\/[\w/-]+/g, '').replace(/\s+/g, ' ').trim();
   return line.length > 48 ? `${line.slice(0, 47)}…` : line;
@@ -55,27 +90,41 @@ export function ChatAssistant() {
   // starts a new session and so a new transcript; saving the draft that is
   // already open only gives it an id, and must not throw away the conversation
   // that asked for it to be saved in the first place.
-  const { documentSessionId } = useEditor();
+  const { documentSessionId } = useDocumentSession();
   return <DocumentChatAssistant key={documentSessionId} />;
 }
 
 function DocumentChatAssistant() {
-  const editor = useEditor();
-  const {
-    documentId,
-    loadingDocumentId,
-    ensureRemoteDocument,
-    hasPendingEdits,
-    saveRemote,
-    restoreEpoch,
-  } = editor;
+  const { doc } = useEditorDoc();
+  const { documentId, documentSessionId, loadingDocumentId, restoreEpoch } = useDocumentSession();
+  const workspaceId = useWorkspaceId();
+  const { ensureRemoteDocument, hasPendingEdits, saveRemote } = useDocumentActions();
   const proposals = useProposals();
-  const { selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId } =
+  const { selectedChatId, selectedLeafId, setSelectedChatId, setSelectedLeafId } =
     useChatSessions();
   const history = useChatHistory();
+  /** Bumped when the author starts or picks a chat: Auto belongs to one chat. */
+  const [chatEpoch, setChatEpoch] = useState(0);
+  const auto = useAutoMode({ workspace: workspaceId, page: documentSessionId, chat: selectedChatId, chatEpoch });
+  // The workspace's policy can take Auto away, and web search or outside
+  // research with it (D7): the switch says so before anything is sent, and
+  // a policy changed while Auto is on turns it off.
+  const policy = useContext(AgentToolsContext)?.policy ?? null;
+  // A viewer never uses Auto (D18): the switch says so before anything is sent.
+  const readOnly = usePageReadOnly();
+  const autoUnavailable: 'policy' | 'role' | null = readOnly ? 'role' : policy?.auto === false ? 'policy' : null;
+  const autoAllowed = autoUnavailable === null;
+  const { on: autoOn, turnOff: turnAutoOff } = auto;
+  useEffect(() => {
+    if (!autoAllowed && autoOn) turnAutoOff();
+  }, [autoAllowed, autoOn, turnAutoOff]);
+  const policyOff = useMemo(
+    () => (policy ? (['web_search', 'outside_research'] as const).filter((key) => !policy[key]) : []),
+    [policy],
+  );
 
   const [input, setInput] = useState('');
-  const files = useChatAttachments(selectedChatId);
+  const files = useChatAttachments(selectedChatId, ensureRemoteDocument);
   const [atBottom, setAtBottom] = useState(true);
 
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -117,9 +166,9 @@ function DocumentChatAssistant() {
     hasPendingEdits,
     saveRemote,
     selectedChatId,
-    selectedThreadId,
+    selectedLeafId,
     setSelectedChatId,
-    setSelectedThreadId,
+    setSelectedLeafId,
     proposals,
     setInput,
     setAtBottom,
@@ -129,9 +178,12 @@ function DocumentChatAssistant() {
     // The API keeps no title of its own, so a new conversation is named by
     // the question that started it — in the list as well as in the header.
     onChatCreated: (chatId, prompt) => {
+      // Still the chat the author turned Auto on in, now with an id.
+      auto.adoptChat(chatId);
       const title = titleFromPrompt(prompt);
       if (title) void history.rename(chatId, title);
     },
+    autoMode: auto,
   });
 
   const visibleMessages = useMemo(
@@ -152,26 +204,26 @@ function DocumentChatAssistant() {
    * name: nothing is attached to it yet, and saying so is the point.
    */
   const attachment = useMemo(() => {
-    const name = editor.doc.name?.trim() || 'Untitled document';
+    const name = doc.name?.trim() || 'Untitled page';
     return documentId
       ? {
           attached: true as const,
           name,
           label: name,
-          hint: `This conversation is kept with “${name}”, and every edit in it is made to that document.`,
+          hint: `This conversation is kept with “${name}”, and every edit in it is made to that page.`,
           regionLabel: `Writing assistant for ${name}`,
         }
       : {
           attached: false as const,
           name,
           label: 'Not saved yet',
-          hint: 'Asking saves this document and keeps the conversation with it from then on.',
-          regionLabel: 'Writing assistant for a document that has not been saved yet',
+          hint: 'Asking saves this page and keeps the conversation with it from then on.',
+          regionLabel: 'Writing assistant for a page that has not been saved yet',
         };
-  }, [documentId, editor.doc.name]);
+  }, [documentId, doc.name]);
 
   const chatTitle = useMemo(() => {
-    const stored = history.items.find((chat) => chat.chat_id === selectedChatId)?.title?.trim();
+    const stored = history.items.find((chat) => chat.id === selectedChatId)?.title?.trim();
     if (stored) return stored;
     const firstPrompt = visibleMessages.find((m) => m.role === 'user')?.content;
     if (firstPrompt) return titleFromPrompt(firstPrompt) || 'Untitled chat';
@@ -182,17 +234,11 @@ function DocumentChatAssistant() {
   // region stays silent until there is something whole to read out.
   const completedReply = useMemo(() => {
     if (isStreaming) return '';
-    for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
-      if (visibleMessages[i].role === 'assistant') return visibleMessages[i].content;
-    }
-    return '';
+    return lastAssistantMessage(visibleMessages)?.content ?? '';
   }, [isStreaming, visibleMessages]);
 
   const latestAnswerId = useMemo(() => {
-    for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
-      if (visibleMessages[i].role === 'assistant') return visibleMessages[i].id;
-    }
-    return null;
+    return lastAssistantMessage(visibleMessages)?.id ?? null;
   }, [visibleMessages]);
 
   // Follow new output only while the reader is already at the bottom, so
@@ -228,10 +274,18 @@ function DocumentChatAssistant() {
 
   const { conversationNotice, reloadConversation } = useConversationLoader({
     onResumeRun: resumeRun,
+    onChatGone: () => {
+      resetChatUI(true);
+      loadedConversationRef.current = null;
+      setChatEpoch((epoch) => epoch + 1);
+      setSelectedChatId(null);
+      setSelectedLeafId(null);
+    },
+    workspaceId,
     documentId,
     selectedChatId,
-    selectedThreadId,
-    setSelectedThreadId,
+    selectedLeafId,
+    setSelectedLeafId,
     abortRef,
     loadedConversationRef,
     setMessages,
@@ -245,22 +299,24 @@ function DocumentChatAssistant() {
     resetChatUI(true);
     // Reopening the same conversation later has to fetch it again.
     loadedConversationRef.current = null;
+    setChatEpoch((epoch) => epoch + 1);
     setSelectedChatId(null);
-    setSelectedThreadId(null);
+    setSelectedLeafId(null);
     requestAnimationFrame(() => focusComposer(inputHostRef.current));
   };
 
   const onPickChat = (chat: ChatItem) => {
-    if (chat.chat_id === selectedChatId) return;
+    if (chat.id === selectedChatId) return;
     files.clear();
     resetChatUI(true);
     loadedConversationRef.current = null;
-    setSelectedChatId(chat.chat_id);
-    setSelectedThreadId(typeof chat.last_thread_id === 'number' ? chat.last_thread_id : null);
+    setChatEpoch((epoch) => epoch + 1);
+    setSelectedChatId(chat.id);
+    setSelectedLeafId(chat.last_message_id);
   };
 
   const onChatDeleted = (chat: ChatItem) => {
-    if (chat.chat_id === selectedChatId) onNewChat();
+    if (chat.id === selectedChatId) onNewChat();
   };
 
   /**
@@ -304,27 +360,23 @@ function DocumentChatAssistant() {
   };
 
   /**
-   * Show the first of a reply's changes in the page. On a phone the AI
-   * sheet covers the page, so it closes first; the change is revealed once
-   * the sheet is gone and has handed focus back, or that would pull focus
-   * away from the card again. The suggestions pill brings the author back.
+   * Show the first of a reply's changes in the page (see `showInPage`). The
+   * suggestions pill brings the author back.
    */
-  const reviewChange = (changeId: string) => {
-    if (!panels || panels.toolsDocked) {
-      proposals.focusChange(changeId);
-      return;
-    }
-    const host = listRef.current;
-    const started = performance.now();
-    panels.setAssistantOpen(false);
-    const whenClosed = () => {
-      if (host?.isConnected && performance.now() - started < 1000) {
-        requestAnimationFrame(whenClosed);
-        return;
-      }
-      setTimeout(() => proposals.focusChange(changeId), 0);
-    };
-    requestAnimationFrame(whenClosed);
+  /** A reply's changes still open for review, from the change sets its edits went into. */
+  const openChangeIdsOf = (changeSetIds: readonly string[]): string[] =>
+    changeSetIds.length === 0
+      ? []
+      : proposals.sets
+        .filter((set) => changeSetIds.includes(set.changeSetId))
+        .flatMap((set) => set.changes.filter((change) => change.status === 'pending').map((change) => change.id));
+  const reviewChange = (changeId: string) =>
+    showInPage(panels, listRef.current, () => proposals.focusChange(changeId));
+  /** Under an Auto turn's reply: Review shows its set in the page. */
+  const reviewAutoApplied = (id: string) =>
+    showInPage(panels, listRef.current, () => proposals.revealAutoApplied(id));
+  const undoAutoApplied = (id: string) => {
+    proposals.undoAutoApplied(id);
   };
 
   const scrollToLatest = () => {
@@ -341,6 +393,9 @@ function DocumentChatAssistant() {
    */
   const onPanelKeyDown = (event: React.KeyboardEvent) => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
+    // A dialog the panel opened (the Auto warning) is in a portal: its
+    // Escape closes the dialog, not the run.
+    if (!event.currentTarget.contains(event.target as Node)) return;
     if (refPickerRef.current?.isOpen()) return;
     if (isStreaming) {
       event.preventDefault();
@@ -432,6 +487,7 @@ function DocumentChatAssistant() {
               saved={Boolean(documentId)}
               unsavedNoticeId={unsavedNoticeId}
               onPick={onSuggestion}
+              readOnly={readOnly}
             />
           )}
 
@@ -445,15 +501,18 @@ function DocumentChatAssistant() {
                 progress={live ? progress : null}
                 latest={message.id === latestAnswerId}
                 // This reply's own changes, minus the ones already decided on.
-                openChangeIds={message.proposedIds.filter((id) =>
-                  proposals.pending.some((change) => change.id === id),
-                )}
+                openChangeIds={openChangeIdsOf(message.changeSetIds)}
                 onFocusChange={reviewChange}
                 onRetry={
                   message.id === latestAnswerId && !isStreaming && !error
                     ? () => regenerate(message.id)
                     : undefined
                 }
+                autoApplied={{
+                  sets: proposals.autoApplied.filter((set) => message.changeSetIds.includes(set.changeSetId)),
+                  onUndo: undoAutoApplied,
+                  onReview: reviewAutoApplied,
+                }}
               />
             );
           })}
@@ -508,6 +567,9 @@ function DocumentChatAssistant() {
             onDismissSelection={() => setDismissedFocus(focus)}
             inputRef={inputHostRef}
             pickerRef={refPickerRef}
+            auto={{ on: auto.on, blocked: auto.blocked, onTurnOn: auto.turnOn, onTurnOff: auto.turnOff, unavailable: autoUnavailable }}
+            switchedOff={policyOff}
+            canUpload={!readOnly}
           />
         </div>
       </div>

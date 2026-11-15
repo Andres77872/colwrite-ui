@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { Check, ChevronRight, CircleSlash, Network, TriangleAlert } from 'lucide-react';
 import { formatDraftSize, formatElapsed, useNow } from '@/components/editor/AgentProgress';
-import type { AgentWorker } from '@/services/streamParser';
+import type { AgentWorker } from '@/api/assistant/streamParser';
 import { failureLead, formatDuration, metaFor } from './toolMeta';
 import type { ToolRun } from './toolMeta';
 

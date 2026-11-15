@@ -6,9 +6,9 @@ import { createContext, useContext } from 'react';
  * The app has no router — it has always been a single editor screen. This is
  * the smallest thing that lets a second full-page surface exist without
  * pulling in routing: the providers stay mounted across a switch, so editor
- * state survives and the profile view can still open a document.
+ * state survives and the Settings view can still open a page.
  */
-export type AppView = 'workspace' | 'profile';
+export type AppView = 'editor' | 'settings';
 
 export type ViewContextValue = {
   view: AppView;

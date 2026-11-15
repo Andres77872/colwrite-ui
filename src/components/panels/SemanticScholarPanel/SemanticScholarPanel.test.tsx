@@ -1,4 +1,7 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { takeItems } from '@/lib/itemAt';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
+import { panelKey } from '@/lib/storageKeys';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const serviceMocks = vi.hoisted(() => ({
@@ -8,8 +11,8 @@ const serviceMocks = vi.hoisted(() => ({
   assessment: vi.fn(),
 }));
 
-vi.mock('@/services/semanticScholar', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/services/semanticScholar')>();
+vi.mock('@/data/semanticScholar', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/data/semanticScholar')>();
   return {
     ...actual,
     searchSemanticScholar: serviceMocks.search,
@@ -27,10 +30,10 @@ vi.mock('@/components/preferences', () => ({
 // the whole document-loading stack into a test about a search panel.
 vi.mock('@/editor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/editor')>()),
-  useEditor: () => ({ documentId: null }),
+  useDocumentId: () => null,
 }));
 
-import type { ClaimAssessment, ClaimVerdict } from '@/services/semanticScholar';
+import type { ClaimAssessment, ClaimVerdict } from '@/data/semanticScholar';
 import { ToastProvider } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { PanelsProvider } from '../panelsContext';
@@ -125,7 +128,7 @@ function switchToClaims() {
 
 beforeEach(() => {
   localStorage.clear();
-  localStorage.setItem('panels.researchSource', JSON.stringify('semantic-scholar'));
+  localStorage.setItem(panelKey('researchSource'), JSON.stringify('semantic-scholar'));
   serviceMocks.search.mockReset();
   serviceMocks.graph.mockReset();
   serviceMocks.recommendations.mockReset();
@@ -417,7 +420,7 @@ describe('Research on Semantic Scholar', () => {
   });
 
   it('does not turn a provider API URL into a browser navigation link', async () => {
-    const [evidence] = claimAssessment().evidence;
+    const [evidence] = takeItems(claimAssessment().evidence, 1);
     serviceMocks.assessment.mockResolvedValueOnce(
       claimAssessment({
         evidence: [
@@ -503,6 +506,7 @@ describe('Research on Semantic Scholar', () => {
     fireEvent.click(assess);
     fireEvent.change(field, { target: { value: 'Second claim' } });
     fireEvent.click(assess);
+    await waitFor(() => expect(serviceMocks.assessment).toHaveBeenCalledTimes(2));
 
     await act(async () => {
       resolveSecond(claimAssessment({ claim: 'Second claim', rationale: 'Newest rationale.' }));

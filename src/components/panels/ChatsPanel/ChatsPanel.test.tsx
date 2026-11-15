@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { StrictMode } from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { ChatsPanel } from './ChatsPanel';
 import { useChatHistory } from './useChatHistory';
-import { EditorActionsContext, EditorContext, type EditorContextValue } from '@/editor/editorContextState';
+import { FakeEditorProviders, type EditorProbe } from '@/editor/__tests__/editorHarness';
 import { ConfirmContext, type ConfirmOptions } from '@/components/ui/confirmContext';
 import { ToastContext } from '@/components/ui/toastContext';
 import { ChatSessionsContext } from '@/components/chat/chatSessionsState';
-import { ApiError } from '@/services/contracts';
-import * as chatsService from '@/services/chats';
+import { http, problem, server } from '@/__tests__/server';
+import type { ChatListResponse, ChatSummary } from '@/api/schema';
 
 /**
  * The chat list inside the assistant's switcher, with the hook that loads it.
@@ -19,22 +20,44 @@ import * as chatsService from '@/services/chats';
  * says so and recovers by itself.
  */
 
-vi.mock('@/services/chats', () => ({
-  listChats: vi.fn(),
-  createChat: vi.fn(),
-  deleteChat: vi.fn(),
-  updateChatTitle: vi.fn(),
-}));
-
-const mocked = vi.mocked(chatsService);
-
 const DOC_ID = 'doc-1';
 
-function editorValue(): EditorContextValue {
+type Answer<Body> = Body | Response | Promise<Body | Response>;
+
+/**
+ * The server's chat routes for this page, one call per request: the list (by
+ * its query), a chat's deletion (its id) and its rename (its id and new
+ * title). Each answers a body, or a `Response` for a problem.
+ */
+const chats = {
+  list: vi.fn<(query: Record<string, string>) => Answer<ChatListResponse>>(),
+  remove: vi.fn<(chatId: string) => Answer<null>>(),
+  rename: vi.fn<(chatId: string, title: string) => Answer<ChatSummary>>(),
+};
+
+function mockChatRoutes() {
+  const chat = '/workspaces/{workspace_id}/documents/{document_id}/chats/{chat_id}';
+  server.use(
+    http.get('/workspaces/{workspace_id}/documents/{document_id}/chats', async ({ request, response }) => {
+      const value = await chats.list(Object.fromEntries(new URL(request.url).searchParams));
+      return value instanceof Response ? response.untyped(value) : response(200).json(value);
+    }),
+    http.delete(chat, async ({ params, response }) => {
+      const value = await chats.remove(params.chat_id);
+      return value instanceof Response ? response.untyped(value) : response(204).empty();
+    }),
+    http.patch(chat, async ({ params, request, response }) => {
+      const value = await chats.rename(params.chat_id, (await request.json()).title ?? '');
+      return value instanceof Response ? response.untyped(value) : response(200).json(value);
+    }),
+  );
+}
+
+function editorValue(): EditorProbe {
   return {
     documentId: DOC_ID,
     ensureRemoteDocument: async () => DOC_ID,
-  } as unknown as EditorContextValue;
+  } as unknown as EditorProbe;
 }
 
 const confirm = vi.fn(async (_options: ConfirmOptions) => true);
@@ -48,68 +71,73 @@ function Switcher() {
 }
 const toast = vi.fn(() => 'toast-1');
 
-const CHAT = {
-  chat_id: 'chat-1',
-  document_id: DOC_ID,
-  user_id: null,
+const CHAT: ChatSummary = {
+  id: 'chat-1',
   title: 'Outline review',
-  last_thread_id: 7,
-  created_at: null,
-  updated_at: null,
+  last_message_id: 7,
+  created_at: '2026-11-14T10:00:00Z',
+  updated_at: '2026-11-14T10:00:00Z',
 };
+
+/** A page of the list; a next cursor says there are more chats. */
+const listOf = (items: ChatSummary[], nextCursor: string | null = null): ChatListResponse => ({ items, next_cursor: nextCursor });
 
 function renderPanel({ strict = false }: { strict?: boolean } = {}) {
   const editor = editorValue();
-  // The fake carries both state and actions, so it feeds both halves of the
-  // split context.
+  // The fake carries every slice, so it feeds every editor context.
   const tree = (
-    <EditorContext.Provider value={editor}>
-      <EditorActionsContext.Provider value={editor}>
-        <ChatSessionsContext.Provider
-          value={{
-            selectedChatId: null,
-            setSelectedChatId: () => {},
-            selectedThreadId: null,
-            setSelectedThreadId: () => {},
-          }}
-        >
-          <ConfirmContext.Provider value={confirm}>
-            <ToastContext.Provider value={{ toast, dismiss: () => {} }}>
-              <Switcher />
-            </ToastContext.Provider>
-          </ConfirmContext.Provider>
-        </ChatSessionsContext.Provider>
-      </EditorActionsContext.Provider>
-    </EditorContext.Provider>
+    <FakeEditorProviders value={editor}>
+      <ChatSessionsContext.Provider
+        value={{
+          selectedChatId: null,
+          setSelectedChatId: () => {},
+          selectedLeafId: null,
+          setSelectedLeafId: () => {},
+        }}
+      >
+        <ConfirmContext.Provider value={confirm}>
+          <ToastContext.Provider value={{ toast, dismiss: () => {} }}>
+            <Switcher />
+          </ToastContext.Provider>
+        </ConfirmContext.Provider>
+      </ChatSessionsContext.Provider>
+    </FakeEditorProviders>
   );
   return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
-function rateLimited(): ApiError {
-  return new ApiError('Too many requests for this document', 429, {
-    code: 'document_rate_limit_exceeded',
-    retryable: true,
-    retry_after: 1,
+function rateLimited(): Response {
+  return problem('document_rate_limit_exceeded', 'Too many requests for this document', { retry_after: 1 }, { headers: { 'Retry-After': '1' } });
+}
+
+/** The client replays a retryable problem after its `Retry-After`, a few times, before it reports it. */
+async function outlastRetries() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
   });
 }
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
-  mocked.listChats.mockReset();
+  chats.list.mockReset();
+  mockChatRoutes();
 });
 
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe('ChatsPanel while the server catches up', () => {
   it('says the list is on its way when the server calls the failure retryable', async () => {
-    mocked.listChats.mockRejectedValue(rateLimited());
+    chats.list.mockImplementation(rateLimited);
 
     renderPanel();
+    await outlastRetries();
 
     await waitFor(() => expect(screen.getByText('Getting your chats ready')).toBeTruthy());
+    const requests = chats.list.mock.calls.length;
     // Our words for the problem, not the server's description of its machinery.
     expect(
       screen.getByText('Too many requests just now — wait a moment and try again.'),
@@ -121,20 +149,17 @@ describe('ChatsPanel while the server catches up', () => {
     });
     // Nothing is polling behind the author's back: the request layer has done
     // its retrying, and from here it is the Retry button's turn.
-    expect(mocked.listChats).toHaveBeenCalledTimes(1);
+    expect(chats.list).toHaveBeenCalledTimes(requests);
   });
 
   it('opens the list when the author retries and the server has caught up', async () => {
-    mocked.listChats.mockRejectedValueOnce(rateLimited()).mockResolvedValue({
-      chats: [CHAT],
-      count: 1,
-      status: 'ok',
-      message: '',
-    });
+    chats.list.mockImplementation(rateLimited);
 
     renderPanel();
+    await outlastRetries();
     await waitFor(() => expect(screen.getByText('Getting your chats ready')).toBeTruthy());
 
+    chats.list.mockImplementation(() => listOf([CHAT]));
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     await waitFor(() => expect(screen.getByText('Outline review')).toBeTruthy());
@@ -142,10 +167,7 @@ describe('ChatsPanel while the server catches up', () => {
   });
 
   it('reports a failure the server does not call retryable', async () => {
-    mocked.listChats.mockRejectedValue(new ApiError('Document not found', 404, {
-      code: 'document_not_found',
-      retryable: false,
-    }));
+    chats.list.mockImplementation(() => problem('document_not_found', 'Document not found'));
 
     renderPanel();
 
@@ -155,29 +177,29 @@ describe('ChatsPanel while the server catches up', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
-    expect(mocked.listChats).toHaveBeenCalledTimes(1);
+    expect(chats.list).toHaveBeenCalledTimes(1);
   });
 
   it('issues one request under a StrictMode double mount', async () => {
     // Setup/cleanup/setup used to produce two real requests here, each
     // amplified by the transport's own retry ladder.
-    mocked.listChats.mockResolvedValue({ chats: [], count: 0, status: 'ok', message: '' });
+    chats.list.mockImplementation(() => listOf([]));
 
     renderPanel({ strict: true });
 
-    await waitFor(() => expect(mocked.listChats).toHaveBeenCalled());
+    await waitFor(() => expect(chats.list).toHaveBeenCalled());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
-    expect(mocked.listChats).toHaveBeenCalledTimes(1);
+    expect(chats.list).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('ChatsPanel rows', () => {
   beforeEach(() => {
-    mocked.listChats.mockResolvedValue({ chats: [CHAT], count: 1, status: 'ok', message: '' });
-    mocked.deleteChat.mockResolvedValue({ status: 'ok', message: '' });
-    mocked.updateChatTitle.mockResolvedValue({ status: 'ok', message: '' } as never);
+    chats.list.mockImplementation(() => listOf([CHAT]));
+    chats.remove.mockImplementation(() => null);
+    chats.rename.mockImplementation((_chatId, title) => ({ ...CHAT, title }));
   });
 
   it('renames a chat in place', async () => {
@@ -188,7 +210,7 @@ describe('ChatsPanel rows', () => {
     fireEvent.keyDown(field, { key: 'Enter' });
 
     await waitFor(() =>
-      expect(mocked.updateChatTitle).toHaveBeenCalledWith(DOC_ID, 'chat-1', 'Method review'),
+      expect(chats.rename).toHaveBeenCalledWith('chat-1', 'Method review'),
     );
   });
 
@@ -196,7 +218,7 @@ describe('ChatsPanel rows', () => {
     renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: 'Delete Outline review' }));
 
-    await waitFor(() => expect(mocked.deleteChat).toHaveBeenCalledWith(DOC_ID, 'chat-1'));
+    await waitFor(() => expect(chats.remove).toHaveBeenCalledWith('chat-1'));
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Delete “Outline review”?', destructive: true }),
     );
@@ -204,19 +226,34 @@ describe('ChatsPanel rows', () => {
 
   it('hands a picked chat and New chat back to the assistant', async () => {
     renderPanel();
-    fireEvent.click(await screen.findByRole('button', { name: 'Outline review' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Outline review/ }));
     expect(onSelect).toHaveBeenCalledWith(CHAT);
     fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
     expect(onNewChat).toHaveBeenCalledTimes(1);
   });
 
+  it('shows more chats by asking for a longer list, and stops when there are no more', async () => {
+    const older = { ...CHAT, id: 'chat-0', title: 'First draft notes' };
+    chats.list.mockImplementation((query) =>
+      query.limit === '10' ? listOf([CHAT], 'cursor-2') : listOf([CHAT, older]),
+    );
+    renderPanel();
+    await screen.findByRole('button', { name: /^Outline review/ });
+    fireEvent.click(screen.getByRole('button', { name: 'Show more chats' }));
+
+    expect(await screen.findByRole('button', { name: /^First draft notes/ })).toBeTruthy();
+    expect(chats.list).toHaveBeenLastCalledWith({ limit: '20' });
+    expect(screen.getByRole('button', { name: /^Outline review/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Show more chats' })).toBeNull();
+  });
+
   it('filters the list by title', async () => {
     renderPanel();
-    await screen.findByRole('button', { name: 'Outline review' });
+    await screen.findByRole('button', { name: /^Outline review/ });
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search chats' }), {
       target: { value: 'budget' },
     });
-    expect(screen.queryByRole('button', { name: 'Outline review' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Outline review/ })).toBeNull();
     expect(screen.getByText('No chats match.')).toBeTruthy();
   });
 });

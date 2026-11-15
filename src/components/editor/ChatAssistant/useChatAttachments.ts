@@ -1,23 +1,36 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { uid } from '@/lib/uid';
-import { describeApiError } from '@/services/contracts';
-import { uploadResource, type ResourceItem } from '@/services/resources';
+import { describeApiError } from '@/api/errors';
+import type { ResourceItem } from '@/data/resources';
+import { useUploadPdfs } from '@/actions/useUploadPdfs';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import {
   attachmentKey, chatFileError, MAX_CHAT_ATTACHMENTS, resourceAttachment, uploadChatImage, withChatFileType,
   type ChatAttachment,
-} from '@/services/chatAttachments';
+} from '@/api/assistant/chatAttachments';
 
 export type PendingChatAttachment = {
   id: string;
   filename: string;
   state: 'uploading' | 'ready' | 'error';
   attachment?: ChatAttachment;
+  /** A PDF uploaded from this composer, which now lives on the open page. */
+  onPage?: boolean;
   file?: File;
   error?: string;
 };
 
-/** A synchronous reservation prevents concurrent file selections exceeding the cap. */
-export function useChatAttachments(chatId: string | null) {
+/**
+ * The files of the message being written. A synchronous reservation prevents
+ * concurrent file selections exceeding the cap.
+ *
+ * A PDF uploaded here goes to the open page, so only that page's assistant
+ * reads it. It goes through the one PDF upload (`useUploadPdfs`), which saves
+ * a page that was never saved before it uploads to it.
+ */
+export function useChatAttachments(chatId: string | null, ensurePage: () => Promise<string | null>) {
+  const pdfs = useUploadPdfs({ kind: 'page' }, { ensurePage });
+  const workspaceId = useWorkspaceId();
   const [items, setItems] = useState<PendingChatAttachment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const current = useRef<PendingChatAttachment[]>([]);
@@ -45,16 +58,20 @@ export function useChatAttachments(chatId: string | null) {
       const file = withChatFileType(item.file);
       const validation = chatFileError(file);
       if (validation) throw new Error(validation);
-      const attachment = file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
-        ? resourceAttachment(await uploadResource(file))
-        : await uploadChatImage(file);
+      const pdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+      let attachment: ChatAttachment;
+      if (pdf) {
+        attachment = resourceAttachment(await pdfs.uploadOne(file));
+      } else {
+        attachment = await uploadChatImage(workspaceId, file);
+      }
       if (!mounted.current || epoch !== generation.current) return;
       if (current.current.some((entry) => entry.id !== item.id && entry.attachment
         && attachmentKey(entry.attachment) === attachmentKey(attachment))) {
         replace(current.current.filter((entry) => entry.id !== item.id));
       } else {
         replace(current.current.map((entry) => entry.id === item.id
-          ? { id: item.id, filename: attachment.filename || file.name, state: 'ready', attachment }
+          ? { id: item.id, filename: attachment.filename || file.name, state: 'ready', attachment, onPage: pdf }
           : entry));
       }
     } catch (cause) {
@@ -67,6 +84,8 @@ export function useChatAttachments(chatId: string | null) {
 
   return {
     items, error, clear,
+    /** Where a PDF chosen here is uploaded, for the picker to say so. */
+    pdfLabel: pdfs.label,
     blocked: items.some((item) => item.state !== 'ready'),
     attachments: items.flatMap((item) => item.attachment ? [item.attachment] : []),
     remove: (id: string) => { replace(current.current.filter((item) => item.id !== id)); setError(null); },

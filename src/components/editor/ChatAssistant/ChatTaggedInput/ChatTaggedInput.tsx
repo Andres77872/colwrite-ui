@@ -255,14 +255,14 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
         chip.dataset.refText = part.refText;
         chip.dataset.start = String(part.start);
         chip.title =
-          part.kind === 'document' ? `Document ${part.docId}` : `Block ${part.blockId ?? ''}`;
+          part.kind === 'document' ? `Page ${part.docId}` : `Block ${part.blockId ?? ''}`;
 
         const label = document.createElement('span');
         label.className = 'ref-chip-label';
         label.textContent = labelForRef
           ? labelForRef(part)
           : part.kind === 'document'
-            ? `Doc ${shorten(part.docId ?? '')}`
+            ? `Page ${shorten(part.docId ?? '')}`
             : `Block ${shorten(part.blockId ?? '')}`;
 
         const remove = document.createElement('button');

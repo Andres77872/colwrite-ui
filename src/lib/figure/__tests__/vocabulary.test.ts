@@ -44,16 +44,16 @@ function tableRows(header: string): string[][] {
   return rows;
 }
 
-const codeWords = (cell: string) => [...cell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+const codeWords = (cell: string | undefined) => [...(cell ?? '').matchAll(/`([^`]+)`/g)].map(([, word]) => word ?? '');
 
 describe('SHAPES and TONES', () => {
   it('list exactly the shapes and tones the docs name, in order', () => {
     const nodeKeys = tableRows('Key');
     const shapeRow = nodeKeys.find((row) => row[0] === '`shape`');
     const toneRow = nodeKeys.find((row) => row[0] === '`tone`');
-    expect(codeWords(shapeRow![1])).toEqual([...SHAPES]);
+    expect(codeWords(shapeRow?.[1])).toEqual([...SHAPES]);
     // The row goes on to mention `#hex` values, which are not tone names.
-    expect(codeWords(toneRow![1].split('.')[0])).toEqual([...TONES]);
+    expect(codeWords(toneRow?.[1]?.split('.')[0])).toEqual([...TONES]);
   });
 
   it('every canonical shape resolves to itself', () => {
@@ -109,14 +109,14 @@ describe('ROLES', () => {
     if (text === 'bare text') return { shape: 'text', tone: 'neutral', italic: false };
     if (text === 'bare italic text') return { shape: 'text', tone: 'neutral', italic: true };
     if (text === 'circle with an operator glyph') return { shape: 'op', tone: 'neutral', italic: false };
-    const [shapeWord, tone] = text.split(',').map((part) => part.trim());
+    const [shapeWord = '', tone] = text.split(',').map((part) => part.trim());
     const shape = resolveShape(shapeWord === 'rounded' ? 'round' : shapeWord);
     if (!shape) throw new Error(`Unknown shape in docs: ${shapeWord}`);
     return { shape, tone: tone as Tone, italic: false };
   }
 
-  const rows = tableRows('Role (aliases)').map(([names, draws]) => {
-    const [primary, aliases = ''] = names.split('(');
+  const rows = tableRows('Role (aliases)').map(([names = '', draws = '']) => {
+    const [primary, aliases] = names.split('(');
     return { primaries: codeWords(primary), aliases: codeWords(aliases), draws: drawsAs(draws) };
   });
 
@@ -177,7 +177,7 @@ describe('opGlyphFor', () => {
     };
     const rows = tableRows('Glyph');
     expect(rows).toHaveLength(5);
-    for (const [glyph, labels] of rows) {
+    for (const [glyph = '', labels] of rows) {
       const expected = glyphs[glyph];
       expect(expected, glyph).toBeDefined();
       for (const label of codeWords(labels)) expect(opGlyphFor(label), label).toBe(expected);

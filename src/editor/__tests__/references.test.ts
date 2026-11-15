@@ -1,3 +1,4 @@
+import { takeItems } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import { buildBibliography, citationLabel } from '../citations';
 import { parseBibtex, toBibtex, bibtexKey } from '../bibtex';
@@ -39,7 +40,7 @@ describe('bibliography from the text and the library', () => {
     const bibliography = buildBibliography(blocks, {
       library: [{ key: 'https://doi.org/10.1234/alpha', title: 'Corrected title', provider: 'crossref' }],
     });
-    const [entry] = bibliography.entries;
+    const [entry] = takeItems(bibliography.entries, 1);
     expect(entry.source.title).toBe('Corrected title');
     expect(entry.verified).toBe(true);
   });
@@ -50,7 +51,7 @@ describe('bibliography from the text and the library', () => {
         cite('a', 'Smith2020', { sources: [{ key: 'Smith2020', title: 'Typed', provider: 'manual' }] }),
       ]),
     ];
-    expect(buildBibliography(blocks).entries[0].verified).toBe(false);
+    expect(buildBibliography(blocks).entries[0]?.verified).toBe(false);
   });
 
   it('relabels every citation when the document chooses a style', () => {

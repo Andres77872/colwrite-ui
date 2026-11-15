@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import type { ChatItem } from '@/services/chats';
+import type { ChatItem } from '@/data/chats';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ChatsPanel, type ChatHistory } from '@/components/panels/ChatsPanel';
 

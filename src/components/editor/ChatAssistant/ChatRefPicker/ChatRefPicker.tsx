@@ -1,18 +1,20 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { menuItem, menuLabel, menuSurface } from '@/components/ui/menuStyles';
 import { ChevronLeft, ChevronRight, FileText, Files } from 'lucide-react';
 import type { SetStateAction } from 'react';
-import { useEditor } from '../../../../editor';
+import { useDocumentId, useEditorDoc } from '../../../../editor';
 import type { Block } from '../../../../editor';
 import { kindLabel } from '@/editor';
 import { blockText } from '../../../../editor/proposals';
-import { loadDocument as apiLoadDocument } from '../../../../services';
-import type { DocumentSummary } from '../../../../services';
-import { errorMessage } from '../../../../services';
-
-type DocSummary = { _id: string; name?: string };
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { documentContentQuery, documentListQuery, type DocumentSummary } from '@/data/documents';
+import { pathLabel, useCollectionPaths } from '@/data/resources';
+import { errorMessage } from '@/api/errors';
+import { ListSkeleton } from '@/components/ui/list-skeleton';
+import { InlineError } from '@/components/ui/inline-error';
+import { EmptyState } from '@/components/ui/empty-state';
 type NavigationLevel = { type: 'main' | 'documents' | 'doc-blocks' | 'this-blocks' };
 
 /* Only one picker is ever mounted (it belongs to the single composer), so
@@ -31,33 +33,26 @@ function PickerHints({ back, search }: { back: boolean; search?: boolean }) {
   );
 }
 
-/** Loading states here were bare text while every other panel used `Spinner`. */
-function LoadingRow({ label }: { label: string }) {
+/** A list loading in the picker: placeholder rows, and its name for assistive tech. */
+function LoadingRows({ label }: { label: string }) {
   return (
-    <div
-      role="status"
-      className="flex items-center justify-center gap-2 px-2 py-4 text-sm text-muted-foreground"
-    >
-      <Spinner />
-      {label}
+    <div role="status">
+      <span className="sr-only">{label}</span>
+      <ListSkeleton dense rows={3} />
     </div>
   );
-}
-
-function toDocSummary(document: DocumentSummary): DocSummary | null {
-  const id = document.id;
-  if (!id) return null;
-  return { _id: id, name: document.name };
 }
 
 /** Longest `#query` the picker keeps filtering before it lets go. */
 const MAX_QUERY_LENGTH = 48;
 const MAX_BLOCK_HITS = 8;
 const MAX_DOC_HITS = 5;
+/** How long typing pauses before the server is asked for matching pages. */
+const QUERY_DEBOUNCE_MS = 150;
 
 type QueryHit =
   | { kind: 'block'; block: Block; index: number; label: string; score: number }
-  | { kind: 'doc'; doc: DocSummary; label: string; score: number };
+  | { kind: 'doc'; doc: DocumentSummary; label: string };
 
 /**
  * How well `text` answers `query`, or null when it does not: a match at the
@@ -68,7 +63,7 @@ function matchScore(text: string, query: string): number | null {
   const at = haystack.indexOf(query);
   if (at === -1) return null;
   if (at === 0) return 3;
-  return /[\s\p{P}]/u.test(haystack[at - 1]) ? 2 : 1;
+  return /[\s\p{P}]/u.test(haystack.charAt(at - 1)) ? 2 : 1;
 }
 
 /**
@@ -121,15 +116,18 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   { getHost, input, setInput, setCaretIndex },
   ref
 ) {
-  const { blocks, listRemote, documentId } = useEditor();
+  const { blocks } = useEditorDoc();
+  const queryClient = useQueryClient();
+  const workspaceId = useWorkspaceId();
+  const documentId = useDocumentId();
 
   const [refOpen, setRefOpen] = useState<boolean>(false);
   const [refResultsOpen, setRefResultsOpen] = useState<boolean>(false);
   const [refResultsType, setRefResultsType] = useState<'this-blocks' | 'documents' | 'doc-blocks'>('this-blocks');
-  const [refDocs, setRefDocs] = useState<DocSummary[] | null>(null);
+  const [refDocs, setRefDocs] = useState<DocumentSummary[] | null>(null);
   const [refLoading, setRefLoading] = useState<boolean>(false);
   const [refError, setRefError] = useState<string>('');
-  const [refDocContext, setRefDocContext] = useState<DocSummary | null>(null);
+  const [refDocContext, setRefDocContext] = useState<DocumentSummary | null>(null);
   const [refBlocks, setRefBlocks] = useState<Block[] | null>(null);
   const [refAnchorIndex, setRefAnchorIndex] = useState<number>(-1);
   const [editingExisting, setEditingExisting] = useState<boolean>(false);
@@ -138,7 +136,6 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   const [resultsIndex, setResultsIndex] = useState<number>(0);
   const [navigationStack, setNavigationStack] = useState<NavigationLevel[]>([{type: 'main'}]);
   const [queryIndex, setQueryIndex] = useState<number>(0);
-  const [queryDocs, setQueryDocs] = useState<DocSummary[] | null>(null);
   const refMenuRef = useRef<HTMLDivElement | null>(null);
   const refResultsRef = useRef<HTMLDivElement | null>(null);
   const queryRef = useRef<HTMLDivElement | null>(null);
@@ -152,10 +149,34 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   const query = !editingExisting && typed ? typed.toLowerCase() : '';
   const queryMode = refOpen && query.length > 0;
   const trimmedQuery = query.trim();
+  // The server searches every page, not only the most recent ones, once the
+  // author pauses; other pages join the block matches then. One extra is
+  // asked for, as the open page may be among the matches.
+  const [searchTerm, setSearchTerm] = useState('');
+  useEffect(() => {
+    if (!queryMode || !trimmedQuery) return;
+    const timer = window.setTimeout(() => setSearchTerm(trimmedQuery), QUERY_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [queryMode, trimmedQuery]);
+  const pageSearch = useQuery({
+    ...documentListQuery(workspaceId, { limit: MAX_DOC_HITS + 1, query: searchTerm }),
+    enabled: queryMode && searchTerm !== '',
+  });
+  // Signed out or offline: this page's blocks are still searchable.
+  const searchedDocs = pageSearch.isError ? [] : pageSearch.data?.documents;
+  const docsForQuery = searchTerm === trimmedQuery && searchedDocs
+    ? searchedDocs.filter((doc) => doc.id !== documentId).slice(0, MAX_DOC_HITS)
+    : null;
+  const queryDocsLoading = queryMode && trimmedQuery !== '' && docsForQuery === null;
+  // Where each listed page lives, so two of one name can be told apart.
+  const listedPages = [...(docsForQuery ?? []), ...(refDocs ?? [])];
+  const collectionPaths = useCollectionPaths(workspaceId, listedPages.map((doc) => doc.collectionId));
+  const pathHint = (doc: DocumentSummary) =>
+    doc.collectionId === null ? '' : pathLabel(collectionPaths.get(doc.collectionId) ?? []);
 
   const hits = useMemo<QueryHit[]>(() => {
     if (!queryMode || !trimmedQuery) return [];
-    const blockHits: QueryHit[] = [];
+    const blockHits: Extract<QueryHit, { kind: 'block' }>[] = [];
     blocks.forEach((block, index) => {
       if (block.type === 'divider') return;
       const text = blockText(block).replace(/\s+/g, ' ').trim();
@@ -166,17 +187,15 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       // Headings are what a reference usually means.
       blockHits.push({ kind: 'block', block, index, label, score: score + (block.type === 'heading' ? 0.5 : 0) });
     });
-    blockHits.sort((a, b) => b.score - a.score || (a.kind === 'block' && b.kind === 'block' ? a.index - b.index : 0));
-    const docHits: QueryHit[] = (queryDocs ?? [])
-      .filter((doc) => doc._id !== documentId)
-      .flatMap((doc) => {
-        const label = doc.name || 'Untitled document';
-        const score = matchScore(label, trimmedQuery);
-        return score === null ? [] : [{ kind: 'doc' as const, doc, label, score }];
-      })
-      .sort((a, b) => b.score - a.score);
-    return [...blockHits.slice(0, MAX_BLOCK_HITS), ...docHits.slice(0, MAX_DOC_HITS)];
-  }, [blocks, documentId, queryDocs, queryMode, trimmedQuery]);
+    blockHits.sort((a, b) => b.score - a.score || a.index - b.index);
+    // The server already matched and ordered these against the query.
+    const docHits: QueryHit[] = (docsForQuery ?? []).map((doc) => ({
+      kind: 'doc' as const,
+      doc,
+      label: doc.name || 'Untitled page',
+    }));
+    return [...blockHits.slice(0, MAX_BLOCK_HITS), ...docHits];
+  }, [blocks, docsForQuery, queryMode, trimmedQuery]);
 
   // A new query starts at the best match. Adjusted during render: it follows
   // the composer's text, not an external system.
@@ -198,7 +217,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setNavigationStack([{type: 'main'}]);
     setEditingExisting(!!opts?.editing);
     setQueryIndex(0);
-    setQueryDocs(null);
+    setSearchTerm('');
     setRefOpen(true);
   }, []);
 
@@ -219,10 +238,10 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
       setNavigationStack(newStack);
       setResultsIndex(0);
       
-      const prevLevel = newStack[newStack.length - 1];
-      if (prevLevel.type === 'main') {
+      const prevLevel = newStack.at(-1);
+      if (prevLevel?.type === 'main') {
         setRefResultsOpen(false);
-      } else if (prevLevel.type === 'documents') {
+      } else if (prevLevel?.type === 'documents') {
         setRefResultsType('documents');
         setRefResultsOpen(true);
       }
@@ -264,8 +283,8 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     closeRefMenu();
   }, [closeRefMenu, editingExisting, input, refAnchorIndex, setCaretIndex, setInput, typed]);
 
-  const insertDocumentReference = useCallback((doc: DocSummary) => {
-    insertAtHash(`#doc/${doc._id}`);
+  const insertDocumentReference = useCallback((doc: DocumentSummary) => {
+    insertAtHash(`#doc/${doc.id}`);
   }, [insertAtHash]);
 
   const labelForBlock = (b: Block, index: number): string => {
@@ -291,64 +310,45 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
     setRefError('');
     setResultsIndex(0);
     try {
-      const { documents } = await listRemote({ page: 1, limit: 10 });
-      const docs = documents.map(toDocSummary).filter((doc): doc is DocSummary => doc !== null);
-      setRefDocs(docs);
+      const { documents } = await queryClient.fetchQuery(documentListQuery(workspaceId, { limit: 10 }));
+      setRefDocs(documents);
       setNavigationStack(prev => [...prev, { type: 'documents' }]);
     } catch (error: unknown) {
-      setRefError(errorMessage(error, 'Failed to load documents'));
+      setRefError(errorMessage(error, 'Could not load pages'));
     } finally {
       setRefLoading(false);
     }
     setRefResultsOpen(true);
-  }, [listRemote]);
+  }, [queryClient, workspaceId]);
 
-  const onOpenDocBlocks = useCallback(async (doc: DocSummary) => {
+  const onOpenDocBlocks = useCallback(async (doc: DocumentSummary) => {
     setRefDocContext(doc);
     setRefResultsType('doc-blocks');
     setRefLoading(true);
     setRefError('');
     setResultsIndex(0);
     try {
-      const loaded = await apiLoadDocument(doc._id);
+      const loaded = await queryClient.fetchQuery(documentContentQuery(workspaceId, doc.id));
       const loadedBlocks = loaded.blocks;
       setRefBlocks(loadedBlocks);
       setNavigationStack(prev => [...prev, { type: 'doc-blocks' }]);
     } catch (error: unknown) {
-      setRefError(errorMessage(error, 'Failed to load document'));
+      setRefError(errorMessage(error, 'Could not load the page'));
     } finally {
       setRefLoading(false);
     }
     setRefResultsOpen(true);
-  }, []);
+  }, [queryClient, workspaceId]);
 
   const onPickBlock = useCallback((source: 'this' | 'doc', block: Block) => {
     if (source === 'this') {
       insertAtHash(`#this/${block.id}`);
     } else {
-      const docId = refDocContext?._id || 'unknown';
+      const docId = refDocContext?.id || 'unknown';
       insertAtHash(`#doc/${docId}/${block.id}`);
     }
   }, [insertAtHash, refDocContext]);
 
-  // Other documents join the matches once the author starts typing a name.
-  const needDocs = queryMode && queryDocs === null;
-  const queryDocsLoading = needDocs;
-  useEffect(() => {
-    if (!needDocs) return;
-    let cancelled = false;
-    listRemote({ page: 1, limit: 50 })
-      .then(({ documents }) => {
-        if (!cancelled) setQueryDocs(documents.map(toDocSummary).filter((doc): doc is DocSummary => doc !== null));
-      })
-      .catch(() => {
-        // Signed out or offline: this page's blocks are still searchable.
-        if (!cancelled) setQueryDocs([]);
-      })
-    return () => {
-      cancelled = true;
-    };
-  }, [listRemote, needDocs]);
 
   const pickHit = useCallback((hit: QueryHit | undefined) => {
     if (!hit) return;
@@ -357,14 +357,14 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   }, [insertAtHash, insertDocumentReference]);
 
   /** Browse a matched document's blocks: the typed query gives way to the list. */
-  const exploreHit = useCallback((doc: DocSummary) => {
+  const exploreHit = useCallback((doc: DocumentSummary) => {
     const start = Math.max(0, refAnchorIndex);
     setInput(`${input.slice(0, start + 1)}${input.slice(start + 1 + (typed?.length ?? 0))}`);
     requestAnimationFrame(() => setCaretIndex?.(start + 1));
-    setRefDocs(queryDocs);
+    setRefDocs(docsForQuery);
     setNavigationStack([{ type: 'main' }, { type: 'documents' }]);
     void onOpenDocBlocks(doc);
-  }, [input, onOpenDocBlocks, queryDocs, refAnchorIndex, setCaretIndex, setInput, typed]);
+  }, [docsForQuery, input, onOpenDocBlocks, refAnchorIndex, setCaretIndex, setInput, typed]);
 
   const handleEnterKey = useCallback(() => {
     if (queryMode) {
@@ -509,7 +509,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
   // an effect: this reacts to the composer's text, not to an external
   // system, and `closeRefMenu` only resets state, so React re-renders before
   // committing. The guard converges: `closeRefMenu` clears both open flags.
-  const noMatches = queryMode && hits.length === 0 && queryDocs !== null && !queryDocsLoading;
+  const noMatches = queryMode && hits.length === 0 && docsForQuery !== null;
   const queryEnded =
     typed !== null &&
     !editingExisting &&
@@ -585,13 +585,13 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
             className="max-h-[18rem] overflow-y-auto"
           >
             {hits.map((hit, idx) => {
-              const firstOfGroup = idx === 0 || hits[idx - 1].kind !== hit.kind;
+              const firstOfGroup = hits[idx - 1]?.kind !== hit.kind;
               const active = queryIndex === idx;
               return (
-                <div key={hit.kind === 'block' ? `b-${hit.block.id}` : `d-${hit.doc._id}`} role="presentation">
+                <div key={hit.kind === 'block' ? `b-${hit.block.id}` : `d-${hit.doc.id}`} role="presentation">
                   {firstOfGroup && (
                     <div role="presentation" className={cn(menuLabel, idx > 0 && 'mt-1')}>
-                      {hit.kind === 'block' ? 'This page' : 'Other documents'}
+                      {hit.kind === 'block' ? 'This page' : 'Other pages'}
                     </div>
                   )}
                   {hit.kind === 'block' ? (
@@ -626,6 +626,9 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                         <span className="min-w-0 flex-1 truncate">
                           <Highlighted text={hit.label} query={trimmedQuery} />
                         </span>
+                        {pathHint(hit.doc) && (
+                          <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground">{pathHint(hit.doc)}</span>
+                        )}
                       </button>
                       <button
                         type="button"
@@ -645,9 +648,9 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
           </div>
           {hits.length === 0 &&
             (queryDocsLoading ? (
-              <LoadingRow label="Searching…" />
+              <LoadingRows label="Searching…" />
             ) : (
-              <div className="px-2 py-3 text-center text-sm text-muted-foreground">No matching blocks or documents</div>
+              <EmptyState size="inline" title="No matching blocks or pages" />
             ))}
           <PickerHints back={false} />
         </div>
@@ -675,7 +678,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
             >
               <FileText aria-hidden="true" />
               <span className="min-w-0 flex-1">
-                <span className="block">This document</span>
+                <span className="block">This page</span>
                 <span className="block text-xs text-muted-foreground">A block on this page</span>
               </span>
               <ChevronRight aria-hidden="true" />
@@ -691,8 +694,8 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
             >
               <Files aria-hidden="true" />
               <span className="min-w-0 flex-1">
-                <span className="block">Other documents</span>
-                <span className="block text-xs text-muted-foreground">A whole document, or a block in it</span>
+                <span className="block">Other pages</span>
+                <span className="block text-xs text-muted-foreground">A whole page, or a block in it</span>
               </span>
               <ChevronRight aria-hidden="true" />
             </button>
@@ -720,21 +723,17 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
             )}
             <div id={`${RESULTS_LIST_ID}-label`} className={cn(menuLabel, 'min-w-0 truncate pt-1 pl-1')}>
               {refResultsType === 'documents'
-                ? 'Documents'
+                ? 'Pages'
                 : refResultsType === 'this-blocks'
                   ? 'Blocks on this page'
-                  : `Blocks in ${refDocContext?.name || refDocContext?._id || 'document'}`}
+                  : `Blocks in ${refDocContext?.name || 'Untitled page'}`}
             </div>
           </div>
 
           {refLoading && (
-            <LoadingRow label={refResultsType === 'documents' ? 'Loading documents…' : 'Loading blocks…'} />
+            <LoadingRows label={refResultsType === 'documents' ? 'Loading pages…' : 'Loading blocks…'} />
           )}
-          {refError && (
-            <div role="alert" className="px-2 py-1.5 text-sm text-destructive">
-              {refError}
-            </div>
-          )}
+          {refError && <InlineError title={refError} />}
 
           {refResultsType === 'documents' && !refLoading && !refError && (
             <div
@@ -744,7 +743,7 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
               className="max-h-[14rem] overflow-y-auto"
             >
               {(refDocs || []).map((d, idx) => (
-                <div key={d._id} className="flex items-center gap-0.5">
+                <div key={d.id} className="flex items-center gap-0.5">
                   <button
                     id={optionId(RESULTS_LIST_ID, idx)}
                     role="option"
@@ -755,21 +754,22 @@ export const ChatRefPicker = forwardRef<ChatRefPickerHandle, ChatRefPickerProps>
                     onMouseEnter={() => setResultsIndex(idx)}
                   >
                     <FileText aria-hidden="true" />
-                    <span className="min-w-0 flex-1 truncate">{d.name || 'Untitled document'}</span>
+                    <span className="min-w-0 flex-1 truncate">{d.name || 'Untitled page'}</span>
+                    {pathHint(d) && <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground">{pathHint(d)}</span>}
                   </button>
                   <button
                     type="button"
                     className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => onOpenDocBlocks(d)}
-                    aria-label={`Explore blocks in ${d.name || d._id}`}
+                    aria-label={`Explore blocks in ${d.name || 'Untitled page'}`}
                   >
                     <ChevronRight aria-hidden="true" className="h-4 w-4" />
                   </button>
                 </div>
               ))}
               {(!refDocs || refDocs.length === 0) && (
-                <div className="px-2 py-3 text-center text-sm text-muted-foreground">No documents</div>
+                <div className="px-2 py-3 text-center text-sm text-muted-foreground">No pages</div>
               )}
             </div>
           )}

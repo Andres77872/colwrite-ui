@@ -6,10 +6,11 @@ import { SettingsEscapeContext } from './settingsEscape';
 
 /**
  * Settings, as a large dialog over the workspace — account, preferences,
- * agent tools, usage and documents — instead of a separate full-screen page
- * that took the sidebar and the open document away.
+ * agent tools and usage — instead of a separate full-screen page that took
+ * the sidebar and the open page away. Pages are managed in the sidebar and
+ * PDFs in the Library; Settings lists neither.
  *
- * `?view=profile` still addresses it, so the URL stays shareable and Back
+ * `?view=settings` still addresses it, so the URL stays shareable and Back
  * closes it.
  */
 export function SettingsDialog({
@@ -20,8 +21,8 @@ export function SettingsDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const escapeHandler = useRef<(() => void) | null>(null);
-  // Opened from a sidebar row or the account menu, never a DialogTrigger:
-  // closing hands focus back to whichever it was.
+  // Opened from the sidebar row, the palette or a link, never a
+  // DialogTrigger: closing hands focus back to whichever it was.
   const returnFocus = useReturnFocus();
 
   return (
@@ -40,7 +41,7 @@ export function SettingsDialog({
       >
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <DialogDescription className="sr-only">
-          Your account, appearance, assistant tools, usage and documents.
+          Your account, appearance, assistant tools, the workspace, its members and usage.
         </DialogDescription>
         <SettingsEscapeContext.Provider value={escapeHandler}>
           <ProfileView />

@@ -1,3 +1,4 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import { describe, it, expect } from 'vitest';
 import type { Block, ToolAction } from '../types';
 import {
@@ -19,7 +20,7 @@ import {
   resumeReview,
 } from '../proposals';
 
-function action(overrides: Partial<ToolAction> = {}): ToolAction {
+function action(overrides: Partial<ToolAction> = {}): ToolAction & { changeSetId: string } {
   return {
     tool: 'doc_edit',
     toolCallId: 'call_1',
@@ -27,8 +28,9 @@ function action(overrides: Partial<ToolAction> = {}): ToolAction {
     documentId: 'doc-1',
     version: 3,
     status: 'proposed',
+    changeSetId: 'cs-1',
     ...overrides,
-  };
+  } as ToolAction & { changeSetId: string };
 }
 
 const blocks: Block[] = [
@@ -49,7 +51,7 @@ describe('buildChangeSet', () => {
 
     expect(set.changes.map((c) => c.kind)).toEqual(['replace', 'delete']);
     expect(set.changes.map((c) => c.order)).toEqual([0, 1]);
-    expect(set.version).toBe(3);
+    expect(set).not.toHaveProperty('version');
   });
 
   it('anchors an insert to its reference block and side', () => {
@@ -93,7 +95,7 @@ describe('buildChangeSet', () => {
       }),
     );
 
-    const [insert, rewrite] = set.changes;
+    const [insert, rewrite] = takeItems(set.changes, 2);
     expect(insert.dependsOn).toEqual([]);
     expect(rewrite.dependsOn).toEqual([insert.id]);
   });
@@ -108,7 +110,7 @@ describe('buildChangeSet', () => {
       }),
     );
 
-    expect(set.changes[1].dependsOn).toEqual([]);
+    expect(set.changes[1]?.dependsOn).toEqual([]);
   });
 
   it('drops operations the editor cannot review', () => {
@@ -133,13 +135,13 @@ describe('readiness', () => {
       }),
     );
 
-    expect(isReady(set.changes[1], [set])).toBe(false);
+    expect(isReady(itemAt(set.changes, 1), [set])).toBe(false);
 
     const accepted = {
       ...set,
-      changes: [{ ...set.changes[0], status: 'accepted' as const }, set.changes[1]],
+      changes: [{ ...itemAt(set.changes, 0), status: 'accepted' as const }, itemAt(set.changes, 1)],
     };
-    expect(isReady(accepted.changes[1], [accepted])).toBe(true);
+    expect(isReady(itemAt(accepted.changes, 1), [accepted])).toBe(true);
   });
 
   it('stays false when the prerequisite was rejected', () => {
@@ -153,10 +155,10 @@ describe('readiness', () => {
     );
     const rejected = {
       ...set,
-      changes: [{ ...set.changes[0], status: 'rejected' as const }, set.changes[1]],
+      changes: [{ ...itemAt(set.changes, 0), status: 'rejected' as const }, itemAt(set.changes, 1)],
     };
 
-    expect(isReady(rejected.changes[1], [rejected])).toBe(false);
+    expect(isReady(itemAt(rejected.changes, 1), [rejected])).toBe(false);
   });
 });
 
@@ -173,7 +175,7 @@ describe('querying', () => {
   it('counts only what is still pending', () => {
     expect(pendingCount([set])).toBe(2);
 
-    const half = { ...set, changes: [{ ...set.changes[0], status: 'accepted' as const }, set.changes[1]] };
+    const half = { ...set, changes: [{ ...itemAt(set.changes, 0), status: 'accepted' as const }, itemAt(set.changes, 1)] };
     expect(pendingCount([half])).toBe(1);
   });
 
@@ -188,14 +190,14 @@ describe('querying', () => {
 
   it('separates document-level changes from block ones', () => {
     expect(documentChanges([set])).toHaveLength(1);
-    expect(documentChanges([set])[0].kind).toBe('rename');
+    expect(documentChanges([set])[0]?.kind).toBe('rename');
   });
 
   it('surfaces changes whose block has been deleted', () => {
     // Otherwise the review bar counts a suggestion that renders nowhere, and
     // the author cannot reach it to dismiss it.
     expect(projectDocument(blocks, [set]).orphans).toHaveLength(0);
-    expect(projectDocument([blocks[0]], [set]).orphans).toHaveLength(1);
+    expect(projectDocument([itemAt(blocks, 0)], [set]).orphans).toHaveLength(1);
   });
 
   it('does not treat a document-level change as orphaned', () => {
@@ -209,7 +211,7 @@ describe('rendering helpers', () => {
     const set = buildChangeSet(
       action({ actions: [{ op: 'replace_block', blockId: 'p', block: { html: 'Rewritten' } }] }),
     );
-    const merged = mergedBlock(set.changes[0], blocks[1]);
+    const merged = mergedBlock(itemAt(set.changes, 0), blocks[1]);
 
     expect(merged).toMatchObject({ id: 'p', type: 'paragraph', html: 'Rewritten' });
     // Fields the agent did not mention keep their value.
@@ -221,7 +223,7 @@ describe('rendering helpers', () => {
       action({ actions: [{ op: 'append_block', block: { id: 'x', type: 'listicle' } }] }),
     );
 
-    expect(proposedBlock(set.changes[0])).toBeNull();
+    expect(proposedBlock(itemAt(set.changes, 0))).toBeNull();
   });
 
   it('reads inline widgets as what they are rather than dropping them silently', () => {
@@ -269,7 +271,7 @@ describe('rendering helpers', () => {
       'Rewrite heading “Title”',
       'Delete paragraph “Body text”',
       'Add heading “x”',
-      'Rename document',
+      'Rename page',
     ]);
   });
 });
@@ -280,31 +282,31 @@ describe('a suggestion whose block changed or went away', () => {
       action({ actions: [{ op: 'replace_block', blockId: 'p', block: { html: 'Assistant text' } }] }),
       blocks,
     );
-  const edited: Block[] = [blocks[0], { ...blocks[1], html: 'Body text, edited by the author' } as Block];
+  const edited: Block[] = [itemAt(blocks, 0), { ...blocks[1], html: 'Body text, edited by the author' } as Block];
 
   it('records what the block said when the suggestion was staged', () => {
     const set = rewrite();
-    expect(set.changes[0].base).toBe(blockFingerprint(blocks[1]));
-    expect(set.changes[0].opIndex).toBe(0);
-    expect(isStale(set.changes[0], blocks)).toBe(false);
+    expect(set.changes[0]?.base).toBe(blockFingerprint(itemAt(blocks, 1)));
+    expect(set.changes[0]?.opIndex).toBe(0);
+    expect(isStale(itemAt(set.changes, 0), blocks)).toBe(false);
   });
 
   it('is stale once the author edits the block, and can no longer be accepted', () => {
     const set = rewrite();
-    expect(isStale(set.changes[0], edited)).toBe(true);
-    expect(isReady(set.changes[0], [set], edited)).toBe(false);
-    expect(isReady(set.changes[0], [set], blocks)).toBe(true);
+    expect(isStale(itemAt(set.changes, 0), edited)).toBe(true);
+    expect(isReady(itemAt(set.changes, 0), [set], edited)).toBe(false);
+    expect(isReady(itemAt(set.changes, 0), [set], blocks)).toBe(true);
   });
 
   it('treats a deletion of an edited block the same way', () => {
     const set = buildChangeSet(action({ actions: [{ op: 'delete_block', blockId: 'p' }] }), blocks);
-    expect(isStale(set.changes[0], edited)).toBe(true);
+    expect(isStale(itemAt(set.changes, 0), edited)).toBe(true);
   });
 
   it('does not count collapsing or locking the block as an edit', () => {
     const set = rewrite();
-    const folded: Block[] = [blocks[0], { ...blocks[1], collapsed: true, locked: true } as Block];
-    expect(isStale(set.changes[0], folded)).toBe(false);
+    const folded: Block[] = [itemAt(blocks, 0), { ...blocks[1], collapsed: true, locked: true } as Block];
+    expect(isStale(itemAt(set.changes, 0), folded)).toBe(false);
   });
 
   it('never marks an insert or a move stale', () => {
@@ -323,7 +325,7 @@ describe('a suggestion whose block changed or went away', () => {
   it('does not offer Accept for a rewrite of a block that was deleted', () => {
     const set = rewrite();
     // Accept used to be shown here, and the only thing it could do was fail.
-    expect(isReady(set.changes[0], [set], [blocks[0]])).toBe(false);
+    expect(isReady(itemAt(set.changes, 0), [set], [itemAt(blocks, 0)])).toBe(false);
   });
 
   it('carries the baseline over the author accepting an earlier rewrite of the same block', () => {
@@ -336,13 +338,13 @@ describe('a suggestion whose block changed or went away', () => {
       }),
       blocks,
     );
-    const after: Block[] = [blocks[0], { ...blocks[1], html: 'First pass' } as Block];
-    const accepted = markChanges([set], new Set([set.changes[0].id]), 'accepted');
+    const after: Block[] = [itemAt(blocks, 0), { ...blocks[1], html: 'First pass' } as Block];
+    const accepted = markChanges([set], new Set([itemAt(set.changes, 0).id]), 'accepted');
 
     // Without the rebase, accepting the first made the second look stale.
-    expect(isStale(accepted[0].changes[1], after)).toBe(true);
+    expect(isStale(itemAt(itemAt(accepted, 0).changes, 1), after)).toBe(true);
     const rebased = rebaseAfterAccept(accepted, blocks, after, ['p']);
-    expect(isStale(rebased[0].changes[1], after)).toBe(false);
+    expect(isStale(itemAt(itemAt(rebased, 0).changes, 1), after)).toBe(false);
   });
 
   it('keeps a suggestion stale when an accept lands on a block the author had already edited', () => {
@@ -355,10 +357,10 @@ describe('a suggestion whose block changed or went away', () => {
       }),
       blocks,
     );
-    const after: Block[] = [blocks[0], { ...(edited[1] as Block), columns: 2 } as Block];
-    const accepted = markChanges([set], new Set([set.changes[0].id]), 'accepted');
+    const after: Block[] = [itemAt(blocks, 0), { ...(edited[1] as Block), columns: 2 } as Block];
+    const accepted = markChanges([set], new Set([itemAt(set.changes, 0).id]), 'accepted');
     const rebased = rebaseAfterAccept(accepted, edited, after, ['p']);
-    expect(isStale(rebased[0].changes[1], after)).toBe(true);
+    expect(isStale(itemAt(itemAt(rebased, 0).changes, 1), after)).toBe(true);
   });
 });
 
@@ -375,13 +377,13 @@ describe('a target the server says changed since the proposal', () => {
     // Staged after a reload: the live block is the author's newer text, so
     // the staging fingerprint alone sees nothing wrong.
     const set = batch(rewrite('Assistant text'));
-    expect(isStale(set.changes[0], blocks)).toBe(false);
+    expect(isStale(itemAt(set.changes, 0), blocks)).toBe(false);
 
     const marked = markOutdated(set, [target('as-proposed', 'edited-since')]);
 
-    expect(marked.changes[0].outdated).toBe(true);
-    expect(isStale(marked.changes[0], blocks)).toBe(true);
-    expect(isReady(marked.changes[0], [marked], blocks)).toBe(false);
+    expect(marked.changes[0]?.outdated).toBe(true);
+    expect(isStale(itemAt(marked.changes, 0), blocks)).toBe(true);
+    expect(isReady(itemAt(marked.changes, 0), [marked], blocks)).toBe(false);
   });
 
   it('is current when the saved block is the one the operation found', () => {
@@ -398,13 +400,13 @@ describe('a target the server says changed since the proposal', () => {
 
   it('still notices an edit made after staging on a block the server called current', () => {
     const marked = markOutdated(batch(rewrite('Assistant text')), [target('same', 'same')]);
-    const edited: Block[] = [blocks[0], { ...blocks[1], html: 'Typed just now' } as Block];
-    expect(isStale(marked.changes[0], edited)).toBe(true);
+    const edited: Block[] = [itemAt(blocks, 0), { ...blocks[1], html: 'Typed just now' } as Block];
+    expect(isStale(itemAt(marked.changes, 0), edited)).toBe(true);
   });
 
   it('is stale when the block is gone from the saved document but still on screen', () => {
     const marked = markOutdated(batch(rewrite('Assistant text')), [target('as-proposed', null)]);
-    expect(isStale(marked.changes[0], blocks)).toBe(true);
+    expect(isStale(itemAt(marked.changes, 0), blocks)).toBe(true);
   });
 
   it('reads a later rewrite of the same block as current while the earlier one is undecided', () => {
@@ -419,25 +421,25 @@ describe('a target the server says changed since the proposal', () => {
     const set = batch(rewrite('First pass'), rewrite('Second pass'));
     const marked = markOutdated(set, [target('stage-0', 'stage-1'), target('stage-1', 'stage-1')]);
     // The first is decided by then; what matters is the one still open.
-    expect(marked.changes[1].outdated ?? false).toBe(false);
+    expect(itemAt(marked.changes, 1).outdated ?? false).toBe(false);
   });
 
   it('is stale when the block was edited by hand after the earlier rewrite was accepted', () => {
     const set = batch(rewrite('First pass'), rewrite('Second pass'));
     const marked = markOutdated(set, [target('stage-0', 'by-hand'), target('stage-1', 'by-hand')]);
-    expect(marked.changes[1].outdated).toBe(true);
+    expect(marked.changes[1]?.outdated).toBe(true);
   });
 
   it('counts the stages recorded by the batches it was written on top of', () => {
     const set = batch(rewrite('Second batch'));
     const targets = [target('after-first-batch', 'before-first-batch')];
 
-    expect(markOutdated(set, targets).changes[0].outdated).toBe(true);
+    expect(markOutdated(set, targets).changes[0]?.outdated).toBe(true);
     const earlier = new Map([['p', new Set(['before-first-batch'])]]);
-    expect(markOutdated(set, targets, earlier).changes[0].outdated ?? false).toBe(false);
+    expect(itemAt(markOutdated(set, targets, earlier).changes, 0).outdated ?? false).toBe(false);
     // A stage of another block says nothing about this one.
     const unrelated = new Map([['h', new Set(['before-first-batch'])]]);
-    expect(markOutdated(set, targets, unrelated).changes[0].outdated).toBe(true);
+    expect(markOutdated(set, targets, unrelated).changes[0]?.outdated).toBe(true);
   });
 
   it('does not take a later operation on the block for an earlier stage', () => {
@@ -445,7 +447,7 @@ describe('a target the server says changed since the proposal', () => {
     // The saved block equals what the *second* operation found, which the
     // first was not written for.
     const marked = markOutdated(set, [target('stage-0', 'stage-1'), target('stage-1', 'stage-1')]);
-    expect(marked.changes[0].outdated).toBe(true);
+    expect(marked.changes[0]?.outdated).toBe(true);
   });
 
   it('leaves inserts, moves and operations without a target alone', () => {
@@ -477,14 +479,14 @@ describe('a target the server says changed since the proposal', () => {
       batch({ op: 'replace_block', blockId: 'p', block: { columns: 2 } }, rewrite('Second pass')),
       [target('stage-0', 'stage-0'), target('stage-1', 'by-hand')],
     );
-    const after: Block[] = [blocks[0], { ...blocks[1], columns: 2 } as Block];
-    const accepted = markChanges([set], new Set([set.changes[0].id]), 'accepted');
+    const after: Block[] = [itemAt(blocks, 0), { ...blocks[1], columns: 2 } as Block];
+    const accepted = markChanges([set], new Set([itemAt(set.changes, 0).id]), 'accepted');
 
     const rebased = rebaseAfterAccept(accepted, blocks, after, ['p']);
 
     // The server said this one was written for other text. Accepting its
     // sibling does not change that.
-    expect(isStale(rebased[0].changes[1], after)).toBe(true);
+    expect(isStale(itemAt(itemAt(rebased, 0).changes, 1), after)).toBe(true);
   });
 });
 
@@ -540,23 +542,23 @@ describe('resuming a half-reviewed durable batch', () => {
 
   it('restores the staging fingerprints, so an edit made before the reload still counts', () => {
     const original = durable();
-    const before = original.changes[0].base!;
-    const editedSinceProposal: Block[] = [blocks[0], { ...blocks[1], html: 'Edited before the reload' } as Block];
+    const before = itemAt(original.changes, 0).base!;
+    const editedSinceProposal: Block[] = [itemAt(blocks, 0), { ...blocks[1], html: 'Edited before the reload' } as Block];
     // Staged again after the edit: on its own, the snapshot would be of the edited text.
     const restaged = buildChangeSet(
       action({ changeSetId: 'cs-1', actions: original.changes.map((change) => change.op) }),
       editedSinceProposal,
     );
-    expect(isStale(restaged.changes[0], editedSinceProposal)).toBe(false);
+    expect(isStale(itemAt(restaged.changes, 0), editedSinceProposal)).toBe(false);
 
     const { set } = resumeReview(restaged, { decisions: [], bases: { 0: before } }, editedSinceProposal);
-    expect(isStale(set.changes[0], editedSinceProposal)).toBe(true);
+    expect(isStale(itemAt(set.changes, 0), editedSinceProposal)).toBe(true);
   });
 
   it('recognises a rewrite that is already in the document', () => {
-    const rewritten: Block[] = [blocks[0], { ...blocks[1], html: 'Rewritten' } as Block];
+    const rewritten: Block[] = [itemAt(blocks, 0), { ...blocks[1], html: 'Rewritten' } as Block];
     const set = durable();
-    expect(alreadyInDocument(set.changes[0], rewritten)).toBe(true);
-    expect(alreadyInDocument(set.changes[0], blocks)).toBe(false);
+    expect(alreadyInDocument(itemAt(set.changes, 0), rewritten)).toBe(true);
+    expect(alreadyInDocument(itemAt(set.changes, 0), blocks)).toBe(false);
   });
 });

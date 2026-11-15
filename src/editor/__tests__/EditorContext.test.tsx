@@ -1,49 +1,61 @@
+import { itemAt } from '@/lib/itemAt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, screen, waitFor } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useImperativeHandle } from 'react';
 import type { Doc } from '../types';
+import { ApiError } from '@/api/errors';
+import { documentList, mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { TEST_WORKSPACE_ID as WS } from '@/__tests__/workspace';
 
-const createDocument = vi.fn(async (_document: unknown) => ({
-  document_id: 'created-doc',
-  version: 1,
-}));
-const saveDocument = vi.fn(async (_id: string, _document: unknown) => ({
-  status: 'ok',
-  message: '',
-  version: 4,
-}));
-const loadDocument = vi.fn<(
+/** A page as the server answers it: its body, with the ETag of its head. */
+type Remote = Doc & { updatedAt?: string; etag?: string };
+
+/** Where a page lives: the top level, for every page here. */
+const placementOf = (documentId: string) => ({ documentId, collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null });
+
+/** The ETag of head `seq`; the editor only ever compares them. */
+const etagOf = (seq: number) => `"cw:canonical-json-v1:1:${seq}:test"`;
+
+const createDocument = vi.fn(async (_document: Doc) => ({ id: 'created-doc', etag: etagOf(1) }));
+const saveDocument = vi.fn(async (_id: string, _document: Doc, _etag: string) => ({ etag: etagOf(4) }));
+const readDocument = vi.fn<(
   _id: string,
   _init?: { signal?: AbortSignal },
-) => Promise<Doc>>(async (_id: string) => ({
-  version: 3,
-  name: 'Remote document',
-  blocks: [{ id: 'p1', type: 'paragraph', html: 'Hello', children: [] }],
-}));
-const deleteDocument = vi.fn(async (_id: string) => ({ status: 'ok', message: '' }));
-const listDocuments = vi.fn(async () => ({
-  documents: [],
-  count: 1,
-  page: 1,
-  limit: 10,
-  totalPages: 1,
-  sortBy: 'updated_at' as const,
-  sortOrder: 'desc' as const,
-  status: 'ok',
-  message: '',
-}));
+) => Promise<Remote>>(async (_id: string) => remoteDoc('Remote document'));
+/** The server's page list: the sidebar reads it. */
+const listDocuments = documentList();
 
-vi.mock('@/services', () => ({
-  createDocument: (document: unknown) => createDocument(document),
-  saveDocument: (id: string, document: unknown) => saveDocument(id, document),
-  loadDocument: (id: string, init?: { signal?: AbortSignal }) => loadDocument(id, init),
-  deleteDocument: (id: string) => deleteDocument(id),
-  listDocuments: () => listDocuments(),
+/** Every page request the session makes, against the test workspace. */
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: async (workspaceId: string, document: Doc) => {
+    expect(workspaceId).toBe(WS);
+    const created = await createDocument(document);
+    return { ...created, doc: document, updatedAt: null, placement: placementOf(created.id) };
+  },
+  saveDocument: async (workspaceId: string, id: string, document: Doc, etag: string) => {
+    expect(workspaceId).toBe(WS);
+    return { updatedAt: null, ...(await saveDocument(id, document, etag)) };
+  },
+  getDocument: async (workspaceId: string, id: string, init?: { signal?: AbortSignal }) => {
+    expect(workspaceId).toBe(WS);
+    const { updatedAt = null, etag = etagOf(3), ...doc } = await readDocument(id, init);
+    return { doc, etag, updatedAt, placement: placementOf(id) };
+  },
 }));
 
-const { EditorProvider, useEditor } = await import('@/editor');
+/** This workspace's key for `name`, as `src/lib/storageKeys.ts` declares it. */
+const key = (name: string) => `colwrite:ws:${WS}:${name}`;
 
-const editorRef = createRef<ReturnType<typeof useEditor>>();
+const { EditorProvider } = await import('@/editor');
+const { PagesTree } = await import('@/components/layout/Sidebar/PagesTree/PagesTree');
+const { ToastProvider } = await import('@/components/ui/toast');
+const { ConfirmProvider } = await import('@/components/ui/confirm-dialog');
+const { useEditorProbe } = await import('./editorHarness');
+const { endPendingSaves, flushPendingSaves } = await import('@/lib/pendingSaves');
+
+const editorRef = createRef<ReturnType<typeof useEditorProbe>>();
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -55,16 +67,20 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function remoteDoc(name: string, version = 3): Doc {
+function pageDoc(name: string): Doc {
   return {
-    version,
     name,
     blocks: [{ id: `${name}-p`, type: 'paragraph', html: name, children: [] }],
   };
 }
 
+/** A page the server holds at head `seq`. */
+function remoteDoc(name: string, seq = 3): Remote {
+  return { ...pageDoc(name), etag: etagOf(seq) };
+}
+
 function CaptureEditor() {
-  const editor = useEditor();
+  const editor = useEditorProbe();
   useImperativeHandle(editorRef, () => editor, [editor]);
   return null;
 }
@@ -75,54 +91,38 @@ function currentEditor() {
 }
 
 async function mountRemoteDocument() {
-  localStorage.setItem('colwrite:lastDocId', 'doc-1');
+  localStorage.setItem(key('lastDocId'), 'doc-1');
   render(
     <EditorProvider>
       <CaptureEditor />
     </EditorProvider>,
   );
-  await waitFor(() => expect(loadDocument).toHaveBeenCalledWith(
+  await waitFor(() => expect(readDocument).toHaveBeenCalledWith(
     'doc-1',
     { signal: expect.any(AbortSignal) },
   ));
-  await waitFor(() => expect(currentEditor().doc.version).toBe(3));
+  await waitFor(() => expect(currentEditor().doc.name).toBe('Remote document'));
 }
 
 beforeEach(() => {
   localStorage.clear();
   window.history.replaceState(null, '', '/');
-  createDocument.mockReset().mockResolvedValue({
-    document_id: 'created-doc',
-    version: 1,
-  });
-  saveDocument.mockReset().mockResolvedValue({
-    status: 'ok',
-    message: '',
-    version: 4,
-  });
-  loadDocument.mockReset().mockResolvedValue(remoteDoc('Remote document'));
-  deleteDocument.mockReset().mockResolvedValue({ status: 'ok', message: '' });
-  listDocuments.mockReset().mockResolvedValue({
-    documents: [],
-    count: 1,
-    page: 1,
-    limit: 10,
-    totalPages: 1,
-    sortBy: 'updated_at',
-    sortOrder: 'desc',
-    status: 'ok',
-    message: '',
-  });
+  createDocument.mockReset().mockResolvedValue({ id: 'created-doc', etag: etagOf(1) });
+  saveDocument.mockReset().mockResolvedValue({ etag: etagOf(4) });
+  readDocument.mockReset().mockResolvedValue(remoteDoc('Remote document'));
+  listDocuments.mockReset().mockResolvedValue({});
+  mockDocumentList(listDocuments);
 });
 
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
   window.history.replaceState(null, '', '/');
+  vi.restoreAllMocks();
 });
 
 describe('remote autosave', () => {
-  it('waits five seconds after the latest edit and sends the server version', async () => {
+  it('waits five seconds after the latest edit and saves over the head it read', async () => {
     await mountRemoteDocument();
     vi.useFakeTimers();
 
@@ -138,37 +138,84 @@ describe('remote autosave', () => {
     });
 
     expect(saveDocument).toHaveBeenCalledTimes(1);
-    expect(saveDocument.mock.calls[0][1]).toMatchObject({
-      version: 3,
-      name: 'Edited title',
+    expect(saveDocument.mock.calls[0]?.[1]).toMatchObject({ name: 'Edited title' });
+    expect(saveDocument.mock.calls[0]?.[1]).not.toHaveProperty('version');
+    expect(saveDocument.mock.calls[0]?.[2]).toBe(etagOf(3));
+  });
+
+  it('knows when an opened page was last saved, from the server, without keeping it in the page', async () => {
+    await mountRemoteDocument();
+    readDocument.mockResolvedValueOnce({ ...remoteDoc('Older page'), updatedAt: '2026-01-15T10:00:00Z' });
+
+    await act(async () => currentEditor().switchTo('doc-2'));
+
+    expect(currentEditor().lastSavedAt).toBe(Date.parse('2026-01-15T10:00:00Z'));
+    expect(currentEditor().doc).not.toHaveProperty('updatedAt');
+  });
+
+  it('sends only saves while the author types for a minute, and the sidebar row follows them', async () => {
+    localStorage.setItem(key('lastDocId'), 'doc-1');
+    listDocuments.mockResolvedValue({
+      documents: [{ id: 'doc-1', name: 'Remote document', tags: [], createdAt: '', updatedAt: '' }],
     });
+    render(
+      <ToastProvider>
+        <ConfirmProvider>
+          <EditorProvider>
+            <CaptureEditor />
+            <PagesTree />
+          </EditorProvider>
+        </ConfirmProvider>
+      </ToastProvider>,
+    );
+    await waitFor(() => expect(currentEditor().doc.name).toBe('Remote document'));
+    await screen.findByText('Remote document');
+    // The sidebar tree's pages at the top level, once; there is no first-run probe.
+    expect(listDocuments).toHaveBeenCalledTimes(1);
+    for (const request of [listDocuments, readDocument, saveDocument, createDocument]) request.mockClear();
+
+    vi.useFakeTimers();
+    // A burst of typing every six seconds: each pause is long enough for an autosave.
+    for (let second = 6; second <= 60; second += 6) {
+      act(() => currentEditor().setDocName(`Draft at ${second}s`));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000);
+      });
+    }
+
+    expect(saveDocument).toHaveBeenCalledTimes(10);
+    expect(listDocuments).not.toHaveBeenCalled();
+    expect(readDocument).not.toHaveBeenCalled();
+    expect(createDocument).not.toHaveBeenCalled();
+    // The open page's row is patched in place from the editor.
+    expect(screen.getByText('Draft at 60s')).toBeTruthy();
   });
 
   it('does not PUT when switching away from a clean document', async () => {
     await mountRemoteDocument();
     saveDocument.mockClear();
-    loadDocument.mockClear();
+    readDocument.mockClear();
 
     await act(async () => currentEditor().switchTo('doc-2'));
 
     expect(saveDocument).not.toHaveBeenCalled();
-    expect(loadDocument).toHaveBeenCalledWith('doc-2', { signal: expect.any(AbortSignal) });
+    expect(readDocument).toHaveBeenCalledWith('doc-2', { signal: expect.any(AbortSignal) });
   });
 
   it('flushes exactly once before switching away from a dirty document', async () => {
     await mountRemoteDocument();
     saveDocument.mockClear();
-    loadDocument.mockClear();
+    readDocument.mockClear();
 
     act(() => currentEditor().setDocName('Dirty title'));
     await act(async () => currentEditor().switchTo('doc-2'));
 
     expect(saveDocument).toHaveBeenCalledTimes(1);
-    expect(saveDocument.mock.calls[0][0]).toBe('doc-1');
-    expect(saveDocument.mock.calls[0][1]).toMatchObject({ name: 'Dirty title' });
-    expect(loadDocument).toHaveBeenCalledWith('doc-2', { signal: expect.any(AbortSignal) });
+    expect(saveDocument.mock.calls[0]?.[0]).toBe('doc-1');
+    expect(saveDocument.mock.calls[0]?.[1]).toMatchObject({ name: 'Dirty title' });
+    expect(readDocument).toHaveBeenCalledWith('doc-2', { signal: expect.any(AbortSignal) });
     expect(saveDocument.mock.invocationCallOrder[0]).toBeLessThan(
-      loadDocument.mock.invocationCallOrder[0],
+      itemAt(readDocument.mock.invocationCallOrder, 0),
     );
   });
 
@@ -192,16 +239,14 @@ describe('remote autosave', () => {
     await mountRemoteDocument();
     saveDocument.mockClear();
 
-    let resolveFirst:
-      | ((value: { status: string; message: string; version: number }) => void)
-      | undefined;
+    let resolveFirst: ((value: { etag: string }) => void) | undefined;
     saveDocument
       .mockImplementationOnce(
         () => new Promise(resolve => {
           resolveFirst = resolve;
         }),
       )
-      .mockResolvedValueOnce({ status: 'ok', message: '', version: 5 });
+      .mockResolvedValueOnce({ etag: etagOf(5) });
 
     act(() => currentEditor().setDocName('First edit'));
     let firstSave!: Promise<void>;
@@ -212,17 +257,16 @@ describe('remote autosave', () => {
 
     act(() => currentEditor().setDocName('Second edit'));
     await act(async () => {
-      resolveFirst?.({ status: 'ok', message: '', version: 4 });
+      resolveFirst?.({ etag: etagOf(4) });
       await firstSave;
     });
 
     await act(async () => currentEditor().switchTo('doc-2'));
 
     expect(saveDocument).toHaveBeenCalledTimes(2);
-    expect(saveDocument.mock.calls[1][1]).toMatchObject({
-      version: 4,
-      name: 'Second edit',
-    });
+    expect(saveDocument.mock.calls[1]?.[1]).toMatchObject({ name: 'Second edit' });
+    // Over the head the first save made.
+    expect(saveDocument.mock.calls[1]?.[2]).toBe(etagOf(4));
   });
 
   it('treats a clean manual save as a local no-op', async () => {
@@ -240,7 +284,7 @@ describe('remote autosave', () => {
     saveDocument.mockClear();
     saveDocument
       .mockRejectedValueOnce(new Error('network down'))
-      .mockResolvedValue({ status: 'ok', message: '', version: 4 });
+      .mockResolvedValue({ etag: etagOf(4) });
     vi.useFakeTimers();
 
     act(() => currentEditor().setDocName('Needs a retry'));
@@ -281,7 +325,7 @@ describe('remote autosave', () => {
     expect(saveDocument).toHaveBeenCalledTimes(1);
 
     // A restore adopts a new baseline, so nothing is dirty any more.
-    act(() => currentEditor().adoptRestoredDocument(remoteDoc('Restored', 6), 6));
+    act(() => currentEditor().adoptRestoredDocument(pageDoc('Restored'), etagOf(6)));
     await act(async () => {
       vi.advanceTimersByTime(120000);
       await Promise.resolve();
@@ -304,8 +348,8 @@ describe('remote autosave', () => {
     await act(async () => currentEditor().switchTo('doc-2'));
 
     expect(createDocument).toHaveBeenCalledTimes(1);
-    expect(createDocument.mock.calls[0][0]).toMatchObject({ name: 'Unsaved draft' });
-    expect(loadDocument).toHaveBeenCalledWith('doc-2', { signal: expect.any(AbortSignal) });
+    expect(createDocument.mock.calls[0]?.[0]).toMatchObject({ name: 'Unsaved draft' });
+    expect(readDocument).toHaveBeenCalledWith('doc-2', { signal: expect.any(AbortSignal) });
     expect(currentEditor().documentId).toBe('doc-2');
   });
 
@@ -320,15 +364,15 @@ describe('remote autosave', () => {
     await act(async () => currentEditor().switchTo('doc-2'));
 
     expect(createDocument).not.toHaveBeenCalled();
-    expect(loadDocument).toHaveBeenCalledWith('doc-2', { signal: expect.any(AbortSignal) });
+    expect(readDocument).toHaveBeenCalledWith('doc-2', { signal: expect.any(AbortSignal) });
   });
 });
 
 describe('atomic document transitions', () => {
   it('keeps an uncached startup target pending without committing or caching its id', async () => {
-    const hydration = deferred<Doc>();
-    loadDocument.mockReturnValue(hydration.promise);
-    localStorage.setItem('colwrite:lastDocId', 'uncached-doc');
+    const hydration = deferred<Remote>();
+    readDocument.mockReturnValue(hydration.promise);
+    localStorage.setItem(key('lastDocId'), 'uncached-doc');
     window.history.replaceState(null, '', '/?doc=uncached-doc');
 
     render(
@@ -339,12 +383,12 @@ describe('atomic document transitions', () => {
 
     expect(currentEditor().loadingDocumentId).toBe('uncached-doc');
     expect(currentEditor().documentId).toBeNull();
-    await waitFor(() => expect(loadDocument).toHaveBeenCalledWith(
+    await waitFor(() => expect(readDocument).toHaveBeenCalledWith(
       'uncached-doc',
       { signal: expect.any(AbortSignal) },
     ));
     await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
-    expect(localStorage.getItem('colwrite:doc:uncached-doc')).toBeNull();
+    expect(localStorage.getItem(key('draft:uncached-doc'))).toBeNull();
 
     await act(async () => {
       hydration.resolve(remoteDoc('Hydrated document'));
@@ -355,7 +399,7 @@ describe('atomic document transitions', () => {
   });
 
   it('hydrates the URL document instead of reopening the cached document', async () => {
-    localStorage.setItem('colwrite:lastDocId', 'cached-doc');
+    localStorage.setItem(key('lastDocId'), 'cached-doc');
     window.history.replaceState(null, '', '/?doc=url-doc');
 
     render(
@@ -366,19 +410,19 @@ describe('atomic document transitions', () => {
 
     await waitFor(() => expect(currentEditor().documentId).toBe('url-doc'));
     await waitFor(() => expect(currentEditor().doc.name).toBe('Remote document'));
-    expect(loadDocument).toHaveBeenCalledTimes(1);
-    expect(loadDocument).toHaveBeenCalledWith('url-doc', { signal: expect.any(AbortSignal) });
+    expect(readDocument).toHaveBeenCalledTimes(1);
+    expect(readDocument).toHaveBeenCalledWith('url-doc', { signal: expect.any(AbortSignal) });
   });
 
   it('does not associate an empty document with a linked id that fails to load', async () => {
-    const cached = remoteDoc('Cached fallback', 4);
-    localStorage.setItem('colwrite:lastDocId', 'cached-doc');
+    const cached = pageDoc('Cached fallback');
+    localStorage.setItem(key('lastDocId'), 'cached-doc');
     localStorage.setItem(
-      'colwrite:doc:cached-doc',
-      JSON.stringify({ documentId: 'cached-doc', doc: cached }),
+      key('draft:cached-doc'),
+      JSON.stringify({ documentId: 'cached-doc', doc: cached, etag: etagOf(4) }),
     );
     window.history.replaceState(null, '', '/?doc=missing-doc');
-    loadDocument.mockRejectedValue(new Error('Not found'));
+    readDocument.mockRejectedValue(new Error('Not found'));
 
     render(
       <EditorProvider>
@@ -386,7 +430,7 @@ describe('atomic document transitions', () => {
       </EditorProvider>,
     );
 
-    await waitFor(() => expect(loadDocument).toHaveBeenCalledWith(
+    await waitFor(() => expect(readDocument).toHaveBeenCalledWith(
       'missing-doc',
       { signal: expect.any(AbortSignal) },
     ));
@@ -397,19 +441,19 @@ describe('atomic document transitions', () => {
   });
 
   it('does not let deferred mount hydration overwrite a newer selection', async () => {
-    const hydration = deferred<Doc>();
-    const selected = deferred<Doc>();
-    loadDocument.mockImplementation((id: string) => (
+    const hydration = deferred<Remote>();
+    const selected = deferred<Remote>();
+    readDocument.mockImplementation((id: string) => (
       id === 'doc-1' ? hydration.promise : selected.promise
     ));
 
-    localStorage.setItem('colwrite:lastDocId', 'doc-1');
+    localStorage.setItem(key('lastDocId'), 'doc-1');
     render(
       <EditorProvider>
         <CaptureEditor />
       </EditorProvider>,
     );
-    await waitFor(() => expect(loadDocument).toHaveBeenCalledWith(
+    await waitFor(() => expect(readDocument).toHaveBeenCalledWith(
       'doc-1',
       { signal: expect.any(AbortSignal) },
     ));
@@ -418,7 +462,7 @@ describe('atomic document transitions', () => {
     act(() => {
       switchPromise = currentEditor().switchTo('doc-2');
     });
-    await waitFor(() => expect(loadDocument).toHaveBeenCalledWith(
+    await waitFor(() => expect(readDocument).toHaveBeenCalledWith(
       'doc-2',
       { signal: expect.any(AbortSignal) },
     ));
@@ -441,9 +485,9 @@ describe('atomic document transitions', () => {
 
   it('ignores a superseded load failure instead of surfacing it', async () => {
     await mountRemoteDocument();
-    const older = deferred<Doc>();
-    const newer = deferred<Doc>();
-    loadDocument.mockImplementation((id: string) => (
+    const older = deferred<Remote>();
+    const newer = deferred<Remote>();
+    readDocument.mockImplementation((id: string) => (
       id === 'doc-2' ? older.promise : newer.promise
     ));
 
@@ -453,11 +497,11 @@ describe('atomic document transitions', () => {
       olderSwitch = currentEditor().switchTo('doc-2');
       newerSwitch = currentEditor().switchTo('doc-3');
     });
-    await waitFor(() => expect(loadDocument).toHaveBeenCalledWith(
+    await waitFor(() => expect(readDocument).toHaveBeenCalledWith(
       'doc-3',
       { signal: expect.any(AbortSignal) },
     ));
-    const olderSignal = loadDocument.mock.calls.find(([id]) => id === 'doc-2')?.[1]?.signal;
+    const olderSignal = readDocument.mock.calls.find(([id]) => id === 'doc-2')?.[1]?.signal;
     expect(olderSignal?.aborted).toBe(true);
 
     await act(async () => {
@@ -479,13 +523,13 @@ describe('atomic document transitions', () => {
 
   it('marks a switch pending before flushing edits and starts GET only after the save settles', async () => {
     await mountRemoteDocument();
-    const saving = deferred<{ status: string; message: string; version: number }>();
-    const loading = deferred<Doc>();
+    const saving = deferred<{ etag: string }>();
+    const loading = deferred<Remote>();
     saveDocument.mockReturnValueOnce(saving.promise);
-    loadDocument.mockImplementation((id) => (
+    readDocument.mockImplementation((id) => (
       id === 'doc-2' ? loading.promise : Promise.resolve(remoteDoc('Unexpected'))
     ));
-    loadDocument.mockClear();
+    readDocument.mockClear();
 
     act(() => currentEditor().setDocName('Dirty before switch'));
     let switching!: Promise<boolean>;
@@ -495,13 +539,13 @@ describe('atomic document transitions', () => {
 
     expect(currentEditor().loadingDocumentId).toBe('doc-2');
     await waitFor(() => expect(saveDocument).toHaveBeenCalled());
-    expect(loadDocument).not.toHaveBeenCalled();
+    expect(readDocument).not.toHaveBeenCalled();
 
     await act(async () => {
-      saving.resolve({ status: 'ok', message: '', version: 4 });
+      saving.resolve({ etag: etagOf(4) });
       await saving.promise;
     });
-    await waitFor(() => expect(loadDocument).toHaveBeenCalledWith(
+    await waitFor(() => expect(readDocument).toHaveBeenCalledWith(
       'doc-2',
       { signal: expect.any(AbortSignal) },
     ));
@@ -518,7 +562,7 @@ describe('atomic document transitions', () => {
   it('retains the committed document and reports a load notice after a failed switch', async () => {
     await mountRemoteDocument();
     const previous = currentEditor().doc;
-    loadDocument.mockRejectedValueOnce(new Error('Forbidden'));
+    readDocument.mockRejectedValueOnce(new Error('Forbidden'));
 
     await act(async () => {
       await expect(currentEditor().switchTo('doc-2')).rejects.toThrow('Forbidden');
@@ -529,21 +573,21 @@ describe('atomic document transitions', () => {
     expect(currentEditor().doc).toBe(previous);
     expect(currentEditor().saveError).toBeNull();
     expect(currentEditor().documentLoadNotice).toMatchObject({
-      title: 'Could not open document',
-      description: expect.stringMatching(/current document remains open/i),
+      title: 'Could not open page',
+      description: expect.stringMatching(/current page stays open/i),
     });
   });
 
   it('commits a valid intentionally empty document', async () => {
     await mountRemoteDocument();
-    loadDocument.mockResolvedValueOnce({ version: 2, name: 'Blank', blocks: [] });
+    readDocument.mockResolvedValueOnce({ name: 'Blank', blocks: [], etag: etagOf(2) });
 
     await act(async () => {
       await currentEditor().switchTo('blank-doc');
     });
 
     expect(currentEditor().documentId).toBe('blank-doc');
-    expect(currentEditor().doc).toEqual({ version: 2, name: 'Blank', blocks: [] });
+    expect(currentEditor().doc).toEqual({ name: 'Blank', blocks: [] });
   });
 
   it('creates and adopts the requested document instead of retaining the old body', async () => {
@@ -552,35 +596,122 @@ describe('atomic document transitions', () => {
 
     await act(async () => {
       await currentEditor().createAndSwitch({
-        version: 1,
         name: 'Blank document',
         blocks: [],
       });
     });
 
     expect(createDocument).toHaveBeenCalledWith({
-      version: 1,
       name: 'Blank document',
       blocks: [],
     });
     expect(currentEditor().documentId).toBe('created-doc');
-    expect(currentEditor().doc).toMatchObject({
-      version: 1,
+    expect(currentEditor().doc).toEqual({
       name: 'Blank document',
       blocks: [],
     });
   });
 
-  it('resets editor identity and content after deleting the active document', async () => {
+  it('shares one creation between calls made while it is in flight', async () => {
     await mountRemoteDocument();
-    deleteDocument.mockClear();
+    createDocument.mockClear();
+    let finish!: (value: { id: string; etag: string }) => void;
+    createDocument.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
 
-    await act(async () => currentEditor().deleteRemote('doc-1'));
+    let first!: Promise<string>;
+    let second!: Promise<string>;
+    act(() => {
+      first = currentEditor().createAndSwitch({ name: 'One', blocks: [] });
+      second = currentEditor().createAndSwitch({ name: 'Two', blocks: [] });
+    });
+    expect(second).toBe(first);
+    await waitFor(() => expect(currentEditor().creatingDocument).toBe(true));
 
-    expect(deleteDocument).toHaveBeenCalledWith('doc-1');
-    expect(currentEditor().documentId).toBeNull();
-    expect(currentEditor().doc.name).toBe('Untitled document');
-    expect(currentEditor().doc.blocks.length).toBeGreaterThan(0);
+    await act(async () => {
+      finish({ id: 'created-once', etag: etagOf(1) });
+      await first;
+    });
+
+    expect(createDocument).toHaveBeenCalledTimes(1);
+    expect(currentEditor().documentId).toBe('created-once');
+    expect(currentEditor().creatingDocument).toBe(false);
+  });
+
+});
+
+/**
+ * A page in the Trash takes no save (409 `document_in_trash`): the editor
+ * stops autosaving and says so, keeps what the author wrote, and saves it
+ * with the ETag it holds once the page is restored, since neither a trash
+ * nor a restore changes the content ETag.
+ */
+describe('a page in the Trash', () => {
+  const inTrash = () => new ApiError('This page is in the Trash', 409, {
+    code: 'document_in_trash',
+    detail: 'This page is in the Trash',
+    trash_root: { kind: 'document', id: 'doc-1' },
+    purge_after: '2026-12-15T09:00:00Z',
+  });
+
+  it('stops autosaving when a save finds it in the Trash, and saves again once it is restored', async () => {
+    await mountRemoteDocument();
+    vi.useFakeTimers();
+    saveDocument.mockRejectedValueOnce(inTrash());
+
+    act(() => currentEditor().setDocName('Written after the trash'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(currentEditor().inTrash).toEqual({
+      trashRoot: { kind: 'document', id: 'doc-1' },
+      purgeAfter: '2026-12-15T09:00:00Z',
+    });
+    // Not a failure to retry: the page says why instead.
+    expect(currentEditor().saveError).toBeNull();
+
+    act(() => currentEditor().setDocName('Still writing'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+
+    act(() => currentEditor().markPageRestored('doc-1'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(currentEditor().inTrash).toBeNull();
+    expect(saveDocument).toHaveBeenCalledTimes(2);
+    expect(saveDocument.mock.calls[1]?.[1]).toMatchObject({ name: 'Still writing' });
+    expect(saveDocument.mock.calls[1]?.[2]).toBe(etagOf(3));
+  });
+
+  it('keeps the edits on this device, rather than saving, when the author leaves a page in the Trash', async () => {
+    await mountRemoteDocument();
+    act(() => currentEditor().markPageTrashed('doc-1', { trashRoot: { kind: 'document', id: 'doc-1' }, purgeAfter: null }));
+    act(() => currentEditor().setDocName('Kept here'));
+    readDocument.mockResolvedValueOnce(remoteDoc('Another page'));
+
+    await act(async () => currentEditor().switchTo('doc-2'));
+
+    expect(saveDocument).not.toHaveBeenCalled();
+    expect(currentEditor().documentId).toBe('doc-2');
+    expect(currentEditor().inTrash).toBeNull();
+    expect(JSON.parse(localStorage.getItem(key('unsaved:doc-1')) ?? 'null')).toMatchObject({ doc: { name: 'Kept here' } });
+  });
+
+  it('opens this device’s copy of a page in the Trash saying so, rather than that it failed', async () => {
+    localStorage.setItem(key('lastDocId'), 'doc-1');
+    readDocument.mockRejectedValue(inTrash());
+    render(
+      <EditorProvider>
+        <CaptureEditor />
+      </EditorProvider>,
+    );
+    await waitFor(() => expect(readDocument).toHaveBeenCalled());
+    // No copy of it on this device: the starter page stays, with the notice.
+    await waitFor(() => expect(currentEditor().documentLoadNotice?.title).toBe('That page is in the Trash'));
+    expect(currentEditor().inTrash).toBeNull();
   });
 });
 
@@ -596,7 +727,7 @@ describe('attaching a draft to a document id', () => {
         <CaptureEditor />
       </EditorProvider>,
     );
-    await waitFor(() => expect(listDocuments).toHaveBeenCalled());
+    await waitFor(() => expect(editorRef.current).not.toBeNull());
     expect(currentEditor().documentId).toBeNull();
   }
 
@@ -683,11 +814,9 @@ describe('save integrity', () => {
     await act(async () => currentEditor().save());
 
     expect(saveDocument).toHaveBeenCalledTimes(1);
-    expect(saveDocument.mock.calls[0][0]).toBe('doc-1');
-    expect(saveDocument.mock.calls[0][1]).toMatchObject({
-      version: 3,
-      name: 'Saved via shortcut',
-    });
+    expect(saveDocument.mock.calls[0]?.[0]).toBe('doc-1');
+    expect(saveDocument.mock.calls[0]?.[1]).toMatchObject({ name: 'Saved via shortcut' });
+    expect(saveDocument.mock.calls[0]?.[2]).toBe(etagOf(3));
     expect(currentEditor().lastSaveSource).toBe('manual');
   });
 
@@ -702,16 +831,13 @@ describe('save integrity', () => {
     expect(currentEditor().lastSavedAt).not.toBeNull();
   });
 
-  // C4: a response to a save that was in flight during a restore carried an
-  // older version; adopting it dragged versionRef below the server head and
-  // every later save failed the optimistic lock.
-  it('ignores a stale version from a save that was in flight during a restore', async () => {
+  // C4: a response to a save that was in flight during a restore names a head
+  // the page is no longer on; adopting it would make every later save stale.
+  it('ignores the ETag of a save that was in flight during a restore', async () => {
     await mountRemoteDocument();
     saveDocument.mockClear();
 
-    let resolveFirst:
-      | ((value: { status: string; message: string; version: number }) => void)
-      | undefined;
+    let resolveFirst: ((value: { etag: string }) => void) | undefined;
     saveDocument.mockImplementationOnce(
       () => new Promise(resolve => {
         resolveFirst = resolve;
@@ -725,23 +851,20 @@ describe('save integrity', () => {
     });
     await waitFor(() => expect(saveDocument).toHaveBeenCalledTimes(1));
 
-    // The server restores to a newer version while the save is in flight.
-    act(() => currentEditor().adoptRestoredDocument(remoteDoc('Restored', 6), 6));
-    expect(currentEditor().doc.version).toBe(6);
+    // The server restores to another version while the save is in flight.
+    act(() => currentEditor().adoptRestoredDocument(pageDoc('Restored'), etagOf(6)));
+    expect(currentEditor().doc.name).toBe('Restored');
 
     await act(async () => {
-      resolveFirst?.({ status: 'ok', message: '', version: 4 });
+      resolveFirst?.({ etag: etagOf(4) });
       await firstSave;
     });
 
-    // The stale response must not regress the version…
-    expect(currentEditor().doc.version).toBe(6);
-
-    // …and the next save must lock on the restored head, not the stale one.
+    // The next save locks on the restored head, not the stale one.
     act(() => currentEditor().setDocName('After restore'));
     await act(async () => currentEditor().saveRemote());
     expect(saveDocument).toHaveBeenCalledTimes(2);
-    expect(saveDocument.mock.calls[1][1]).toMatchObject({ version: 6 });
+    expect(saveDocument.mock.calls[1]?.[2]).toBe(etagOf(6));
   });
 
   // M9: an override is a body snapshot of the document open at call time. If
@@ -752,9 +875,7 @@ describe('save integrity', () => {
     saveDocument.mockClear();
 
     // An in-flight save the override save has to queue behind.
-    let resolveFirst:
-      | ((value: { status: string; message: string; version: number }) => void)
-      | undefined;
+    let resolveFirst: ((value: { etag: string }) => void) | undefined;
     saveDocument
       .mockImplementationOnce(
         () => new Promise(resolve => {
@@ -762,7 +883,7 @@ describe('save integrity', () => {
         }),
       )
       // The override PUT, if it happens at all, must be observable.
-      .mockResolvedValue({ status: 'ok', message: '', version: 7 });
+      .mockResolvedValue({ etag: etagOf(7) });
 
     act(() => currentEditor().setDocName('First edit'));
     let firstSave!: Promise<void>;
@@ -780,9 +901,7 @@ describe('save integrity', () => {
     // Move the workspace while the override save is queued. The document is
     // dirty, so the switch flushes first; keep that flush pending too, so the
     // override save can only resume after the switch committed doc-2.
-    let resolveFlush:
-      | ((value: { status: string; message: string; version: number }) => void)
-      | undefined;
+    let resolveFlush: ((value: { etag: string }) => void) | undefined;
     saveDocument.mockImplementationOnce(
       () => new Promise(resolve => {
         resolveFlush = resolve;
@@ -790,14 +909,14 @@ describe('save integrity', () => {
     );
     let switched!: Promise<boolean>;
     await act(async () => {
-      resolveFirst?.({ status: 'ok', message: '', version: 4 });
+      resolveFirst?.({ etag: etagOf(4) });
       await firstSave;
       switched = currentEditor().switchTo('doc-2');
     });
     await waitFor(() => expect(saveDocument).toHaveBeenCalledTimes(2));
 
     await act(async () => {
-      resolveFlush?.({ status: 'ok', message: '', version: 5 });
+      resolveFlush?.({ etag: etagOf(5) });
       await switched;
       await overrideSave;
     });
@@ -818,11 +937,11 @@ describe('save integrity', () => {
 describe('undo/redo', () => {
   function mountLocal() {
     localStorage.setItem(
-      'colwrite:doc:local',
+      key('doc:local'),
       JSON.stringify({
         documentId: null,
+        etag: null,
         doc: {
-          version: 1,
           blocks: [
             { id: 'p1', type: 'paragraph', html: 'First', children: [] },
             { id: 'p2', type: 'paragraph', html: 'Second', children: [] },
@@ -894,8 +1013,8 @@ describe('undo/redo', () => {
 
     act(() => currentEditor().updateHtml('p1', 'Before restore'));
     act(() => currentEditor().adoptRestoredDocument(
-      { version: 6, name: 'Restored', blocks: [{ id: 'r1', type: 'paragraph', html: 'Server copy', children: [] }] },
-      6,
+      { name: 'Restored', blocks: [{ id: 'r1', type: 'paragraph', html: 'Server copy', children: [] }] },
+      etagOf(6),
     ));
 
     act(() => currentEditor().undo());
@@ -915,12 +1034,15 @@ describe('undo/redo', () => {
     });
 
     expect(saveDocument).toHaveBeenCalledTimes(1);
-    expect(saveDocument.mock.calls[0][1]).toMatchObject({ name: 'Remote document' });
+    expect(saveDocument.mock.calls[0]?.[1]).toMatchObject({ name: 'Remote document' });
   });
 });
 
-describe('a save the server refuses as out of date', () => {
-  const conflict = () => Object.assign(new Error('Version conflict'), { status: 409 });
+describe('a save the server refuses as out of date (412 stale_head)', () => {
+  const conflict = () => new ApiError('The document changed since it was read', 412, {
+    code: 'stale_head', status: 412, detail: 'The document changed since it was read', retryable: false,
+    expected_head: etagOf(3), current_head: etagOf(9),
+  });
 
   async function editIntoConflict() {
     await mountRemoteDocument();
@@ -958,26 +1080,51 @@ describe('a save the server refuses as out of date', () => {
   it('writes my version over the newer one when I keep mine', async () => {
     await editIntoConflict();
     vi.useRealTimers();
-    loadDocument.mockResolvedValueOnce(remoteDoc('Their edit', 9));
-    saveDocument.mockReset().mockResolvedValue({ status: 'ok', message: '', version: 10 });
+    readDocument.mockResolvedValueOnce(remoteDoc('Their edit', 9));
+    saveDocument.mockReset().mockResolvedValue({ etag: etagOf(10) });
 
     await act(async () => {
       await currentEditor().resolveSaveConflict('mine');
     });
 
     expect(saveDocument).toHaveBeenCalledTimes(1);
-    expect(saveDocument.mock.calls[0][1]).toMatchObject({ name: 'My edit', version: 9 });
+    expect(saveDocument.mock.calls[0]?.[1]).toMatchObject({ name: 'My edit' });
+    // Over the newer head, which it replaces.
+    expect(saveDocument.mock.calls[0]?.[2]).toBe(etagOf(9));
     expect(currentEditor().saveConflict).toBe(false);
     expect(currentEditor().saveError).toBeNull();
     expect(currentEditor().doc.name).toBe('My edit');
     expect(currentEditor().unsavedDraftAt).toBeNull();
   });
 
+  it('leaves nothing pending once my version is saved, so the status reads "Saved"', async () => {
+    await editIntoConflict();
+    vi.useRealTimers();
+    readDocument.mockResolvedValueOnce(remoteDoc('Their edit', 9));
+    let finish!: (value: { etag: string }) => void;
+    saveDocument.mockReset().mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+
+    let keeping!: Promise<void>;
+    act(() => {
+      keeping = currentEditor().resolveSaveConflict('mine');
+    });
+    // The page renders while the save is in flight.
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      finish({ etag: etagOf(10) });
+      await keeping;
+    });
+
+    expect(currentEditor().saveConflict).toBe(false);
+    // No autosave was armed for the edit that save carried.
+    expect(currentEditor().hasPendingEdits()).toBe(false);
+  });
+
   it('opens the newer version and keeps my edits to bring back', async () => {
     await editIntoConflict();
     vi.useRealTimers();
-    loadDocument.mockResolvedValueOnce(remoteDoc('Their edit', 9));
-    saveDocument.mockReset().mockResolvedValue({ status: 'ok', message: '', version: 10 });
+    readDocument.mockResolvedValueOnce(remoteDoc('Their edit', 9));
+    saveDocument.mockReset().mockResolvedValue({ etag: etagOf(10) });
 
     await act(async () => {
       await currentEditor().resolveSaveConflict('theirs');
@@ -1008,7 +1155,7 @@ describe('a save the server refuses as out of date', () => {
   it('asks again when someone wrote in between', async () => {
     await editIntoConflict();
     vi.useRealTimers();
-    loadDocument.mockResolvedValueOnce(remoteDoc('Their edit', 9));
+    readDocument.mockResolvedValueOnce(remoteDoc('Their edit', 9));
 
     await act(async () => {
       await currentEditor().resolveSaveConflict('mine');
@@ -1025,14 +1172,14 @@ describe('edits the server never received', () => {
     saveDocument.mockReset().mockRejectedValue(new Error('network down'));
     act(() => currentEditor().setDocName('Written offline'));
 
-    loadDocument.mockResolvedValueOnce(remoteDoc('Other document', 1));
+    readDocument.mockResolvedValueOnce(remoteDoc('Other document', 1));
     await act(async () => {
       await currentEditor().switchTo('doc-2');
     });
     expect(currentEditor().doc.name).toBe('Other document');
     expect(currentEditor().unsavedDraftAt).toBeNull();
 
-    loadDocument.mockResolvedValueOnce(remoteDoc('Remote document'));
+    readDocument.mockResolvedValueOnce(remoteDoc('Remote document'));
     await act(async () => {
       await currentEditor().switchTo('doc-1');
     });
@@ -1044,25 +1191,24 @@ describe('edits the server never received', () => {
       currentEditor().restoreKeptDraft();
     });
     expect(currentEditor().doc.name).toBe('Written offline');
-    expect(currentEditor().doc.version).toBe(3);
   });
 
   it('are dropped for good when the author discards them', async () => {
     await mountRemoteDocument();
     saveDocument.mockReset().mockRejectedValue(new Error('network down'));
     act(() => currentEditor().setDocName('Written offline'));
-    loadDocument.mockResolvedValueOnce(remoteDoc('Other document', 1));
+    readDocument.mockResolvedValueOnce(remoteDoc('Other document', 1));
     await act(async () => {
       await currentEditor().switchTo('doc-2');
     });
-    loadDocument.mockResolvedValueOnce(remoteDoc('Remote document'));
+    readDocument.mockResolvedValueOnce(remoteDoc('Remote document'));
     await act(async () => {
       await currentEditor().switchTo('doc-1');
     });
 
     act(() => currentEditor().discardKeptDraft());
     expect(currentEditor().unsavedDraftAt).toBeNull();
-    expect(localStorage.getItem('colwrite:unsaved:doc-1')).toBeNull();
+    expect(localStorage.getItem(key('unsaved:doc-1'))).toBeNull();
     expect(currentEditor().doc.name).toBe('Remote document');
   });
 
@@ -1072,7 +1218,7 @@ describe('edits the server never received', () => {
     act(() => {
       window.dispatchEvent(new Event('pagehide'));
     });
-    const kept = JSON.parse(localStorage.getItem('colwrite:unsaved:doc-1') ?? 'null');
+    const kept = JSON.parse(localStorage.getItem(key('unsaved:doc-1')) ?? 'null');
     expect(kept).toMatchObject({ documentId: 'doc-1', doc: { name: 'Closing soon' } });
   });
 
@@ -1081,7 +1227,7 @@ describe('edits the server never received', () => {
     act(() => {
       window.dispatchEvent(new Event('pagehide'));
     });
-    expect(localStorage.getItem('colwrite:unsaved:doc-1')).toBeNull();
+    expect(localStorage.getItem(key('unsaved:doc-1'))).toBeNull();
   });
 
   it('are forgotten once a later save of the document goes through', async () => {
@@ -1092,25 +1238,164 @@ describe('edits the server never received', () => {
     act(() => {
       window.dispatchEvent(new Event('pagehide'));
     });
-    expect(localStorage.getItem('colwrite:unsaved:doc-1')).not.toBeNull();
+    expect(localStorage.getItem(key('unsaved:doc-1'))).not.toBeNull();
 
     await act(async () => {
       vi.advanceTimersByTime(5000);
       await Promise.resolve();
     });
     expect(saveDocument).toHaveBeenCalledTimes(1);
-    expect(localStorage.getItem('colwrite:unsaved:doc-1')).toBeNull();
+    expect(localStorage.getItem(key('unsaved:doc-1'))).toBeNull();
   });
 
   it('are not offered when the server already has the same text', async () => {
-    localStorage.setItem('colwrite:unsaved:doc-1', JSON.stringify({
+    localStorage.setItem(key('unsaved:doc-1'), JSON.stringify({
       documentId: 'doc-1',
-      doc: { ...remoteDoc('Remote document'), version: 2 },
+      doc: pageDoc('Remote document'),
       savedAt: 1,
     }));
     await mountRemoteDocument();
     expect(currentEditor().unsavedDraftAt).toBeNull();
-    expect(localStorage.getItem('colwrite:unsaved:doc-1')).toBeNull();
+    expect(localStorage.getItem(key('unsaved:doc-1'))).toBeNull();
+  });
+});
+
+/**
+ * B-13: an edit inside the 5-second autosave window used to be lost when the
+ * editor unmounted (a scope remount, the surface going away) or the author
+ * signed out. Only `pagehide` kept it.
+ */
+describe('edits inside the autosave window when the editor goes away', () => {
+  function storedUserKeys(): string[] {
+    const keys: string[] = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const stored = localStorage.key(index);
+      if (stored?.startsWith('colwrite:user:') || stored?.startsWith('colwrite:ws:')) keys.push(stored);
+    }
+    return keys;
+  }
+
+  it('are saved when the editor unmounts, and kept on this device until the save lands', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockClear();
+    const saving = deferred<{ etag: string }>();
+    saveDocument.mockReturnValueOnce(saving.promise);
+
+    act(() => currentEditor().setDocName('Typed just before leaving'));
+    expect(saveDocument).not.toHaveBeenCalled();
+    cleanup();
+
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(saveDocument.mock.calls[0]?.[0]).toBe('doc-1');
+    expect(saveDocument.mock.calls[0]?.[1]).toMatchObject({ name: 'Typed just before leaving' });
+    expect(saveDocument.mock.calls[0]?.[2]).toBe(etagOf(3));
+    // The save may never finish (the tab closing next), so the body is kept first.
+    const kept = JSON.parse(localStorage.getItem(key('unsaved:doc-1')) ?? 'null');
+    expect(kept).toMatchObject({ documentId: 'doc-1', doc: { name: 'Typed just before leaving' } });
+
+    await act(async () => {
+      saving.resolve({ etag: etagOf(4) });
+      await saving.promise;
+    });
+    expect(localStorage.getItem(key('unsaved:doc-1'))).toBeNull();
+  });
+
+  it('are offered back when the save on unmount fails and the page opens again', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockReset().mockRejectedValue(new Error('network down'));
+
+    act(() => currentEditor().setDocName('Written before a remount'));
+    cleanup();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+
+    readDocument.mockResolvedValueOnce(remoteDoc('Remote document'));
+    render(
+      <EditorProvider>
+        <CaptureEditor />
+      </EditorProvider>,
+    );
+    // The server copy opens; the edits it never received are an offer.
+    await waitFor(() => expect(currentEditor().unsavedDraftAt).toEqual(expect.any(Number)));
+    expect(currentEditor().doc.name).toBe('Remote document');
+    act(() => {
+      currentEditor().restoreKeptDraft();
+    });
+    expect(currentEditor().doc.name).toBe('Written before a remount');
+  });
+
+  it('are not saved on unmount when nothing was edited', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockClear();
+    cleanup();
+    expect(saveDocument).not.toHaveBeenCalled();
+    expect(localStorage.getItem(key('unsaved:doc-1'))).toBeNull();
+  });
+
+  it('are sent before a sign-out clears the account, and nothing is written after it', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockClear();
+
+    act(() => currentEditor().setDocName('Typed before signing out'));
+    await act(async () => {
+      await flushPendingSaves();
+    });
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(saveDocument.mock.calls[0]?.[1]).toMatchObject({ name: 'Typed before signing out' });
+
+    // What `clearLocalSession` does: end the session, clear the account's keys,
+    // and the editor unmounts. A late edit must not be saved or kept.
+    act(() => currentEditor().setDocName('Typed while signing out'));
+    endPendingSaves();
+    localStorage.clear();
+    cleanup();
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
+
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(storedUserKeys()).toEqual([]);
+  });
+
+  it('are kept, without holding up a new page, when creating one cannot save them', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockReset().mockRejectedValue(new Error('network down'));
+    act(() => currentEditor().setDocName('Not saved yet'));
+
+    await act(async () => {
+      await currentEditor().createAndSwitch({ name: 'Fresh page', blocks: [] });
+    });
+
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(currentEditor().documentId).toBe('created-doc');
+    expect(currentEditor().doc.name).toBe('Fresh page');
+    const kept = JSON.parse(localStorage.getItem(key('unsaved:doc-1')) ?? 'null');
+    expect(kept).toMatchObject({ documentId: 'doc-1', doc: { name: 'Not saved yet' } });
+  });
+
+  it('are saved by flushPendingSave, which reports a failure without throwing', async () => {
+    await mountRemoteDocument();
+    saveDocument.mockClear();
+    act(() => currentEditor().setDocName('Flushed on demand'));
+
+    let saved: boolean | undefined;
+    await act(async () => {
+      saved = await currentEditor().flushPendingSave();
+    });
+    expect(saved).toBe(true);
+    expect(saveDocument).toHaveBeenCalledTimes(1);
+    expect(currentEditor().hasPendingEdits()).toBe(false);
+
+    saveDocument.mockRejectedValueOnce(new Error('network down'));
+    act(() => currentEditor().setDocName('Flush that fails'));
+    await act(async () => {
+      saved = await currentEditor().flushPendingSave();
+    });
+    expect(saved).toBe(false);
+    expect(currentEditor().saveError).toMatch(/could not be saved/i);
+    expect(localStorage.getItem(key('unsaved:doc-1'))).not.toBeNull();
   });
 });
 

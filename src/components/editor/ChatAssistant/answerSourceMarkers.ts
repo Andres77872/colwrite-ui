@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { scrollBehavior } from '@/lib/motion';
-import type { AgentSource } from '@/services/streamParser';
+import type { AgentSource } from '@/api/assistant/streamParser';
 import type { SourceMarkers } from './ChatMarkdown/ChatMarkdown';
 
 const MARKER = /\[(S\d{1,5}(?:\s*[,;]\s*S\d{1,5})*)\](?!\()/g;
@@ -10,7 +10,7 @@ export function citedOrder(text: string, sources: readonly AgentSource[]): strin
   const known = new Set(sources.map((source) => source.id));
   const order: string[] = [];
   for (const match of text.matchAll(MARKER)) {
-    for (const id of match[1].split(/\s*[,;]\s*/)) {
+    for (const id of (match[1] ?? '').split(/\s*[,;]\s*/)) {
       if (known.has(id) && !order.includes(id)) order.push(id);
     }
   }

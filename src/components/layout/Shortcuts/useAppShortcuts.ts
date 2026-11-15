@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { useEditorActions } from '@/editor';
+import { useDocumentActions, useEditorActions } from '@/editor';
+import { useNewPage } from '@/actions/useNewPage';
 import { usePanels } from '@/components/panels/panelsContextState';
 import { useSidebarToggle } from '../useShellLayout';
 import { matchShortcut, type ShortcutId } from './shortcuts';
@@ -63,10 +64,14 @@ export function useAppShortcuts({
   onShowHelp: () => void;
   onOpenPalette?: () => void;
 }) {
-  const { toggle, toggleAssistant, activeTool } = usePanels();
+  const { toggle, toggleAssistant, activeTool, setTool } = usePanels();
   const sidebar = useSidebarToggle();
   const toggleSidebar = sidebar.toggle;
-  const { save, undo, redo } = useEditorActions();
+  const { save } = useDocumentActions();
+  const { undo, redo } = useEditorActions();
+  // The shared action: one creation in flight, whichever control started it.
+  // Until collections exist, "new page here" is a new page.
+  const { newPage, disabled: newPageDisabled } = useNewPage();
 
   useEffect(() => {
     const run: Record<ShortcutId, () => void> = {
@@ -75,6 +80,13 @@ export function useAppShortcuts({
       'toggle-sidebar': toggleSidebar,
       'toggle-assistant': toggleAssistant,
       'command-palette': () => onOpenPalette?.(),
+      'new-page': () => {
+        // A switch or a creation already owns the editor; the key is still
+        // claimed, so a repeat does nothing rather than reach the browser.
+        if (!newPageDisabled) void newPage();
+      },
+      // Opens it, like the sidebar's Library row; it does not toggle.
+      library: () => setTool('library'),
       save,
       undo,
       redo,
@@ -107,11 +119,14 @@ export function useAppShortcuts({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     activeTool,
+    newPage,
+    newPageDisabled,
     onShowHelp,
     onOpenPalette,
     save,
     undo,
     redo,
+    setTool,
     toggle,
     toggleAssistant,
     toggleSidebar,

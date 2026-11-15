@@ -8,12 +8,23 @@
  * and underline, and `Mod+1`…`Mod+9`, which the browser owns for tab switching.
  * Switching tools needs no numeric binding: each right-sidebar tab has its
  * own button in the page topbar.
+ *
+ * Checked against the browsers' own keys on macOS, Windows and Linux (Chrome,
+ * Edge, Firefox, Safari):
+ * - `Mod+N`, `Mod+Shift+N`, `Mod+T`, `Mod+W` are reserved: the browser never
+ *   hands them to the page, so "New page" is `Mod+Alt+N`, which no browser
+ *   binds.
+ * - `Mod+Shift+L` is free in Chrome and Firefox. Safari (Show Sidebar), Edge
+ *   (Paste and search) and password-manager extensions (autofill) may keep
+ *   it; the sidebar's Library row and the palette are the way there.
  */
 export type ShortcutId =
   | 'toggle-tools'
   | 'toggle-sidebar'
   | 'toggle-assistant'
   | 'command-palette'
+  | 'new-page'
+  | 'library'
   | 'save'
   | 'undo'
   | 'redo'
@@ -31,6 +42,8 @@ export type Shortcut = {
    */
   code?: string;
   shift?: boolean;
+  /** Alt (Option) held as well. Compared strictly, like `shift`. */
+  alt?: boolean;
   /** Keycap parts, in order, for the help dialog. */
   keys: string[];
   label: string;
@@ -38,8 +51,19 @@ export type Shortcut = {
 };
 
 export const SHORTCUTS: readonly Shortcut[] = [
-  { id: 'command-palette', key: 'k', keys: ['Mod', 'K'], label: 'Search documents and commands', group: 'General' },
-  { id: 'command-palette', key: 'p', keys: ['Mod', 'P'], label: 'Search documents and commands', group: 'General' },
+  { id: 'command-palette', key: 'k', keys: ['Mod', 'K'], label: 'Search pages and commands', group: 'General' },
+  { id: 'command-palette', key: 'p', keys: ['Mod', 'P'], label: 'Search pages and commands', group: 'General' },
+  // Matched on the physical key too: on macOS Option turns N into the tilde
+  // dead key, so ⌘⌥N reports `Dead`, not `n`.
+  {
+    id: 'new-page',
+    key: 'n',
+    code: 'KeyN',
+    alt: true,
+    keys: ['Mod', 'Alt', 'N'],
+    label: 'New page',
+    group: 'General',
+  },
   { id: 'save', key: 's', keys: ['Mod', 'S'], label: 'Save now', group: 'General' },
   { id: 'undo', key: 'z', keys: ['Mod', 'Z'], label: 'Undo', group: 'General' },
   { id: 'redo', key: 'z', shift: true, keys: ['Mod', 'Shift', 'Z'], label: 'Redo', group: 'General' },
@@ -64,6 +88,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     label: 'Show or hide the right sidebar',
     group: 'Navigation',
   },
+  { id: 'library', key: 'l', shift: true, keys: ['Mod', 'Shift', 'L'], label: 'Open the Library', group: 'Navigation' },
   // Inside a block Mod+J is claimed first by Ask AI (the block's own
   // handler); Mod+Shift+J reaches the assistant panel from anywhere, as in
   // Notion.
@@ -116,6 +141,12 @@ export const EDITOR_SHORTCUTS: ReadonlyArray<{
   // "send" in the composer.
   { label: 'Accept the focused suggestion', bindings: [['Mod', 'Enter']], group: 'Review' },
   { label: 'Reject the focused suggestion', bindings: [['Mod', 'Backspace'], ['Mod', 'Delete']], group: 'Review' },
+
+  // The sidebar's pages tree, on its focused row (PagesTree). Type a name's
+  // first letters to move to it.
+  { label: 'Rename the focused page or collection in the tree', bindings: [['F2']], group: 'Navigation' },
+  { label: 'Open the focused tree row’s menu', bindings: [['Shift', 'F10']], group: 'Navigation' },
+  { label: 'Move the focused tree row up or down (custom order)', bindings: [['Alt', 'Shift', '↑'], ['Alt', 'Shift', '↓']], group: 'Navigation', joiner: '·' },
 ];
 
 export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = ['General', 'Navigation', 'AI', 'Review', 'Editing'];
@@ -144,7 +175,12 @@ export function shortcutReference(): Array<{ group: ShortcutGroup; rows: Shortcu
 
 /** Stable identity for one physical binding, distinct from its shared action. */
 export function shortcutBindingKey(shortcut: Shortcut): string {
-  return `${shortcut.id}:${shortcut.key}:${shortcut.shift ? 'shift' : 'plain'}`;
+  return `${shortcut.id}:${shortcut.key}:${shortcut.shift ? 'shift' : 'plain'}${shortcut.alt ? ':alt' : ''}`;
+}
+
+/** The keycap parts of an action's first binding (`Mod` unresolved), for a hint beside a control. */
+export function bindingKeys(id: ShortcutId): string[] {
+  return SHORTCUTS.find((shortcut) => shortcut.id === id)?.keys ?? [];
 }
 
 /** `⌘` on Apple platforms, `Ctrl` everywhere else. */
@@ -166,19 +202,37 @@ export function keycapLabel(part: string, modifier = modifierLabel()): string {
 }
 
 /**
+ * Whether the pressed key is the shortcut's key.
+ *
+ * An Alt chord falls back to the physical key only with ⌘ held (macOS, where
+ * Option makes the letter a dead key or a symbol). Elsewhere Ctrl+Alt is
+ * AltGr on Windows and types letters (ń is AltGr+N on a Polish keyboard), so
+ * the key must be the letter itself.
+ */
+function keyMatches(shortcut: Shortcut, event: KeyboardEvent, key: string): boolean {
+  if (shortcut.key === key) return true;
+  if (shortcut.code === undefined || shortcut.code !== event.code) return false;
+  return !shortcut.alt || event.metaKey;
+}
+
+/**
  * Which shortcut a keydown matches, if any.
  *
- * `shift` is compared strictly so `Mod+\` and `Mod+Shift+\` stay distinct
- * rather than the first swallowing the second.
+ * `shift` and `alt` are compared strictly so `Mod+\` and `Mod+Shift+\` stay
+ * distinct rather than the first swallowing the second, and so an Alt chord
+ * the platform owns never reaches a plain binding.
  */
 export function matchShortcut(event: KeyboardEvent): Shortcut | null {
-  if (!(event.metaKey || event.ctrlKey) || event.altKey) return null;
+  if (!(event.metaKey || event.ctrlKey)) return null;
+  // AltGr reports Ctrl+Alt on Windows; it is typing, never a chord.
+  if (event.altKey && event.getModifierState?.('AltGraph')) return null;
   const key = event.key.toLowerCase();
   return (
     SHORTCUTS.find(
       (shortcut) =>
-        (shortcut.key === key || (shortcut.code !== undefined && shortcut.code === event.code)) &&
-        Boolean(shortcut.shift) === event.shiftKey,
+        keyMatches(shortcut, event, key) &&
+        Boolean(shortcut.shift) === event.shiftKey &&
+        Boolean(shortcut.alt) === event.altKey,
     ) ?? null
   );
 }

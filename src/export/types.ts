@@ -18,7 +18,6 @@ export type DocumentExportOptions = {
 };
 
 export type DocumentExportSnapshot = {
-  base_version: number;
   local_revision: number;
   dirty: boolean;
 };

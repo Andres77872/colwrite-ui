@@ -1,3 +1,4 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import { describe, expect, it, vi } from 'vitest';
 import { FIGURE_METRICS } from '../constants';
 import { inflateRect } from '../geometry';
@@ -297,7 +298,7 @@ function runCrosses(a: Point, b: Point, r: Rect): boolean {
 }
 
 function segments(points: Point[]): Array<[Point, Point]> {
-  return points.slice(0, -1).map((p, i) => [p, points[i + 1]]);
+  return points.slice(0, -1).map((p, i) => [p, itemAt(points, i + 1)]);
 }
 
 function expectOrthogonal(edge: SceneEdge): void {
@@ -331,8 +332,8 @@ function expectCleanRoute(edge: SceneEdge, layout: FigureLayout): void {
   const pts = edge.points;
   const from = layout.nodes.find((n) => n.id === edge.model.from);
   const to = layout.nodes.find((n) => n.id === edge.model.to);
-  if (from) expect(attaches(pts[0], from), `${edge.id} start`).toBe(true);
-  if (to) expect(attaches(pts[pts.length - 1], to), `${edge.id} end`).toBe(true);
+  if (from) expect(attaches(itemAt(pts, 0), from), `${edge.id} start`).toBe(true);
+  if (to) expect(attaches(itemAt(pts, pts.length - 1), to), `${edge.id} end`).toBe(true);
   segments(pts).forEach(([a, b], k) => {
     for (const node of layout.nodes) {
       const own = node.id === edge.model.from || node.id === edge.model.to;
@@ -353,18 +354,18 @@ function crossings(p: SceneEdge, q: SceneEdge): number {
     for (const [c, d] of segments(q.points)) {
       const [h, v] = close(a.y, b.y) && close(c.x, d.x) ? [[a, b], [c, d]] : close(c.y, d.y) && close(a.x, b.x) ? [[c, d], [a, b]] : [null, null];
       if (!h || !v) continue;
-      const x = v[0].x;
-      const y = h[0].y;
+      const x = itemAt(v, 0).x;
+      const y = itemAt(h, 0).y;
       const inside = (t: number, lo: number, hi: number) => t > Math.min(lo, hi) + 1e-6 && t < Math.max(lo, hi) - 1e-6;
-      if (inside(x, h[0].x, h[1].x) && inside(y, v[0].y, v[1].y)) n += 1;
+      if (inside(x, itemAt(h, 0).x, itemAt(h, 1).x) && inside(y, itemAt(v, 0).y, itemAt(v, 1).y)) n += 1;
     }
   }
   return n;
 }
 
 function lastDirection(points: Point[]): Point {
-  const a = points[points.length - 2];
-  const b = points[points.length - 1];
+  const a = itemAt(points, points.length - 2);
+  const b = itemAt(points, points.length - 1);
   const len = Math.hypot(b.x - a.x, b.y - a.y);
   return { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
 }
@@ -410,9 +411,9 @@ describe('routeFigure — straight chains', () => {
     });
     const pts = edge(0).points;
     expect(pts).toHaveLength(2);
-    expect(pts[0].x).toBe(pts[1].x);
-    expect(pts[0].y).toBe(50);
-    expect(pts[1].y).toBe(90);
+    expect(pts[0]?.x).toBe(itemAt(pts, 1).x);
+    expect(pts[0]?.y).toBe(50);
+    expect(pts[1]?.y).toBe(90);
   });
 
   it('routes a horizontal flow left to right between facing sides', () => {
@@ -447,8 +448,8 @@ describe('routeFigure — straight chains', () => {
     expect(lastDirection(pts)).toEqual({ x: 0, y: -1 });
     // A Z with its jog in the gap between the two layers.
     expect(pts).toHaveLength(4);
-    expect(pts[1].y).toBeGreaterThan(130);
-    expect(pts[1].y).toBeLessThan(200);
+    expect(pts[1]?.y).toBeGreaterThan(130);
+    expect(pts[1]?.y).toBeLessThan(200);
   });
 });
 
@@ -490,7 +491,7 @@ describe('routeFigure — orthogonal routes', () => {
     });
     // bottom → jog in the gap → top: exactly two bends.
     expect(edge(0).points).toHaveLength(4);
-    const [p0, p1, p2, p3] = edge(0).points;
+    const [p0, p1, p2, p3] = takeItems(edge(0).points, 4);
     expect(p1.x).toBe(p0.x);
     expect(p2.y).toBe(p1.y);
     expect(p3.x).toBe(p2.x);
@@ -508,11 +509,11 @@ describe('routeFigure — orthogonal routes', () => {
       edges: [{ from: 'a', to: 'b' }],
     });
     const pts = edge(0).points;
-    expect(pts[0].y).toBe(50);
-    expect(pts[1].x).toBe(pts[0].x);
-    expect(pts[1].y - pts[0].y).toBeGreaterThanOrEqual(EDGE.stub - 1e-6);
-    const last = pts[pts.length - 1];
-    const before = pts[pts.length - 2];
+    expect(pts[0]?.y).toBe(50);
+    expect(pts[1]?.x).toBe(itemAt(pts, 0).x);
+    expect(itemAt(pts, 1).y - itemAt(pts, 0).y).toBeGreaterThanOrEqual(EDGE.stub - 1e-6);
+    const last = itemAt(pts, pts.length - 1);
+    const before = itemAt(pts, pts.length - 2);
     expect(last.y).toBe(150);
     expect(before.x).toBe(last.x);
     expect(last.y - before.y).toBeGreaterThanOrEqual(EDGE.arrowLength + EDGE.cornerRadius - 1e-6);
@@ -549,7 +550,7 @@ describe('routeFigure — orthogonal routes', () => {
     const add = node('add').anchor;
     const block = node('block').bounds;
     const pts = residual.points;
-    const tip = pts[pts.length - 1];
+    const tip = itemAt(pts, pts.length - 1);
     expect(tip.x).toBe(add.x);
     expect(tip.y).toBeCloseTo(add.y + add.height / 2, 6);
     expect(lastDirection(pts)).toEqual({ x: 1, y: 0 });
@@ -557,8 +558,8 @@ describe('routeFigure — orthogonal routes', () => {
     const minX = Math.min(...pts.map((p) => p.x));
     expect(minX).toBeLessThanOrEqual(block.x - EDGE.clearance + 1e-6);
     // Out of x's bottom, left of the flow edge's port so the two never cross.
-    expect(pts[0].y).toBe(50);
-    expect(pts[0].x).toBeLessThan(edge(0).points[0].x);
+    expect(pts[0]?.y).toBe(50);
+    expect(pts[0]?.x).toBeLessThan(itemAt(edge(0).points, 0).x);
   });
 
   it('loops a feedback edge round the right of the stack', () => {
@@ -580,8 +581,8 @@ describe('routeFigure — orthogonal routes', () => {
     const a = node('a').anchor;
     const c = node('c').anchor;
     const b = node('b').bounds;
-    expect(pts[0].x).toBe(c.x + c.width);
-    expect(pts[pts.length - 1].x).toBe(a.x + a.width);
+    expect(pts[0]?.x).toBe(c.x + c.width);
+    expect(pts[pts.length - 1]?.x).toBe(a.x + a.width);
     expect(lastDirection(pts)).toEqual({ x: -1, y: 0 });
     expect(Math.max(...pts.map((p) => p.x))).toBeGreaterThanOrEqual(b.x + b.width + EDGE.clearance - 1e-6);
   });
@@ -596,7 +597,7 @@ describe('routeFigure — orthogonal routes', () => {
       groups: [{ id: 'G', box: { x: 60, y: 100, width: 340, height: 120 }, border: 'solid' }],
       edges: [{ from: 'a', to: 'b' }],
     });
-    const box = layout.groups[0].box;
+    const box = itemAt(layout.groups, 0).box;
     expectCleanRoute(edge(0), layout);
     for (const [p, q] of segments(edge(0).points)) expect(runCrosses(p, q, box)).toBe(false);
   });
@@ -652,12 +653,12 @@ describe('routeFigure — orthogonal routes', () => {
     const residual = edge(2).points;
     // Out of the ⊕'s top, straight up along the main line, then off to the side.
     expect(residual[0]).toEqual({ x: add.x + add.width / 2, y: add.y });
-    expect(residual[1].x).toBe(residual[0].x);
-    expect(residual[1].y).toBeLessThan(add.y);
-    expect(residual[1].y).toBeGreaterThan(582);
+    expect(residual[1]?.x).toBe(itemAt(residual, 0).x);
+    expect(residual[1]?.y).toBeLessThan(add.y);
+    expect(residual[1]?.y).toBeGreaterThan(582);
     // Into the norm from the left, clear of the attention block.
     const norm = node('norm').anchor;
-    expect(residual[residual.length - 1].x).toBe(norm.x);
+    expect(residual[residual.length - 1]?.x).toBe(norm.x);
     expect(lastDirection(residual)).toEqual({ x: 1, y: 0 });
     expect(Math.min(...residual.map((p) => p.x))).toBeLessThanOrEqual(64.94685 - EDGE.clearance + 1e-6);
   });
@@ -677,9 +678,9 @@ describe('routeFigure — orthogonal routes', () => {
       ],
     });
     const pts = edge(1).points;
-    expect(pts[0].y).toBe(100);
+    expect(pts[0]?.y).toBe(100);
     // The first bend sits outside the copies' clearance zone.
-    expect(pts[1].y).toBeLessThanOrEqual(92 - EDGE.clearance + 1e-6);
+    expect(pts[1]?.y).toBeLessThanOrEqual(92 - EDGE.clearance + 1e-6);
     expectCleanRoute(edge(1), layout);
   });
 });
@@ -699,9 +700,9 @@ describe('routeFigure — ports', () => {
         { from: 's', to: 'b' },
       ],
     });
-    const toC = edge(0).points[0];
-    const toA = edge(1).points[0];
-    const toB = edge(2).points[0];
+    const toC = itemAt(edge(0).points, 0);
+    const toA = itemAt(edge(1).points, 0);
+    const toB = itemAt(edge(2).points, 0);
     for (const p of [toA, toB, toC]) expect(p.y).toBe(50);
     expect(toA.x).toBeLessThan(toB.x);
     expect(toB.x).toBeLessThan(toC.x);
@@ -729,12 +730,12 @@ describe('routeFigure — ports', () => {
     });
     for (const e of edges) expectCleanRoute(e, layout);
     let total = 0;
-    for (let i = 0; i < edges.length; i += 1) for (let j = i + 1; j < edges.length; j += 1) total += crossings(edges[i], edges[j]);
+    for (let i = 0; i < edges.length; i += 1) for (let j = i + 1; j < edges.length; j += 1) total += crossings(itemAt(edges, i), itemAt(edges, j));
     expect(total).toBe(0);
     const aux = edge(2).points;
-    const ports = edges.map((e) => e.points[0].x);
+    const ports = edges.map((e) => itemAt(e.points, 0).x);
     const detourRight = Math.max(...aux.map((p) => p.x)) > 320;
-    expect(aux[0].x).toBe(detourRight ? Math.max(...ports) : Math.min(...ports));
+    expect(aux[0]?.x).toBe(detourRight ? Math.max(...ports) : Math.min(...ports));
   });
 
   it('squeezes ports onto a narrow side instead of spilling past it', () => {
@@ -745,7 +746,7 @@ describe('routeFigure — ports', () => {
       ],
       edges: [0, 1, 2, 3, 4].map((i) => ({ from: 's', to: `t${i}` })),
     });
-    const xs = edges.map((e) => e.points[0].x);
+    const xs = edges.map((e) => itemAt(e.points, 0).x);
     expect(new Set(xs).size).toBe(5);
     const radius = FIGURE_METRICS.node.radius;
     for (const x of xs) {
@@ -795,9 +796,9 @@ describe('routeFigure — ports', () => {
       edges: [{ from: 'a', to: 'b', fromSide: 'right' }],
     });
     const pts = edge(0).points;
-    expect(pts[0].x).toBe(180);
+    expect(pts[0]?.x).toBe(180);
     // b is downstream: enter at its top.
-    expect(pts[pts.length - 1].y).toBe(120);
+    expect(pts[pts.length - 1]?.y).toBe(120);
     expect(lastDirection(pts)).toEqual({ x: 0, y: 1 });
   });
 
@@ -857,7 +858,7 @@ describe('routeFigure — tensors and images', () => {
       nodes: [{ id: 'src', x: 0, y: 95 }, tensor('tok', 200, 100)],
       edges: [{ from: 'src', to: 'tok' }],
     });
-    const end = edge(0).points[edge(0).points.length - 1];
+    const end = itemAt(edge(0).points, edge(0).points.length - 1);
     const tok = node('tok').shape;
     expect(end.x).toBe(tok.x);
     expect(end.y).toBeGreaterThanOrEqual(tok.y);
@@ -881,7 +882,7 @@ describe('routeFigure — tensors and images', () => {
     });
     const tok = node('tok').shape;
     for (const e of edges) {
-      const end = e.points[e.points.length - 1];
+      const end = itemAt(e.points, e.points.length - 1);
       expect(end.y).toBe(tok.y);
       expect(end.x).toBeGreaterThanOrEqual(tok.x);
       expect(end.x).toBeLessThanOrEqual(tok.x + tok.width);
@@ -897,7 +898,7 @@ describe('routeFigure — tensors and images', () => {
     });
     const pts = edge(0).points;
     const tok = node('tok');
-    const end = pts[pts.length - 1];
+    const end = itemAt(pts, pts.length - 1);
     expect([tok.shape.x, tok.shape.x + tok.shape.width]).toContain(end.x);
     expect(end.y).toBeGreaterThanOrEqual(tok.shape.y);
     expect(end.y).toBeLessThanOrEqual(tok.shape.y + tok.shape.height);
@@ -910,7 +911,7 @@ describe('routeFigure — tensors and images', () => {
       nodes: [tensor('tok', 100, 20), { id: 'dst', x: 100, y: 160 }],
       edges: [{ from: 'tok', to: 'dst' }],
     });
-    const start = edge(0).points[0];
+    const start = itemAt(edge(0).points, 0);
     const tok = node('tok');
     expect(start.y).toBe(tok.anchor.y + tok.anchor.height);
     expect(start.x).toBeGreaterThanOrEqual(tok.shape.x);
@@ -927,7 +928,7 @@ describe('routeFigure — tensors and images', () => {
     });
     const pts = edge(0).points;
     const tok = node('tok');
-    expect(pts[pts.length - 1].y).toBe(tok.anchor.y + tok.anchor.height);
+    expect(pts[pts.length - 1]?.y).toBe(tok.anchor.y + tok.anchor.height);
     expect(lastDirection(pts)).toEqual({ x: 0, y: -1 });
   });
 });
@@ -957,16 +958,16 @@ describe('routeFigure — arrowheads and path data', () => {
       expect(end.tip).toEqual(pts[pts.length - 1]);
       expect(end.polygon[0]).toEqual(end.tip);
       const u = lastDirection(pts);
-      const base = { x: (end.polygon[1].x + end.polygon[2].x) / 2, y: (end.polygon[1].y + end.polygon[2].y) / 2 };
+      const base = { x: (itemAt(end.polygon, 1).x + itemAt(end.polygon, 2).x) / 2, y: (itemAt(end.polygon, 1).y + itemAt(end.polygon, 2).y) / 2 };
       expect(base.x).toBeCloseTo(end.tip.x - u.x * length, 6);
       expect(base.y).toBeCloseTo(end.tip.y - u.y * length, 6);
-      expect(Math.hypot(end.polygon[1].x - end.polygon[2].x, end.polygon[1].y - end.polygon[2].y)).toBeCloseTo(width, 6);
+      expect(Math.hypot(itemAt(end.polygon, 1).x - itemAt(end.polygon, 2).x, itemAt(end.polygon, 1).y - itemAt(end.polygon, 2).y)).toBeCloseTo(width, 6);
       // The stroke ends at the arrow base.
       expect(edge.d.endsWith(`L${Math.round(base.x * 100) / 100} ${Math.round(base.y * 100) / 100}`)).toBe(true);
     }
-    const both = edges[1];
+    const both = itemAt(edges, 1);
     expect(both.start?.tip).toEqual(both.points[0]);
-    expect(edges[0].start).toBeNull();
+    expect(edges[0]?.start).toBeNull();
   });
 
   it('draws no arrowheads for an undirected edge and the full line', () => {
@@ -1005,7 +1006,7 @@ describe('routeFigure — straight, curved and self-loops', () => {
       ],
       edges: [{ from: 'a', to: 'b', route: 'straight' }],
     });
-    const [p0, p1] = edge(0).points;
+    const [p0, p1] = takeItems(edge(0).points, 2);
     expect(edge(0).points).toHaveLength(2);
     // Corner to corner along the diagonal.
     expect(p0.x).toBeCloseTo(40, 6);
@@ -1023,7 +1024,7 @@ describe('routeFigure — straight, curved and self-loops', () => {
       ],
       edges: [{ from: 'a', to: 'b', route: 'curved' }],
     });
-    const [p0, c1, c2, p3] = edge(0).points;
+    const [p0, c1, c2, p3] = takeItems(edge(0).points, 4);
     expect(edge(0).points).toHaveLength(4);
     expect(p0).toEqual({ x: 60, y: 50 });
     expect(p3).toEqual({ x: 260, y: 200 });
@@ -1296,9 +1297,9 @@ describe('routeFigure — failure modes', () => {
       edges: [{ from: 'a', to: 't' }],
     });
     expect(diagnostics.map((d) => d.code)).toEqual(['route.fallback']);
-    expect(diagnostics[0].path).toBe('edges[0]');
-    expect(edges[0].points).toHaveLength(2);
-    expect(edges[0].end).not.toBeNull();
+    expect(diagnostics[0]?.path).toBe('edges[0]');
+    expect(edges[0]?.points).toHaveLength(2);
+    expect(itemAt(edges, 0).end).not.toBeNull();
   });
 
   it('draws an edge to a walled-in target as a simple orthogonal route, not a diagonal', () => {
@@ -1314,8 +1315,8 @@ describe('routeFigure — failure modes', () => {
       edges: [{ from: 'a', to: 't' }],
     });
     expect(diagnostics.map((d) => d.code)).toEqual(['route.fallback']);
-    expectOrthogonal(edges[0]);
-    expect(edges[0].end).not.toBeNull();
+    expectOrthogonal(itemAt(edges, 0));
+    expect(itemAt(edges, 0).end).not.toBeNull();
   });
 
   it('squeezes a route between close neighbours rather than through the one in the way', () => {
@@ -1422,8 +1423,8 @@ describe('translateEdges', () => {
       ],
       edges: [{ from: 'a', to: 'b', label: 'long edge label', arrow: 'both' }],
     });
-    const [moved] = translateEdges(edges, 10, 20);
-    const [edge] = edges;
+    const [moved] = takeItems(translateEdges(edges, 10, 20), 1);
+    const [edge] = takeItems(edges, 1);
     expect(moved.points).toEqual(edge.points.map((p) => ({ x: p.x + 10, y: p.y + 20 })));
     expect(moved.end?.polygon).toEqual(edge.end?.polygon.map((p) => ({ x: p.x + 10, y: p.y + 20 })));
     expect(moved.start?.tip).toEqual({ x: edge.start!.tip.x + 10, y: edge.start!.tip.y + 20 });
@@ -1435,7 +1436,7 @@ describe('translateEdges', () => {
     expect(after.length).toBe(before.length);
     after.forEach((values, k) => {
       const shifted = values.length === 7 ? [0, 0, 0, 0, 0, 10, 20] : [10, 20];
-      values.forEach((v, i) => expect(v).toBeCloseTo(before[k][i] + shifted[i], 6));
+      values.forEach((v, i) => expect(v).toBeCloseTo(itemAt(itemAt(before, k), i) + itemAt(shifted, i), 6));
     });
   });
 });

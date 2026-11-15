@@ -1,6 +1,10 @@
+import { itemAt } from '@/lib/itemAt';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup, fireEvent, screen } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import type { Block, CitationChild, Doc } from '@/editor/types';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
 /**
  * The reference list is derived from the document, so it is tested through the
@@ -8,13 +12,21 @@ import type { Block, CitationChild, Doc } from '@/editor/types';
  * only that the fixture matches itself.
  */
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
+
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const { EditorProvider } = await import('@/editor');
 const { ReferencesSection } = await import('./ReferencesSection');
@@ -38,8 +50,8 @@ const para = (id: string, children: CitationChild[]): Block => ({
 });
 
 async function mount(blocks: Block[]) {
-  const doc: Doc = { version: 1, blocks };
-  localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc }));
+  const doc: Doc = { blocks };
+  localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: null, doc }));
   const utils = render(
     <EditorProvider>
       {/* Stands in for the paragraph a back-link jumps to. */}
@@ -97,9 +109,9 @@ describe('ReferencesSection', () => {
 
     const rows = screen.getAllByRole('listitem');
     expect(rows).toHaveLength(2);
-    expect(rows[0].textContent).toContain('[1]');
-    expect(rows[0].textContent).toContain('A. Author. First paper. 2020.');
-    expect(rows[1].textContent).toContain('[2]');
+    expect(rows[0]?.textContent).toContain('[1]');
+    expect(rows[0]?.textContent).toContain('A. Author. First paper. 2020.');
+    expect(rows[1]?.textContent).toContain('[2]');
     expect(screen.getByText('2 sources · Numbered in order of first citation.')).toBeTruthy();
   });
 
@@ -108,9 +120,9 @@ describe('ReferencesSection', () => {
 
     const back = screen.getAllByRole('button', { name: /Go to citation/ });
     expect(back).toHaveLength(2);
-    expect(back[0].getAttribute('aria-label')).toBe('Go to citation 1 of 2 for k1');
+    expect(back[0]?.getAttribute('aria-label')).toBe('Go to citation 1 of 2 for k1');
 
-    fireEvent.click(back[1]);
+    fireEvent.click(itemAt(back, 1));
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     // Focus lands on the citation, not back where the reader started.
     expect(document.activeElement?.closest('[data-child-id]')?.getAttribute('data-child-id'))
@@ -151,9 +163,9 @@ describe('ReferencesSection', () => {
     ]);
 
     const rows = screen.getAllByRole('listitem');
-    expect(rows[0].textContent).toContain('A. Abel (2019). Earlier.');
-    expect(rows[0].textContent).not.toContain('[1]');
-    expect(rows[1].textContent).toContain('Z. Zed (2020). Later.');
+    expect(rows[0]?.textContent).toContain('A. Abel (2019). Earlier.');
+    expect(rows[0]?.textContent).not.toContain('[1]');
+    expect(rows[1]?.textContent).toContain('Z. Zed (2020). Later.');
   });
 
   it('renders a source whose year arrived from the agent as a number', async () => {

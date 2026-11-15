@@ -1,24 +1,35 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { useState } from 'react';
 import type { Doc } from '@/editor/types';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
+
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /** Resolves the current run when the test says so, after one token. */
 let finishRun: (() => void) | null = null;
 /** The running request's handlers, to drive its progress events. */
-let runHandlers: import('@/services/streamParser').SSEEventHandlers | null = null;
+let runHandlers: import('@/api/assistant/streamParser').AgentEventHandlers | null = null;
 let runSignal: AbortSignal | undefined;
-vi.mock('@/services/agentChat', () => ({
-  streamAgentChat: vi.fn(
-    (_params: unknown, handlers: import('@/services/streamParser').SSEEventHandlers, options?: { signal?: AbortSignal }) =>
+vi.mock('@/api/assistant/agentChat', () => ({
+  runAgentTurn: vi.fn(
+    (_params: unknown, handlers: import('@/api/assistant/streamParser').AgentEventHandlers, options?: { signal?: AbortSignal }) =>
       new Promise((resolve) => {
         runHandlers = handlers;
         runSignal = options?.signal;
@@ -74,11 +85,10 @@ function PanelHarness({ onClose }: { onClose: () => void }) {
 
 function mount() {
   const doc: Doc = {
-    version: 1,
     name: 'Ask AI test',
     blocks: [{ id: 'p1', type: 'paragraph', html: 'A long paragraph.', children: [], columns: 1 }],
   };
-  localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: 'doc-1', doc }));
+  localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: 'doc-1', doc }));
   const onClose = vi.fn();
   render(
     <EditorProvider>

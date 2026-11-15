@@ -1,7 +1,7 @@
 import { uid } from '@/lib/uid';
 import { markdownToBlocks } from '@/editor/markdown';
 import type { Block, CitationChild, ParagraphBlock } from '@/editor';
-import type { AgentSource } from '@/services/streamParser';
+import type { AgentSource } from '@/api/assistant/streamParser';
 import { parseCitationSuggestion, stripCitationTags } from './citationTags';
 
 /** `[S3]` and `[S1, S4]`: the handles research tools give their results. */

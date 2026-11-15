@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { uid } from '@/lib/uid';
 import { blocksToMarkdown, citationLookup, inlineHtmlToMarkdown } from '@/editor/markdown';
-import { htmlToText, isFigureBlock, useEditorActions, useEditorState } from '@/editor';
+import { htmlToText, isFigureBlock, useEditorActions, useEditorDoc, useEditorView } from '@/editor';
 import { blockText } from '@/editor/proposals';
 import { serializeEditableHtml } from '../../common/Editable/editableHtml';
 import { ASK_AI_EVENT, type AskAiRequest } from './askAiEvents';
@@ -15,7 +15,8 @@ import type { AskAiTarget } from './AskAi';
  * its anchor the way a floating one does.
  */
 export function useAskAiTarget() {
-  const { selectedBlockIds, blocks } = useEditorState();
+  const { blocks } = useEditorDoc();
+  const { selectedBlockIds } = useEditorView();
   const { refs, getBlock, clearBlockSelection } = useEditorActions();
   const [target, setTarget] = useState<AskAiTarget | null>(null);
   const selectedRef = useRef(selectedBlockIds);
@@ -34,19 +35,21 @@ export function useAskAiTarget() {
 
       if (selected.length > 0) {
         const chosen = all.filter((block) => selected.includes(block.id));
-        if (chosen.length === 1 && isFigureBlock(chosen[0])) {
+        const [only] = chosen;
+        const last = chosen.at(-1);
+        if (chosen.length === 1 && only && isFigureBlock(only)) {
           // One selected figure (Esc in its source, then Mod+J) is the figure
           // itself: the text presets would rewrite its JSON as prose, and the
           // figure presets apply to a single block only.
           clearBlockSelection();
-          blockId = chosen[0].id;
-        } else if (chosen.length > 0) {
+          blockId = only.id;
+        } else if (last) {
           clearBlockSelection();
           return {
             key,
             kind: 'blocks',
             blockIds: chosen.map((block) => block.id),
-            anchorId: chosen[chosen.length - 1].id,
+            anchorId: last.id,
             markdown: blocksToMarkdown(chosen),
             text: chosen.map(blockText).join('\n\n'),
             locked: chosen.some((block) => block.locked),

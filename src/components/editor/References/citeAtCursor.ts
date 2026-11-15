@@ -14,6 +14,7 @@ import { scrollBehavior } from '@/lib/motion';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import { useToast } from '@/components/ui/toastContext';
 import type { ToastOptions } from '@/components/ui/toastContext';
+import { registerModuleReset } from '@/lib/moduleState';
 
 /**
  * Where the author's caret last was in the document.
@@ -155,6 +156,10 @@ export type EditorFocus = { blockId: string; selection: string | null };
 
 let focusSnapshot: EditorFocus | null = null;
 const focusListeners = new Set<() => void>();
+registerModuleReset(() => {
+  remembered = null;
+  focusSnapshot = null;
+});
 
 /** The plain text of a range, without citation labels and other widgets. */
 function rangeText(range: Range): string | null {
@@ -403,8 +408,8 @@ export function useCiteAtCursor(): (sources: readonly CitationSource[]) => CiteP
       if (!range) {
         const ids = getBlockIds();
         const lastUsable = (from: number, to: number): ParagraphBlock | undefined => {
-          for (let index = to - 1; index >= from; index -= 1) {
-            const candidate = getBlock(ids[index]);
+          for (const id of ids.slice(from, to).reverse()) {
+            const candidate = getBlock(id);
             if (usable(candidate)) return candidate;
           }
           return undefined;
@@ -414,9 +419,13 @@ export function useCiteAtCursor(): (sources: readonly CitationSource[]) => CiteP
         const at = caretBlock ? ids.indexOf(caretBlock.id) : -1;
         if (at >= 0) {
           let start = at;
-          while (start > 0 && getBlock(ids[start])?.type !== 'heading') start -= 1;
+          const kindAt = (index: number) => {
+            const id = ids[index];
+            return id === undefined ? undefined : getBlock(id)?.type;
+          };
+          while (start > 0 && kindAt(start) !== 'heading') start -= 1;
           let end = at + 1;
-          while (end < ids.length && getBlock(ids[end])?.type !== 'heading') end += 1;
+          while (end < ids.length && kindAt(end) !== 'heading') end += 1;
           target = lastUsable(start, end);
         }
         const finalUsable = lastUsable(0, ids.length);
@@ -426,9 +435,12 @@ export function useCiteAtCursor(): (sources: readonly CitationSource[]) => CiteP
           range.selectNodeContents(refs.current[target.id]!);
           range.collapse(false);
           let heading: Block | undefined;
-          for (let index = ids.indexOf(target.id); index >= 0 && !heading; index -= 1) {
-            const candidate = getBlock(ids[index]);
-            if (candidate?.type === 'heading') heading = candidate;
+          for (const id of ids.slice(0, ids.indexOf(target.id) + 1).reverse()) {
+            const candidate = getBlock(id);
+            if (candidate?.type === 'heading') {
+              heading = candidate;
+              break;
+            }
           }
           fallback = {
             where: 'fallback',
@@ -519,7 +531,8 @@ export function useCiteAtCursor(): (sources: readonly CitationSource[]) => CiteP
 
 /** What to tell the author after a cite: where it went, in their terms. */
 export function citeNotice(placement: CitePlacement, sources: readonly CitationSource[]): ToastOptions {
-  const named = sources.length === 1 ? sources[0].title || sources[0].key : `${sources.length} sources`;
+  const [only] = sources;
+  const named = only && sources.length === 1 ? only.title || only.key : `${sources.length} sources`;
   switch (placement.where) {
     case 'caret':
       return { title: 'Citation inserted', description: named };
@@ -533,7 +546,7 @@ export function citeNotice(placement: CitePlacement, sources: readonly CitationS
       const title = placement.section
         ? `Cited at the end of “${placement.section}”`
         : placement.last
-          ? 'Cited at the end of the document'
+          ? 'Cited at the end of the page'
           : 'Cited at the end of the nearest paragraph';
       const why =
         placement.caretBlock === 'heading'

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { NativeSelect } from '@/components/ui/select';
@@ -7,119 +7,116 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useTheme, type ThemePreference } from '@/lib/theme';
 import { cn } from '@/lib/utils';
-import { useEditor } from '@/editor';
 import { usePageSettings } from '@/editor/pageSettings';
 import { useView } from '@/components/layout/viewContextState';
-import { errorMessage } from '@/services/contracts';
-import { getOverview, type UserOverview, type UserProfile } from '@/services/userProfile';
+import { usePanels } from '@/components/panels/panelsContextState';
+import { errorMessage } from '@/api/errors';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { meQuery } from '@/data/userProfile';
+import { accountUsageQuery, workspaceUsageQuery } from '@/data/workspaces';
+import { useWorkspace } from '@/components/workspace/workspaceContextState';
 import { ActivityChart } from './ActivityChart';
-import { DocumentsSection } from './DocumentsSection';
 import { AccountPane } from './AccountPane';
+import { PageActivityTable } from './PageActivityTable';
 import { StatTiles } from './StatTiles';
+import { StorageSummary } from './StorageSummary';
 import { ToolUsageList } from './ToolUsageList';
-import { UploadsSection } from './UploadsSection';
+import { WorkspacePane } from './WorkspacePane';
+import { MembersPane } from './MembersPane';
+import { WorkspaceUsageTable } from './WorkspaceUsageTable';
 import { AgentEnginePreferences, AgentToolsPreferences } from '@/components/preferences';
-import { takeRequestedSettingsPane } from './settingsPane';
-import { BarChart3, FileText, RefreshCw, SlidersHorizontal, Sparkles, UserRound } from 'lucide-react';
+import { takeRequestedSettingsPane, type SettingsPane } from './settingsPane';
+import { BarChart3, Layers, RefreshCw, SlidersHorizontal, Sparkles, UserRound, Users, type LucideIcon } from 'lucide-react';
 
 const ACTIVITY_DAYS = 30;
 
-const PANES = [
+/**
+ * The panes, in order. Pages and PDFs have no pane: pages are managed in the
+ * sidebar and PDFs in the Library, so Settings keeps only their usage.
+ */
+const PANES: ReadonlyArray<{ value: SettingsPane; label: string; icon: LucideIcon }> = [
   { value: 'account', label: 'Account', icon: UserRound },
   { value: 'preferences', label: 'Preferences', icon: SlidersHorizontal },
   { value: 'ai', label: 'AI & tools', icon: Sparkles },
+  { value: 'workspace', label: 'Workspace', icon: Layers },
+  { value: 'members', label: 'Members', icon: Users },
   { value: 'usage', label: 'Usage', icon: BarChart3 },
-  // Its documents and uploaded files; "Documents" alone repeated the
-  // section heading right under the pane title.
-  { value: 'documents', label: 'Documents & files', icon: FileText },
-] as const;
+];
+
+/** What Usage counts: the workspace being shown (the default), or every workspace of the account. */
+type UsageScope = 'workspace' | 'all';
 
 /**
  * ProfileView — the body of the Settings dialog: a left nav of panes and one
  * flat, scrolling pane beside it.
  *
- * Everything here comes from ColWrite's own API rather than the auth service.
- * One `/users/me/overview` call backs the Account, Usage and Documents panes,
- * because each endpoint revalidates the session and a per-widget fetch would
- * pay that cost five times over to render the page once.
+ * Everything here comes from ColWrite's own API rather than the auth service:
+ * Account reads the person (`GET /users/me`), Workspace the workspace being
+ * shown (`GET /workspaces/{w}`), Members its members and invitations
+ * (`GET /workspaces/{w}/members`, `…/invitations`), and Usage that workspace
+ * (`GET /workspaces/{w}/usage`) or, switched to "All workspaces", every
+ * workspace of the account (`GET /users/me/usage`), each in one request.
  */
 export function ProfileView() {
   const { setView } = useView();
-  const { documentId, loadingDocumentId, switchTo } = useEditor();
+  const { setTool } = usePanels();
 
   // Read once, on mount: the dialog remounts this view each time it opens.
   const [initialPane] = useState(() => takeRequestedSettingsPane() ?? 'account');
-  const [overview, setOverview] = useState<UserOverview | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const { workspace } = useWorkspace();
+  const workspaceId = workspace.id;
+  const [usageScope, setUsageScope] = useState<UsageScope>('workspace');
+  const me = useQuery(meQuery());
+  const usage = useQuery({ ...workspaceUsageQuery(workspaceId, ACTIVITY_DAYS), enabled: usageScope === 'workspace' });
+  const allUsage = useQuery({ ...accountUsageQuery(ACTIVITY_DAYS), enabled: usageScope === 'all' });
+  const shownUsage = usageScope === 'workspace' ? usage : allUsage;
+  const refreshing = me.isFetching || shownUsage.isFetching;
+  const refreshUsage = () => void shownUsage.refetch();
 
-  const load = useCallback(async () => {
-    // Keep effect-driven loads on the asynchronous side of the boundary, the
-    // same way the documents menu does; a button press still starts in the
-    // same microtask.
-    await Promise.resolve();
-    setRefreshing(true);
-    try {
-      const next = await getOverview(ACTIVITY_DAYS);
-      setOverview(next);
-      setError(null);
-    } catch (caught) {
-      setError(errorMessage(caught, 'Could not load your profile'));
-    } finally {
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
-
-  const openDocument = async (documentId: string) => {
-    if (documentId === loadingDocumentId) return;
-    try {
-      const committed = await switchTo(documentId);
-      if (committed) setView('workspace');
-    } catch {
-      // The editor emits the one shared load notice; keep settings open.
-    }
+  // Settings closes first: the Library is a tab of the right sidebar, behind
+  // this dialog.
+  const openLibrary = () => {
+    setView('editor');
+    setTool('library');
   };
 
-  const onProfileSaved = (profile: UserProfile) =>
-    setOverview((previous) => (previous ? { ...previous, profile } : previous));
-
   const refreshButton = (
-    <Button variant="ghost" size="sm" onClick={() => void load()} disabled={refreshing}>
-      {refreshing ? <Spinner /> : <RefreshCw aria-hidden="true" />}
-      {refreshing ? 'Refreshing…' : 'Refresh'}
+    <Button variant="ghost" size="sm" onClick={refreshUsage} disabled={shownUsage.isFetching}>
+      {shownUsage.isFetching ? <Spinner /> : <RefreshCw aria-hidden="true" />}
+      {shownUsage.isFetching ? 'Refreshing…' : 'Refresh'}
     </Button>
   );
 
-  /** Overview-backed panes share one loading and one failure state. */
-  const withOverview = (render: (overview: UserOverview) => ReactNode) => (
-    <>
-      {error && <Alert variant="destructive">{error}</Alert>}
-      {overview ? (
-        render(overview)
-      ) : (
-        <div className="flex min-h-56 flex-col items-center justify-center gap-3">
-          {error ? (
-            <Button variant="outline" size="sm" onClick={() => void load()}>
-              <RefreshCw aria-hidden="true" />
-              Try again
-            </Button>
-          ) : (
-            <span className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Spinner />
-              Loading your profile…
-            </span>
-          )}
-        </div>
-      )}
-    </>
-  );
+  /** A pane backed by one read: its loading state, its failure and a retry. */
+  const withData = <T,>(
+    read: UseQueryResult<T>,
+    labels: { loading: string; failed: string },
+    render: (data: T) => ReactNode,
+  ) => {
+    const error = read.isError ? errorMessage(read.error, labels.failed) : null;
+    return (
+      <>
+        {error && <Alert variant="destructive">{error}</Alert>}
+        {read.data ? (
+          render(read.data)
+        ) : (
+          <div className="flex min-h-56 flex-col items-center justify-center gap-3">
+            {error ? (
+              <Button variant="outline" size="sm" onClick={() => void read.refetch()}>
+                <RefreshCw aria-hidden="true" />
+                Try again
+              </Button>
+            ) : (
+              <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Spinner />
+                {labels.loading}
+              </span>
+            )}
+          </div>
+        )}
+      </>
+    );
+  };
 
   return (
     <Tabs
@@ -151,8 +148,8 @@ export function ProfileView() {
         <div className="mx-auto w-full max-w-3xl px-5 pb-8 pt-6 sm:px-10 sm:pt-9">
           <TabsContent value="account" className="mt-0 flex flex-col gap-6">
             <PaneTitle title="Account" />
-            {withOverview((data) => (
-              <AccountPane identity={data.identity} profile={data.profile} onSaved={onProfileSaved} />
+            {withData(me, { loading: 'Loading your profile…', failed: 'Could not load your profile' }, (data) => (
+              <AccountPane identity={data.identity} profile={data.profile} />
             ))}
           </TabsContent>
 
@@ -169,43 +166,97 @@ export function ProfileView() {
             <AgentToolsPreferences leading={<AgentEnginePreferences />} />
           </TabsContent>
 
-          <TabsContent value="usage" className="mt-0 flex flex-col gap-6">
-            <PaneTitle title="Usage" action={refreshButton} />
-            {withOverview((data) => (
-              <>
-                <StatTiles summary={data.summary} />
-                <ActivityChart activity={data.activity} days={ACTIVITY_DAYS} />
-                <ToolUsageList tools={data.tools} />
-              </>
-            ))}
+          <TabsContent value="workspace" className="mt-0 flex flex-col gap-6">
+            <PaneTitle title="Workspace" />
+            <WorkspacePane />
           </TabsContent>
 
-          <TabsContent value="documents" className="mt-0 flex flex-col gap-6">
-            <PaneTitle title="Documents & files" action={refreshButton} />
-            {/* No `key={generation}` remount here. Both sections reconcile a
-                fresh first page against the pages they have already loaded
-                (`usePagedList`), so Refresh updates the rows instead of
-                throwing away everything the user paged in. */}
-            {withOverview((data) => (
-              <>
-                <DocumentsSection
-                  documents={data.documents}
-                  totalKnown={data.summary.documents_active}
-                  onOpen={(documentId) => void openDocument(documentId)}
-                  currentDocumentId={documentId}
-                  loadingDocumentId={loadingDocumentId}
-                />
-                <UploadsSection
-                  uploads={data.resources}
-                  totalKnown={data.summary.resources_active}
-                  onChanged={() => void load()}
-                />
-              </>
-            ))}
+          <TabsContent value="members" className="mt-0 flex flex-col gap-6">
+            <PaneTitle title="Members" />
+            <MembersPane />
+          </TabsContent>
+
+          <TabsContent value="usage" className="mt-0 flex flex-col gap-6">
+            <PaneTitle title="Usage" action={refreshButton} />
+            <UsageScopeSwitch scope={usageScope} onChange={setUsageScope} workspaceName={workspace.name} />
+            {usageScope === 'workspace'
+              ? withData(usage, { loading: 'Loading the usage…', failed: 'Could not load the usage' }, (data) => (
+                  <>
+                    <StatTiles summary={data.summary} />
+                    <ActivityChart activity={data.activity} days={ACTIVITY_DAYS} />
+                    <PageActivityTable pages={data.pages} totalPages={data.summary.documents_active} />
+                    <ToolUsageList tools={data.tools} />
+                    <StorageSummary summary={data.summary} onOpenLibrary={openLibrary} />
+                  </>
+                ))
+              : withData(allUsage, { loading: 'Loading the usage…', failed: 'Could not load the usage' }, (data) => (
+                  <>
+                    <StatTiles summary={data.summary} />
+                    <ActivityChart activity={data.activity} days={ACTIVITY_DAYS} />
+                    <WorkspaceUsageTable workspaces={data.workspaces} />
+                    <ToolUsageList tools={data.tools} />
+                    <StorageSummary summary={data.summary} onOpenLibrary={openLibrary} />
+                  </>
+                ))}
           </TabsContent>
         </div>
       </div>
     </Tabs>
+  );
+}
+
+/**
+ * "This workspace" (the default) or "All workspaces": a radio group of two,
+ * one tab stop, arrows move between them.
+ */
+function UsageScopeSwitch({
+  scope,
+  onChange,
+  workspaceName,
+}: {
+  scope: UsageScope;
+  onChange: (scope: UsageScope) => void;
+  workspaceName: string;
+}) {
+  const options: ReadonlyArray<{ value: UsageScope; label: string }> = [
+    { value: 'workspace', label: 'This workspace' },
+    { value: 'all', label: 'All workspaces' },
+  ];
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <div role="radiogroup" aria-label="Usage of" className="inline-flex rounded-md bg-subtle p-0.5">
+        {options.map((option, index) => {
+          const checked = scope === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              tabIndex={checked ? 0 : -1}
+              onClick={() => onChange(option.value)}
+              onKeyDown={(event) => {
+                if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+                event.preventDefault();
+                const next = options[(index + 1) % options.length];
+                if (!next) return;
+                onChange(next.value);
+                (event.currentTarget.parentElement?.children[(index + 1) % options.length] as HTMLElement | undefined)?.focus();
+              }}
+              className={cn(
+                'h-7 rounded-[5px] px-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                checked ? 'bg-background font-medium text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {scope === 'workspace' ? `Counting ${workspaceName} only.` : 'Counting every workspace you are in.'}
+      </p>
+    </div>
   );
 }
 

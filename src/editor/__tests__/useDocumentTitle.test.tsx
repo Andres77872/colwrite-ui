@@ -2,28 +2,44 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 
 const editor = vi.hoisted(() => ({
-  doc: { version: 1, name: 'Untitled document', blocks: [] } as { version: number; name?: string; blocks: [] },
+  doc: { version: 1, name: 'Untitled page', blocks: [] } as { version: number; name?: string; blocks: [] },
   setDocName: vi.fn(),
   saveRemote: vi.fn(async () => {}),
 }));
 const toast = vi.hoisted(() => vi.fn());
 
-vi.mock('../editorContextState', () => ({ useEditor: () => editor }));
+vi.mock('../editorContextState', () => ({ useEditorActions: () => editor }));
+vi.mock('../documentSessionState', () => ({
+  useEditorDoc: () => ({ doc: editor.doc, blocks: editor.doc.blocks }),
+  useDocumentActions: () => editor,
+}));
 vi.mock('@/components/ui/toastContext', () => ({ useToast: () => ({ toast }) }));
 
 const { useDocumentTitle, focusPageTitle } = await import('../useDocumentTitle');
 
 beforeEach(() => {
   vi.clearAllMocks();
-  editor.doc = { version: 1, name: 'Untitled document', blocks: [] };
+  editor.doc = { version: 1, name: 'Untitled page', blocks: [] };
 });
 afterEach(cleanup);
 
 describe('useDocumentTitle', () => {
   it('treats the default name as no name, so the page shows its placeholder', () => {
     const { result } = renderHook(() => useDocumentTitle());
-    expect(result.current.title).toBe('Untitled document');
+    expect(result.current.title).toBe('Untitled page');
     expect(result.current.draftTitle).toBe('');
+    expect(result.current.isUntitled).toBe(true);
+  });
+
+  it('reads the default name as no name', async () => {
+    const { isDefaultTitle } = await import('../useDocumentTitle');
+    expect(isDefaultTitle('Untitled page')).toBe(true);
+    expect(isDefaultTitle('  ')).toBe(true);
+    expect(isDefaultTitle('Untitled findings')).toBe(false);
+
+    editor.doc = { version: 1, name: 'Untitled page', blocks: [] };
+    const { result } = renderHook(() => useDocumentTitle());
+    expect(result.current.title).toBe('Untitled page');
     expect(result.current.isUntitled).toBe(true);
   });
 
@@ -41,7 +57,7 @@ describe('useDocumentTitle', () => {
     await act(() => result.current.rename('Paper'));
     expect(editor.saveRemote).not.toHaveBeenCalled();
 
-    editor.doc = { version: 1, name: 'Untitled document', blocks: [] };
+    editor.doc = { version: 1, name: 'Untitled page', blocks: [] };
     const untitled = renderHook(() => useDocumentTitle());
     await act(() => untitled.result.current.rename('   '));
     expect(editor.saveRemote).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildChangeSet, markChanges, type ChangeSet } from '@/editor/proposals';
@@ -20,7 +21,7 @@ const reviewState = {
 
 vi.mock('@/editor', async () => ({
   ...(await vi.importActual<Record<string, unknown>>('@/editor')),
-  useEditor: () => editorState,
+  useEditorDoc: () => editorState,
 }));
 vi.mock('@/editor/proposalsContextState', () => ({ useProposals: () => reviewState }));
 vi.mock('@/components/ui/confirmContext', () => ({ useConfirm: () => vi.fn() }));
@@ -38,9 +39,9 @@ function batch(count: number, callId: string): ChangeSet {
     tool: 'doc_edit',
     toolCallId: callId,
     documentId: 'doc-1',
-    version: 1,
     status: 'proposed',
     actions,
+    changeSetId: `cs-${callId}`,
   });
 }
 
@@ -82,7 +83,7 @@ describe('announcing suggestions', () => {
     expect(announcer()).toBe('');
 
     // Accepting one is the author's own action: no announcement.
-    const decided = markChanges([first], new Set([first.changes[0].id]), 'accepted');
+    const decided = markChanges([first], new Set([itemAt(first.changes, 0).id]), 'accepted');
     show(decided);
     view.rerender(<ReviewPill />);
     expect(announcer()).toBe('');

@@ -74,7 +74,10 @@ export const BLOCK_KINDS: readonly BlockKind[] = [
 const KIND_BY_ID = new Map(BLOCK_KINDS.map((kind) => [kind.id, kind]));
 
 export function blockKind(id: BlockKindId): BlockKind {
-  return KIND_BY_ID.get(id) ?? BLOCK_KINDS[0];
+  const kind = KIND_BY_ID.get(id);
+  // `BlockKindId` is the union of the ids above, so this is a missing row.
+  if (!kind) throw new Error(`No block kind "${id}"`);
+  return kind;
 }
 
 /** Kinds a text block can be turned into in place. */
@@ -246,7 +249,8 @@ export function convertBlock(block: Block, kind: BlockKindId): Block {
 
   const html = block.type === 'code' ? textToHtml(block.text) : sourceHtml;
 
-  if (kind in HEADING_LEVELS) {
+  const level = HEADING_LEVELS[kind];
+  if (level) {
     // A heading renders no widgets, so a paragraph that holds some keeps its
     // words but not the widgets.
     const hasWidgets = block.type === 'paragraph' && (block.children ?? []).length > 0;
@@ -254,7 +258,7 @@ export function convertBlock(block: Block, kind: BlockKindId): Block {
       ...meta,
       id: block.id,
       type: 'heading',
-      level: HEADING_LEVELS[kind],
+      level,
       html: hasWidgets ? textToHtml(htmlToText(html).replace(/\n/g, ' ')) : html,
     };
   }

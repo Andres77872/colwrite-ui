@@ -1,7 +1,9 @@
 import type { ReviewDecision } from './proposals';
+import { keysWithPrefix, readItem, removeItem, reviewKey, reviewPrefix, writeJson } from '@/lib/storageKeys';
 
 /**
- * Decisions made on a durable change set, remembered in this browser.
+ * Decisions made on a durable change set, remembered in this browser under
+ * the workspace the page is in.
  *
  * The API records a decision per operation and says whether each target
  * block is still the one the operation was written for
@@ -22,7 +24,6 @@ import type { ReviewDecision } from './proposals';
  * it.
  */
 
-const PREFIX = 'colwrite:review:v1:';
 
 /**
  * Change sets expire within seven days of being proposed (the API caps
@@ -40,10 +41,6 @@ export type StoredReview = {
   /** Staging fingerprint per operation index (see `ProposedChange.base`). */
   bases: Record<string, string>;
 };
-
-function keyFor(documentId: string, changeSetId: string): string {
-  return `${PREFIX}${encodeURIComponent(documentId)}:${encodeURIComponent(changeSetId)}`;
-}
 
 function isDecision(value: unknown): value is ReviewDecision {
   return (
@@ -78,9 +75,9 @@ function parse(raw: string | null): StoredReview | null {
   }
 }
 
-export function loadReview(documentId: string, changeSetId: string): StoredReview | null {
+export function loadReview(workspaceId: string, documentId: string, changeSetId: string): StoredReview | null {
   try {
-    const record = parse(localStorage.getItem(keyFor(documentId, changeSetId)));
+    const record = parse(readItem(reviewKey(workspaceId, documentId, changeSetId)));
     // Keyed by both ids and carrying both, so a record can never be read back
     // for a different batch.
     if (!record || record.documentId !== documentId || record.changeSetId !== changeSetId) {
@@ -101,6 +98,7 @@ export function loadReview(documentId: string, changeSetId: string): StoredRevie
  * after it (see `rebaseAfterAccept`).
  */
 export function saveReview(
+  workspaceId: string,
   documentId: string,
   changeSetId: string,
   update: { decisions?: readonly ReviewDecision[]; bases?: Readonly<Record<string, string>> },
@@ -110,8 +108,8 @@ export function saveReview(
   const bases = update.bases ?? {};
   if (decisions.length === 0 && Object.keys(bases).length === 0) return;
   try {
-    const key = keyFor(documentId, changeSetId);
-    const current = parse(localStorage.getItem(key));
+    const key = reviewKey(workspaceId, documentId, changeSetId);
+    const current = parse(readItem(key));
     const record: StoredReview = current && current.documentId === documentId && current.changeSetId === changeSetId
       ? current
       : { documentId, changeSetId, at: now, decisions: [], bases: {} };
@@ -123,7 +121,7 @@ export function saveReview(
     }
     record.bases = { ...record.bases, ...bases };
     record.at = now;
-    localStorage.setItem(key, JSON.stringify(record));
+    writeJson(key, record);
   } catch {
     // Storage full, blocked or unavailable: the review carries on, and a
     // reload stages the batch as the server has it.
@@ -136,32 +134,33 @@ export function saveReview(
  * with neither is removed.
  */
 export function forgetDecisions(
+  workspaceId: string,
   documentId: string,
   changeSetId: string,
   opIndexes: readonly number[],
 ): void {
   if (opIndexes.length === 0) return;
   try {
-    const key = keyFor(documentId, changeSetId);
-    const record = parse(localStorage.getItem(key));
+    const key = reviewKey(workspaceId, documentId, changeSetId);
+    const record = parse(readItem(key));
     if (!record || record.documentId !== documentId || record.changeSetId !== changeSetId) return;
     const sent = new Set(opIndexes);
     const decisions = record.decisions.filter(([opIndex]) => !sent.has(opIndex));
     if (decisions.length === record.decisions.length) return;
     if (decisions.length === 0 && Object.keys(record.bases).length === 0) {
-      localStorage.removeItem(key);
+      removeItem(key);
       return;
     }
-    localStorage.setItem(key, JSON.stringify({ ...record, decisions }));
+    writeJson(key, { ...record, decisions });
   } catch {
     /* storage unavailable — nothing to clean up */
   }
 }
 
 /** Drop a change set's record once the server no longer holds it as pending. */
-export function forgetReview(documentId: string, changeSetId: string): void {
+export function forgetReview(workspaceId: string, documentId: string, changeSetId: string): void {
   try {
-    localStorage.removeItem(keyFor(documentId, changeSetId));
+    removeItem(reviewKey(workspaceId, documentId, changeSetId));
   } catch {
     /* storage unavailable — nothing to clean up */
   }
@@ -178,6 +177,7 @@ export function forgetReview(documentId: string, changeSetId: string): void {
  * could not have included, so it is kept.
  */
 export function pruneReviews(
+  workspaceId: string,
   documentId: string,
   pendingChangeSetIds: ReadonlySet<string>,
   listedAt: number = Date.now(),
@@ -185,10 +185,8 @@ export function pruneReviews(
 ): void {
   try {
     const doomed: string[] = [];
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
-      if (!key?.startsWith(PREFIX)) continue;
-      const record = parse(localStorage.getItem(key));
+    for (const key of keysWithPrefix(reviewPrefix(workspaceId))) {
+      const record = parse(readItem(key));
       if (!record || now - record.at > REVIEW_RECORD_MAX_AGE_MS) {
         doomed.push(key);
         continue;
@@ -201,7 +199,7 @@ export function pruneReviews(
         doomed.push(key);
       }
     }
-    for (const key of doomed) localStorage.removeItem(key);
+    for (const key of doomed) removeItem(key);
   } catch {
     /* storage unavailable — nothing to prune */
   }

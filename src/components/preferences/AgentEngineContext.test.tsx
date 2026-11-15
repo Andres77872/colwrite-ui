@@ -1,6 +1,8 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, screen, waitFor } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEngineCatalog, AgentEngineStatus } from '@/services/agentEngines';
+import { mockAgentEngines } from '@/data/__tests__/agentEngineFixtures';
+import type { AgentEngineCatalog, AgentEngineStatus } from '@/data/agentEngines';
 import {
   DEFAULT_ENGINE_PREFS,
   isAgentEnginePrefs,
@@ -9,12 +11,8 @@ import {
   type AgentEngineContextValue,
 } from './agentEngineContextState';
 
-const api = vi.hoisted(() => ({ list: vi.fn(), check: vi.fn() }));
-
-vi.mock('@/services/agentEngines', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/services/agentEngines')>();
-  return { ...actual, getAgentEngines: api.list, checkAgentEngine: api.check };
-});
+/** The server's engine routes. */
+const api = { list: vi.fn(), check: vi.fn() };
 
 const { AgentEngineProvider } = await import('./AgentEngineContext');
 
@@ -32,9 +30,9 @@ function status(engine: AgentEngineStatus['engine'], state: AgentEngineStatus['s
 function catalog(runtime: 'local' | 'deployed', codex: AgentEngineStatus['state'] = 'unauthenticated'): AgentEngineCatalog {
   return {
     runtime,
-    default_engine: 'legacy',
+    default_engine: 'gateway',
     engines: [
-      status('legacy', 'ready'),
+      status('gateway', 'ready'),
       status('claude', runtime === 'local' ? 'ready' : 'disabled'),
       status('codex', runtime === 'local' ? codex : 'disabled'),
     ],
@@ -59,7 +57,7 @@ describe('resolveEngineRequest', () => {
     // Inline AI follows the assistant unless told otherwise.
     expect(resolveEngineRequest(prefs, local, 'inline')).toEqual({ engine: 'claude', model: 'sonnet' });
     expect(
-      resolveEngineRequest({ ...prefs, inline: 'legacy' }, local, 'inline'),
+      resolveEngineRequest({ ...prefs, inline: 'gateway' }, local, 'inline'),
     ).toEqual({});
   });
 
@@ -77,14 +75,14 @@ describe('resolveEngineRequest', () => {
   it('drops a stored model the engine could not accept', () => {
     const prefs = { chat: 'claude' as const, inline: 'chat' as const, models: { claude: '~gateway/id' } };
     expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({ engine: 'claude' });
-    const legacy = { chat: 'legacy' as const, inline: 'chat' as const, models: { legacy: '~anthropic/x' } };
-    expect(resolveEngineRequest(legacy, local, 'chat')).toEqual({});
+    const gatewayPrefs = { chat: 'gateway' as const, inline: 'chat' as const, models: { gateway: '~anthropic/x' } };
+    expect(resolveEngineRequest(gatewayPrefs, local, 'chat')).toEqual({});
   });
 
   it('sends tier choices to gateway and CLI runs on both surfaces', () => {
     const prefs = {
-      chat: 'claude' as const, inline: 'legacy' as const,
-      models: { legacy: 'anthropic/claude-sonnet-5.5', claude: 'sonnet' },
+      chat: 'claude' as const, inline: 'gateway' as const,
+      models: { gateway: 'anthropic/claude-sonnet-5.5', claude: 'sonnet' },
       liteModel: 'anthropic/claude-haiku-5.5',
     };
     const gateway_models = { main: 'anthropic/claude-sonnet-5.5', lite: 'anthropic/claude-haiku-5.5' };
@@ -96,15 +94,12 @@ describe('resolveEngineRequest', () => {
   it('does not send unknown, cross-tier, or unverified stored choices', () => {
     const prefs = {
       ...DEFAULT_ENGINE_PREFS,
-      models: { legacy: 'openai/gpt-6-luna' },
+      models: { gateway: 'openai/gpt-6-luna' },
       liteModel: 'openai/gpt-6.1-sol',
     };
     expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({});
-    const valid = { ...prefs, models: { legacy: 'openai/gpt-6.1-sol' }, liteModel: 'openai/gpt-6-luna' };
+    const valid = { ...prefs, models: { gateway: 'openai/gpt-6.1-sol' }, liteModel: 'openai/gpt-6-luna' };
     expect(resolveEngineRequest(valid, null, 'chat')).toEqual({});
-    const older = { ...local };
-    delete older.gateway_models;
-    expect(resolveEngineRequest(valid, older, 'chat')).toEqual({});
   });
 
   it('validates persisted preferences', () => {
@@ -129,14 +124,18 @@ describe('AgentEngineProvider', () => {
     window.localStorage.clear();
     api.list.mockReset();
     api.check.mockReset();
+    mockAgentEngines(api);
     latest = null;
   });
 
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it('works on the default engine outside a provider', () => {
     render(<Probe />);
-    expect(screen.getByTestId('engine').textContent).toBe('legacy');
+    expect(screen.getByTestId('engine').textContent).toBe('gateway');
     expect(latest?.selectable).toBe(false);
     expect(latest?.requestFor('chat')).toEqual({});
   });
@@ -158,7 +157,7 @@ describe('AgentEngineProvider', () => {
 
   it('ignores a remembered local engine on a deployed server', async () => {
     window.localStorage.setItem(
-      'colwrite:agent-engine:v1',
+      'colwrite:device:agent-engine',
       JSON.stringify({ chat: 'claude', inline: 'chat', models: {} }),
     );
     api.list.mockResolvedValue(catalog('deployed'));
@@ -170,7 +169,7 @@ describe('AgentEngineProvider', () => {
     await waitFor(() => expect(api.list).toHaveBeenCalled());
     await waitFor(() => expect(latest?.catalog?.runtime).toBe('deployed'));
     expect(latest?.selectable).toBe(false);
-    expect(screen.getByTestId('engine').textContent).toBe('legacy');
+    expect(screen.getByTestId('engine').textContent).toBe('gateway');
     expect(latest?.requestFor('chat')).toEqual({});
   });
 
@@ -247,13 +246,13 @@ describe('AgentEngineProvider', () => {
     expect(problem).toMatch(/configured/);
     expect(latest?.requestFor('chat')).toEqual({});
 
-    act(() => { latest?.setModel('legacy', ' anthropic/claude-sonnet-5.5 '); });
+    act(() => { latest?.setModel('gateway', ' anthropic/claude-sonnet-5.5 '); });
     act(() => { latest?.setGatewayModel('lite', 'google/gemini-4-hydrogen'); });
     expect(latest?.requestFor('chat')).toEqual({
       gateway_models: { main: 'anthropic/claude-sonnet-5.5', lite: 'google/gemini-4-hydrogen' },
     });
     act(() => { latest?.setGatewayModel('main', 'unknown/model'); });
-    expect(latest?.prefs.models.legacy).toBe('anthropic/claude-sonnet-5.5');
+    expect(latest?.prefs.models.gateway).toBe('anthropic/claude-sonnet-5.5');
     act(() => { latest?.setGatewayModel('lite', ''); });
     expect(latest?.requestFor('inline')).toEqual({ gateway_models: { main: 'anthropic/claude-sonnet-5.5' } });
     act(() => { latest?.setGatewayModel('main', ''); });

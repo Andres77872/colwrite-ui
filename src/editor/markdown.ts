@@ -58,9 +58,9 @@ function citationFromMarker(
   body: string,
   known: ReadonlyMap<string, CitationChild>,
 ): CitationChild | null {
-  const keys = Array.from(body.matchAll(/@([^\s;,\]]+)/g), (match) => match[1]);
-  if (keys.length === 0 || keys.some((key) => !known.has(key))) return null;
-  const first = known.get(keys[0])!;
+  const keys = Array.from(body.matchAll(/@([^\s;,\]]+)/g), ([, key]) => key ?? '');
+  const first = keys[0] === undefined ? undefined : known.get(keys[0]);
+  if (!first || keys.some((key) => !known.has(key))) return null;
   const sources = keys.flatMap((key) =>
     (known.get(key)?.sources ?? []).filter((source) => source.key === key),
   );
@@ -180,8 +180,8 @@ function splitTableRow(line: string): string[] {
 }
 
 function tableBlock(lines: string[]): ParagraphBlock {
-  const header = splitTableRow(lines[0]);
-  const alignRow = splitTableRow(lines[1]);
+  const header = splitTableRow(lines[0] ?? '');
+  const alignRow = splitTableRow(lines[1] ?? '');
   const body = lines.slice(2).map(splitTableRow);
   const cols = Math.max(header.length, ...body.map((row) => row.length));
   const pad = (row: string[]) => Array.from({ length: cols }, (_, index) => row[index] ?? '');
@@ -232,13 +232,15 @@ export function markdownToBlocks(markdown: string, options: MarkdownOptions = {}
 
 function parseMarkdownBlocks(markdown: string): Block[] {
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
+  // Past the end reads as a blank line, which ends every run below.
+  const lineAt = (at: number) => lines[at] ?? '';
   const blocks: Block[] = [];
   // Leading-space widths of the open list levels, outermost first.
   let listIndents: number[] = [];
   let index = 0;
 
   while (index < lines.length) {
-    const line = lines[index];
+    const line = lineAt(index);
     const next = lines[index + 1];
 
     if (!line.trim()) {
@@ -248,11 +250,11 @@ function parseMarkdownBlocks(markdown: string): Block[] {
 
     const fence = FENCE_RE.exec(line);
     if (fence) {
-      const marker = fence[1];
+      const marker = fence[1] ?? '';
       const body: string[] = [];
       index += 1;
-      while (index < lines.length && !lines[index].trim().startsWith(marker)) {
-        body.push(lines[index]);
+      while (index < lines.length && !lineAt(index).trim().startsWith(marker)) {
+        body.push(lineAt(index));
         index += 1;
       }
       index += 1;
@@ -265,7 +267,7 @@ function parseMarkdownBlocks(markdown: string): Block[] {
     const display = /^\s*(\$\$|\\\[)(.*)$/.exec(line);
     if (display) {
       const close = display[1] === '$$' ? '$$' : '\\]';
-      let rest = display[2];
+      let rest = display[2] ?? '';
       const body: string[] = [];
       if (rest.trimEnd().endsWith(close) && rest.trim().length >= close.length) {
         body.push(rest.trimEnd().slice(0, -close.length));
@@ -274,7 +276,7 @@ function parseMarkdownBlocks(markdown: string): Block[] {
         if (rest.trim()) body.push(rest);
         index += 1;
         while (index < lines.length) {
-          rest = lines[index];
+          rest = lineAt(index);
           index += 1;
           if (rest.trimEnd().endsWith(close)) {
             body.push(rest.trimEnd().slice(0, -close.length));
@@ -291,8 +293,8 @@ function parseMarkdownBlocks(markdown: string): Block[] {
 
     const heading = HEADING_RE.exec(line);
     if (heading) {
-      const level = Math.min(3, heading[1].length) as 1 | 2 | 3;
-      blocks.push({ id: uid(), type: 'heading', level, html: inlineMarkdownToHtml(heading[2]).html });
+      const level = Math.min(3, (heading[1] ?? '').length) as 1 | 2 | 3;
+      blocks.push({ id: uid(), type: 'heading', level, html: inlineMarkdownToHtml(heading[2] ?? '').html });
       listIndents = [];
       index += 1;
       continue;
@@ -309,8 +311,8 @@ function parseMarkdownBlocks(markdown: string): Block[] {
     if (line.includes('|') && next !== undefined && TABLE_SEPARATOR_RE.test(next)) {
       const rows = [line, next];
       index += 2;
-      while (index < lines.length && lines[index].includes('|') && lines[index].trim()) {
-        rows.push(lines[index]);
+      while (index < lines.length && lineAt(index).includes('|') && lineAt(index).trim()) {
+        rows.push(lineAt(index));
         index += 1;
       }
       blocks.push(tableBlock(rows));
@@ -320,29 +322,29 @@ function parseMarkdownBlocks(markdown: string): Block[] {
 
     const item = LIST_RE.exec(line);
     if (item) {
-      const lead = item[1].replace(/\t/g, '    ').length;
-      while (listIndents.length > 0 && listIndents[listIndents.length - 1] > lead) listIndents.pop();
-      if (listIndents.length === 0 || listIndents[listIndents.length - 1] < lead) listIndents.push(lead);
+      const lead = (item[1] ?? '').replace(/\t/g, '    ').length;
+      while ((listIndents.at(-1) ?? -1) > lead) listIndents.pop();
+      if ((listIndents.at(-1) ?? -1) < lead) listIndents.push(lead);
       const depth = Math.min(MAX_BLOCK_INDENT, listIndents.length - 1);
-      let text = item[3];
+      let text = item[3] ?? '';
       // Lazy continuation lines belong to the item.
       index += 1;
       while (
         index < lines.length &&
-        lines[index].trim() &&
-        !isBlockStart(lines[index], lines[index + 1]) &&
-        /^\s+/.test(lines[index])
+        lineAt(index).trim() &&
+        !isBlockStart(lineAt(index), lines[index + 1]) &&
+        /^\s+/.test(lineAt(index))
       ) {
-        text += ` ${lines[index].trim()}`;
+        text += ` ${lineAt(index).trim()}`;
         index += 1;
       }
       const todo = /^\[( |x|X)\]\s+(.*)$/.exec(text);
-      const numbered = /\d/.test(item[2]);
+      const numbered = /\d/.test(item[2] ?? '');
       const role: Partial<ParagraphBlock> = todo
-        ? { variant: 'todo', checked: todo[1].toLowerCase() === 'x' }
+        ? { variant: 'todo', checked: todo[1]?.toLowerCase() === 'x' }
         : { variant: numbered ? 'numbered' : 'bullet' };
       if (depth > 0) role.indent = depth;
-      blocks.push(inlineParagraph(todo ? todo[2] : text, role));
+      blocks.push(inlineParagraph(todo ? todo[2] ?? '' : text, role));
       continue;
     }
     listIndents = [];
@@ -351,19 +353,25 @@ function parseMarkdownBlocks(markdown: string): Block[] {
     if (quote) {
       const group: string[] = [];
       while (index < lines.length) {
-        const match = QUOTE_RE.exec(lines[index]);
+        const match = QUOTE_RE.exec(lineAt(index));
         if (!match) break;
-        group.push(match[1]);
+        group.push(match[1] ?? '');
         index += 1;
       }
       const callout = CALLOUT_RE.exec(group[0]?.trim() ?? '');
-      const body = callout ? [callout[2], ...group.slice(1)] : group;
+      const body = callout ? [callout[2] ?? '', ...group.slice(1)] : group;
       // Blank quote lines separate paragraphs of the quotation.
-      const paragraphs: string[][] = [[]];
+      const paragraphs: string[][] = [];
+      let paragraph: string[] = [];
       for (const part of body) {
-        if (!part.trim()) paragraphs.push([]);
-        else paragraphs[paragraphs.length - 1].push(part.trim());
+        if (part.trim()) {
+          paragraph.push(part.trim());
+        } else {
+          paragraphs.push(paragraph);
+          paragraph = [];
+        }
       }
+      paragraphs.push(paragraph);
       for (const lines_ of paragraphs.filter((p) => p.length > 0)) {
         blocks.push(inlineParagraph(lines_.join(' '), { variant: callout ? 'callout' : 'quote' }));
       }
@@ -373,8 +381,8 @@ function parseMarkdownBlocks(markdown: string): Block[] {
     // A paragraph runs until a blank line or the start of another block.
     const text: string[] = [line.trim()];
     index += 1;
-    while (index < lines.length && lines[index].trim() && !isBlockStart(lines[index], lines[index + 1])) {
-      text.push(lines[index].trim());
+    while (index < lines.length && lineAt(index).trim() && !isBlockStart(lineAt(index), lines[index + 1])) {
+      text.push(lineAt(index).trim());
       index += 1;
     }
     blocks.push(inlineParagraph(text.join(' ')));

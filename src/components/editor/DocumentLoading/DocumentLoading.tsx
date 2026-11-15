@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { cn } from '@/lib/utils';
-import { useEditor } from '@/editor';
+import { useDocumentSession } from '@/editor';
 import { Skeleton } from '@/components/ui/spinner';
 import { DOCUMENT_TRANSITION_START_EVENT } from '@/editor/documentTransition';
 
@@ -26,7 +26,7 @@ export function DocumentLoadingBoundary({
   children: React.ReactNode;
   regionRef: RefObject<HTMLDivElement | null>;
 }) {
-  const { documentId, loadingDocumentId } = useEditor();
+  const { documentId, loadingDocumentId } = useDocumentSession();
   const pending = loadingDocumentId !== null;
   const [skeletonState, setSkeletonState] = useState(() => ({
     documentId: loadingDocumentId,
@@ -123,7 +123,7 @@ export function DocumentLoadingBoundary({
       aria-busy={pending}
     >
       <p className="sr-only" role="status" aria-live="polite">
-        {pending ? 'Opening document…' : ''}
+        {pending ? 'Opening page…' : ''}
       </p>
       <div
         inert={pending}

@@ -115,7 +115,7 @@ export function ChartFigure(props: ChartFigureProps) {
               style={{ background: seriesColor(kind === 'pie' ? hover.index : 0, props.colors) }}
             />
             <span className="text-muted-foreground">{labelFor(hover.index)}</span>
-            <span className="font-medium tabular-nums">{formatNumber(values[hover.index])}</span>
+            <span className="font-medium tabular-nums">{formatNumber(values[hover.index] ?? 0)}</span>
           </span>
         </div>
       )}
@@ -145,7 +145,8 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
 
   // One value is direct-labelled — the largest. A number beside every mark is
   // chaos; the axis carries the rest.
-  const peakIndex = values.reduce((best, value, index) => (value > values[best] ? index : best), 0);
+  const peakIndex = values.reduce((best, value, index) => (value > (values[best] ?? -Infinity) ? index : best), 0);
+  const peak = values[peakIndex];
 
   const linePoints = values.map((value, index) => `${centre(index)},${y(value)}`).join(' ');
   const areaPath =
@@ -253,15 +254,15 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
 
       {/* One direct label, on the peak. Held inside the plot: a value that
           lands on the top gridline would otherwise be drawn off the canvas. */}
-      {values.length > 0 && (
+      {peak !== undefined && (
         <text
           x={centre(peakIndex)}
-          y={Math.max(9, y(values[peakIndex]) - (kind === 'bar' ? 6 : 10))}
+          y={Math.max(9, y(peak) - (kind === 'bar' ? 6 : 10))}
           textAnchor="middle"
           className="fill-foreground"
           style={{ fontSize: 'var(--text-2xs)', fontWeight: 600 }}
         >
-          {formatNumber(values[peakIndex])}
+          {formatNumber(peak)}
         </text>
       )}
 
@@ -304,7 +305,7 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
 
       {/* Hit targets are the full band, not the mark: a 2px-wide bar or a 4px
           dot is not something anyone can reliably point at. */}
-      {interactive && values.map((_, index) => (
+      {interactive && values.map((value, index) => (
         <rect
           key={`hit-${index}`}
           x={PLOT.left + band * index}
@@ -316,7 +317,7 @@ function CartesianChart({ kind, values, colors, xLabel, yLabel, hover, setHover,
             setHover({
               index,
               x: (centre(index) / PLOT.width) * 100,
-              y: (y(values[index]) / PLOT.height) * 100,
+              y: (y(value) / PLOT.height) * 100,
             })
           }
         />

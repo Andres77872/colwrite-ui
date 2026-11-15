@@ -45,14 +45,15 @@ import {
   referenceLink,
   useBibliography,
   useEditorActions,
-  useEditorState,
+  useEditorDoc,
+  usePageReadOnly,
   type CitationSource,
   type Doc,
 } from '@/editor';
 import { parseBibtex, toBibtex } from '@/editor/bibtex';
 import { downloadBlob, exportFilename } from '@/export/download';
-import { resolveSource } from '@/services/sources';
-import { ApiError } from '@/services/contracts';
+import { resolveSource } from '@/data/sources';
+import { problemCode } from '@/api/errors';
 import { revealCitationUsage, useCiteAndAnnounce } from '@/components/editor/References';
 import { usePanels } from '../panelsContextState';
 import { scrollBehavior } from '@/lib/motion';
@@ -76,13 +77,17 @@ const STYLES: ReadonlyArray<{ value: Doc['citationStyle'] | null; label: string 
 
 /** What went wrong resolving an identifier, in the author's terms. */
 function resolveError(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.status === 400) return 'That is not a DOI, an arXiv id or a Semantic Scholar id.';
-    if (error.status === 404) return 'No record exists for that identifier. Check it for typos.';
-    if (error.status === 403) return error.message;
-    if (error.status === 503) return 'The registry could not be reached. Try again in a moment.';
+  switch (problemCode(error)) {
+    case 'unrecognized_identifier':
+      return 'That is not a DOI, an arXiv id or a Semantic Scholar id.';
+    case 'source_not_found':
+      return 'No record exists for that identifier. Check it for typos.';
+    case 'resolver_unavailable':
+      return 'The registry could not be reached. Try again in a moment.';
+    default:
+      // `paper_source_disabled` says which source to turn on.
+      return error instanceof Error ? error.message : 'The source could not be resolved.';
   }
-  return error instanceof Error ? error.message : 'The source could not be resolved.';
 }
 
 /** The identifier a registry can confirm, if the source has one. */
@@ -171,7 +176,10 @@ function SourceRow({
   onRemove,
   verifying,
   highlighted,
+  readOnly = false,
 }: {
+  /** A viewer's row reads, links and copies; it never cites, verifies, edits or removes. */
+  readOnly?: boolean;
   row: Row;
   onCite: () => void;
   onVerify: (() => void) | null;
@@ -246,10 +254,12 @@ function SourceRow({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuItem onSelect={onCite}>
-              <Quote />
-              Cite at cursor
-            </DropdownMenuItem>
+            {!readOnly && (
+              <DropdownMenuItem onSelect={onCite}>
+                <Quote />
+                Cite at cursor
+              </DropdownMenuItem>
+            )}
             {row.firstUsage && (
               <DropdownMenuItem onSelect={() => row.firstUsage && revealCitationUsage(row.firstUsage)}>
                 <Crosshair />
@@ -268,17 +278,19 @@ function SourceRow({
               <ClipboardCopy />
               Copy BibTeX
             </DropdownMenuItem>
-            {onVerify && (
+            {onVerify && !readOnly && (
               <DropdownMenuItem onSelect={onVerify}>
                 <RefreshCw />
                 {row.verified ? 'Refresh from registry' : 'Verify against registry'}
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem onSelect={() => setEditing(true)}>
-              <Pencil />
-              Edit details
-            </DropdownMenuItem>
-            {row.inLibrary && (
+            {!readOnly && (
+              <DropdownMenuItem onSelect={() => setEditing(true)}>
+                <Pencil />
+                Edit details
+              </DropdownMenuItem>
+            )}
+            {row.inLibrary && !readOnly && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
@@ -348,8 +360,10 @@ function SourceRow({
  * typed; imported BibTeX stays unverified until the author checks it.
  */
 export function SourcesPanel() {
-  const { doc } = useEditorState();
+  const { doc } = useEditorDoc();
   const { upsertSources, updateSource, removeSource, setCitationStyle } = useEditorActions();
+  // A viewer reads and exports the page's sources; the library is the page's, and theirs to read only.
+  const readOnly = usePageReadOnly();
   const bibliography = useBibliography();
   const cite = useCiteAndAnnounce();
   const { toast } = useToast();
@@ -500,6 +514,7 @@ export function SourcesPanel() {
           onVerify={resolvableIdentifier(row.source) ? () => void verify(row) : null}
           onEdit={(patch) => edit(row, patch)}
           onRemove={() => removeSource(row.source.key)}
+          readOnly={readOnly}
         />
       ))}
     </ul>
@@ -508,6 +523,15 @@ export function SourcesPanel() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 space-y-2.5 px-3 pb-2 pt-3">
+        {readOnly ? (
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">You can view this page’s sources, not change them.</p>
+            <Button type="button" variant="ghost" size="sm" onClick={exportBibtex} disabled={rows.total === 0}>
+              <Download aria-hidden="true" />
+              Export .bib
+            </Button>
+          </div>
+        ) : (
         <form onSubmit={add}>
           <label htmlFor="source-identifier" className="sr-only">
             Add a source
@@ -557,6 +581,7 @@ export function SourcesPanel() {
             </p>
           )}
         </form>
+        )}
 
         <div className="flex min-w-0 flex-wrap items-center gap-1">
           <span aria-hidden="true" className="pr-0.5 text-xs text-muted-foreground">
@@ -571,7 +596,8 @@ export function SourcesPanel() {
                   type="button"
                   role="radio"
                   aria-checked={active}
-                  onClick={() => setCitationStyle(option.value)}
+                  disabled={readOnly && !active}
+                  onClick={() => !readOnly && setCitationStyle(option.value)}
                   className={cn(
                     'h-6 whitespace-nowrap rounded-sm px-1.5 text-xs transition-colors duration-120 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                     active
@@ -619,7 +645,7 @@ export function SourcesPanel() {
         ) : (
           <>
             {rows.cited.length > 0 && (
-              <section aria-label="Cited in this document">
+              <section aria-label="Cited on this page">
                 <h3 className="px-2 pb-1 text-xs font-medium text-muted-foreground">Cited · {rows.cited.length}</h3>
                 {renderRows(rows.cited)}
               </section>
@@ -633,7 +659,7 @@ export function SourcesPanel() {
               </section>
             )}
             {rows.cited.length + rows.saved.length === 0 && (
-              <p className="px-2 text-sm text-muted-foreground">Nothing matches “{filter}”.</p>
+              <EmptyState size="inline" title={`Nothing matches “${filter}”`} />
             )}
           </>
         )}
@@ -644,7 +670,7 @@ export function SourcesPanel() {
           <DialogHeader>
             <DialogTitle>Import BibTeX</DialogTitle>
             <DialogDescription>
-              Paste entries from Zotero, Mendeley, Google Scholar or a .bib file. They join this document’s
+              Paste entries from Zotero, Mendeley, Google Scholar or a .bib file. They join this page’s
               sources as unverified until you check them against their DOI or arXiv id.
             </DialogDescription>
           </DialogHeader>

@@ -4,14 +4,13 @@ import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { NativeSelect } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
-import { gatewayModelsFor, type GatewayModelTier } from '@/services/agentEngines';
+import { gatewayModelsFor, type GatewayModelTier } from '@/data/agentEngines';
 import { useAgentEngine } from './agentEngineContextState';
 
 /** Gateway model choices are available on local and deployed servers alike. */
 export function GatewayModelPreferences() {
   const { catalog, loading, error, refresh } = useAgentEngine();
   const titleId = useId();
-  const supported = catalog?.gateway_models !== undefined;
   const hasModels = gatewayModelsFor(catalog, 'main').length > 0
     && gatewayModelsFor(catalog, 'lite').length > 0;
 
@@ -27,13 +26,11 @@ export function GatewayModelPreferences() {
         <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
           <Spinner /> Loading configured models…
         </p>
-      ) : !supported || !hasModels ? (
+      ) : !hasModels ? (
         <Alert variant="warning" className="mt-3">
           <div className="flex flex-wrap items-center gap-2">
             <span>
-              {error && !catalog ? error : supported
-                ? 'Gateway models are not configured on this server.'
-                : 'This server does not expose model choices yet. Its default models will still be used.'}
+              {error && !catalog ? error : 'Gateway models are not configured on this server.'}
             </span>
             <Button type="button" variant="ghost" size="xs" disabled={loading} onClick={() => void refresh()}>
               <RefreshCw aria-hidden="true" /> Reload models
@@ -63,7 +60,7 @@ function GatewayModelField({ tier, label, children }: {
   const id = useId();
   const [problem, setProblem] = useState<string | null>(null);
   const models = gatewayModelsFor(catalog, tier);
-  const saved = ((tier === 'main' ? prefs.models.legacy : prefs.liteModel) ?? '').trim();
+  const saved = ((tier === 'main' ? prefs.models.gateway : prefs.liteModel) ?? '').trim();
   const stale = Boolean(saved && !models.includes(saved));
 
   return (

@@ -1,7 +1,7 @@
 import type { CitationChild } from '@/editor';
 import { markdownToBlocks } from '@/editor/markdown';
 import { uid } from '@/lib/uid';
-import type { AgentSource } from '@/services/streamParser';
+import type { AgentSource } from '@/api/assistant/streamParser';
 
 const MARKER = /\[(S\d{1,5}(?:\s*[,;]\s*S\d{1,5})*)\](?!\()/g;
 

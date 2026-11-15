@@ -1,3 +1,4 @@
+import { takeItems } from '@/lib/itemAt';
 import { describe, it, expect, afterEach } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { AuthProvider } from '@/components/auth/AuthContext';
@@ -41,7 +42,7 @@ describe('LandingPage', () => {
 
   it('surfaces the real tool panels', () => {
     renderLanding();
-    for (const label of ['Search arXiv', 'Search pages', 'My PDFs', 'Document JSON']) {
+    for (const label of ['Search arXiv', 'Search paper pages', 'Library', 'Document JSON']) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
   });
@@ -71,7 +72,7 @@ describe('LandingPage', () => {
 
   it('opens the auth dialog from the call to action', async () => {
     renderLanding();
-    const [cta] = screen.getAllByRole('button', { name: 'Sign in to continue' });
+    const [cta] = takeItems(screen.getAllByRole('button', { name: 'Sign in to continue' }), 1);
     fireEvent.click(cta);
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toContain('Welcome to ColWrite');

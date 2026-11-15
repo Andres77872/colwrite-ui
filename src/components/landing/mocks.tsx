@@ -502,7 +502,7 @@ export function LibraryMock() {
         </div>
       ))}
       <p className="text-2xs text-muted-foreground">
-        Files stay in this browser session — drop PDFs in, preview them alongside the text.
+        PDFs are kept with your account — drop them in, read them alongside the text.
       </p>
     </div>
   );

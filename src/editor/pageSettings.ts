@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { PAGE_SETTINGS_KEY, readJson, writeJson } from '@/lib/storageKeys';
 
 /**
  * How the page is laid out on this device: Notion's "Full width" and
@@ -12,34 +13,25 @@ export type PageSettings = {
   smallText: boolean;
 };
 
-export const PAGE_SETTINGS_STORAGE_KEY = 'colwrite:page-settings';
 const DEFAULTS: PageSettings = { fullWidth: false, smallText: false };
 
 const listeners = new Set<() => void>();
 
 function read(): PageSettings {
-  try {
-    const raw = window.localStorage.getItem(PAGE_SETTINGS_STORAGE_KEY);
-    if (!raw) return DEFAULTS;
-    const parsed = JSON.parse(raw) as Partial<PageSettings>;
-    return {
-      fullWidth: parsed.fullWidth === true,
-      smallText: parsed.smallText === true,
-    };
-  } catch {
-    return DEFAULTS;
-  }
+  const parsed = readJson(PAGE_SETTINGS_KEY) as Partial<PageSettings> | null | undefined;
+  if (!parsed || typeof parsed !== 'object') return DEFAULTS;
+  return {
+    fullWidth: parsed.fullWidth === true,
+    smallText: parsed.smallText === true,
+  };
 }
 
 let settings: PageSettings = typeof window === 'undefined' ? DEFAULTS : read();
 
 export function setPageSettings(update: Partial<PageSettings>): void {
   settings = { ...settings, ...update };
-  try {
-    window.localStorage.setItem(PAGE_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-  } catch {
-    /* applies to this tab only */
-  }
+  // A refused write applies to this tab only.
+  writeJson(PAGE_SETTINGS_KEY, settings);
   listeners.forEach((listener) => listener());
 }
 

@@ -1,23 +1,35 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
-import { kindLabel as blockKindLabel, kindOf, useEditor } from '@/editor';
+import {
+  kindLabel as blockKindLabel,
+  kindOf,
+  useDocumentActions,
+  useDocumentId,
+  useDocumentSession,
+  useDocumentStatus,
+  useEditorDoc,
+} from '@/editor';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import type { Block, Doc } from '@/editor';
 import { ProposalsContext } from '@/editor/proposalsContextState';
 import { PanelsContext } from '../panelsContextState';
 import { formatDateTime } from '@/lib/text';
-import { describeApiError } from '@/services/contracts';
-import { isRetryableProblem } from '@/services/retry';
+import { describeApiError } from '@/api/errors';
+import { isRetryableProblem } from '@/api/retry';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  type DocumentHead,
   type RevisionChange,
   type RevisionSummary,
+  adoptHead,
   diffRevision,
-  fetchDocumentHead,
+  documentHeadQuery,
   getRevision,
+  historyKeys,
   isStaleHead,
-  listRevisions,
+  refreshHistory,
   restoreRevision,
-} from '@/services/documentHistory';
+  revisionsQuery,
+} from '@/data/documentHistory';
 import {
   ProposedBlockView,
   ProposedRewriteView,
@@ -87,44 +99,20 @@ function entityLabel(change: RevisionChange, block: Block | null): string {
   return BLOCK_TYPE_LABELS[change.entityType] ?? 'Block';
 }
 
-type Timeline = { revisions: RevisionSummary[]; nextCursor: string | null };
-
 /** Stable identity for the memo when nothing is loaded yet. */
 const NO_REVISIONS: RevisionSummary[] = [];
 
 /** Bound on auto-paging toward the current version — a hint, not a crawl. */
 const MAX_REVEAL_PAGES = 10;
 
-/**
- * Fold a refreshed first page into the pages already on screen. A refresh
- * (after a restore or an outside save) must not throw away rows the author
- * paged in: under pointer semantics the "Current" marker can sit on any of
- * them, not just on page one.
- */
-function mergeRevisionPages(current: Timeline, page: Timeline): Timeline {
-  const fresh = new Set(page.revisions.map((revision) => revision.revisionId));
-  const kept = current.revisions.filter(
-    (revision) => !fresh.has(revision.revisionId),
-  );
-  return {
-    revisions: [...page.revisions, ...kept].sort(
-      (a, b) => b.revisionNo - a.revisionNo,
-    ),
-    // If the accumulated list reaches deeper than the fresh page, keep paging
-    // from where the author already was.
-    nextCursor: kept.length > 0 ? current.nextCursor : page.nextCursor,
-  };
-}
-
 export function HistoryPanel() {
-  const {
-    documentId,
-    doc,
-    hasPendingEdits,
-    saveRemote,
-    adoptRestoredDocument,
-    documentListRevision,
-  } = useEditor();
+  const documentId = useDocumentId();
+  const workspaceId = useWorkspaceId();
+  const { doc } = useEditorDoc();
+  const { lastSavedAt } = useDocumentStatus();
+  // A viewer reads every version and restores none (D6: restore is an edit).
+  const { restoreEpoch, readOnly } = useDocumentSession();
+  const { hasPendingEdits, saveRemote, adoptRestoredDocument } = useDocumentActions();
   const confirm = useConfirm();
   const { toast, dismiss } = useToast();
   // Optional: the panel also renders where there is no review (tests, previews).
@@ -132,17 +120,56 @@ export function HistoryPanel() {
   const panels = useContext(PanelsContext);
   const visible = !panels || (panels.isOpen && panels.activeTool === 'history');
 
-  // Autosave bumps the list revision every few seconds. A hidden History tab
-  // stays mounted, and refetching it each time was traffic nobody looked at:
-  // it catches up once, when it is shown again.
-  const [seenListRevision, setSeenListRevision] = useState(documentListRevision);
-  if (visible && seenListRevision !== documentListRevision) setSeenListRevision(documentListRevision);
+  // Every save and restore gives the open page a new version. A hidden
+  // History tab stays mounted and catches up once, when it is shown again,
+  // instead of refetching after each autosave.
+  const headVersion = `${lastSavedAt ?? ''}:${restoreEpoch}`;
+  const [seenVersion, setSeenVersion] = useState(headVersion);
+  if (visible && seenVersion !== headVersion) setSeenVersion(headVersion);
 
-  const [timeline, setTimeline] = useState<Timeline | null>(null);
-  const [head, setHead] = useState<DocumentHead | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<{ message: string; retryable: boolean } | null>(null);
+  const queryClient = useQueryClient();
+  const headQuery = useQuery({ ...documentHeadQuery(workspaceId, documentId ?? ''), enabled: documentId !== null });
+  const timelineQuery = useInfiniteQuery({
+    ...revisionsQuery(workspaceId, documentId ?? '', PAGE_SIZE),
+    enabled: documentId !== null,
+  });
+  const head = documentId ? (headQuery.data ?? null) : null;
+  // Another document's rows are not this one's, even for a moment: each
+  // document is a query of its own.
+  const timelineData = documentId ? timelineQuery.data : undefined;
+  const hasOlder = timelineQuery.hasNextPage;
+  const timeline = useMemo(
+    () => (timelineData
+      ? {
+          revisions: timelineData.pages.flatMap((page) => page.revisions),
+          nextCursor: hasOlder ? (timelineData.pages.at(-1)?.nextCursor ?? null) : null,
+        }
+      : null),
+    [hasOlder, timelineData],
+  );
+  const loading = headQuery.isFetching || (timelineQuery.isFetching && !timelineQuery.isFetchingNextPage);
+  const loadingMore = timelineQuery.isFetchingNextPage;
+  // The request layer already retried what is worth retrying, so this goes
+  // to the author with "Check again" rather than starting another timer
+  // behind their back.
+  const failure = headQuery.error ?? (timelineQuery.isFetchNextPageError ? null : timelineQuery.error);
+  const error = documentId && failure
+    ? { message: describeApiError(failure, 'Could not load the page history.'), retryable: isRetryableProblem(failure) }
+    : null;
+  const retryLoad = () => {
+    if (documentId) void refreshHistory(queryClient, workspaceId, documentId);
+  };
+
+  // A new version seen while the tab is shown: the head and the timeline read
+  // again, once. The first read of a document is the queries' own.
+  const caughtUp = useRef({ documentId, version: seenVersion });
+  useEffect(() => {
+    const last = caughtUp.current;
+    caughtUp.current = { documentId, version: seenVersion };
+    if (!documentId || last.documentId !== documentId || last.version === seenVersion) return;
+    void refreshHistory(queryClient, workspaceId, documentId);
+  }, [documentId, queryClient, seenVersion, workspaceId]);
+
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<{ revisionId: string; message: string } | null>(null);
@@ -159,11 +186,6 @@ export function HistoryPanel() {
     };
   }, [documentId, dismiss]);
   const [revealingCurrent, setRevealingCurrent] = useState(false);
-  // Bumped when the panel itself learns the server moved on (failed restore).
-  const [refreshTick, setRefreshTick] = useState(0);
-  // Which document the timeline rows belong to: a refresh of the same
-  // document merges pages, a navigation starts over.
-  const timelineDocRef = useRef<string | null>(null);
 
   const revisions = timeline?.revisions ?? NO_REVISIONS;
   const graph = useMemo(() => buildVersionGraph(revisions), [revisions]);
@@ -173,90 +195,15 @@ export function HistoryPanel() {
     !head?.currentRevisionId
     || revisions.some((revision) => revision.revisionId === head.currentRevisionId);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    (async () => {
-      if (!documentId) {
-        setTimeline(null);
-        setHead(null);
-        setError(null);
-        return;
-      }
-      // Another document: its rows are not this one's, even for a moment.
-      if (timelineDocRef.current !== documentId) {
-        setTimeline(null);
-        setHead(null);
-      }
-      setLoading(true);
-      setError(null);
-      try {
-        const [headValue, page] = await Promise.all([
-          fetchDocumentHead(documentId, { signal: controller.signal }),
-          listRevisions(documentId, { limit: PAGE_SIZE, signal: controller.signal }),
-        ]);
-        if (controller.signal.aborted) return;
-        setHead(headValue);
-        const fresh: Timeline = {
-          revisions: page.revisions,
-          nextCursor: page.nextCursor,
-        };
-        setTimeline((current) =>
-          current && timelineDocRef.current === documentId
-            ? mergeRevisionPages(current, fresh)
-            : fresh,
-        );
-        timelineDocRef.current = documentId;
-      } catch (cause) {
-        if (controller.signal.aborted) return;
-        // The request layer already retried what is worth retrying, so this
-        // goes to the author with "Check again" rather than starting another
-        // timer behind their back.
-        const preparing = isRetryableProblem(cause);
-        setError({
-          // What the author is waiting for here is the timeline — say that
-          // rather than name the machinery behind it.
-          message: preparing
-            ? 'The history for this document is still being prepared.'
-            : describeApiError(cause, 'Could not load the document history.'),
-          retryable: preparing,
-        });
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    })();
-    return () => {
-      controller.abort();
-    };
-  }, [documentId, seenListRevision, refreshTick]);
-
   const loadMore = async () => {
     if (!documentId || !timeline?.nextCursor) return;
-    setLoadingMore(true);
-    try {
-      const page = await listRevisions(documentId, {
-        limit: PAGE_SIZE,
-        cursor: timeline.nextCursor,
-      });
-      setTimeline((current) => {
-        if (!current) return current;
-        // A save while the panel is open shifts pagination; drop repeats.
-        const seen = new Set(current.revisions.map((revision) => revision.revisionId));
-        return {
-          revisions: [
-            ...current.revisions,
-            ...page.revisions.filter((revision) => !seen.has(revision.revisionId)),
-          ],
-          nextCursor: page.nextCursor,
-        };
-      });
-    } catch (cause) {
+    const result = await timelineQuery.fetchNextPage();
+    if (result.isFetchNextPageError) {
       toast({
         title: 'Could not load older versions',
-        description: describeApiError(cause, 'The request failed.'),
+        description: describeApiError(result.error, 'The request failed.'),
         variant: 'error',
       });
-    } finally {
-      setLoadingMore(false);
     }
   };
 
@@ -266,25 +213,14 @@ export function HistoryPanel() {
     if (!documentId || !pointer || !timeline) return;
     setRevealingCurrent(true);
     try {
-      let merged = timeline.revisions;
-      let cursor = timeline.nextCursor;
-      let pages = 0;
+      let result = { data: timelineQuery.data, hasNextPage: timelineQuery.hasNextPage };
       const loaded = () =>
-        merged.some((revision) => revision.revisionId === pointer);
-      while (cursor && !loaded() && pages < MAX_REVEAL_PAGES) {
-        const page = await listRevisions(documentId, {
-          limit: PAGE_SIZE,
-          cursor,
-        });
-        const seen = new Set(merged.map((revision) => revision.revisionId));
-        merged = [
-          ...merged,
-          ...page.revisions.filter((revision) => !seen.has(revision.revisionId)),
-        ];
-        cursor = page.nextCursor;
-        pages += 1;
+        result.data?.pages.some((page) => page.revisions.some((revision) => revision.revisionId === pointer)) ?? false;
+      for (let pages = 0; result.hasNextPage && !loaded() && pages < MAX_REVEAL_PAGES; pages += 1) {
+        const next = await timelineQuery.fetchNextPage();
+        if (next.isFetchNextPageError) throw next.error;
+        result = next;
       }
-      setTimeline({ revisions: merged, nextCursor: cursor });
     } catch (cause) {
       toast({
         title: 'Could not load the current version',
@@ -309,43 +245,53 @@ export function HistoryPanel() {
   ): Promise<string | null> => {
     if (hasPendingEdits()) await saveRemote();
     // Read after that save: it may have moved the pointer to a new revision.
-    const before = await fetchDocumentHead(docId);
-    const restored = await restoreRevision(docId, target.revisionId, {
+    const before = await queryClient.fetchQuery({ ...documentHeadQuery(workspaceId, docId), staleTime: 0 });
+    const restored = await restoreRevision(workspaceId, docId, target.revisionId, {
       summary: target.revisionNo !== null ? `Restored version ${target.revisionNo}` : 'Undid a restore',
       ...(before.etag ? { etag: before.etag } : {}),
     });
-    adoptRestoredDocument(restored.content, restored.headSeq);
+    if (!restored.etag) throw new Error('The server did not provide a concurrency token.');
+    adoptRestoredDocument(restored.content, restored.etag);
     setExpandedId(null);
     // No revision was written — only the current-version pointer moved. The
-    // returned head already carries it; refetching keeps the marker honest
+    // returned head already carries it; reading again keeps the marker honest
     // if a save landed in between, and picks up any new rows that save left.
-    setHead(restored);
-    setRefreshTick((tick) => tick + 1);
+    adoptHead(queryClient, workspaceId, docId, restored);
+    void refreshHistory(queryClient, workspaceId, docId);
     return before.currentRevisionId || null;
+  };
+
+  /**
+   * "the version from Today, 8:32 AM". A version is named by when it was
+   * saved, never by its counter.
+   */
+  const versionFrom = (createdAt: string): string => {
+    const when = revisionTime(createdAt);
+    return when ? `the version from ${when}` : 'this version';
   };
 
   const revisionNoOf = (revisionId: string): number | null =>
     revisions.find((candidate) => candidate.revisionId === revisionId)?.revisionNo ?? null;
 
   const undoRestore = async (docId: string, previous: { revisionId: string; revisionNo: number | null }) => {
-    // The author moved on to another document since: nothing here to undo.
+    // The author moved on to another page since: nothing here to undo.
     if (currentDocumentId.current !== docId) return;
     setUndoError(null);
     setRestoringId(previous.revisionId);
     try {
       await switchVersion(docId, previous);
       toast({
-        title: previous.revisionNo !== null ? `Back on version ${previous.revisionNo}` : 'Restore undone',
+        title: 'Back on the version you were on',
         variant: 'success',
       });
     } catch (cause) {
       setUndoError({
         message: isStaleHead(cause)
-          ? 'The document changed in the meantime, so the restore was not undone. The history has been refreshed.'
+          ? 'The page changed in the meantime, so the restore was not undone. The history has been refreshed.'
           : describeApiError(cause, 'The restore could not be undone.'),
         retry: () => void undoRestore(docId, previous),
       });
-      setRefreshTick((tick) => tick + 1);
+      void refreshHistory(queryClient, workspaceId, docId);
     } finally {
       setRestoringId(null);
     }
@@ -359,10 +305,10 @@ export function HistoryPanel() {
         ? ` ${pendingSuggestions} ${pendingSuggestions === 1 ? 'suggestion' : 'suggestions'} waiting for review will be discarded.`
         : '';
     const confirmed = await confirm({
-      title: `Switch to version ${revision.revisionNo}?`,
+      title: `Switch to ${versionFrom(revision.createdAt)}?`,
       description: (hasPendingEdits()
-        ? 'Your unsaved edits are saved as their own version first, then the document switches to this one. Switching does not create a new version and the history is untouched — your next save starts a new branch from here.'
-        : 'The document goes back to this version. Switching does not create a new version and the history is untouched — your next save starts a new branch from here.') + discarded,
+        ? 'Your unsaved edits are saved as their own version first, then the page switches to this one. Switching does not create a new version and the history is untouched — your next save starts a new branch from here.'
+        : 'The page goes back to this version. Switching does not create a new version and the history is untouched — your next save starts a new branch from here.') + discarded,
       confirmLabel: 'Restore',
     });
     if (!confirmed) return;
@@ -377,7 +323,7 @@ export function HistoryPanel() {
           : null;
       if (undoToast.current) dismiss(undoToast.current);
       undoToast.current = toast({
-        title: `Now on version ${revision.revisionNo}`,
+        title: `Now on ${versionFrom(revision.createdAt)}`,
         description: 'Saving from here starts a new branch.',
         variant: 'success',
         ...(previous
@@ -389,10 +335,10 @@ export function HistoryPanel() {
       setRestoreError({
         revisionId: revision.revisionId,
         message: isStaleHead(cause)
-          ? 'The document changed while restoring. The history has been refreshed; try again.'
+          ? 'The page changed while restoring. The history has been refreshed; try again.'
           : describeApiError(cause, 'This version could not be restored.'),
       });
-      setRefreshTick((tick) => tick + 1);
+      void refreshHistory(queryClient, workspaceId, docId);
     } finally {
       setRestoringId(null);
     }
@@ -403,7 +349,7 @@ export function HistoryPanel() {
       <EmptyState
         icon={History}
         title="No saved versions yet"
-        description="Save this document once and every save after that shows up here."
+        description="Save this page once and every save after that shows up here."
         className="h-full"
       />
     );
@@ -424,7 +370,7 @@ export function HistoryPanel() {
       <div className="flex flex-col items-center gap-3 py-8 text-center">
         <AlertCircle aria-hidden="true" className="h-5 w-5 text-destructive" />
         <p className="text-sm text-muted-foreground">{error.message}</p>
-        <Button variant="outline" size="sm" onClick={() => setRefreshTick((tick) => tick + 1)}>
+        <Button variant="outline" size="sm" onClick={retryLoad}>
           {error.retryable ? 'Check again' : 'Retry'}
         </Button>
       </div>
@@ -436,7 +382,7 @@ export function HistoryPanel() {
       <EmptyState
         icon={History}
         title="No saved versions yet"
-        description="Save this document once and every save after that shows up here."
+        description="Save this page once and every save after that shows up here."
         className="h-full"
       />
     );
@@ -450,7 +396,7 @@ export function HistoryPanel() {
         <InlineProblem
           message="Could not refresh the history."
           actionLabel={error.retryable ? 'Check again' : 'Retry'}
-          onAction={() => setRefreshTick((tick) => tick + 1)}
+          onAction={retryLoad}
           busy={loading}
         />
       )}
@@ -465,7 +411,7 @@ export function HistoryPanel() {
       {!currentPointerLoaded && (
         <div className="mb-2 flex items-center justify-between gap-2 rounded-md bg-subtle px-2.5 py-2">
           <p className="text-xs text-muted-foreground">
-            The document is on an older version that isn&apos;t shown yet.
+            The page is on an older version that isn&apos;t shown yet.
           </p>
           <Button
             variant="ghost"
@@ -480,7 +426,7 @@ export function HistoryPanel() {
       )}
       <ol className="flex flex-col">
         {timeline.revisions.map((revision, index) => {
-          // The pointer, not the newest revision: after a restore the document
+          // The pointer, not the newest revision: after a restore the page
           // sits on an older node until the next save branches from it.
           const isCurrent = head?.currentRevisionId === revision.revisionId;
           const isExpanded = expandedId === revision.revisionId;
@@ -511,6 +457,7 @@ export function HistoryPanel() {
                     currentDoc={doc}
                     isCurrent={isCurrent}
                     restoring={restoringId === revision.revisionId}
+                    readOnly={readOnly}
                     restoreError={
                       restoreError?.revisionId === revision.revisionId ? restoreError.message : null
                     }
@@ -581,6 +528,7 @@ function RevisionRow({
       type="button"
       onClick={onToggle}
       aria-expanded={isExpanded}
+      data-revision-id={revision.revisionId}
       // Pinned to the rail's row height so the node dots line up with the
       // rows they belong to.
       style={{ minHeight: RAIL_ROW_HEIGHT }}
@@ -607,7 +555,6 @@ function RevisionRow({
             Current
           </Badge>
         )}
-        <span className="ml-auto shrink-0 font-mono text-2xs text-muted-foreground">v{revision.revisionNo}</span>
       </div>
       <div className="mt-0.5 flex items-baseline gap-2 text-xs text-muted-foreground">
         <time className="shrink-0" dateTime={revision.createdAt} title={formatDateTime(revision.createdAt)}>
@@ -659,84 +606,74 @@ function RevisionInspector({
   restoring,
   restoreError,
   onRestore,
+  readOnly = false,
 }: {
   documentId: string;
   revision: RevisionSummary;
   currentDoc: Doc;
   isCurrent: boolean;
   restoring: boolean;
+  readOnly?: boolean;
   restoreError: string | null;
   onRestore: () => void;
 }) {
   const [mode, setMode] = useState<CompareMode>('change');
-  const [data, setData] = useState<InspectorData | null>(null);
-  const [pending, setPending] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const workspaceId = useWorkspaceId();
 
-  useEffect(() => {
-    const controller = new AbortController();
-    const signal = controller.signal;
-
-    const load = async (): Promise<InspectorData> => {
-      if (mode === 'change') {
-        if (!revision.parentRevisionId) {
-          const detail = await getRevision(documentId, revision.revisionId, { signal });
-          return {
-            changes: [],
-            baseBlocks: new Map(),
-            targetBlocks: blockMap(detail.content),
-            rename: null,
-            initial: true,
-          };
-        }
-        // Base = the parent (older), target = this revision: "what this save changed".
-        const [diff, parent, detail] = await Promise.all([
-          diffRevision(documentId, revision.parentRevisionId, revision.revisionId, { signal }),
-          getRevision(documentId, revision.parentRevisionId, { signal }),
-          getRevision(documentId, revision.revisionId, { signal }),
-        ]);
+  const load = async (signal: AbortSignal): Promise<InspectorData> => {
+    if (mode === 'change') {
+      if (!revision.parentRevisionId) {
+        const detail = await getRevision(workspaceId, documentId, revision.revisionId, { signal });
         return {
-          changes: diff.changes,
-          baseBlocks: blockMap(parent.content),
+          changes: [],
+          baseBlocks: new Map(),
           targetBlocks: blockMap(detail.content),
-          rename: renameBetween(parent.content, detail.content),
-          initial: false,
+          rename: null,
+          initial: true,
         };
       }
-      // Base = this revision (older), target = the live document: "what changed since".
-      const [diff, detail] = await Promise.all([
-        diffRevision(documentId, revision.revisionId, 'current', { signal }),
-        getRevision(documentId, revision.revisionId, { signal }),
+      // Base = the parent (older), target = this revision: "what this save changed".
+      const [diff, parent, detail] = await Promise.all([
+        diffRevision(workspaceId, documentId, revision.parentRevisionId, revision.revisionId, { signal }),
+        getRevision(workspaceId, documentId, revision.parentRevisionId, { signal }),
+        getRevision(workspaceId, documentId, revision.revisionId, { signal }),
       ]);
       return {
         changes: diff.changes,
-        baseBlocks: blockMap(detail.content),
-        targetBlocks: blockMap(currentDoc),
-        rename: renameBetween(detail.content, currentDoc),
+        baseBlocks: blockMap(parent.content),
+        targetBlocks: blockMap(detail.content),
+        rename: renameBetween(parent.content, detail.content),
         initial: false,
       };
+    }
+    // Base = this revision (older), target = the live document: "what changed since".
+    const [diff, detail] = await Promise.all([
+      diffRevision(workspaceId, documentId, revision.revisionId, 'current', { signal }),
+      getRevision(workspaceId, documentId, revision.revisionId, { signal }),
+    ]);
+    return {
+      changes: diff.changes,
+      baseBlocks: blockMap(detail.content),
+      targetBlocks: blockMap(currentDoc),
+      rename: renameBetween(detail.content, currentDoc),
+      initial: false,
     };
+  };
 
-    (async () => {
-      setPending(true);
-      setFailure(null);
-      setData(null);
-      try {
-        const value = await load();
-        if (!signal.aborted) setData(value);
-      } catch (cause) {
-        if (!signal.aborted) {
-          setFailure(describeApiError(cause, 'Could not load this comparison.'));
-        }
-      } finally {
-        if (!signal.aborted) setPending(false);
-      }
-    })();
-    return () => controller.abort();
-    // The live document is compared by value on each open; tracking every
-    // keystroke would refetch the revision for no new information.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [documentId, revision.revisionId, revision.parentRevisionId, mode]);
+  // The live document is compared by value when the comparison opens;
+  // tracking every keystroke would read the revision again for nothing new.
+  const comparison = useQuery({
+    queryKey: historyKeys.comparison(
+      workspaceId,
+      documentId,
+      mode === 'change' ? revision.parentRevisionId : revision.revisionId,
+      mode === 'change' ? revision.revisionId : 'current',
+    ),
+    queryFn: ({ signal }) => load(signal),
+  });
+  const data = comparison.data ?? null;
+  const pending = comparison.isFetching;
+  const failure = comparison.isError ? describeApiError(comparison.error, 'Could not load this comparison.') : null;
 
   return (
     // No card: an indented rail under the selected row, on the same surface.
@@ -762,18 +699,18 @@ function RevisionInspector({
           </Button>
         </div>
         {isCurrent ? (
-          // Restoring the node the document already sits on is a server-side
+          // Restoring the node the page already sits on is a server-side
           // no-op; say so instead of offering a button that does nothing.
           <span className="text-2xs text-muted-foreground">
-            The document is on this version
+            The page is on this version
           </span>
-        ) : (
+        ) : readOnly ? null : (
           <Button
             size="xs"
             variant="outline"
             onClick={onRestore}
             disabled={restoring}
-            title="Switch the document to this version"
+            title="Switch the page to this version"
           >
             {restoring ? <Spinner /> : <RotateCcw aria-hidden="true" />}
             Restore
@@ -811,7 +748,7 @@ function ComparisonView({ data, mode }: { data: InspectorData; mode: CompareMode
   if (data.initial) {
     return (
       <p className="text-xs text-muted-foreground">
-        First version of this document — {data.targetBlocks.size}{' '}
+        First version of this page — {data.targetBlocks.size}{' '}
         {data.targetBlocks.size === 1 ? 'block' : 'blocks'}.
       </p>
     );
@@ -821,7 +758,7 @@ function ComparisonView({ data, mode }: { data: InspectorData; mode: CompareMode
       <p className="text-xs text-muted-foreground">
         {mode === 'change'
           ? 'No content changes in this version.'
-          : 'The document currently matches this version.'}
+          : 'The page currently matches this version.'}
       </p>
     );
   }
@@ -831,8 +768,8 @@ function ComparisonView({ data, mode }: { data: InspectorData; mode: CompareMode
         <li className="text-xs">
           <span className="font-medium">Renamed</span>{' '}
           <span className="text-muted-foreground">
-            “{data.rename.from || 'Untitled document'}” →{' '}
-            “{data.rename.to || 'Untitled document'}”
+            “{data.rename.from || 'Untitled page'}” →{' '}
+            “{data.rename.to || 'Untitled page'}”
           </span>
         </li>
       )}

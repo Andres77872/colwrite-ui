@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useImperativeHandle } from 'react';
 import type { PanelsContextValue } from '@/components/panels/panelsContextState';
 import type { Block, Doc, ParagraphChild } from '@/editor/types';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
 /**
  * Behaviour tests for the reworked in-flow widgets (citation, equation),
@@ -10,13 +13,21 @@ import type { Block, Doc, ParagraphChild } from '@/editor/types';
  * property, so testing it without the document would test nothing.
  */
 
-vi.mock('@/services', async () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
+
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const searchMocks = vi.hoisted(() => ({
   arxiv: vi.fn(),
@@ -36,25 +47,26 @@ vi.mock('@/components/preferences', () => ({
   }),
 }));
 
-vi.mock('@/services/arxiv', () => ({
+vi.mock('@/data/arxiv', () => ({
   searchArxiv: searchMocks.arxiv,
 }));
 
-vi.mock('@/services/semanticScholar', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/services/semanticScholar')>();
+vi.mock('@/data/semanticScholar', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/data/semanticScholar')>();
   return {
     ...actual,
     searchSemanticScholar: searchMocks.semanticScholar,
   };
 });
 
-const { EditorProvider, useEditor } = await import('@/editor');
+const { EditorProvider } = await import('@/editor');
+const { useEditorProbe } = await import('@/editor/__tests__/editorHarness');
 const { PanelsContext } = await import('@/components/panels/panelsContextState');
 const { CitationInline } = await import('../CitationInline/CitationInline');
 const { EquationInline } = await import('../EquationInline/EquationInline');
 const { ReferencesSection } = await import('@/components/editor/References');
 
-const captureRef = createRef<ReturnType<typeof useEditor>>();
+const captureRef = createRef<ReturnType<typeof useEditorProbe>>();
 const harness = {
   get editor() {
     if (!captureRef.current) throw new Error('Editor harness is not mounted');
@@ -63,14 +75,14 @@ const harness = {
 };
 
 function Capture() {
-  const editor = useEditor();
+  const editor = useEditorProbe();
   useImperativeHandle(captureRef, () => editor, [editor]);
   return null;
 }
 
 /** Renders one widget with the provider's real wiring. */
 function Host({ blockId, child }: { blockId: string; child: ParagraphChild }) {
-  const ctx = useEditor();
+  const ctx = useEditorProbe();
   const props = {
     blockId,
     child,
@@ -90,14 +102,13 @@ async function mount(
   panels?: Partial<PanelsContextValue>,
 ) {
   const doc: Doc = {
-    version: 1,
     blocks: [
       { id: 'p1', type: 'paragraph', html: 'text', children: [child] },
       ...extraBlocks,
     ],
   };
   // The provider adopts the local draft when no remote document is known.
-  localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc }));
+  localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: null, doc }));
 
   const editor = (
     <EditorProvider>

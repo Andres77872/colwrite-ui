@@ -1,3 +1,4 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import type { Block, CitationChild, CitationSource } from '../types';
 import {
@@ -421,8 +422,8 @@ describe('one work cited under two spellings', () => {
     ]);
 
     expect(bibliography.entries).toHaveLength(1);
-    expect(bibliography.entries[0].key).toBe('10.1234/abc');
-    expect(bibliography.entries[0].usages).toHaveLength(3);
+    expect(bibliography.entries[0]?.key).toBe('10.1234/abc');
+    expect(bibliography.entries[0]?.usages).toHaveLength(3);
   });
 
   it('keeps the first spelling for anything the reader sees', () => {
@@ -433,7 +434,7 @@ describe('one work cited under two spellings', () => {
       ]),
     ]);
 
-    const [entry] = bibliography.entries;
+    const [entry] = takeItems(bibliography.entries, 1);
     expect(entry.displayKey).toBe('10.1234/ABC');
     // Nothing was attached, so the row prints the key — as written.
     expect(formatReference(entry, 'numeric').text).toBe('10.1234/ABC');
@@ -468,8 +469,8 @@ describe('one work cited under two spellings', () => {
       ]),
     ]);
 
-    expect(bibliography.entries[0].source.title).toBe('Found anyway');
-    expect(bibliography.entries[0].unresolved).toBe(false);
+    expect(bibliography.entries[0]?.source.title).toBe('Found anyway');
+    expect(bibliography.entries[0]?.unresolved).toBe(false);
   });
 
   it('does not merge two genuinely different keys', () => {
@@ -515,7 +516,7 @@ describe('a provider-style integer year', () => {
       const bibliography = buildBibliography([
         para('b1', [cite('c1', { style, sources: [numericYear] })]),
       ]);
-      expect(formatReference(bibliography.entries[0], style).text).toContain('2020');
+      expect(formatReference(itemAt(bibliography.entries, 0), style).text).toContain('2020');
     },
   );
 
@@ -529,7 +530,7 @@ describe('a provider-style integer year', () => {
     const bibliography = buildBibliography([
       para('b1', [cite('c1', { sources: [numericYear] })]),
     ]);
-    expect(bibliography.entries[0].source.year).toBe('2020');
+    expect(bibliography.entries[0]?.source.year).toBe('2020');
   });
 
   it('still disambiguates two sources sharing an author and year', () => {

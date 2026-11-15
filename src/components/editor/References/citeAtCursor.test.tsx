@@ -1,29 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useImperativeHandle } from 'react';
 import type { Block, CitationChild, CitationSource, ParagraphBlock } from '@/editor/types';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
 
-const { EditorProvider, useEditor } = await import('@/editor');
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const { EditorProvider } = await import('@/editor');
+const { useEditorProbe } = await import('@/editor/__tests__/editorHarness');
 const { Editable } = await import('@/components/common/Editable');
 const { citeNotice, forgetCaret, useCiteAtCursor, useRememberCaret } = await import('./citeAtCursor');
 type Placement = import('./citeAtCursor').CitePlacement;
 
 type Cite = (sources: readonly CitationSource[]) => Placement | null;
 const citeRef = createRef<Cite>();
-const editorRef = createRef<ReturnType<typeof useEditor>>();
+const editorRef = createRef<ReturnType<typeof useEditorProbe>>();
 
 /** Every text block as the canvas renders it, with the caret tracker mounted. */
 function Harness() {
   useRememberCaret();
-  const editor = useEditor();
+  const editor = useEditorProbe();
   const cite = useCiteAtCursor();
   useImperativeHandle(editorRef, () => editor, [editor]);
   useImperativeHandle(citeRef, () => cite, [cite]);
@@ -52,7 +64,7 @@ const PARAGRAPH: Block = {
 };
 
 function seed(blocks: Block[]) {
-  localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc: { version: 1, blocks } }));
+  localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: null, doc: { version: 1, blocks } }));
 }
 
 /** Render the editor; returns a field outside the text for focus to move to. */
@@ -108,7 +120,7 @@ async function leaveText(outside: HTMLElement) {
 beforeEach(() => {
   localStorage.clear();
   localStorage.setItem(
-    'colwrite:doc:local',
+    `colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`,
     JSON.stringify({
       documentId: null,
       doc: {
@@ -305,7 +317,7 @@ describe('Cite at cursor', () => {
 
     expect(placed).toEqual({ where: 'fallback', blockId: 'p1', section: null, last: true, caretBlock: null });
     const notice = citeNotice(placed!, [SOURCE]);
-    expect(notice.title).toBe('Cited at the end of the document');
+    expect(notice.title).toBe('Cited at the end of the page');
     expect(notice.description).toContain('Click into the text first');
   });
 });

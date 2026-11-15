@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import { useToast } from '@/components/ui/toastContext';
+import { useNewPage } from '@/actions/useNewPage';
 import { BrandMark, APP_NAME, APP_TAGLINE } from '@/components/common/Brand';
 import {
   figureNumbers,
@@ -13,7 +13,11 @@ import {
   kindLabel,
   kindOf,
   listNumbers,
-  useEditor,
+  useActiveBlock,
+  useDocumentSession,
+  useEditorActions,
+  useEditorDoc,
+  useEditorView,
   type Block,
   type Doc,
 } from '@/editor';
@@ -39,7 +43,13 @@ import { useProposals } from '@/editor/proposalsContextState';
 import { documentChanges, projectDocument } from '@/editor/proposals';
 import { PageTitle } from './PageTitle';
 import { BlankPageActions } from './BlankPageActions';
-import { ChevronRight, Sparkles } from 'lucide-react';
+import { ChevronRight, FolderPlus, Sparkles, SquarePen } from 'lucide-react';
+import { useWorkspace } from '@/components/workspace/workspaceContextState';
+import { WorkspaceIcon } from '@/components/workspace/WorkspaceIcon';
+import { CollectionEditorDialog } from '@/components/panels/Library/CollectionDialogs';
+import { revealInTree } from '@/components/layout/Sidebar/PagesTree/treeReveal';
+import { useCollectionMutations } from '@/data/resources';
+import { noteOwnTreeChange } from '@/data/workspaces';
 
 /** A figure's caption; a starter has none to number, but its draft still says what it is. */
 function figurePreview(source: string): string {
@@ -72,52 +82,113 @@ function isBlankParagraph(block: Block): boolean {
 }
 
 /* ----------------------------------------
-   First-run screen
+   An empty workspace
    ---------------------------------------- */
 
+/**
+ * What a workspace with no pages shows (14 §3.6, 08 §6.7): "Start your
+ * first page", with New page and New collection, and how pages can come
+ * from another workspace. The personal workspace's first run also says what
+ * the app does, and offers a page that shows it.
+ */
 function WelcomeScreen({
+  canEdit,
   creating,
   onCreateIntro,
   onCreateBlank,
 }: {
+  /** A viewer cannot add pages: the screen says the workspace is empty, and who can fill it. */
+  canEdit: boolean;
   creating: boolean;
   onCreateIntro: () => void;
   onCreateBlank: () => void;
 }) {
+  const { workspace, workspaces } = useWorkspace();
+  const workspaceId = workspace.id;
+  const { create } = useCollectionMutations(workspaceId);
+  const [newCollection, setNewCollection] = useState(false);
+  const personal = workspace.kind === 'personal';
+  const others = workspaces.length > 1;
+
+  if (!canEdit) {
+    return (
+      <div className="mx-auto w-full max-w-[calc(var(--doc-measure)+40px)] px-5 pb-12 pt-24">
+        <WorkspaceIcon workspace={workspace} size="lg" />
+        <h1 className="mt-6 text-4xl font-bold tracking-[-0.02em]">Nothing here yet</h1>
+        <p className="mt-1 text-md text-muted-foreground">
+          {workspace.name} has no pages yet. You’re a viewer here: once an editor adds pages, you can read them and ask the assistant about them.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-[calc(var(--doc-measure)+40px)] px-5 pb-12 pt-24">
-      <BrandMark size="lg" />
-      <h1 className="mt-6 text-4xl font-bold tracking-[-0.02em]">Welcome to {APP_NAME}</h1>
-      <p className="mt-1 text-md text-muted-foreground">{APP_TAGLINE}</p>
-
-      <p className="mt-8 text-md">
-        Create your first document to get started. ColWrite pairs a clean writing canvas with an
-        AI assistant and quick insert commands.
+      {personal ? <BrandMark size="lg" /> : <WorkspaceIcon workspace={workspace} size="lg" />}
+      <h1 className="mt-6 text-4xl font-bold tracking-[-0.02em]">Start your first page</h1>
+      <p className="mt-1 text-md text-muted-foreground">
+        {personal ? APP_TAGLINE : `${workspace.name} is empty. What you add here stays in this workspace.`}
       </p>
 
-      <ul className="mt-4 space-y-2 text-md">
-        {[
-          'Block-based editor with “/” commands',
-          'Inline assistant for outlines, rewrites and summaries',
-          'Citations, equations and simple graphs',
-          'Autosave with versioned remote storage',
-        ].map((feature) => (
-          <li key={feature} className="flex items-start gap-2.5">
-            <Sparkles aria-hidden="true" className="mt-1 h-4 w-4 shrink-0 text-ai" />
-            <span>{feature}</span>
-          </li>
-        ))}
-      </ul>
+      {personal && (
+        <>
+          <p className="mt-8 text-md">
+            {APP_NAME} pairs a clean writing canvas with an AI assistant and quick insert commands.
+          </p>
+          <ul className="mt-4 space-y-2 text-md">
+            {[
+              'Block-based editor with “/” commands',
+              'Inline assistant for outlines, rewrites and summaries',
+              'Citations, equations and simple graphs',
+              'Autosave with versioned remote storage',
+            ].map((feature) => (
+              <li key={feature} className="flex items-start gap-2.5">
+                <Sparkles aria-hidden="true" className="mt-1 h-4 w-4 shrink-0 text-ai" />
+                <span>{feature}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       <div className="mt-8 flex flex-wrap gap-2">
-        <Button onClick={onCreateIntro} disabled={creating}>
-          {creating && <Spinner />}
-          {creating ? 'Creating…' : 'Create your first document'}
+        <Button onClick={onCreateBlank} disabled={creating}>
+          {creating ? <Spinner /> : <SquarePen aria-hidden="true" />}
+          {creating ? 'Creating…' : 'New page'}
         </Button>
-        <Button variant="ghost" onClick={onCreateBlank} disabled={creating}>
-          Start blank
+        <Button variant="outline" onClick={() => setNewCollection(true)} disabled={creating}>
+          <FolderPlus aria-hidden="true" />
+          New collection
         </Button>
+        {personal && (
+          <Button variant="ghost" onClick={onCreateIntro} disabled={creating}>
+            Start with a guided page
+          </Button>
+        )}
       </div>
+
+      <p className="mt-6 max-w-prose text-sm text-muted-foreground">
+        Collections group pages and PDFs; the Library holds the PDFs.
+        {others && (
+          <>
+            {' '}You can also copy pages here from another workspace: open the page there and choose{' '}
+            <strong className="font-medium text-foreground">Copy to workspace…</strong> in its menu.
+          </>
+        )}
+      </p>
+
+      {newCollection && (
+        <CollectionEditorDialog
+          open
+          mode="create"
+          onOpenChange={(next) => !next && setNewCollection(false)}
+          onSave={async (values) => {
+            const created = await create({ ...values, parentId: null });
+            noteOwnTreeChange(workspaceId, created.tree_version);
+            revealInTree({ kind: 'collection', id: created.id, focus: false });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -127,26 +198,20 @@ function WelcomeScreen({
    ---------------------------------------- */
 
 export function Canvas() {
+  const { blocks } = useEditorDoc();
+  const { documentId, pageCount, readOnly } = useDocumentSession();
+  const { activeId } = useActiveBlock();
+  const { recentlyChanged, selectedBlockIds, openMenuBlockId, openMenuType } = useEditorView();
   const {
-    blocks,
-    activeId,
     setActive,
     reorderBlock,
     addBlockAtStart,
     refs,
     updateHtml,
-    documentId,
-    createRemote,
-    setFromJSON,
     toggleCollapsed,
-    hasAnyRemoteDocs,
-    recentlyChanged,
-    selectedBlockIds,
     insertBlocksAfter,
-    openMenuBlockId,
-    openMenuType,
     markRecentlyChanged,
-  } = useEditor();
+  } = useEditorActions();
   const { extendTo } = useBlockSelection();
   useRememberCaret();
   const askAi = useAskAiTarget();
@@ -174,7 +239,7 @@ export function Canvas() {
   const numbers = useMemo(() => listNumbers(blocks), [blocks]);
   const figures = useMemo(() => figureNumbers(blocks, (source) => figureMeta(source).caption), [blocks]);
   const { sets } = useProposals();
-  const { toast } = useToast();
+  const newPage = useNewPage();
 
   // The document with every pending change folded into it at the position it
   // would take. One projection drives the whole canvas, so what the author
@@ -192,7 +257,6 @@ export function Canvas() {
     [blocks],
   );
   const order = useMemo(() => blocks.map((block) => block.id).join('\n'), [blocks]);
-  const [creating, setCreating] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Drag-and-drop measures `.block-row` elements, which proposals are not, so
   // the drop line keeps indexing the real block list. It is driven outside
@@ -203,24 +267,27 @@ export function Canvas() {
     reorderBlock,
   });
 
-  const showWelcome = hasAnyRemoteDocs === false && !documentId;
-  const isCheckingDocs = hasAnyRemoteDocs === null && !documentId;
+  const showWelcome = pageCount === 0 && !documentId;
+  const isCheckingDocs = pageCount === null && !documentId;
   const isEmpty = blocks.length === 0;
   // A page with nothing written on it yet: no blocks, or the one empty line a
   // new document starts with.
-  const isBlank = isEmpty || (blocks.length === 1 && isBlankParagraph(blocks[0]));
+  const [onlyBlock] = blocks;
+  const isBlank = isEmpty || (blocks.length === 1 && onlyBlock !== undefined && isBlankParagraph(onlyBlock));
   const pageSettings = usePageSettings();
 
   const focusBlock = (id: string) => queueMicrotask(() => refs.current[id]?.focus());
 
-  /** Enter or ↓ in the title: into the first block, creating one if needed. */
+  /** Enter or ↓ in the title: into the first block, creating one if needed (not on a read-only page). */
   const continueFromTitle = () => {
     const first = blocks[0];
-    focusBlock(first && first.type !== 'divider' ? first.id : addBlockAtStart('paragraph'));
+    if (first && first.type !== 'divider') focusBlock(first.id);
+    else if (!readOnly) focusBlock(addBlockAtStart('paragraph'));
   };
 
   /** A click below the last block: into a trailing empty line. */
   const continueAtEnd = () => {
+    if (readOnly) return;
     const last = blocks[blocks.length - 1];
     if (!last) {
       focusBlock(addBlockAtStart('paragraph'));
@@ -237,14 +304,13 @@ export function Canvas() {
   };
 
   const buildIntroDoc = (): Doc => ({
-    version: 1,
     name: 'Welcome to ColWrite',
     blocks: [
       { id: uid(), type: 'heading', level: 2, html: 'Welcome to ColWrite' },
       {
         id: uid(),
         type: 'paragraph',
-        html: 'This is your workspace. Press “/” to insert headings, equations, citations and more. Select text to format it or hand it to the assistant.',
+        html: 'This is your first page. Press “/” to insert headings, equations, citations and more. Select text to format it or hand it to the assistant.',
         children: [],
         columns: 1,
       },
@@ -260,35 +326,12 @@ export function Canvas() {
     ],
   });
 
-  /**
-   * The welcome screen is the first thing a new account sees, and this used to
-   * be the one mutation path in the app with no `catch`: a failed
-   * `createRemote` rejected into nothing, so both buttons spun briefly and then
-   * did nothing at all. The document still exists locally, so say so rather
-   * than implying the work was lost.
-   */
-  const createDocument = async (next: Doc) => {
-    setCreating(true);
-    try {
-      setFromJSON(JSON.stringify(next));
-      await createRemote(next);
-    } catch (error) {
-      toast({
-        title: 'Created locally, but the server did not accept it',
-        description: error instanceof Error ? error.message : undefined,
-        variant: 'error',
-      });
-    } finally {
-      setCreating(false);
-    }
-  };
-
   if (isCheckingDocs) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center" aria-busy="true">
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
           <Spinner />
-          Preparing your workspace…
+          Loading your pages…
         </p>
       </div>
     );
@@ -298,11 +341,10 @@ export function Canvas() {
     return (
       <div className="min-h-0 flex-1 overflow-y-auto">
         <WelcomeScreen
-          creating={creating}
-          onCreateIntro={() => void createDocument(buildIntroDoc())}
-          onCreateBlank={() =>
-            void createDocument({ version: 1, name: 'Untitled document', blocks: [] })
-          }
+          canEdit={!readOnly}
+          creating={newPage.creating}
+          onCreateIntro={() => void newPage.newPage(buildIntroDoc())}
+          onCreateBlank={() => void newPage.newPage()}
         />
       </div>
     );
@@ -315,9 +357,9 @@ export function Canvas() {
       // Only a tab stop while empty, where the canvas itself accepts typing to
       // create the first block. A permanently focusable scroll container would
       // add a meaningless stop to every keyboard pass over the page.
-      tabIndex={isEmpty ? 0 : -1}
+      tabIndex={isEmpty && !readOnly ? 0 : -1}
       onMouseDown={(event) => {
-        if (!isEmpty) return;
+        if (!isEmpty || readOnly) return;
         const target = event.target as HTMLElement | null;
         if (target?.closest('button, a, input, [contenteditable]')) return;
         event.currentTarget.focus();
@@ -326,7 +368,7 @@ export function Canvas() {
         // Only keys aimed at the page itself: the title and the blank-page
         // buttons handle their own.
         if (event.target !== event.currentTarget) return;
-        if (!isEmpty || event.ctrlKey || event.metaKey || event.altKey) return;
+        if (!isEmpty || readOnly || event.ctrlKey || event.metaKey || event.altKey) return;
 
         if (event.key === 'Enter') {
           event.preventDefault();
@@ -353,7 +395,7 @@ export function Canvas() {
           el.focus();
         });
       }}
-      {...dragHandlers}
+      {...(readOnly ? {} : dragHandlers)}
     >
       {/* The review bar pins to the top of the page while there is
           something to review; the page's own chrome is the topbar above
@@ -376,7 +418,8 @@ export function Canvas() {
             : `${selected.size} ${selected.size === 1 ? 'block' : 'blocks'} selected. Esc to deselect.`}
         </p>
         <PageTitle onContinue={continueFromTitle} pageKey={documentId} blank={isBlank} />
-        {isBlank && <BlankPageActions blankId={blocks[0]?.id ?? null} />}
+        {isBlank && !readOnly && <BlankPageActions blankId={blocks[0]?.id ?? null} />}
+        {isBlank && readOnly && <p className="mb-2 text-sm text-muted-foreground">Nothing is written on this page yet.</p>}
 
         {docLevelChanges.map((change) => (
           <ChangeCard key={change.id} change={change} />
@@ -393,7 +436,9 @@ export function Canvas() {
 
                 const block = row.block;
                 const index = blockIndex.get(block.id) ?? 0;
-                const isCollapsed = block.collapsed === true;
+                // A viewer cannot fold a block open (that is an edit), so a
+                // read-only page shows every block in full.
+                const isCollapsed = block.collapsed === true && !readOnly;
                 // Rewrites, deletions and moves are about this block, so they
                 // read below it, next to the text they would change.
                 const onBlock = row.changes;
@@ -522,12 +567,12 @@ export function Canvas() {
             what made the review look unsorted. */}
         {orphans.length > 0 && (
           <section
-            aria-label="Suggestions with no place in the document"
+            aria-label="Suggestions with no place on the page"
             className="mt-6 border-t border-border/60 pt-3"
           >
             <p className="mb-1 text-xs text-muted-foreground">
               {orphans.length === 1 ? 'This suggestion refers' : 'These suggestions refer'} to a block
-              that is no longer in the document.
+              that is no longer on the page.
             </p>
             {orphans.map((change) => (
               <ChangeCard key={change.id} change={change} />
@@ -546,9 +591,9 @@ export function Canvas() {
             written mid-screen. */}
         <div
           aria-hidden="true"
-          className="relative min-h-[30vh] flex-1 cursor-text"
+          className={cn('relative min-h-[30vh] flex-1', !readOnly && 'cursor-text')}
           onMouseDown={(event) => {
-            if (event.button !== 0) return;
+            if (event.button !== 0 || readOnly) return;
             event.preventDefault();
             continueAtEnd();
           }}

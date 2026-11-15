@@ -1,8 +1,20 @@
 import { useEffect, useId, useMemo, useRef, useState, type ElementType } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useWorkspace, useWorkspaceId } from '@/components/workspace/workspaceContextState';
+import { CreateWorkspaceDialog } from '@/components/workspace/CreateWorkspaceDialog';
+import { useWorkspaceAccess, workspaceBadge } from '@/components/workspace/workspaceAccess';
+import { InviteDialog } from '@/components/profile/InviteDialog';
+import { requestSettingsPane } from '@/components/profile/settingsPane';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
+  BookOpen,
   FileText,
+  FolderInput,
+  FolderPlus,
   Hash,
   Keyboard,
+  Layers,
+  Plus,
   Moon,
   PanelLeft,
   PanelRight,
@@ -11,29 +23,37 @@ import {
   Sparkles,
   SquarePen,
   Sun,
+  Trash2,
+  UserPlus,
+  Users,
 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { Kbd } from '@/components/ui/kbd';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/lib/theme';
-import { htmlToText, useEditorActions, useEditorState } from '@/editor';
+import { htmlToText, useDocumentActions, useDocumentId, useEditorActions, useEditorDoc } from '@/editor';
 import { usePanels } from '@/components/panels/panelsContextState';
 import { toolsForEnabledSources } from '@/components/panels/toolsConfig';
 import { useAgentTools } from '@/components/preferences';
 import { SHORTCUTS, modifierLabel, type ShortcutId } from '../Shortcuts/shortcuts';
 import { useView } from '../viewContextState';
-import { useNewDocument } from '../useNewDocument';
+import { useNewPage } from '@/actions/useNewPage';
 import { useSidebarToggle } from '../useShellLayout';
 import { relativeTime } from '../relativeTime';
 import { displayTitle, isUntitledName } from '../displayTitle';
-import { rememberDocumentSummaries } from '../documentSummaryCache';
 import { useReturnFocus } from '@/hooks/useReturnFocus';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { scrollBehavior } from '@/lib/motion';
-import type { DocumentSummary } from '@/services';
+import { documentListQuery, pagePlacementQuery, type DocumentSummary } from '@/data/documents';
+import { pathLabel, useCollectionMutations, useCollectionPaths } from '@/data/resources';
+import { noteOwnTreeChange } from '@/data/workspaces';
+import { MoveToDialog, type MoveDestination } from '@/components/collections/MoveToDialog';
+import { CollectionEditorDialog } from '@/components/panels/Library/CollectionDialogs';
+import { revealInTree } from '../Sidebar/PagesTree/treeReveal';
+import { useMoveTo } from '@/actions/useMoveTo';
 
-type Group = 'Recent' | 'In this document' | 'Documents' | 'Commands' | 'Sidebar';
+type Group = 'Recent' | 'On this page' | 'Pages' | 'Switch workspace' | 'Commands' | 'Panels';
 
 type Item = {
   id: string;
@@ -53,11 +73,16 @@ type Item = {
   run: () => void;
 };
 
-/** Recent documents shown before anything is typed. */
+/** Recent pages shown before anything is typed. */
 const RECENT_LIMIT = 5;
 const SEARCH_LIMIT = 8;
+const SEARCH_DEBOUNCE_MS = 180;
+const NO_DOCUMENTS: DocumentSummary[] = [];
 
-const GROUP_ORDER: readonly Group[] = ['Recent', 'In this document', 'Documents', 'Commands', 'Sidebar'];
+const GROUP_ORDER: readonly Group[] = ['Recent', 'On this page', 'Pages', 'Switch workspace', 'Commands', 'Panels'];
+
+/** The dialogs a command opens; they outlive the palette, which closes first. */
+type PaletteDialog = 'new-collection' | 'move-page' | 'new-workspace' | 'invite';
 
 function matches(item: Item, query: string): boolean {
   const q = query.trim().toLowerCase();
@@ -74,23 +99,28 @@ function shortcutKeys(id: ShortcutId): string[] {
 
 /**
  * The command palette (Mod+K / Mod+P), shaped like Notion's search: a wide
- * field near the top of the window, recent documents before anything is
+ * field near the top of the window, recent pages before anything is
  * typed, then commands with their shortcuts, and a key legend at the foot.
  *
- * Documents are searched on the server as the author types, debounced, with
+ * Pages are searched on the server as the author types, debounced, with
  * the previous request aborted so a slow answer never overwrites a newer one.
  */
 export function CommandPalette({
   open,
   onOpenChange,
   onShowShortcuts,
+  onOpenTrash,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onShowShortcuts: () => void;
+  onOpenTrash: () => void;
 }) {
   const returnFocus = useReturnFocus();
+  // The dialogs a command opens outlive the palette, which closes first.
+  const [dialog, setDialog] = useState<PaletteDialog | null>(null);
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         onCloseAutoFocus={returnFocus.onCloseAutoFocus}
@@ -110,7 +140,7 @@ export function CommandPalette({
       >
         <DialogTitle className="sr-only">Search</DialogTitle>
         <DialogDescription className="sr-only">
-          Search your documents and headings in this one, or run a command.
+          Search your pages and the headings on this one, or run a command.
         </DialogDescription>
         {/* Mounted per opening (Radix unmounts closed content), so every
             opening starts from an empty query. */}
@@ -118,9 +148,67 @@ export function CommandPalette({
           close={() => onOpenChange(false)}
           handOffFocus={returnFocus.handOff}
           onShowShortcuts={onShowShortcuts}
+          onOpenTrash={onOpenTrash}
+          onOpenDialog={setDialog}
         />
       </DialogContent>
     </Dialog>
+    {dialog === 'new-collection' && <NewCollection onClose={() => setDialog(null)} />}
+    {dialog === 'move-page' && <MoveOpenPage onClose={() => setDialog(null)} />}
+    {dialog === 'new-workspace' && <CreateWorkspaceDialog open onOpenChange={(next) => !next && setDialog(null)} />}
+    {dialog === 'invite' && <InviteShown onClose={() => setDialog(null)} />}
+    </>
+  );
+}
+
+/** "Invite people…" from the palette, into the workspace being shown. */
+function InviteShown({ onClose }: { onClose: () => void }) {
+  const { workspace } = useWorkspace();
+  return <InviteDialog workspaceId={workspace.id} workspaceName={workspace.name} onClose={onClose} />;
+}
+
+/** "New collection" from the palette: a top-level collection, shown in the tree once made. */
+function NewCollection({ onClose }: { onClose: () => void }) {
+  const workspaceId = useWorkspaceId();
+  const { create } = useCollectionMutations(workspaceId);
+  return (
+    <CollectionEditorDialog
+      open
+      mode="create"
+      onOpenChange={(next) => !next && onClose()}
+      onSave={async (values) => {
+        const created = await create({ ...values, parentId: null });
+        noteOwnTreeChange(workspaceId, created.tree_version);
+        revealInTree({ kind: 'collection', id: created.id, focus: false });
+      }}
+    />
+  );
+}
+
+/** "Move page to…" from the palette: the open page, through the one picker. */
+function MoveOpenPage({ onClose }: { onClose: () => void }) {
+  const workspaceId = useWorkspaceId();
+  const documentId = useDocumentId();
+  const { doc } = useEditorDoc();
+  const move = useMoveTo();
+  const queryClient = useQueryClient();
+  const placement = queryClient.getQueryData<{ collectionId: number | null; placementEtag: string }>(
+    pagePlacementQuery(workspaceId, documentId ?? '').queryKey,
+  );
+  if (!documentId || !placement) return null;
+  const name = displayTitle(doc.name);
+  return (
+    <MoveToDialog
+      open
+      subject={{ kind: 'page', name, collectionId: placement.collectionId }}
+      onOpenChange={(next) => !next && onClose()}
+      onChoose={async (destination: MoveDestination) => {
+        await move.movePage(
+          { id: documentId, name: doc.name ?? '', collectionId: placement.collectionId, placementEtag: placement.placementEtag },
+          destination.kind === 'collection' ? { id: destination.collectionId, name: destination.name } : { id: null, name: null },
+        );
+      }}
+    />
   );
 }
 
@@ -128,63 +216,108 @@ function PaletteBody({
   close,
   handOffFocus,
   onShowShortcuts,
+  onOpenTrash,
+  onOpenDialog,
 }: {
   close: () => void;
   handOffFocus: () => void;
   onShowShortcuts: () => void;
+  onOpenTrash: () => void;
+  onOpenDialog: (dialog: PaletteDialog) => void;
 }) {
-  const { blocks, documentId } = useEditorState();
-  const { listRemote, switchTo, markRecentlyChanged } = useEditorActions();
+  const { blocks } = useEditorDoc();
+  const documentId = useDocumentId();
+  const { switchTo } = useDocumentActions();
+  const { markRecentlyChanged } = useEditorActions();
   const { setTool, toggle, setAssistantOpen } = usePanels();
   const { setView } = useView();
   const { resolved, setPreference } = useTheme();
   const { isSourceEnabled } = useAgentTools();
-  const { createDocument } = useNewDocument();
+  const { newPage } = useNewPage();
   const toggleSidebar = useSidebarToggle().toggle;
   // Touch screens have no keys to hint at, and less room for the prompt.
   const compact = useMediaQuery('(max-width: 639px), (pointer: coarse)');
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
-  const [documents, setDocuments] = useState<DocumentSummary[]>([]);
-  const [searching, setSearching] = useState(false);
   const listId = useId();
   const listRef = useRef<HTMLDivElement | null>(null);
   const searchingText = query.trim() !== '';
 
+  // The server searches every page of the workspace; typing waits for a pause before asking.
+  const workspaceId = useWorkspaceId();
+  const { workspace, workspaces, multiWorkspace, switchWorkspace } = useWorkspace();
+  // A viewer is offered nothing that writes (D6).
+  const { canEdit, isAdmin } = useWorkspaceAccess();
+  const shared = workspace.kind === 'shared';
+  const [searchTerm, setSearchTerm] = useState('');
   useEffect(() => {
-    const controller = new AbortController();
-    const timer = window.setTimeout(async () => {
-      setSearching(true);
-      try {
-        const result = await listRemote(
-          { limit: SEARCH_LIMIT, query: query.trim() || undefined, sortBy: 'updated_at', sortOrder: 'desc' },
-          { signal: controller.signal },
-        );
-        if (!controller.signal.aborted) {
-          setDocuments(result.documents);
-          rememberDocumentSummaries(result.documents);
-        }
-      } catch {
-        if (!controller.signal.aborted) setDocuments([]);
-      } finally {
-        if (!controller.signal.aborted) setSearching(false);
-      }
-    }, 180);
-    return () => {
-      controller.abort();
-      window.clearTimeout(timer);
-    };
-  }, [query, listRemote]);
+    const timer = window.setTimeout(() => setSearchTerm(query.trim()), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+  const pageSearch = useQuery({
+    ...documentListQuery(workspaceId, { limit: SEARCH_LIMIT, query: searchTerm || undefined, sortBy: 'updated_at', sortOrder: 'desc' }),
+    // The last answer stays while the next one is on its way.
+    placeholderData: keepPreviousData,
+  });
+  const searching = pageSearch.isFetching;
+  const documents = (!pageSearch.isError && pageSearch.data?.documents) || NO_DOCUMENTS;
+  // Each result's path, so two pages of one name can be told apart (C-18).
+  const paths = useCollectionPaths(workspaceId, documents.map((doc) => doc.collectionId));
 
   const items = useMemo<Item[]>(() => {
-    const commands: Item[] = [
+    const writing: Item[] = [
       {
         id: 'new-doc',
         group: 'Commands',
         label: 'New page',
+        shortcut: 'new-page',
         icon: SquarePen,
         keywords: 'create blank document',
-        run: () => void createDocument(),
+        run: () => void newPage(),
+      },
+      {
+        id: 'new-collection',
+        group: 'Commands',
+        label: 'New collection',
+        icon: FolderPlus,
+        keywords: 'create folder group',
+        opensDialog: true,
+        run: () => onOpenDialog('new-collection'),
+      },
+      ...(documentId
+        ? [{
+            id: 'move-page',
+            group: 'Commands' as const,
+            label: 'Move page to…',
+            icon: FolderInput,
+            keywords: 'move collection folder file',
+            opensDialog: true,
+            run: () => onOpenDialog('move-page'),
+          }]
+        : []),
+    ];
+    const commands: Item[] = [
+      ...(canEdit ? writing : []),
+      {
+        id: 'library',
+        group: 'Commands',
+        label: 'Library',
+        shortcut: 'library',
+        icon: BookOpen,
+        keywords: 'pdfs papers upload',
+        run: () => {
+          setView('editor');
+          setTool('library');
+        },
+      },
+      {
+        id: 'trash',
+        group: 'Commands',
+        label: 'Trash',
+        icon: Trash2,
+        keywords: 'deleted restore bin recycle',
+        opensDialog: true,
+        run: () => onOpenTrash(),
       },
       {
         id: 'assistant',
@@ -201,7 +334,7 @@ function PaletteBody({
         label: 'Toggle sidebar',
         shortcut: 'toggle-sidebar',
         icon: PanelLeft,
-        keywords: 'navigation documents',
+        keywords: 'navigation pages documents',
         run: toggleSidebar,
       },
       {
@@ -238,23 +371,87 @@ function PaletteBody({
         icon: Settings,
         keywords: 'profile account preferences agent tools usage',
         opensDialog: true,
-        run: () => setView('profile'),
+        run: () => setView('settings'),
       },
+      {
+        id: 'workspace-settings',
+        group: 'Commands',
+        label: 'Workspace settings',
+        icon: Settings,
+        keywords: 'workspace name icon policy export delete restore',
+        opensDialog: true,
+        run: () => {
+          requestSettingsPane('workspace');
+          setView('settings');
+        },
+      },
+      ...(shared
+        ? [{
+            id: 'members',
+            group: 'Commands' as const,
+            label: 'Members',
+            icon: Users,
+            keywords: 'people share roles invite remove leave owner transfer',
+            opensDialog: true,
+            run: () => {
+              requestSettingsPane('members');
+              setView('settings');
+            },
+          }]
+        : []),
+      ...(shared && isAdmin
+        ? [{
+            id: 'invite',
+            group: 'Commands' as const,
+            label: 'Invite people…',
+            icon: UserPlus,
+            keywords: 'share invite link member add person',
+            opensDialog: true,
+            run: () => onOpenDialog('invite'),
+          }]
+        : []),
+      ...(multiWorkspace
+        ? [{
+            id: 'new-workspace',
+            group: 'Commands' as const,
+            label: 'New workspace…',
+            icon: Plus,
+            keywords: 'create workspace',
+            opensDialog: true,
+            run: () => onOpenDialog('new-workspace'),
+          }]
+        : []),
     ];
-    // Sources the account has switched off are not offered at all.
-    const panels: Item[] = toolsForEnabledSources(isSourceEnabled).map((tool) => ({
-      id: `tool-${tool.id}`,
-      group: 'Sidebar',
-      label: tool.label,
-      hint: tool.description,
-      icon: tool.icon,
-      run: () => {
-        setView('workspace');
-        setTool(tool.id);
-      },
-    }));
+    // The account's other workspaces, most recently opened first. Picking one
+    // switches there, saving the open page first.
+    const switching: Item[] = workspaces
+      .filter((item) => item.id !== workspaceId)
+      .map((item) => ({
+        id: `workspace-${item.id}`,
+        group: 'Switch workspace',
+        label: item.name,
+        hint: workspaceBadge(item) ?? (item.kind === 'personal' ? 'Personal' : undefined),
+        icon: Layers,
+        keywords: 'switch workspace',
+        run: () => void switchWorkspace(item.id),
+      }));
+    // Sources the account has switched off are not offered at all. The
+    // Library is a command of its own, so it is not listed twice.
+    const panels: Item[] = toolsForEnabledSources(isSourceEnabled)
+      .filter((tool) => tool.id !== 'library')
+      .map((tool) => ({
+        id: `tool-${tool.id}`,
+        group: 'Panels',
+        label: tool.label,
+        hint: tool.description,
+        icon: tool.icon,
+        run: () => {
+          setView('editor');
+          setTool(tool.id);
+        },
+      }));
     // Headings only answer a query; before one is typed they would bury the
-    // recent documents under the outline of the page already on screen.
+    // recent pages under the outline of the page already on screen.
     const headings: Item[] = !searchingText
       ? []
       : blocks.flatMap((block) => {
@@ -263,12 +460,12 @@ function PaletteBody({
           return [
             {
               id: `heading-${block.id}`,
-              group: 'In this document' as const,
+              group: 'On this page' as const,
               label: text || 'Untitled heading',
               hint: `H${block.level}`,
               icon: Hash,
               run: () => {
-                setView('workspace');
+                setView('editor');
                 requestAnimationFrame(() => {
                   document
                     .querySelector(`[data-block-id="${CSS.escape(block.id)}"]`)
@@ -286,19 +483,24 @@ function PaletteBody({
       .slice(0, searchingText ? SEARCH_LIMIT : RECENT_LIMIT)
       .map((doc) => ({
         id: `doc-${doc.id}`,
-        group: searchingText ? ('Documents' as const) : ('Recent' as const),
+        group: searchingText ? ('Pages' as const) : ('Recent' as const),
         label: displayTitle(doc.name),
         muted: isUntitledName(doc.name),
-        hint: doc.id === documentId ? 'Current page' : relativeTime(doc.updatedAt) || undefined,
+        hint: [
+          doc.collectionId === null ? null : pathLabel(paths.get(doc.collectionId) ?? []),
+          doc.id === documentId ? 'Current page' : relativeTime(doc.updatedAt),
+        ].filter(Boolean).join(' · ') || undefined,
         icon: FileText,
         // The server already matched these against the query.
         keywords: query,
         run: () => {
-          setView('workspace');
-          void switchTo(doc.id, { source: 'selection' });
+          setView('editor');
+          // The editor shows the one load-failure notice and keeps the open
+          // page; the rejection needs no second report here.
+          switchTo(doc.id, { source: 'selection' }).catch(() => undefined);
         },
       }));
-    const all = [...docs, ...headings, ...commands, ...(searchingText ? panels : [])];
+    const all = [...docs, ...headings, ...switching, ...commands, ...(searchingText ? panels : [])];
     // Keep the flat list in display order so arrow keys walk it top to bottom.
     return GROUP_ORDER.flatMap((group) =>
       all.filter((item) => item.group === group && matches(item, query)),
@@ -307,7 +509,10 @@ function PaletteBody({
     blocks,
     documents,
     documentId,
-    createDocument,
+    newPage,
+    onOpenDialog,
+    onOpenTrash,
+    paths,
     isSourceEnabled,
     markRecentlyChanged,
     onShowShortcuts,
@@ -320,7 +525,14 @@ function PaletteBody({
     setView,
     toggleSidebar,
     switchTo,
+    switchWorkspace,
     toggle,
+    workspaceId,
+    workspaces,
+    multiWorkspace,
+    canEdit,
+    isAdmin,
+    shared,
   ]);
 
   useEffect(() => {
@@ -360,8 +572,8 @@ function PaletteBody({
           aria-expanded="true"
           aria-controls={listId}
           aria-activedescendant={items[active] ? `${listId}-${items[active].id}` : undefined}
-          aria-label="Search documents or run a command"
-          placeholder={compact ? 'Search…' : 'Search documents or run a command…'}
+          aria-label="Search pages or run a command"
+          placeholder={compact ? 'Search…' : 'Search pages or run a command…'}
           className="min-w-0 flex-1 truncate bg-transparent text-md text-foreground outline-none placeholder:text-placeholder"
         />
         {searching && <Spinner />}

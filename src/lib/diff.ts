@@ -64,15 +64,18 @@ export function diffWords(before: string, after: string): DiffSegment[] {
   const cols = midB.length;
   const table: number[][] = Array.from({ length: rows + 1 }, () => new Array<number>(cols + 1).fill(0));
 
+  // The longest common subsequence from (i, j) on; past either end it is 0.
+  const lcs = (i: number, j: number) => table[i]?.[j] ?? 0;
   for (let i = rows - 1; i >= 0; i--) {
+    const row = table[i];
+    if (!row) continue;
     for (let j = cols - 1; j >= 0; j--) {
-      table[i][j] =
-        midA[i] === midB[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+      row[j] = midA[i] === midB[j] ? lcs(i + 1, j + 1) + 1 : Math.max(lcs(i + 1, j), lcs(i, j + 1));
     }
   }
 
   const segments: DiffSegment[] = [];
-  const push = (type: DiffSegment['type'], value: string) => {
+  const push = (type: DiffSegment['type'], value: string | undefined) => {
     if (!value) return;
     const last = segments[segments.length - 1];
     // Merge runs so the renderer emits one span per change, not one per word.
@@ -89,7 +92,7 @@ export function diffWords(before: string, after: string): DiffSegment[] {
       push('equal', midA[i]);
       i++;
       j++;
-    } else if (table[i + 1][j] >= table[i][j + 1]) {
+    } else if (lcs(i + 1, j) >= lcs(i, j + 1)) {
       push('delete', midA[i]);
       i++;
     } else {
@@ -127,9 +130,7 @@ function coalesce(segments: DiffSegment[]): DiffSegment[] {
   };
 
   let index = 0;
-  while (index < segments.length) {
-    const segment = segments[index];
-
+  for (let segment = segments[index]; segment; segment = segments[index]) {
     if (segment.type === 'equal' && !isBridge(segments, index)) {
       push('equal', segment.value);
       index++;
@@ -138,8 +139,7 @@ function coalesce(segments: DiffSegment[]): DiffSegment[] {
 
     let deleted = '';
     let inserted = '';
-    while (index < segments.length) {
-      const current = segments[index];
+    for (let current = segments[index]; current; current = segments[index]) {
       if (current.type === 'delete') deleted += current.value;
       else if (current.type === 'insert') inserted += current.value;
       else if (isBridge(segments, index)) {
@@ -159,7 +159,7 @@ function coalesce(segments: DiffSegment[]): DiffSegment[] {
 /** An unchanged run of pure whitespace with edits on both sides. */
 function isBridge(segments: DiffSegment[], index: number): boolean {
   const segment = segments[index];
-  if (segment.type !== 'equal' || segment.value.trim() !== '') return false;
+  if (segment?.type !== 'equal' || segment.value.trim() !== '') return false;
   const before = segments[index - 1];
   const after = segments[index + 1];
   return !!before && !!after && before.type !== 'equal' && after.type !== 'equal';

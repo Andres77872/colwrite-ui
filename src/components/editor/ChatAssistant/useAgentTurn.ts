@@ -9,14 +9,18 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react';
-import { attachmentKey, type ChatAttachment } from '@/services/chatAttachments';
-import { streamAgentChat, type AgentChatContext, type AgentChatResult } from '@/services/agentChat';
+import type { ChatAttachment } from '@/api/assistant/chatAttachments';
+import { runAgentTurn, type AgentChatContext, type AgentChatResult } from '@/api/assistant/agentChat';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
+import { useQueryClient } from '@tanstack/react-query';
+import { invalidatePageBranch } from '@/data/documents';
 import { useAgentEngine } from '@/components/preferences/agentEngineContextState';
-import { AgentSocketError } from '@/services/agentSocket';
-import type { AssistantSnapshot, ResumeAgentRun } from '@/services/agentSessionChat';
-import type { SSEEventHandlers } from '@/services/streamParser';
+import { engineName } from '@/components/preferences/agentEngineCopy';
+import { AgentSocketError } from '@/api/assistant/agentSocket';
+import type { AssistantSnapshot, ResumeAgentRun } from '@/api/assistant/agentSessionChat';
+import type { AgentEventHandlers } from '@/api/assistant/streamParser';
 import type { ToolAction } from '@/editor/types';
-import type { EditorContextValue } from '@/editor/editorContextState';
+import type { DocumentActionsValue, DocumentSessionValue } from '@/editor';
 import type { ProposalsContextValue } from '@/editor/proposalsContextState';
 import {
   advanceProgress,
@@ -33,18 +37,19 @@ import {
   type ChatMessage,
   type LastExchange,
 } from './chatUtils';
+import type { AutoMode } from './useAutoMode';
 
 type AgentTurnOptions = {
-  documentId: EditorContextValue['documentId'];
-  loadingDocumentId: EditorContextValue['loadingDocumentId'];
-  restoreEpoch: EditorContextValue['restoreEpoch'];
-  ensureRemoteDocument: EditorContextValue['ensureRemoteDocument'];
-  hasPendingEdits: EditorContextValue['hasPendingEdits'];
-  saveRemote: EditorContextValue['saveRemote'];
+  documentId: DocumentSessionValue['documentId'];
+  loadingDocumentId: DocumentSessionValue['loadingDocumentId'];
+  restoreEpoch: DocumentSessionValue['restoreEpoch'];
+  ensureRemoteDocument: DocumentActionsValue['ensureRemoteDocument'];
+  hasPendingEdits: DocumentActionsValue['hasPendingEdits'];
+  saveRemote: DocumentActionsValue['saveRemote'];
   selectedChatId: string | null;
-  selectedThreadId: number | null;
+  selectedLeafId: number | null;
   setSelectedChatId: (id: string | null) => void;
-  setSelectedThreadId: (id: number | null) => void;
+  setSelectedLeafId: (id: number | null) => void;
   proposals: ProposalsContextValue;
   setInput: Dispatch<SetStateAction<string>>;
   setAtBottom: Dispatch<SetStateAction<boolean>>;
@@ -59,6 +64,12 @@ type AgentTurnOptions = {
   loadedConversationRef: MutableRefObject<string | null>;
   /** The server started a conversation for this turn's message. */
   onChatCreated?: (chatId: string, prompt: string) => void;
+  /**
+   * The chat's Auto switch (D18). While it is on, a turn asks for
+   * `apply_mode: "auto"`, and the change sets the server stores as `auto`
+   * are applied by the editor as they arrive.
+   */
+  autoMode?: Pick<AutoMode, 'on' | 'startTurn' | 'notePolicy'>;
 };
 
 export type AgentTurn = {
@@ -109,9 +120,9 @@ export function useAgentTurn({
   hasPendingEdits,
   saveRemote,
   selectedChatId,
-  selectedThreadId,
+  selectedLeafId,
   setSelectedChatId,
-  setSelectedThreadId,
+  setSelectedLeafId,
   proposals,
   setInput,
   setAtBottom,
@@ -119,8 +130,11 @@ export function useAgentTurn({
   refPickerRef,
   loadedConversationRef,
   onChatCreated,
+  autoMode,
 }: AgentTurnOptions): AgentTurn {
   const engines = useAgentEngine();
+  const workspaceId = useWorkspaceId();
+  const queryClient = useQueryClient();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<ChatError | null>(null);
@@ -156,19 +170,30 @@ export function useAgentTurn({
   const documentIdRef = useRef(documentId);
   const sessionRef = useRef({
     selectedChatId,
-    selectedThreadId,
+    selectedLeafId,
     setSelectedChatId,
-    setSelectedThreadId,
+    setSelectedLeafId,
   });
   useLayoutEffect(() => {
     documentIdRef.current = documentId;
     sessionRef.current = {
       selectedChatId,
-      selectedThreadId,
+      selectedLeafId,
       setSelectedChatId,
-      setSelectedThreadId,
+      setSelectedLeafId,
     };
-  }, [documentId, selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId]);
+  }, [documentId, selectedChatId, selectedLeafId, setSelectedChatId, setSelectedLeafId]);
+
+  /**
+   * Auto as it is now. A turn asks for it when it starts a run, and a set
+   * that arrives later is applied only if Auto is still on then: turning it
+   * off mid-reply leaves the rest of the reply's edits waiting.
+   */
+  const autoRef = useRef(autoMode);
+  useLayoutEffect(() => {
+    autoRef.current = autoMode;
+  }, [autoMode]);
+  const autoApply = useCallback(() => autoRef.current?.on === true, []);
 
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
@@ -240,10 +265,11 @@ export function useAgentTurn({
   /**
    * Hand a streamed document mutation to the review layer.
    *
-   * Nothing is applied here. The agent's operations are staged server-side and
-   * the author accepts or rejects each one on the block it affects — a rewrite
-   * cannot be judged from a chat bubble, only against the paragraph it
-   * replaces.
+   * Nothing is applied here. The agent's operations are stored server-side
+   * and the author accepts or rejects each one on the block it affects — a
+   * rewrite cannot be judged from a chat bubble, only against the paragraph
+   * it replaces. With Auto on, the review layer accepts a set the server
+   * stored as `auto` itself, the same way.
    */
   const onToolAction = useCallback(
     (action: ToolAction) => {
@@ -263,6 +289,10 @@ export function useAgentTurn({
         (op) => op.op === 'create_document',
       );
       if (action.documentId !== documentIdRef.current && !announcesNewDocument) return;
+      // The new page lives beside its source page: that branch of the tree reads again.
+      if (announcesNewDocument && action.status === 'applied') {
+        void invalidatePageBranch(queryClient, workspaceId, action.collectionId ?? null);
+      }
 
       // Only a genuine redelivery is a duplicate. The id alone is not enough:
       // providers that number tool calls per request reuse `call_0`, and some
@@ -275,7 +305,7 @@ export function useAgentTurn({
       if (processedToolCallIds.current.has(dedupKey)) return;
       processedToolCallIds.current.add(dedupKey);
 
-      const { changeIds, applied } = proposals.receive(action);
+      proposals.receive(action, { autoApply });
 
       if (action.status === 'error') {
         setError({
@@ -284,15 +314,16 @@ export function useAgentTurn({
         });
       }
 
-      if (changeIds.length > 0 || applied > 0) {
-        patchActive((message) => ({
-          ...message,
-          proposedIds: [...message.proposedIds, ...changeIds],
-          applied: message.applied + applied,
-        }));
+      const changeSetId = action.status === 'proposed' ? action.changeSetId : null;
+      if (changeSetId) {
+        patchActive((message) => (
+          message.changeSetIds.includes(changeSetId)
+            ? message
+            : { ...message, changeSetIds: [...message.changeSetIds, changeSetId] }
+        ));
       }
     },
-    [patchActive, proposals],
+    [autoApply, patchActive, proposals, queryClient, workspaceId],
   );
 
   const send = async (text: string, context?: AgentChatContext, attachments?: ChatAttachment[], resume?: ResumeAgentRun) => {
@@ -300,6 +331,8 @@ export function useAgentTurn({
 
     setError(null);
     setInput('');
+    // Why the server paused Auto was about the previous message.
+    autoRef.current?.startTurn();
     // Something is on screen from the moment the message is sent.
     setAgentStatus({ ...THINKING, since: Date.now() });
     pinnedToBottom.current = true;
@@ -308,7 +341,11 @@ export function useAgentTurn({
     processedToolCallIds.current = new Set();
     runningToolsRef.current = new Map();
 
-    const userMessage = emptyMessage('user', text, attachments, resume?.runId);
+    // A reattached run started before this browser saw it: its timings are
+    // not this turn's to measure.
+    const sentAt = Date.now();
+    const timed = !resume;
+    const userMessage: ChatMessage = { ...emptyMessage('user', text, attachments, resume?.runId), createdAt: sentAt };
     const assistantMessage = emptyMessage('assistant');
     setLastExchange({
       text,
@@ -322,22 +359,15 @@ export function useAgentTurn({
     setActiveMessageId(assistantMessage.id);
     setMessages((prev) => {
       if (resume) {
-        const matchesRun = (message: ChatMessage | undefined, allowLegacy: boolean) => {
-          if (message?.role !== 'user') return false;
-          if (message.runId) return message.runId === resume.runId;
-          // Old transcripts have no run identity. Only an unanswered final
-          // user row is safe to reuse; identical text/files cannot identify a
-          // completed exchange as the active run.
-          return allowLegacy && message.content === text
-            && JSON.stringify((message.attachments ?? []).map(attachmentKey).sort())
-              === JSON.stringify((attachments ?? []).map(attachmentKey).sort());
-        };
+        // Every message a run wrote carries the run's id.
+        const matchesRun = (message: ChatMessage | undefined) =>
+          message?.role === 'user' && message.runId === resume.runId;
         const last = prev.at(-1);
-        if (last && matchesRun(last, true)) {
+        if (last && matchesRun(last)) {
           return [...prev.slice(0, -1), { ...last, id: userMessage.id, runId: resume.runId }, assistantMessage];
         }
         const prompt = prev.at(-2);
-        if (last?.role === 'assistant' && prompt && matchesRun(prompt, false)) {
+        if (last?.role === 'assistant' && prompt && matchesRun(prompt)) {
           return [...prev.slice(0, -2), { ...prompt, id: userMessage.id, runId: resume.runId }, assistantMessage];
         }
       }
@@ -367,14 +397,14 @@ export function useAgentTurn({
       if (!turnDocumentId) {
         moveTo({
           phase: 'preparing',
-          label: 'Saving this document so the assistant can work on it…',
+          label: 'Saving this page so the assistant can work on it…',
         });
         turnDocumentId = await ensureRemoteDocument();
         if (!streamIsLive()) return;
         if (!turnDocumentId) {
           setError({
             message:
-              'This document could not be saved, so there is nothing for the assistant to work on yet.',
+              'This page could not be saved, so there is nothing for the assistant to work on yet.',
             retryable: true,
           });
           return;
@@ -392,7 +422,7 @@ export function useAgentTurn({
           if (!streamIsLive()) return;
           setError({
             message:
-              'Your latest edits could not be saved, so the assistant would answer about an older version of this document.',
+              'Your latest edits could not be saved, so the assistant would answer about an older version of this page.',
             retryable: true,
           });
           return;
@@ -404,20 +434,20 @@ export function useAgentTurn({
       // Captured for the whole turn. A conversation belongs to the document it
       // was started on; nothing below may silently move it to another one.
       let turnChatId = sessionRef.current.selectedChatId;
-      let turnThreadId = sessionRef.current.selectedThreadId;
+      let turnLeafId = sessionRef.current.selectedLeafId;
 
       // A chat id can outlive the chat it names — deleted from the chats panel
       // in another tab, or left behind in this browser after the document it
       // belonged to was removed. The server answers `CHAT_NOT_FOUND` and the
       // session used to stay wedged on that dead id for good. Recover once, as
       // a new conversation on the document that is actually open.
-      let recover: 'chat' | 'thread' | null = null;
+      let recover = false;
       let alreadyRecovered = false;
 
-      const handlers: SSEEventHandlers = {
+      const handlers: AgentEventHandlers = {
         onSessionChat: (chatId) => {
           if (!streamIsLive()) return;
-          loadedConversationRef.current = `${turnDocumentId}:${chatId}:${turnThreadId ?? 'latest'}`;
+          loadedConversationRef.current = `${turnDocumentId}:${chatId}:${turnLeafId ?? 'latest'}`;
           if (chatId !== turnChatId) {
             if (!turnChatId) onChatCreated?.(chatId, text);
             turnChatId = chatId;
@@ -448,6 +478,7 @@ export function useAgentTurn({
           patchActive((message) => ({
             ...endThinking(message, now),
             content: message.content + content,
+            ...(timed && message.firstTokenMs === undefined ? { firstTokenMs: now - sentAt } : {}),
           }));
         },
         onReasoning: (content) => {
@@ -475,6 +506,10 @@ export function useAgentTurn({
             return;
           }
           moveTo(next);
+        },
+        onApplyPolicy: (policy, reason) => {
+          // The strip says at once when the server refused Auto for this run.
+          if (streamIsLive()) autoRef.current?.notePolicy(policy, reason);
         },
         onToolCallStart: (tool, toolCallId, args) => {
           if (!streamIsLive()) return;
@@ -510,11 +545,10 @@ export function useAgentTurn({
               && run.argsPreview === undefined
               && (event.toolCallId ? run.id === event.toolCallId : run.tool === event.tool),
             );
-            if (index === -1 || message.runs[index].argumentsChars === event.argumentsChars) {
-              return message;
-            }
+            const existing = message.runs[index];
+            if (!existing || existing.argumentsChars === event.argumentsChars) return message;
             const runs = message.runs.slice();
-            runs[index] = { ...runs[index], argumentsChars: event.argumentsChars };
+            runs[index] = { ...existing, argumentsChars: event.argumentsChars };
             return { ...message, runs };
           });
         },
@@ -527,9 +561,9 @@ export function useAgentTurn({
               run.state === 'running'
               && (event.toolCallId ? run.id === event.toolCallId : run.tool === event.tool),
             );
-            if (index === -1) return message;
+            const existing = message.runs[index];
+            if (!existing) return message;
             const runs = message.runs.slice();
-            const existing = runs[index];
             runs[index] = {
               ...existing,
               args: event.arguments ?? existing.args,
@@ -578,9 +612,9 @@ export function useAgentTurn({
             if (index === -1 && event.toolCallId && (event.isError || event.outputPreview !== null)) {
               index = message.runs.findIndex((run) => run.id === event.toolCallId);
             }
-            if (index === -1) return message;
+            const existing = message.runs[index];
+            if (!existing) return message;
             const runs = message.runs.slice();
-            const existing = runs[index];
             runs[index] = {
               ...existing,
               state: event.isError ? 'error' : 'done',
@@ -628,10 +662,10 @@ export function useAgentTurn({
           }
           // Reattaching observes an existing run; its failure must not reset
           // selection or enter the recovery path that starts a new turn.
-          if (!resume && !alreadyRecovered && (code === 'CHAT_NOT_FOUND' || code === 'THREAD_NOT_FOUND')) {
+          if (!resume && !alreadyRecovered && code === 'CHAT_NOT_FOUND') {
             // Reported by the retry below if that fails too, so the author is
             // never shown an error the app is about to resolve by itself.
-            recover = code === 'CHAT_NOT_FOUND' ? 'chat' : 'thread';
+            recover = true;
             return;
           }
           // The stream died around these calls; the tools themselves did not
@@ -645,14 +679,14 @@ export function useAgentTurn({
           }));
           setError(friendlyStreamError(code, message));
         },
-        onDone: (chatId, threadId) => {
+        onDone: (chatId, messageId) => {
           if (!streamIsLive()) return;
           const id = chatId || turnChatId;
           // This transcript *is* the conversation these ids name, so mark it
           // loaded before the ids land and the loader chases them.
           if (id) {
             loadedConversationRef.current = `${turnDocumentId}:${id}:${
-              typeof threadId === 'number' ? threadId : turnThreadId ?? 'latest'
+              typeof messageId === 'number' ? messageId : turnLeafId ?? 'latest'
             }`;
           }
           // Through the ref, because attaching the document mid-turn rebuilt
@@ -663,28 +697,40 @@ export function useAgentTurn({
             turnChatId = chatId;
             sessionRef.current.setSelectedChatId(chatId);
           }
-          if (typeof threadId === 'number' && threadId !== turnThreadId) {
-            turnThreadId = threadId;
-            sessionRef.current.setSelectedThreadId(threadId);
+          // The answer is the chat's new leaf: the next turn continues from it.
+          if (typeof messageId === 'number' && messageId !== turnLeafId) {
+            turnLeafId = messageId;
+            sessionRef.current.setSelectedLeafId(messageId);
           }
         },
       };
 
       // Chosen once per turn: switching engines mid-reply applies to the next.
       const engineRequest = engines.requestFor('chat');
+      // Named under the reply only when the author chose it: the server's
+      // default needs no label.
+      const chosenEngine = engineRequest.engine ?? (engineRequest.gateway_models?.main ? 'gateway' : null);
+      if (timed && chosenEngine) {
+        const model = engineRequest.engine ? engineRequest.model : engineRequest.gateway_models?.main;
+        const engine = { name: engineName(chosenEngine, engines.statusOf(chosenEngine)), ...(model ? { model } : {}) };
+        patchActive((message) => ({ ...message, engine }));
+      }
       let result: AgentChatResult | null = null;
       for (;;) {
-        recover = null;
-        result = await streamAgentChat(
+        recover = false;
+        result = await runAgentTurn(
           {
+            workspace_id: workspaceId,
             message: text,
             document_id: turnDocumentId,
             chat_id: turnChatId,
-            thread_id: turnThreadId,
+            leaf_id: turnLeafId,
             mode: 'assistant',
             context,
             ...(attachments?.length ? { attachments } : {}),
             ...engineRequest,
+            // Asked, not granted: the server decides per run (D18).
+            ...(autoApply() ? { apply_mode: 'auto' as const } : {}),
           },
           handlers,
           {
@@ -706,12 +752,10 @@ export function useAgentTurn({
         if (!recover || !streamIsLive()) break;
 
         alreadyRecovered = true;
-        if (recover === 'chat') {
-          turnChatId = null;
-          sessionRef.current.setSelectedChatId(null);
-        }
-        turnThreadId = null;
-        sessionRef.current.setSelectedThreadId(null);
+        turnChatId = null;
+        sessionRef.current.setSelectedChatId(null);
+        turnLeafId = null;
+        sessionRef.current.setSelectedLeafId(null);
         loadedConversationRef.current = null;
         // The failed attempt reached no tools, but a redelivered id from it
         // must not block the retry's own staging.
@@ -770,6 +814,8 @@ export function useAgentTurn({
         const endedAt = Date.now();
         patchActive((message) => ({
           ...endThinking(message, endedAt),
+          createdAt: endedAt,
+          ...(timed ? { durationMs: endedAt - sentAt } : {}),
           runs: message.runs.map((run) =>
             run.state === 'running'
               ? { ...run, state: 'interrupted' as const, argumentsChars: undefined }
@@ -817,7 +863,7 @@ export function useAgentTurn({
     lastExchange,
     send,
     resumeRun: (snapshot) => {
-      if (snapshot.run) void send(snapshot.run.request.message, snapshot.run.request.context, snapshot.run.request.attachments,
+      if (snapshot.run) void send(snapshot.run.request.message, snapshot.run.request.context ?? undefined, snapshot.run.request.attachments,
         { sessionId: snapshot.session.id, runId: snapshot.run.id });
     },
     onStop,

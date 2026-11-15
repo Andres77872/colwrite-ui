@@ -131,7 +131,7 @@ export function toBibtex(sources: readonly CitationSource[]): string {
 /** Read one braced or quoted value starting at `index`; returns it and the index after it. */
 function readValue(text: string, index: number): [string, number] {
   let cursor = index;
-  while (cursor < text.length && /\s/.test(text[cursor])) cursor += 1;
+  while (cursor < text.length && /\s/.test(text.charAt(cursor))) cursor += 1;
   const open = text[cursor];
   if (open === '{') {
     let depth = 0;
@@ -195,7 +195,7 @@ export function parseBibtex(text: string): BibtexImport {
   const entryStart = /@\s*([A-Za-z]+)\s*[{(]/g;
   let match: RegExpExecArray | null;
   while ((match = entryStart.exec(text))) {
-    const type = match[1].toLowerCase();
+    const type = (match[1] ?? '').toLowerCase();
     if (type === 'comment' || type === 'preamble' || type === 'string') continue;
     let cursor = entryStart.lastIndex;
     const keyEnd = text.indexOf(',', cursor);
@@ -205,10 +205,11 @@ export function parseBibtex(text: string): BibtexImport {
     const fields: Record<string, string> = {};
     while (cursor < text.length) {
       const fieldMatch = /^\s*([A-Za-z][\w-]*)\s*=\s*/.exec(text.slice(cursor));
-      if (!fieldMatch) break;
+      const name = fieldMatch?.[1];
+      if (!fieldMatch || !name) break;
       cursor += fieldMatch[0].length;
       const [value, next] = readValue(text, cursor);
-      fields[fieldMatch[1].toLowerCase()] = value;
+      fields[name.toLowerCase()] = value;
       cursor = next;
       const separator = /^\s*,?/.exec(text.slice(cursor));
       cursor += separator?.[0].length ?? 0;

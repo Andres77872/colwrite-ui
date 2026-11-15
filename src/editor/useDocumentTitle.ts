@@ -1,9 +1,17 @@
 import { useCallback } from 'react';
 import { useToast } from '@/components/ui/toastContext';
-import { useEditor } from './editorContextState';
+import { useEditorActions } from './editorContextState';
+import { useDocumentActions, useEditorDoc } from './documentSessionState';
+import { DEFAULT_DOCUMENT_TITLE } from './types';
 
-/** The name a document gets when it has none. Lists and exports show it. */
-export const DEFAULT_DOCUMENT_TITLE = 'Untitled document';
+/**
+ * True while a page carries no name or the default one, which the API also
+ * gives a page created without a name.
+ */
+export function isDefaultTitle(name: string | null | undefined): boolean {
+  const trimmed = name?.trim() ?? '';
+  return !trimmed || trimmed === DEFAULT_DOCUMENT_TITLE;
+}
 
 /**
  * Selector for the in-page title, so chrome elsewhere (the topbar breadcrumb)
@@ -12,7 +20,7 @@ export const DEFAULT_DOCUMENT_TITLE = 'Untitled document';
 export const PAGE_TITLE_SELECTOR = '[data-page-title]';
 
 export type DocumentTitle = {
-  /** What to show: the document's name, or the default when it has none. */
+  /** What to show: the page's name, or the default when it has none. */
   title: string;
   /**
    * What an editable title should hold: empty while the document still
@@ -36,12 +44,14 @@ export type DocumentTitle = {
  * and the topbar breadcrumb.
  */
 export function useDocumentTitle(): DocumentTitle {
-  const { doc, setDocName, saveRemote } = useEditor();
+  const { doc } = useEditorDoc();
+  const { setDocName } = useEditorActions();
+  const { saveRemote } = useDocumentActions();
   const { toast } = useToast();
 
   const name = doc.name?.trim() ?? '';
-  const isUntitled = !name || name === DEFAULT_DOCUMENT_TITLE;
-  const title = name || DEFAULT_DOCUMENT_TITLE;
+  const isUntitled = isDefaultTitle(name);
+  const title = isUntitled ? DEFAULT_DOCUMENT_TITLE : name;
 
   const rename = useCallback(
     async (next: string) => {

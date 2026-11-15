@@ -7,7 +7,7 @@ const editorState = {
   loadingDocumentId: null as string | null,
 };
 
-vi.mock('@/editor', () => ({ useEditor: () => editorState }));
+vi.mock('@/editor', () => ({ useDocumentSession: () => editorState }));
 
 const { DocumentLoadingBoundary } = await import('./DocumentLoading');
 
@@ -40,7 +40,7 @@ describe('DocumentLoadingBoundary', () => {
 
     expect(screen.getByTestId('document-skeleton')).toBeTruthy();
     expect(regionRef.current?.getAttribute('aria-busy')).toBe('true');
-    expect(screen.getByRole('status').textContent).toBe('Opening document…');
+    expect(screen.getByRole('status').textContent).toBe('Opening page…');
     const committedLayer = screen.getByTestId('committed-canvas').parentElement;
     expect(committedLayer?.hasAttribute('inert')).toBe(true);
     expect(committedLayer?.getAttribute('aria-hidden')).toBe('true');

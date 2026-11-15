@@ -204,14 +204,15 @@ export function firstAuthorSurname(authors?: string): string | undefined {
   if (!beforeComma) return undefined;
 
   const words = beforeComma.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return undefined;
-  if (words.length === 1) return words[0].replace(/\.$/, '') || undefined;
+  const [only] = words;
+  if (only === undefined) return undefined;
+  if (words.length === 1) return only.replace(/\.$/, '') || undefined;
 
   // "Given Family": walk back over particles so "van der Berg" survives whole.
   // Locale-independent casing: which words count as particles feeds grouping
   // and labels, so it must not shift with the user's locale.
   let start = words.length - 1;
-  while (start > 0 && PARTICLES.has(words[start - 1].toLowerCase())) start -= 1;
+  while (start > 0 && PARTICLES.has(words[start - 1]?.toLowerCase() ?? '')) start -= 1;
   return words.slice(start).join(' ') || undefined;
 }
 
@@ -319,7 +320,7 @@ export function citationFingerprint(
  */
 /** Ids of a paragraph's widget placeholders, in the order they appear in its text. */
 function placeholderOrder(html: string): string[] {
-  return Array.from(html.matchAll(/data-child-id="([^"]+)"/g), (match) => match[1]);
+  return Array.from(html.matchAll(/data-child-id="([^"]+)"/g), ([, id]) => id).filter((id) => id !== undefined);
 }
 
 /**
@@ -625,7 +626,7 @@ export function citationLabelParts(
     if (keys.length === 0) parts.push({ text: 'citation' });
     entries.forEach((entry, index) => {
       if (index > 0) parts.push({ text: '; ' });
-      parts.push({ text: authorYearName(entry, keys[index]), ...(entry ? { entry } : {}) });
+      parts.push({ text: authorYearName(entry, keys[index] ?? ''), ...(entry ? { entry } : {}) });
     });
     if (trailing) parts.push({ text: `, ${trailing}` });
     parts.push({ text: ')' });

@@ -513,7 +513,7 @@ for (const [kind, tokens] of [
 
 type EnvironmentSpec = { open?: string; close?: string; colSep: number; rowHeight: number; aligned?: boolean };
 /** Array-like environments: delimiters, column gap and baseline distance (em). */
-const ENVIRONMENTS: Record<string, EnvironmentSpec> = {
+const ENVIRONMENTS: Record<string, EnvironmentSpec> & { matrix: EnvironmentSpec } = {
   matrix: { colSep: 1, rowHeight: 1.2 },
   pmatrix: { open: '(', close: ')', colSep: 1, rowHeight: 1.2 },
   bmatrix: { open: '[', close: ']', colSep: 1, rowHeight: 1.2 },
@@ -552,8 +552,13 @@ function lookup<T>(table: Record<string, T>, key: string): T | undefined {
   return Object.hasOwn(table, key) ? table[key] : undefined;
 }
 
+/** A glyph width from a table in thousandths of an em; callers guard the index range. */
+function tableEm(table: readonly number[], index: number): number {
+  return (table[index] ?? 0) / 1000;
+}
+
 function spacing(left: AtomClass, right: AtomClass, item: Item): number {
-  const code = SPACING[CLASS_ORDER[left]][CLASS_ORDER[right]];
+  const code = SPACING[CLASS_ORDER[left]]?.charAt(CLASS_ORDER[right]);
   const tight = item.level >= 2;
   const mu = code === '2' || (code === '1' && !tight) ? 3 : code === '3' && !tight ? 4 : code === '4' && !tight ? 5 : 0;
   return (mu / 18) * item.scale;
@@ -566,7 +571,7 @@ function listWidth(items: Item[]): number {
   let previous = -1;
   for (let i = 0; i < classes.length; i += 1) {
     const cls = classes[i];
-    if (cls === null) continue;
+    if (cls == null) continue;
     if (cls === 'bin' && (previous < 0 || BIN_BLOCKERS.has(classes[previous] ?? 'ord'))) classes[i] = 'ord';
     if ((cls === 'rel' || cls === 'close' || cls === 'punct') && previous >= 0 && classes[previous] === 'bin') {
       classes[previous] = 'ord';
@@ -580,7 +585,7 @@ function listWidth(items: Item[]): number {
   items.forEach((item, i) => {
     width += item.width;
     const cls = classes[i];
-    if (cls === null) return;
+    if (cls == null) return;
     if (left !== null) width += spacing(left, cls, item);
     left = cls;
   });
@@ -591,7 +596,7 @@ function boxOf(items: Item[]): Box {
   return {
     width: listWidth(items),
     extra: items.reduce((max, item) => Math.max(max, item.extra), 0),
-    cls: items.length === 1 ? (items[0].cls ?? 'ord') : 'ord',
+    cls: items.length === 1 ? (items[0]?.cls ?? 'ord') : 'ord',
     tall: items.some((item) => item.tall === true),
   };
 }
@@ -753,7 +758,7 @@ const UNIT_EM: Record<string, number> = {
 function dimensionEm(text: string): number {
   const match = /^\s*([+-]?)\s*(\d+\.?\d*|\.\d+)\s*([a-z]{2})/.exec(text);
   if (!match) return 0;
-  const value = Number(match[2]) * (lookup(UNIT_EM, match[3]) ?? 0);
+  const value = Number(match[2]) * (lookup(UNIT_EM, match[3] ?? '') ?? 0);
   return match[1] === '-' ? -value : value;
 }
 
@@ -899,7 +904,7 @@ function fractionItem(num: Box, den: Box, style: Style, display: boolean, delimi
 function letterWidth(ch: string, variant: Variant): number {
   const code = ch.charCodeAt(0);
   const lower = ch >= 'a';
-  const italic = MATH_ITALIC[lower ? code - 97 : 26 + code - 65] / 1000;
+  const italic = tableEm(MATH_ITALIC, lower ? code - 97 : 26 + code - 65);
   switch (variant) {
     case 'math':
     case 'it':
@@ -909,15 +914,15 @@ function letterWidth(ch: string, variant: Variant): number {
       return 0.525;
     // The decorative faces have capitals only (Fraktur also lowercase); the rest fall back.
     case 'cal':
-      return lower ? italic : CALLIGRAPHIC_UPPER[code - 65] / 1000;
+      return lower ? italic : tableEm(CALLIGRAPHIC_UPPER, code - 65);
     case 'bb':
-      return lower ? italic : BLACKBOARD_UPPER[code - 65] / 1000;
+      return lower ? italic : tableEm(BLACKBOARD_UPPER, code - 65);
     case 'scr':
       return lower ? italic : 1.1;
     case 'frak':
       return lower ? 0.5 : 0.8;
     default:
-      return (MAIN_ASCII[code - 33] / 1000) * VARIANT_FACTOR[variant];
+      return tableEm(MAIN_ASCII, code - 33) * VARIANT_FACTOR[variant];
   }
 }
 
@@ -951,7 +956,7 @@ function charItem(ch: string, style: Style): Item {
   const special = lookup(MATH_ASCII, ch);
   if (special) return makeItem(style, special[0], (special[1] / 1000) * s);
   const code = ch.charCodeAt(0);
-  if (ch.length === 1 && code >= 33 && code <= 126) return makeItem(style, 'ord', (MAIN_ASCII[code - 33] / 1000) * s);
+  if (ch.length === 1 && code >= 33 && code <= 126) return makeItem(style, 'ord', tableEm(MAIN_ASCII, code - 33) * s);
   const symbol = UNICODE_SYMBOLS.get(ch);
   if (symbol) return symbolItem(symbol, style);
   return makeItem(style, 'ord', fallbackWidth(ch) * s);
@@ -959,7 +964,7 @@ function charItem(ch: string, style: Style): Item {
 
 /** Width of a delimiter at size step 0–5 (normal, \big … \Bigg, extensible); null is `.`. */
 function delimiterWidth(kind: DelimiterKind | null, step: number): number {
-  return kind === null ? NULL_DELIMITER : DELIMITER_SIZES[kind][Math.min(5, Math.max(0, step))] / 1000;
+  return kind === null ? NULL_DELIMITER : tableEm(DELIMITER_SIZES[kind], Math.min(5, Math.max(0, step)));
 }
 
 function delimiterKind(token: string | null): DelimiterKind | null {
@@ -1042,9 +1047,9 @@ function command(name: string, r: Reader, style: Style, depth: number, items: It
   }
   const big = BIG_DELIMITER.exec(name);
   if (big) {
-    const step = BIG_STEP[big[1]];
+    const step = lookup(BIG_STEP, big[1] ?? '') ?? 1;
     const side: AtomClass = big[2] === 'l' ? 'open' : big[2] === 'r' ? 'close' : big[2] === 'm' ? 'rel' : 'ord';
-    push(side, delimiterWidth(delimiterKind(r.next()), step) * s, BIG_EXTRA[step] * s, { tall: true });
+    push(side, delimiterWidth(delimiterKind(r.next()), step) * s, (BIG_EXTRA[step] ?? 0) * s, { tall: true });
     return;
   }
 
@@ -1263,7 +1268,7 @@ function textCharWidth(ch: string, variant: Variant): number {
   if (ch.length === 1 && code >= 33 && code <= 126) {
     if (variant === 'tt') return 0.525;
     const factor = variant === 'it' ? 1.05 : variant === 'bf' || variant === 'sf' ? VARIANT_FACTOR[variant] : 1;
-    return (MAIN_ASCII[code - 33] / 1000) * factor;
+    return tableEm(MAIN_ASCII, code - 33) * factor;
   }
   return UNICODE_SYMBOLS.get(ch)?.width ?? fallbackWidth(ch);
 }
@@ -1308,7 +1313,7 @@ function textWidth(raw: string, variant: Variant, style: Style, depth: number): 
     }
     if (isBlank(ch)) {
       while (isBlank(raw[i])) i += 1;
-      width += SPACES[' '] * s;
+      width += (SPACES[' '] ?? 0) * s;
       continue;
     }
     const glyph = String.fromCodePoint(raw.codePointAt(i) ?? 0);
@@ -1350,8 +1355,8 @@ function environment(name: string, r: Reader, style: Style, depth: number): Item
     break;
   }
   // `a \\ b \\` ends with an empty row that draws nothing.
-  const lastRow = rows[rows.length - 1];
-  if (rows.length > 1 && lastRow.length === 1 && lastRow[0].width === 0) rows.pop();
+  const lastRow = rows.at(-1);
+  if (rows.length > 1 && lastRow?.length === 1 && lastRow[0]?.width === 0) rows.pop();
 
   const s = scaleOf(style);
   const columns = Math.max(...rows.map((cells) => cells.length));

@@ -1,3 +1,4 @@
+import { problemCode } from '@/api/errors';
 import { citationYear } from './citations';
 import { sanitizeEditableHtml } from '@/export/sanitize';
 import { MAX_BLOCK_INDENT } from './types';
@@ -67,7 +68,7 @@ const CHILD_ID_RE = /data-child-id="([^"]+)"/g;
 /** Ids of the inline-widget placeholders present in a paragraph's html. */
 export function placeholderIds(html: string): Set<string> {
   const ids = new Set<string>();
-  for (const match of html.matchAll(CHILD_ID_RE)) ids.add(match[1]);
+  for (const [, id] of html.matchAll(CHILD_ID_RE)) if (id) ids.add(id);
   return ids;
 }
 
@@ -360,6 +361,10 @@ export function applyPatchToBlocks(
           break;
         }
         const [moved] = next.splice(from, 1);
+        if (!moved) {
+          desynced.push(op);
+          break;
+        }
         // The server sends an absolute index it already translated out of the
         // AI-visible (aiHidden-filtered) index space.
         next.splice(Math.max(0, Math.min(op.toIndex, next.length)), 0, moved);
@@ -417,22 +422,16 @@ export function replayFootprint(from: Doc, to: Doc): { changed: string[]; near: 
 }
 
 /**
- * Whether a save was refused because the server holds a newer version.
+ * Whether a save was refused because someone saved the page since the head
+ * it was based on: 412 `stale_head`, the `If-Match` ETag no longer the head.
  *
- * Trying again cannot help: the same body with the same version number is
- * refused every time. The author has to choose which version stays.
+ * Trying again cannot help: the same body over the same ETag is refused
+ * every time. The author has to choose which version stays. The route's 409
+ * `schema_unsupported` is content stored by a newer server than this one
+ * can read, which no choice of version settles.
  */
 export function isSaveConflict(error: unknown): boolean {
-  if ((error as { status?: number } | null)?.status !== 409) return false;
-  // The save route answers 409 for one other thing: content stored by a newer
-  // server than this one can read. No choice of version settles that.
-  return !isUnsupportedSchema(error);
-}
-
-function isUnsupportedSchema(error: unknown): boolean {
-  return (error as { status?: number } | null)?.status === 409
-    && error instanceof Error
-    && /schema/i.test(error.message);
+  return problemCode(error) === 'stale_head';
 }
 
 /**
@@ -456,8 +455,8 @@ function canonicalContent(value: unknown): unknown {
 }
 
 /**
- * Whether two documents hold the same content, whatever their version and
- * however each writer spelled its defaults.
+ * Whether two documents hold the same content, however each writer spelled
+ * its defaults.
  */
 export function sameContent(a: Doc, b: Doc): boolean {
   if (a.blocks === b.blocks && a.name === b.name && a.sources === b.sources && a.citationStyle === b.citationStyle) {
@@ -475,14 +474,14 @@ export function sameContent(a: Doc, b: Doc): boolean {
 /** Turn a save rejection into something worth showing a writer. */
 export function describeSaveError(error: unknown): string {
   const status = (error as { status?: number } | null)?.status;
-  if (isUnsupportedSchema(error)) {
-    return 'This document was saved by a newer version of ColWrite, so it cannot be changed from here.';
+  if (problemCode(error) === 'schema_unsupported') {
+    return 'This page was saved by a newer version of ColWrite, so it cannot be changed from here.';
   }
-  if (status === 409) {
-    return 'This document was changed somewhere else, so your latest edits are not saved yet.';
+  if (isSaveConflict(error)) {
+    return 'This page was changed somewhere else, so your latest edits are not saved yet.';
   }
   if (status === 404) {
-    return 'This document no longer exists on the server.';
+    return 'This page no longer exists on the server.';
   }
   if (status === 401 || status === 403) {
     return 'Your session expired, so changes are no longer being saved.';

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { BookmarkPlus, BookOpen, Check, ChevronRight, FileText, Globe, Library, Quote } from 'lucide-react';
+import { BookmarkPlus, BookOpen, Check, ChevronRight, FileText, Globe, GraduationCap, Quote } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { AgentSource } from '@/services/streamParser';
+import type { AgentSource } from '@/api/assistant/streamParser';
 import { useEditorActions } from '@/editor';
 import { useCiteAndAnnounce } from '@/components/editor/References';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
@@ -10,9 +10,10 @@ import { anchorId, useSourceMarkers } from './answerSourceMarkers';
 
 function originOf(source: AgentSource): { label: string; icon: typeof Globe } {
   if (source.provider === 'web') return { label: 'Web', icon: Globe };
-  if (source.provider === 'resource') return { label: 'Your PDF', icon: Library };
-  if (source.provider === 'semantic_scholar') return { label: 'Semantic Scholar', icon: BookOpen };
-  if (source.provider === 'arxiv') return { label: 'arXiv', icon: BookOpen };
+  // The Library's own icon, as in the sidebar; papers found outside it get another.
+  if (source.provider === 'resource') return { label: 'Your PDF', icon: BookOpen };
+  if (source.provider === 'semantic_scholar') return { label: 'Semantic Scholar', icon: GraduationCap };
+  if (source.provider === 'arxiv') return { label: 'arXiv', icon: GraduationCap };
   return { label: 'Source', icon: FileText };
 }
 
@@ -27,7 +28,7 @@ function recordOf({ id: _id, origin: _origin, ...record }: AgentSource) {
 }
 
 /**
- * Cite at the caret, or keep in the document's library — with the record's
+ * Cite at the caret, or keep in the page's sources — with the record's
  * metadata, never anything the answer said about it.
  */
 function useSourceActions(source: AgentSource) {

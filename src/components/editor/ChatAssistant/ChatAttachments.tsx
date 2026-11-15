@@ -1,16 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, FileText, ImageOff, Library, LoaderCircle, Paperclip, RotateCcw, Upload, X } from 'lucide-react';
+import { BookOpen, Check, FileText, ImageOff, LoaderCircle, Paperclip, RotateCcw, Upload, X } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { describeApiError } from '@/services/contracts';
-import { listResources, resourceContentUrl, type ResourceItem } from '@/services/resources';
+import { describeApiError } from '@/api/errors';
+import { useInfiniteQuery } from '@tanstack/react-query';
+import { resourceContentUrl, resourceListQuery, resourcesOf } from '@/data/resources';
 import {
   attachmentKey, attachmentName, CHAT_FILE_ACCEPT, chatImageContentUrl, loadChatImageBlob, MAX_CHAT_ATTACHMENTS,
   type ChatAttachment,
-} from '@/services/chatAttachments';
+} from '@/api/assistant/chatAttachments';
 import type { ChatAttachmentDraft } from './useChatAttachments';
+import { ListSkeleton } from '@/components/ui/list-skeleton';
+import { InlineError } from '@/components/ui/inline-error';
+import { EmptyState } from '@/components/ui/empty-state';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 
 function ImagePreview({ imageId, name, small = false }: { imageId: string; name: string; small?: boolean }) {
   const host = useRef<HTMLSpanElement>(null);
+  const workspaceId = useWorkspaceId();
   const [preview, setPreview] = useState<{ imageId: string; url: string | null } | null>(null);
   useEffect(() => {
     const controller = new AbortController();
@@ -21,7 +27,7 @@ function ImagePreview({ imageId, name, small = false }: { imageId: string; name:
       if (started || controller.signal.aborted) return;
       started = true;
       observer?.disconnect();
-      void loadChatImageBlob(imageId, controller.signal).then((blob) => {
+      void loadChatImageBlob(workspaceId, imageId, controller.signal).then((blob) => {
         if (controller.signal.aborted) return;
         objectUrl = URL.createObjectURL(blob);
         setPreview({ imageId, url: objectUrl });
@@ -38,7 +44,7 @@ function ImagePreview({ imageId, name, small = false }: { imageId: string; name:
       observer.observe(host.current);
     } else load();
     return () => { controller.abort(); observer?.disconnect(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [imageId]);
+  }, [imageId, workspaceId]);
   return <span ref={host} className="inline-flex min-h-4 min-w-4 max-w-full">
     {preview?.imageId !== imageId ? <LoaderCircle aria-label="Loading image preview" className="size-4 animate-spin text-muted-foreground" />
       : preview.url === null
@@ -49,10 +55,11 @@ function ImagePreview({ imageId, name, small = false }: { imageId: string; name:
 }
 
 export function MessageAttachments({ attachments }: { attachments?: ChatAttachment[] }) {
+  const workspaceId = useWorkspaceId();
   if (!attachments?.length) return null;
   return <ul aria-label="Message attachments" className="mb-2 flex flex-wrap gap-2 whitespace-normal">
     {attachments.map((item) => <li key={attachmentKey(item)} className="min-w-0 max-w-full">
-      <a href={item.kind === 'image' ? chatImageContentUrl(item.image_id) : resourceContentUrl(item.resource_id)}
+      <a href={item.kind === 'image' ? chatImageContentUrl(workspaceId, item.image_id) : resourceContentUrl(workspaceId, item.resource_id)}
         target="_blank" rel="noopener noreferrer" className="flex max-w-full flex-col gap-1 rounded-lg border border-border bg-background p-1.5 text-xs hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
         {item.kind === 'image'
           ? <ImagePreview imageId={item.image_id} name={attachmentName(item)} />
@@ -74,6 +81,7 @@ export function DraftAttachments({ draft }: { draft: ChatAttachmentDraft }) {
               : <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
           <span className="min-w-0 flex-1 truncate" title={item.filename}>{item.filename}</span>
           {item.state === 'uploading' && <span role="status" className="text-muted-foreground">Uploading…</span>}
+          {item.state === 'ready' && item.onPage && <span className="shrink-0 text-muted-foreground">on this page</span>}
           {item.state === 'error' && <button type="button" onClick={() => draft.retry(item.id)} aria-label={`Retry uploading ${item.filename}`} className="rounded p-1 hover:bg-hover"><RotateCcw className="size-3.5" /></button>}
           <button type="button" onClick={() => draft.remove(item.id)} aria-label={`Remove ${item.filename}`} className="rounded p-1 hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring"><X aria-hidden="true" className="size-3.5" /></button>
         </div>
@@ -86,52 +94,47 @@ export function DraftAttachments({ draft }: { draft: ChatAttachmentDraft }) {
 
 const PAGE_SIZE = 20;
 
-export function ChatAttachmentPicker({ draft, disabled }: { draft: ChatAttachmentDraft; disabled: boolean }) {
+const LIBRARY_PDFS = { scope: 'library' } as const;
+
+export function ChatAttachmentPicker({ draft, disabled, canUpload = true }: { draft: ChatAttachmentDraft; disabled: boolean; canUpload?: boolean }) {
   const input = useRef<HTMLInputElement>(null);
-  const generation = useRef(0);
   const [open, setOpen] = useState(false);
   const [library, setLibrary] = useState(false);
-  const [resources, setResources] = useState<ResourceItem[]>([]);
-  const [offset, setOffset] = useState(0);
-  const [more, setMore] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const workspaceId = useWorkspaceId();
+  const pdfs = useInfiniteQuery({ ...resourceListQuery(workspaceId, LIBRARY_PDFS, PAGE_SIZE), enabled: open && library });
+  const resources = resourcesOf(pdfs.data).filter(
+    (item) => item.content_type === 'application/pdf' || /\.pdf$/i.test(item.filename),
+  );
+  const loading = library && pdfs.isFetching;
+  const error = library && pdfs.isError ? describeApiError(pdfs.error, 'Could not load your Library.') : null;
+  const more = pdfs.hasNextPage;
+  const retry = () => void (pdfs.isFetchNextPageError ? pdfs.fetchNextPage() : pdfs.refetch());
   const full = draft.items.length >= MAX_CHAT_ATTACHMENTS;
-  const load = async (nextOffset: number) => {
-    const epoch = ++generation.current;
-    setLoading(true); setError(null);
-    try {
-      const page = await listResources({ scope: 'library', limit: PAGE_SIZE, offset: nextOffset });
-      if (epoch !== generation.current) return;
-      const pdfs = page.resources.filter((item) => item.content_type === 'application/pdf' || /\.pdf$/i.test(item.filename));
-      setResources((current) => nextOffset ? [...current, ...pdfs.filter((item) => !current.some((old) => old.id === item.id))] : pdfs);
-      setOffset(nextOffset + page.resources.length);
-      setMore(page.resources.length === PAGE_SIZE);
-    } catch (cause) {
-      if (epoch === generation.current) setError(describeApiError(cause, 'Could not load your library.'));
-    } finally { if (epoch === generation.current) setLoading(false); }
-  };
   return <>
     <input ref={input} type="file" multiple accept={CHAT_FILE_ACCEPT} aria-label="Upload images or PDFs" className="sr-only" tabIndex={-1}
-      disabled={disabled || full} onChange={(event) => {
+      disabled={disabled || full || !canUpload} onChange={(event) => {
         const files = Array.from(event.currentTarget.files ?? []);
         event.currentTarget.value = '';
         draft.addFiles(files);
       }} />
-    <Popover open={open} onOpenChange={(value) => { setOpen(value); if (!value) { generation.current += 1; setLibrary(false); setLoading(false); } }}>
+    <Popover open={open} onOpenChange={(value) => { setOpen(value); if (!value) setLibrary(false); }}>
       <PopoverTrigger asChild><button type="button" disabled={disabled} aria-label="Attach images or PDFs"
         className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40">
         <Paperclip aria-hidden="true" className="size-4" />
       </button></PopoverTrigger>
       <PopoverContent side="top" align="start" className="w-80 max-w-[calc(100vw-2rem)] p-2">
         <p className="px-2 py-1 text-xs font-medium">Attach files <span className="font-normal text-muted-foreground">{draft.items.length}/{MAX_CHAT_ATTACHMENTS}</span></p>
-        <button type="button" disabled={full} onClick={() => { input.current?.click(); setOpen(false); }} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-hover disabled:opacity-40">
-          <Upload aria-hidden="true" className="size-4" /> Upload images or PDFs
+        <button type="button" disabled={full || !canUpload} onClick={() => { input.current?.click(); setOpen(false); }} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-hover disabled:opacity-40">
+          <Upload aria-hidden="true" className="size-4 shrink-0" />
+          <span className="min-w-0">
+            <span className="block">Upload images or PDFs</span>
+            <span className="block text-2xs text-muted-foreground">{canUpload ? `PDFs · ${draft.pdfLabel}` : 'Viewers can’t upload files here'}</span>
+          </span>
         </button>
-        <button type="button" onClick={() => { setLibrary(true); setResources([]); setOffset(0); void load(0); }} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-hover">
-          <Library aria-hidden="true" className="size-4" /> Choose PDF from library
+        <button type="button" onClick={() => setLibrary(true)} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-hover">
+          <BookOpen aria-hidden="true" className="size-4" /> Choose a PDF from the Library
         </button>
-        <p className="px-2 py-1 text-xs text-muted-foreground">New PDFs are saved to your library. Images: PNG, JPEG, WebP or GIF, up to 10 MB each.</p>
+        <p className="px-2 py-1 text-xs text-muted-foreground">PDFs are kept in your Library. Images: PNG, JPEG, WebP or GIF, up to 10 MB each.</p>
         {library && <div className="mt-2 border-t border-border pt-2">
           <p className="px-2 pb-1 text-xs font-medium">Your PDFs</p>
           <ul aria-label="Library PDFs" className="max-h-56 overflow-y-auto">
@@ -144,10 +147,10 @@ export function ChatAttachmentPicker({ draft, disabled }: { draft: ChatAttachmen
               </button></li>;
             })}
           </ul>
-          {loading && <p role="status" className="px-2 py-2 text-xs text-muted-foreground">Loading PDFs…</p>}
-          {!loading && !error && !resources.length && <p className="px-2 py-2 text-xs text-muted-foreground">No PDFs yet. Upload a PDF to add it to your library.</p>}
-          {error && <div className="px-2 py-1 text-xs"><p role="alert" className="text-destructive">{error}</p><button type="button" onClick={() => void load(offset)} className="mt-1 underline">Try again</button></div>}
-          {more && !loading && !error && <button type="button" onClick={() => void load(offset)} className="w-full rounded px-2 py-2 text-xs hover:bg-hover">Load more PDFs</button>}
+          {loading && <div role="status"><span className="sr-only">Loading PDFs…</span><ListSkeleton dense rows={3} /></div>}
+          {!loading && !error && !resources.length && <EmptyState size="inline" title="No PDFs yet" description="Upload a PDF to add it to your Library." />}
+          {error && <InlineError title="Could not load your Library" detail={error} onRetry={retry} retryLabel="Try again" />}
+          {more && !loading && !error && <button type="button" onClick={() => void pdfs.fetchNextPage()} className="w-full rounded px-2 py-2 text-xs hover:bg-hover">Load more PDFs</button>}
         </div>}
       </PopoverContent>
     </Popover>

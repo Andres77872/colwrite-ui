@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
 import {
   assessSemanticScholarClaim,
   getSemanticScholarGraph,
@@ -9,7 +10,7 @@ import {
   type ResearchGraphEntry,
   type ResearchPaper,
   type SemanticScholarSearchParams,
-} from '@/services/semanticScholar';
+} from '@/data/semanticScholar';
 
 export type ExplorationMode = CitationGraphDirection | 'recommendations';
 
@@ -109,196 +110,150 @@ function searchParams(
   };
 }
 
+function failure(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+const researchKeys = {
+  search: (params: SemanticScholarSearchParams | null) => ['research', 'semantic-scholar', 'search', params] as const,
+  exploration: (paperId: string | null, mode: ExplorationMode | null, limit: number) =>
+    ['research', 'semantic-scholar', 'explore', { paperId, mode, limit }] as const,
+};
+
 /**
  * Semantic Scholar's search, citation-graph drill-in and claim check.
  *
- * Every request carries a sequence number and only the newest of each kind
- * may land, so a slow page, graph or assessment never overwrites a newer one.
+ * Each is keyed by what it asks, so a slow page, graph or assessment never
+ * lands over a newer one: an answer for a search the author has replaced
+ * goes to that search's entry, which nothing shows.
  */
 export function useSemanticScholar() {
-  const [results, setResults] = useState<ResearchPaper[]>([]);
-  const [submittedQuery, setSubmittedQuery] = useState('');
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [nextOffset, setNextOffset] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [exploration, setExploration] = useState<Exploration | null>(null);
-  const [assessment, setAssessment] = useState<Assessment | null>(null);
-  const requestSequence = useRef(0);
-  const activeSearch = useRef<SemanticScholarSearchParams | null>(null);
-  const explorationSequence = useRef(0);
-  const assessmentSequence = useRef(0);
-  const limitRef = useRef(20);
+  const [submitted, setSubmitted] = useState<SemanticScholarSearchParams | null>(null);
+  const [explored, setExplored] = useState<{ source: ResearchPaper; mode: ExplorationMode } | null>(null);
+  const limit = submitted?.limit ?? 20;
 
+  const searchQuery = useInfiniteQuery({
+    queryKey: researchKeys.search(submitted),
+    queryFn: ({ pageParam }) =>
+      submitted ? searchSemanticScholar(pageParam ? { ...submitted, offset: pageParam } : submitted) : Promise.reject(new Error('No search')),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.next_offset ?? undefined,
+    enabled: submitted !== null,
+  });
+
+  const explorationQuery = useInfiniteQuery({
+    queryKey: researchKeys.exploration(explored?.source.paper_id ?? null, explored?.mode ?? null, limit),
+    queryFn: async ({ pageParam }): Promise<{ items: ExplorationItem[]; nextOffset: number | null }> => {
+      if (!explored) throw new Error('Nothing to explore');
+      if (explored.mode === 'recommendations') {
+        const response = await getSemanticScholarRecommendations({ paperId: explored.source.paper_id, limit });
+        return {
+          items: response.data.map((paper) => ({ paper, contexts: [], intents: [], isInfluential: false })),
+          nextOffset: null,
+        };
+      }
+      const response = await getSemanticScholarGraph({
+        paperId: explored.source.paper_id,
+        direction: explored.mode,
+        limit,
+        offset: pageParam,
+      });
+      return { items: response.data.map(graphItem), nextOffset: response.next_offset };
+    },
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.nextOffset ?? undefined,
+    enabled: explored !== null,
+  });
+
+  const assessment = useMutation({
+    mutationFn: (request: { claim: string; limit: number; year?: string }) => assessSemanticScholarClaim(request),
+  });
+
+  const { refetch: refetchSearch, fetchNextPage: fetchMorePapers } = searchQuery;
   const search = useCallback(
-    async (query: string, limit: number, filters: SemanticScholarFilters) => {
+    async (query: string, pageLimit: number, filters: SemanticScholarFilters) => {
       const trimmed = query.trim();
       if (!trimmed) return;
-      const params = searchParams(trimmed, limit, filters);
-      const sequence = ++requestSequence.current;
-      activeSearch.current = params;
-      limitRef.current = limit;
-      setLoading(true);
-      setLoadingMore(false);
-      setNextOffset(null);
-      setError(null);
-      explorationSequence.current += 1;
-      setExploration(null);
-      try {
-        const response = await searchSemanticScholar(params);
-        if (requestSequence.current !== sequence) return;
-        setResults(deduplicatePapers(response.data));
-        setTotal(response.total);
-        setNextOffset(response.next_offset);
-        setSubmittedQuery(trimmed);
-      } catch (err) {
-        if (requestSequence.current !== sequence) return;
-        activeSearch.current = null;
-        setError(err instanceof Error ? err.message : 'Search failed');
-        setResults([]);
-        setTotal(0);
-        setNextOffset(null);
-      } finally {
-        if (requestSequence.current === sequence) setLoading(false);
-      }
+      const params = searchParams(trimmed, pageLimit, filters);
+      setExplored(null);
+      // The same search run again asks the server again.
+      if (JSON.stringify(params) === JSON.stringify(submitted)) await refetchSearch();
+      else setSubmitted(params);
     },
-    [],
+    [refetchSearch, submitted],
   );
+
+  const pages = searchQuery.data?.pages;
+  const results = useMemo(() => deduplicatePapers(pages?.flatMap((page) => page.data) ?? []), [pages]);
+  const lastPage = pages?.at(-1);
+  const nextOffset = lastPage?.next_offset ?? null;
+  const loading = searchQuery.isFetching && !searchQuery.isFetchingNextPage;
+  const loadingMore = searchQuery.isFetchingNextPage;
 
   const loadMore = useCallback(async () => {
-    const params = activeSearch.current;
-    const offset = nextOffset;
-    if (!params || offset === null || loading || loadingMore) return;
-    const sequence = ++requestSequence.current;
-    setLoadingMore(true);
-    setError(null);
-    try {
-      const response = await searchSemanticScholar({ ...params, offset });
-      if (requestSequence.current !== sequence) return;
-      setResults((current) => deduplicatePapers([...current, ...response.data]));
-      setTotal(response.total);
-      setNextOffset(response.next_offset);
-    } catch (err) {
-      if (requestSequence.current !== sequence) return;
-      setError(err instanceof Error ? err.message : 'Could not load more papers');
-    } finally {
-      if (requestSequence.current === sequence) setLoadingMore(false);
-    }
-  }, [loading, loadingMore, nextOffset]);
+    if (!submitted || nextOffset === null || loading || loadingMore) return;
+    await fetchMorePapers();
+  }, [fetchMorePapers, loading, loadingMore, nextOffset, submitted]);
 
+  const { refetch: refetchExploration, fetchNextPage: fetchMoreExploration } = explorationQuery;
   const explore = useCallback(
     async (source: ResearchPaper, mode: ExplorationMode, append = false) => {
-      const sequence = ++explorationSequence.current;
-      const current =
-        exploration?.source.paper_id === source.paper_id && exploration.mode === mode
-          ? exploration
-          : null;
-      const offset = append ? current?.nextOffset : 0;
-      if (append && offset === null) return;
-      const limit = limitRef.current;
-
-      setExploration({
-        source,
-        mode,
-        items: append ? current?.items ?? [] : [],
-        nextOffset: append ? current?.nextOffset ?? null : null,
-        loading: true,
-        error: null,
-      });
-
-      try {
-        if (mode === 'recommendations') {
-          const response = await getSemanticScholarRecommendations({
-            paperId: source.paper_id,
-            limit,
-          });
-          if (explorationSequence.current !== sequence) return;
-          setExploration({
-            source,
-            mode,
-            items: response.data.map((paper) => ({
-              paper,
-              contexts: [],
-              intents: [],
-              isInfluential: false,
-            })),
-            nextOffset: null,
-            loading: false,
-            error: null,
-          });
-          return;
-        }
-
-        const response = await getSemanticScholarGraph({
-          paperId: source.paper_id,
-          direction: mode,
-          limit,
-          offset: offset ?? 0,
-        });
-        if (explorationSequence.current !== sequence) return;
-        setExploration({
-          source,
-          mode,
-          items: [...(append ? current?.items ?? [] : []), ...response.data.map(graphItem)],
-          nextOffset: response.next_offset,
-          loading: false,
-          error: null,
-        });
-      } catch (err) {
-        if (explorationSequence.current !== sequence) return;
-        setExploration({
-          source,
-          mode,
-          items: append ? current?.items ?? [] : [],
-          nextOffset: append ? current?.nextOffset ?? null : null,
-          loading: false,
-          error: err instanceof Error ? err.message : 'Could not load the paper graph',
-        });
+      const same = explored?.source.paper_id === source.paper_id && explored.mode === mode;
+      if (append) {
+        if (same) await fetchMoreExploration();
+        return;
       }
+      if (same) await refetchExploration();
+      else setExplored({ source, mode });
     },
-    [exploration],
+    [explored, fetchMoreExploration, refetchExploration],
   );
 
-  const closeExploration = useCallback(() => {
-    explorationSequence.current += 1;
-    setExploration(null);
-  }, []);
+  const closeExploration = useCallback(() => setExplored(null), []);
 
-  const assess = useCallback(async (claimText: string, limit: number, year: string) => {
-    const claim = claimText.trim();
-    if (!claim) return;
-    const sequence = ++assessmentSequence.current;
-    setAssessment({ claim, result: null, loading: true, error: null });
-    try {
-      const result = await assessSemanticScholarClaim({
-        claim,
-        limit: Math.min(limit, 12),
-        ...(year.trim() ? { year: year.trim() } : {}),
-      });
-      if (assessmentSequence.current !== sequence) return;
-      setAssessment({ claim, result, loading: false, error: null });
-    } catch (err) {
-      if (assessmentSequence.current !== sequence) return;
-      setAssessment({
-        claim,
-        result: null,
-        loading: false,
-        error: err instanceof Error ? err.message : 'Claim assessment failed',
-      });
-    }
-  }, []);
+  const { mutate: runAssessment } = assessment;
+  const assess = useCallback(
+    async (claimText: string, claimLimit: number, year: string) => {
+      const claim = claimText.trim();
+      if (!claim) return;
+      runAssessment({ claim, limit: Math.min(claimLimit, 12), ...(year.trim() ? { year: year.trim() } : {}) });
+    },
+    [runAssessment],
+  );
+
+  const explorationPages = explorationQuery.data?.pages;
+  const exploration: Exploration | null = explored
+    ? {
+        source: explored.source,
+        mode: explored.mode,
+        items: explorationPages?.flatMap((page) => page.items) ?? [],
+        nextOffset: explorationPages?.at(-1)?.nextOffset ?? null,
+        loading: explorationQuery.isFetching,
+        error: explorationQuery.isError ? failure(explorationQuery.error, 'Could not load the paper graph') : null,
+      }
+    : null;
 
   return {
-    results,
-    submittedQuery,
-    total,
+    results: searchQuery.isError && !searchQuery.isFetchNextPageError ? [] : results,
+    submittedQuery: searchQuery.data && submitted ? submitted.query : '',
+    total: searchQuery.isError && !searchQuery.isFetchNextPageError ? 0 : (lastPage?.total ?? 0),
     loading,
     loadingMore,
-    nextOffset,
-    error,
+    nextOffset: searchQuery.isError ? null : nextOffset,
+    error: searchQuery.isFetchNextPageError
+      ? failure(searchQuery.error, 'Could not load more papers')
+      : searchQuery.isError
+        ? failure(searchQuery.error, 'Search failed')
+        : null,
     exploration,
-    assessment,
+    assessment: assessment.isIdle
+      ? null
+      : {
+          claim: assessment.variables?.claim ?? '',
+          result: assessment.data ?? null,
+          loading: assessment.isPending,
+          error: assessment.isError ? failure(assessment.error, 'Claim assessment failed') : null,
+        } satisfies Assessment,
     search,
     loadMore,
     explore,

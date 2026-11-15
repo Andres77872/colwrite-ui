@@ -230,8 +230,7 @@ function renderToken(token: InlineToken, key: number, markers?: SourceMarkers): 
 function renderInline(text: string, markers?: SourceMarkers): ReactNode {
   const tokens = tokenizeInline(text);
   const out: ReactNode[] = [];
-  for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index];
+  for (const [index, token] of tokens.entries()) {
     if (token.type !== 'sources' || knownIds(token.ids ?? [], markers).length === 0) {
       out.push(renderToken(token, index, markers));
       continue;
@@ -301,9 +300,9 @@ function mathBlockAt(
 ): { block: Extract<Block, { type: 'math' }>; next: number; trailing: string } | null {
   const opener = /^\s*(\$\$|\\\[)(.*)$/.exec(lines[index] ?? '');
   if (!opener) return null;
-  const open = opener[1];
+  const open = opener[1] ?? '$$';
   const close = open === '$$' ? '$$' : '\\]';
-  const rest = opener[2];
+  const rest = opener[2] ?? '';
   const sameLine = rest.indexOf(close);
   if (sameLine !== -1) {
     if (rest.slice(sameLine + close.length).trim() !== '') return null;
@@ -315,17 +314,17 @@ function mathBlockAt(
   }
   const body = [rest];
   let cursor = index + 1;
-  while (cursor < lines.length) {
-    const at = lines[cursor].indexOf(close);
+  for (let line = lines[cursor]; line !== undefined; line = lines[cursor]) {
+    const at = line.indexOf(close);
     if (at !== -1) {
-      body.push(lines[cursor].slice(0, at));
+      body.push(line.slice(0, at));
       return {
         block: { type: 'math', latex: body.join('\n'), open, closed: true },
         next: cursor + 1,
-        trailing: lines[cursor].slice(at + close.length).trim(),
+        trailing: line.slice(at + close.length).trim(),
       };
     }
-    body.push(lines[cursor]);
+    body.push(line);
     cursor++;
   }
   // Unterminated: normal mid-stream. Shown as source until the closer arrives.
@@ -334,11 +333,13 @@ function mathBlockAt(
 
 function parseBlocks(source: string): Block[] {
   const lines = source.split('\n');
+  // Past the end reads as a blank line, which ends every run below.
+  const lineAt = (at: number) => lines[at] ?? '';
   const blocks: Block[] = [];
   let index = 0;
 
   while (index < lines.length) {
-    const line = lines[index];
+    const line = lineAt(index);
 
     if (line.trim() === '') {
       index++;
@@ -357,7 +358,7 @@ function parseBlocks(source: string): Block[] {
     if (fence) {
       const code: string[] = [];
       index++;
-      while (index < lines.length && !/^```\s*$/.test(lines[index])) code.push(lines[index++]);
+      while (index < lines.length && !/^```\s*$/.test(lineAt(index))) code.push(lineAt(index++));
       const closed = index < lines.length;
       index++;
       const lang = fence[1] ? fence[1].toLowerCase() : undefined;
@@ -377,12 +378,12 @@ function parseBlocks(source: string): Block[] {
       continue;
     }
 
-    if (line.includes('|') && index + 1 < lines.length && TABLE_SEPARATOR.test(lines[index + 1])) {
+    if (line.includes('|') && index + 1 < lines.length && TABLE_SEPARATOR.test(lineAt(index + 1))) {
       const header = tableCells(line);
       const rows: string[][] = [];
       index += 2;
-      while (index < lines.length && lines[index].includes('|') && lines[index].trim()) {
-        rows.push(tableCells(lines[index]));
+      while (index < lines.length && lineAt(index).includes('|') && lineAt(index).trim()) {
+        rows.push(tableCells(lineAt(index)));
         index++;
       }
       blocks.push({ type: 'table', header, rows });
@@ -391,15 +392,15 @@ function parseBlocks(source: string): Block[] {
 
     const heading = line.match(/^(#{1,3})\s+(.*)$/);
     if (heading) {
-      blocks.push({ type: 'h', level: heading[1].length as 1 | 2 | 3, text: heading[2] });
+      blocks.push({ type: 'h', level: (heading[1] ?? '#').length as 1 | 2 | 3, text: heading[2] ?? '' });
       index++;
       continue;
     }
 
     if (/^\s*[-*+]\s+/.test(line)) {
       const items: string[] = [];
-      while (index < lines.length && /^\s*[-*+]\s+/.test(lines[index])) {
-        items.push(lines[index].replace(/^\s*[-*+]\s+/, ''));
+      while (index < lines.length && /^\s*[-*+]\s+/.test(lineAt(index))) {
+        items.push(lineAt(index).replace(/^\s*[-*+]\s+/, ''));
         index++;
       }
       blocks.push({ type: 'ul', items });
@@ -408,8 +409,8 @@ function parseBlocks(source: string): Block[] {
 
     if (/^\s*\d+[.)]\s+/.test(line)) {
       const items: string[] = [];
-      while (index < lines.length && /^\s*\d+[.)]\s+/.test(lines[index])) {
-        items.push(lines[index].replace(/^\s*\d+[.)]\s+/, ''));
+      while (index < lines.length && /^\s*\d+[.)]\s+/.test(lineAt(index))) {
+        items.push(lineAt(index).replace(/^\s*\d+[.)]\s+/, ''));
         index++;
       }
       blocks.push({ type: 'ol', items });
@@ -418,8 +419,8 @@ function parseBlocks(source: string): Block[] {
 
     if (/^\s*>\s?/.test(line)) {
       const quoted: string[] = [];
-      while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
-        quoted.push(lines[index].replace(/^\s*>\s?/, ''));
+      while (index < lines.length && /^\s*>\s?/.test(lineAt(index))) {
+        quoted.push(lineAt(index).replace(/^\s*>\s?/, ''));
         index++;
       }
       blocks.push({ type: 'quote', lines: quoted });
@@ -429,19 +430,19 @@ function parseBlocks(source: string): Block[] {
     const paragraph: string[] = [];
     while (
       index < lines.length &&
-      lines[index].trim() !== '' &&
-      !/^(#{1,3}\s|```|\s*[-*+]\s|\s*\d+[.)]\s|\s*>)/.test(lines[index]) &&
+      lineAt(index).trim() !== '' &&
+      !/^(#{1,3}\s|```|\s*[-*+]\s|\s*\d+[.)]\s|\s*>)/.test(lineAt(index)) &&
       !mathBlockAt(lines, index) &&
-      !(paragraph.length > 0 && lines[index].includes('|') && TABLE_SEPARATOR.test(lines[index + 1] ?? ''))
+      !(paragraph.length > 0 && lineAt(index).includes('|') && TABLE_SEPARATOR.test(lines[index + 1] ?? ''))
     ) {
-      paragraph.push(lines[index]);
+      paragraph.push(lineAt(index));
       index++;
     }
     if (paragraph.length === 0) {
       // Defensive: every line shape must be consumed by exactly one branch.
       // If none matched, emit the line as literal text and move on — never
       // loop without advancing.
-      blocks.push({ type: 'p', lines: [lines[index]] });
+      blocks.push({ type: 'p', lines: [lineAt(index)] });
       index++;
       continue;
     }
@@ -553,7 +554,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
       {blocks.map((block, index) => {
         switch (block.type) {
           case 'h': {
-            const Tag = (['h3', 'h4', 'h5'] as const)[block.level - 1];
+            const Tag = ({ 1: 'h3', 2: 'h4', 3: 'h5' } as const)[block.level];
             return (
               <Tag
                 key={index}

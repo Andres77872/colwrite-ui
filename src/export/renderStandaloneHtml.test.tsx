@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import type { Doc } from '@/editor/types';
 import kitchenSinkFixture from './fixtures/kitchen-sink.json';
@@ -19,7 +20,7 @@ const options: DocumentExportOptions = {
   ai_beat: 'omit',
   include_references: true,
 };
-const snapshot = { base_version: 4, local_revision: 12, dirty: true };
+const snapshot = { local_revision: 12, dirty: true };
 
 const canonicalFixtures = [
   kitchenSinkFixture,
@@ -30,7 +31,6 @@ const canonicalFixtures = [
 
 function kitchenSink(): Doc {
   return {
-    version: 4,
     name: 'Kitchen sink',
     blocks: [
       { id: 'h1', type: 'heading', level: 1, html: 'Results <em>and analysis</em>' },
@@ -145,7 +145,6 @@ describe('renderStandaloneHtml', () => {
     expect(html).toContain("default-src 'none'");
     expect(html).toContain('font-src data:');
     expect(html).toContain('data:font/woff2;base64');
-    expect(html).toContain('name="colwrite-document-version" content="4"');
     expect(html).toContain('name="colwrite-local-revision" content="12"');
     expect(html).toContain('name="colwrite-export-profile" content="paper"');
     expect(html).not.toMatch(/(?:src|url)\s*=\s*["']https?:/i);
@@ -157,7 +156,7 @@ describe('renderStandaloneHtml', () => {
 
   it('rejects duplicate placeholders instead of losing or inventing content', () => {
     const doc = kitchenSink();
-    const paragraph = doc.blocks[1];
+    const paragraph = itemAt(doc.blocks, 1);
     if (paragraph.type !== 'paragraph') throw new Error('fixture is invalid');
     paragraph.html += '<span data-child-id="citation"></span>';
 
@@ -166,7 +165,7 @@ describe('renderStandaloneHtml', () => {
 
   it('links every citation to its reference entry, and the entry back to each usage', () => {
     const doc = kitchenSink();
-    const paragraph = doc.blocks[1];
+    const paragraph = itemAt(doc.blocks, 1);
     if (paragraph.type !== 'paragraph') throw new Error('fixture is invalid');
     // A second citation of the same paper: one entry, two back-links.
     paragraph.html += '<span data-child-id="citation-again"></span>';
@@ -194,7 +193,6 @@ describe('renderStandaloneHtml', () => {
 
   it('sets an author–year citation off from the word before it, as the page does', () => {
     const doc: Doc = {
-      version: 1,
       name: 'Spacing',
       citationStyle: 'author-year',
       blocks: [
@@ -247,7 +245,7 @@ describe('renderStandaloneHtml', () => {
       const html = renderStandaloneHtml(
         fixture,
         options,
-        { base_version: fixture.version, local_revision: 0, dirty: false },
+        { local_revision: 0, dirty: false },
       );
 
       expect(html).toMatch(/^<!doctype html>/);
@@ -289,7 +287,6 @@ describe('structured figures', () => {
 
   function figureDoc(): Doc {
     return {
-      version: 1,
       name: 'Figures',
       blocks: [
         { id: 'f1', type: 'code', language: 'figure', text: spec('The first figure.') },
@@ -318,7 +315,6 @@ describe('structured figures', () => {
 
   it('sizes only the figure\'s own svg, never the KaTeX glyphs drawn inside it', () => {
     const doc: Doc = {
-      version: 1,
       blocks: [
         {
           id: 'f',
@@ -364,7 +360,6 @@ describe('structured figures', () => {
 
   it('never loads a remote image, which the page\'s CSP would block anyway', () => {
     const doc: Doc = {
-      version: 1,
       blocks: [
         {
           id: 'f',
@@ -386,7 +381,6 @@ describe('structured figures', () => {
 
   it('never lets markup in a label reach the page', () => {
     const doc: Doc = {
-      version: 1,
       blocks: [
         {
           id: 'x',

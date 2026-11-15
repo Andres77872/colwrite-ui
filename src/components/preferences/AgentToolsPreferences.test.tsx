@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,13 +8,13 @@ import type {
   AgentToolOption,
   AgentToolSettings,
   AgentToolSettingsUpdate,
-} from '@/services/agentTools';
+} from '@/data/agentTools';
 import {
   AgentToolsContext,
   type AgentToolsContextValue,
 } from './agentToolsContextState';
 import { AgentToolsPreferences } from './AgentToolsPreferences';
-import { ApiError } from '@/services/contracts';
+import { ApiError } from '@/api/errors';
 
 function tool(
   id: string,
@@ -66,7 +67,7 @@ const categories: AgentToolCategory[] = [
         ['semantic_scholar_snippets', 'Retrieve paper evidence'],
         ['validate_claim', 'Validate a claim'],
       ].map(([id, label]) =>
-        tool(id, label, 'research', {
+        tool(id ?? '', label ?? '', 'research', {
           default_enabled: false,
           enabled: false,
           effective_enabled: false,
@@ -127,6 +128,8 @@ const SETTINGS: AgentToolSettings = {
     },
   ],
   categories,
+  skills: [],
+  features: [],
 };
 
 /** The catalog after a PUT, as the API answers it: selections merged in. */
@@ -134,10 +137,11 @@ function applyUpdate(catalog: AgentToolSettings, changes: AgentToolSettingsUpdat
   const next = structuredClone(catalog);
   const set = <T extends { id: string; enabled: boolean; available: boolean; effective_enabled: boolean }>(
     options: T[] | undefined,
-    selection: Record<string, boolean> | undefined,
+    selection: Record<string, boolean> | null | undefined,
   ) => {
     for (const option of options ?? []) {
-      if (typeof selection?.[option.id] === 'boolean') option.enabled = selection[option.id];
+      const chosen = selection?.[option.id];
+      if (typeof chosen === 'boolean') option.enabled = chosen;
       option.effective_enabled = option.enabled && option.available;
     }
   };
@@ -178,6 +182,8 @@ function Harness({
       settings.categories
         .flatMap((category) => category.tools)
         .find((candidate) => candidate.id === id)?.effective_enabled === true,
+    policy: { web_search: true, outside_research: true, auto: true },
+    switchedOffBy: () => null,
   };
   return (
     <AgentToolsContext.Provider value={value}>
@@ -221,7 +227,7 @@ describe('AgentToolsPreferences', () => {
       name: /^Semantic Scholar Opt-in/,
     }) as HTMLButtonElement;
     expect(semanticSource.dataset.state).toBe('unchecked');
-    expect(screen.getByText(/not a document-privacy switch/i)).toBeTruthy();
+    expect(screen.getByText(/does not keep the page private/i)).toBeTruthy();
     // Exceptions only: no per-row "Available to agent" and no account chip.
     expect(screen.queryByText('Available to agent')).toBeNull();
     expect(screen.queryByText('Account-wide')).toBeNull();
@@ -356,8 +362,8 @@ describe('dependency availability', () => {
 
   it('keeps a selected skill ineffective when a required tool is unavailable', () => {
     const catalog = structuredClone(researchSettings);
-    catalog.categories[0].tools[0].enabled = true;
-    catalog.categories[0].tools[0].available = false;
+    itemAt(itemAt(catalog.categories, 0).tools, 0).enabled = true;
+    itemAt(itemAt(catalog.categories, 0).tools, 0).available = false;
     renderPreferences(undefined, catalog);
     expect((screen.getByRole('switch', { name: /^Search the web/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText('Needs Search the web')).toBeTruthy();

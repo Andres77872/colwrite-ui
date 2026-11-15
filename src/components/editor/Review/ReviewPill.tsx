@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirmContext';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { menuItem, menuSeparator } from '@/components/ui/menuStyles';
-import { useEditor } from '@/editor';
+import { useEditorDoc, usePageReadOnly } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
 import {
   describeChange,
@@ -104,8 +104,10 @@ function useArrivalAnnouncement(sets: readonly ChangeSet[]): string {
  * repeated the count the topbar already showed.
  */
 export function ReviewPill() {
-  const { blocks } = useEditor();
+  const { blocks } = useEditorDoc();
   const { sets, pendingCount, acceptAll, rejectAll, focusChange, focusedChangeId } = useProposals();
+  // A viewer steps through the suggestions and decides none of them.
+  const readOnly = usePageReadOnly();
   const confirm = useConfirm();
   const [open, setOpen] = useState(false);
   const announcement = useArrivalAnnouncement(sets);
@@ -135,7 +137,8 @@ export function ReviewPill() {
       current === -1
         ? delta === 1 ? 0 : pending.length - 1
         : (current + delta + pending.length) % pending.length;
-    focusChange(pending[next].id);
+    const change = pending[next];
+    if (change) focusChange(change.id);
   };
 
   // Both act on every pending change at once and there is no undo, so both
@@ -148,10 +151,10 @@ export function ReviewPill() {
     const ok = await confirm({
       title: `Accept all ${plural}?`,
       description: stale === 0
-        ? 'Every pending suggestion will be applied to the document.'
+        ? 'Every pending suggestion will be applied to the page.'
         : stale === 1
-          ? 'Every pending suggestion will be applied to the document, except 1 whose text changed after it was suggested.'
-          : `Every pending suggestion will be applied to the document, except ${stale} whose text changed after they were suggested.`,
+          ? 'Every pending suggestion will be applied to the page, except 1 whose text changed after it was suggested.'
+          : `Every pending suggestion will be applied to the page, except ${stale} whose text changed after they were suggested.`,
       confirmLabel: 'Accept all',
     });
     if (ok) acceptAll();
@@ -240,11 +243,15 @@ export function ReviewPill() {
 
           <div role="separator" className={menuSeparator} />
 
+          {readOnly && (
+            <p className="px-2 py-1 text-xs text-muted-foreground">Viewers can’t accept or reject changes. An editor decides them.</p>
+          )}
           <div className="flex items-center gap-1">
             <Button
               size="sm"
               variant="ghost"
               className="flex-1 text-diff-add-fg hover:bg-diff-add hover:text-diff-add-fg"
+              disabled={readOnly}
               onClick={() => void onAcceptAll()}
             >
               <Check />
@@ -254,6 +261,7 @@ export function ReviewPill() {
               size="sm"
               variant="ghost"
               className="flex-1 font-normal text-muted-foreground hover:text-foreground"
+              disabled={readOnly}
               onClick={() => void onRejectAll()}
             >
               <X />

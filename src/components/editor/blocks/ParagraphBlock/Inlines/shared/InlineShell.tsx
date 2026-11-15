@@ -3,6 +3,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { usePageReadOnly } from '@/editor';
 import { stopEditorEvents } from './stopEditorEvents';
 import { placeCaretAfterWidget } from './caretAfterWidget';
 import { Settings2, Trash2 } from 'lucide-react';
@@ -104,6 +105,8 @@ export function InlinePopover({
    */
   returnFocus?: 'caret' | 'trigger';
 }) {
+  // A read-only page (a viewer) shows the widget and never opens its editor.
+  const readOnly = usePageReadOnly();
   const [open, setOpenState] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   // State rather than a ref: it is set in the same batch as `open`, so the
@@ -125,6 +128,8 @@ export function InlinePopover({
   );
   const close = useCallback(() => closeWith('caret'), [closeWith]);
   const closeAndLeave = useCallback(() => closeWith('leave'), [closeWith]);
+
+  if (readOnly) return <>{trigger}</>;
 
   return (
     <Popover
@@ -266,6 +271,8 @@ export function InlineFigureShell({
   className?: string;
   captionClassName?: string;
 }) {
+  // A read-only page (a viewer): the figure, and no toolbar to change it.
+  const readOnly = usePageReadOnly();
   return (
     <span
       className={cn(
@@ -280,6 +287,7 @@ export function InlineFigureShell({
       contentEditable={false}
       {...stopEditorEvents}
     >
+      {!readOnly && (
       <span
         className={cn(
           // Above the figure, never over it: sitting on the corner it hid
@@ -305,6 +313,7 @@ export function InlineFigureShell({
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </span>
+      )}
 
       <span className="block">{children}</span>
 

@@ -8,7 +8,7 @@ import {
   type AgentEngineStatus,
   type GatewayModelSelection,
   type GatewayModelTier,
-} from '@/services/agentEngines';
+} from '@/data/agentEngines';
 
 /**
  * Where an agent run starts: the chat assistant, or the inline AI (Ask AI,
@@ -26,13 +26,13 @@ export type AgentEnginePrefs = {
   chat: AgentEngineId;
   /** `'chat'` follows the chat assistant's engine. */
   inline: AgentEngineId | 'chat';
-  /** Per-engine model; `legacy` is the gateway's general choice. Empty uses defaults. */
+  /** Per-engine model; `gateway` is the gateway's general choice. Empty uses defaults. */
   models: Partial<Record<AgentEngineId, string>>;
-  /** Optional for compatibility with preferences saved before tier selection. */
+  /** The gateway's lite model; absent uses the server's default. */
   liteModel?: string;
 };
 
-export const DEFAULT_ENGINE_PREFS: AgentEnginePrefs = { chat: 'legacy', inline: 'chat', models: {} };
+export const DEFAULT_ENGINE_PREFS: AgentEnginePrefs = { chat: 'gateway', inline: 'chat', models: {} };
 
 export function isAgentEnginePrefs(value: unknown): value is AgentEnginePrefs {
   if (!value || typeof value !== 'object') return false;
@@ -46,7 +46,7 @@ export function isAgentEnginePrefs(value: unknown): value is AgentEnginePrefs {
   );
 }
 
-/** What `streamAgentChat` gets: nothing at all for the plain default. */
+/** What `runAgentTurn` gets: nothing at all for the plain default. */
 export type AgentEngineRequest = {
   engine?: AgentEngineId;
   model?: string;
@@ -72,7 +72,7 @@ export function effectiveEngine(
   surface: AgentEngineSurface,
 ): AgentEngineId {
   const engine = selectedEngine(prefs, surface);
-  if (catalog?.runtime === 'deployed') return 'legacy';
+  if (catalog?.runtime === 'deployed') return 'gateway';
   return engine;
 }
 
@@ -83,13 +83,13 @@ export function resolveEngineRequest(
 ): AgentEngineRequest {
   const engine = effectiveEngine(prefs, catalog, surface);
   const request: AgentEngineRequest = {};
-  if (engine !== 'legacy') {
+  if (engine !== 'gateway') {
     request.engine = engine;
     const model = (prefs.models[engine] ?? '').trim();
     if (model && engineModelProblem(engine, model) === null) request.model = model;
   }
   const selected: GatewayModelSelection = {};
-  const main = prefs.models.legacy?.trim();
+  const main = prefs.models.gateway?.trim();
   const lite = prefs.liteModel?.trim();
   if (main && gatewayModelsFor(catalog, 'main').includes(main)) selected.main = main;
   if (lite && gatewayModelsFor(catalog, 'lite').includes(lite)) selected.lite = lite;
@@ -134,7 +134,7 @@ const DEFAULT_CONTEXT: AgentEngineContextValue = {
   prefs: DEFAULT_ENGINE_PREFS,
   selectable: false,
   statusOf: () => null,
-  engineFor: () => 'legacy',
+  engineFor: () => 'gateway',
   requestFor: () => ({}),
   setChatEngine: noop,
   setInlineEngine: noop,

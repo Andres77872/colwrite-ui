@@ -49,7 +49,7 @@ export function BlankPageActions({ blankId }: { blankId: string | null }) {
       { id: uid(), type: 'heading', level: 2, html: section },
       emptyParagraph(),
     ]);
-    fill(blocks, blocks[1].id);
+    fill(blocks, blocks[1]?.id);
   };
 
   const importMarkdown = async (file: File) => {

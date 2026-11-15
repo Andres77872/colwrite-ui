@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
@@ -92,7 +93,7 @@ describe('DiagramBlock', () => {
     // No Done while there is nothing to show instead of the source.
     expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Flowchart' }));
-    expect(actions.updateCodeText).toHaveBeenCalledWith('d1', DIAGRAM_TEMPLATES[0].source);
+    expect(actions.updateCodeText).toHaveBeenCalledWith('d1', itemAt(DIAGRAM_TEMPLATES, 0).source);
     expect(mermaid.render).not.toHaveBeenCalled();
   });
 

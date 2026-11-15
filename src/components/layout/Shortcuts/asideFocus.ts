@@ -1,4 +1,5 @@
 import { captureFocus, restoreFocus, type FocusSnapshot } from '@/hooks/useReturnFocus';
+import { registerModuleReset } from '@/lib/moduleState';
 import type { SidebarTab } from '@/components/panels/panelsContextState';
 import { toolMeta } from '@/components/panels/toolsConfig';
 
@@ -16,6 +17,12 @@ const ASIDE = 'aside[aria-label="Tools"]';
 
 let beforeAside: FocusSnapshot | null = null;
 let installed = false;
+
+// The snapshot holds a node of the signed-out session's page and its caret.
+// The listener stays installed: it belongs to the document, not the session.
+registerModuleReset(() => {
+  beforeAside = null;
+});
 
 function aside(): HTMLElement | null {
   return document.querySelector<HTMLElement>(ASIDE);

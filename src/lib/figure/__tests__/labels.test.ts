@@ -287,7 +287,7 @@ describe('measureLabel', () => {
       expect(box.label.source).toBe(label.source);
       expect(box.label.hasMath).toBe(true);
       expect(box.lines).toHaveLength(box.label.lines.length);
-      box.label.lines.forEach((line, i) => expect(box.lines[i].segments).toHaveLength(line.length));
+      box.label.lines.forEach((line, i) => expect(box.lines[i]?.segments).toHaveLength(line.length));
     });
 
     it('never puts spaces at the start or end of a wrapped line', () => {
@@ -348,7 +348,7 @@ describe('measureLabel', () => {
       const measurer = fakeMeasurer();
       const spy = vi.spyOn(measurer, 'text');
       const box = measureLabel(parseLabel('aaa bbb ccc'), FONT, measurer, { maxWidth: 45 });
-      expect(box.lines[0].segments).toEqual([42]);
+      expect(box.lines[0]?.segments).toEqual([42]);
       expect(spy).toHaveBeenCalledWith('aaa bbb', FONT);
     });
   });

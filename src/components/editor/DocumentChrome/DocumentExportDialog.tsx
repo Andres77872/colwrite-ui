@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import { RefreshCw } from 'lucide-react';
-import { useEditor } from '@/editor';
+import { useDocumentActions, useDocumentId, useEditorActions } from '@/editor';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -20,8 +21,8 @@ import { useReturnFocus } from '@/hooks/useReturnFocus';
 import { downloadBlob, exportFilename } from '@/export/download';
 import { documentToMarkdown } from '@/export/markdown';
 import { printStandaloneHtml } from '@/export/print';
-import { ApiError } from '@/services/contracts';
-import { describeLatexExportError, exportDocumentLatex } from '@/services/documentExport';
+import { ApiError } from '@/api/errors';
+import { describeLatexExportError, exportDocumentLatex } from '@/data/documentExport';
 import type {
   AiBeatExportMode,
   DocumentExportOptions,
@@ -48,7 +49,7 @@ const FORMAT_NOTES: Record<ExportFormat, string> = {
   markdown:
     'Citations are written as Pandoc keys, such as [@10.1145/3290605]. Export the .bib from Sources to go with them.',
   latex:
-    'The server renders the saved document, so edits waiting for autosave are saved first. It always includes the title and the reference list.',
+    'The server renders the saved page, so edits waiting for autosave are saved first. It always includes the title and the reference list.',
 };
 
 const BUTTON_LABELS: Record<ExportFormat, string> = {
@@ -70,7 +71,10 @@ class UnsavedEditsError extends Error {}
 
 export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props) {
   const focusReturn = useReturnFocus(returnFocus);
-  const { getExportSnapshot, documentId, saveRemote, ensureRemoteDocument } = useEditor();
+  const { getExportSnapshot } = useEditorActions();
+  const documentId = useDocumentId();
+  const workspaceId = useWorkspaceId();
+  const { saveRemote, ensureRemoteDocument } = useDocumentActions();
   const { toast } = useToast();
   const [format, setFormat] = useState<ExportFormat>('pdf');
   const [profile, setProfile] = useState<ExportProfile>('paper');
@@ -106,7 +110,7 @@ export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props)
     }
     const id = await ensureRemoteDocument();
     if (!id) throw new UnsavedEditsError('Check your connection and try again.');
-    const { source, filename } = await exportDocumentLatex(id);
+    const { source, filename } = await exportDocumentLatex(workspaceId, id);
     downloadBlob(
       new Blob([source], { type: 'application/x-tex;charset=utf-8' }),
       filename ?? exportFilename(name, 'tex'),
@@ -145,7 +149,6 @@ export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props)
         include_references: includeReferences,
       };
       const exportSnapshot = {
-        base_version: snapshot.baseVersion,
         local_revision: snapshot.localRevision,
         dirty: snapshot.dirty,
       };
@@ -175,7 +178,7 @@ export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props)
             ? describeLatexExportError(error)
             : error instanceof Error && error.message
               ? error.message
-              : 'The document could not be exported.',
+              : 'The page could not be exported.',
       );
     } finally {
       setBusy(false);
@@ -198,9 +201,9 @@ export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props)
         onCloseAutoFocus={focusReturn.onCloseAutoFocus}
       >
         <DialogHeader>
-          <DialogTitle>Export document</DialogTitle>
+          <DialogTitle>Export page</DialogTitle>
           <DialogDescription>
-            Export the document as it is in the editor, including edits still waiting for autosave.
+            Export the page as it is in the editor, including edits still waiting for autosave.
           </DialogDescription>
         </DialogHeader>
 
@@ -276,7 +279,7 @@ export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props)
                   onChange={(event) => setAiBeat(event.target.value as AiBeatExportMode)}
                   disabled={busy}
                 >
-                  <option value="omit">Omit from document</option>
+                  <option value="omit">Leave out of the export</option>
                   <option value="draft-card">
                     {format === 'markdown' ? 'Include their text' : 'Include as labelled draft cards'}
                   </option>
@@ -288,7 +291,7 @@ export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props)
                   onCheckedChange={(checked) => setIncludeTitle(checked === true)}
                   disabled={busy}
                 />
-                Include the document name as a title in the body
+                Include the page name as a title in the body
               </label>
               <label className="flex items-start gap-2 text-sm sm:col-span-2">
                 <Checkbox

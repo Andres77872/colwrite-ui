@@ -1,18 +1,27 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import { scrollBehavior } from '@/lib/motion';
 import { lastInputWasPointer } from '@/lib/inputModality';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useDocumentTitle, useEditor } from '@/editor';
+import { useDocumentActions, useDocumentId, useDocumentStatus, useDocumentTitle, usePageReadOnly } from '@/editor';
 import { usePanels } from '@/components/panels/panelsContextState';
 import { modifierLabel } from '@/components/layout/Shortcuts';
 import { useSidebarToggle } from '@/components/layout/useShellLayout';
 import { UNTITLED_LABEL } from '@/components/layout/displayTitle';
+import { CollectionBreadcrumbs } from '@/components/panels/Library/CollectionBreadcrumbs';
+import { revealInTree } from '@/components/layout/Sidebar/PagesTree/treeReveal';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
+import { pagePlacementQuery } from '@/data/documents';
+import { collectionDetailQuery } from '@/data/resources';
+import { workspaceQuery } from '@/data/workspaces';
 import { ReviewPill } from '../Review/ReviewPill';
 import { PageMenu } from './PageMenu';
 import { PAGE_TOOLS } from './pageTools';
 import { SaveRecoveryBar } from './SaveRecoveryBar';
+import { TrashedPageBar } from './TrashedPageBar';
+import { ViewOnlyBadge, ViewOnlyBar } from './ViewOnlyBar';
 import {
   ChevronsRight,
   CloudCheck,
@@ -20,8 +29,10 @@ import {
   CloudUpload,
   FileText,
   HardDrive,
+  Library,
   Menu,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 
 /**
@@ -43,6 +54,7 @@ export function PageTopbar() {
   // repeating them here only squeezed the breadcrumb.
   const showToolButtons = !(isOpen && toolsDocked);
   const modifier = modifierLabel();
+  const readOnly = usePageReadOnly();
 
   const focusTitle = () => {
     if (focusPageTitle()) return;
@@ -69,21 +81,23 @@ export function PageTopbar() {
         </Tooltip>
       )}
 
-      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center">
-        <button
-          type="button"
-          onClick={focusTitle}
-          className="flex h-6 min-w-0 items-center gap-1.5 rounded-md px-1.5 text-sm text-foreground transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          title="Rename page"
-        >
-          <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-          <span className={cn('truncate', isUntitled && 'text-muted-foreground')}>
-            {isUntitled ? UNTITLED_LABEL : title}
-          </span>
-        </button>
-      </nav>
+      <PageBreadcrumb
+        current={
+          <button
+            type="button"
+            onClick={focusTitle}
+            aria-current="page"
+            className="flex h-6 min-w-0 items-center gap-1.5 rounded-md px-1.5 text-sm text-foreground transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+            <span className={cn('max-w-[40ch] truncate', isUntitled && 'text-muted-foreground')}>
+              {isUntitled ? UNTITLED_LABEL : title}
+            </span>
+          </button>
+        }
+      />
 
-      <SaveStatus />
+      {readOnly ? <ViewOnlyBadge /> : <SaveStatus />}
 
       <div className="ml-auto flex shrink-0 items-center gap-0.5">
         {/* Pending AI suggestions: the count, and the batch review menu. */}
@@ -140,8 +154,48 @@ export function PageTopbar() {
         <PageMenu />
       </div>
     </div>
+    <TrashedPageBar />
+    <ViewOnlyBar />
     <SaveRecoveryBar />
     </>
+  );
+}
+
+/**
+ * Workspace › … › Chapter 2 › the page (08 §2.2). Where the page lives comes
+ * from the editor's read and from every move, so the path follows a move
+ * with no reload; a move made elsewhere arrives with the tree's refresh. A
+ * collection crumb shows that collection in the sidebar tree.
+ */
+function PageBreadcrumb({ current }: { current: ReactNode }) {
+  const workspaceId = useWorkspaceId();
+  const documentId = useDocumentId();
+  const toggle = useSidebarToggle();
+  const workspace = useQuery(workspaceQuery(workspaceId));
+  const placement = useQuery({ ...pagePlacementQuery(workspaceId, documentId ?? ''), enabled: documentId !== null });
+  const homeId = documentId ? (placement.data?.collectionId ?? null) : null;
+  const home = useQuery({ ...collectionDetailQuery(workspaceId, homeId ?? 0), enabled: homeId !== null });
+  const path = homeId !== null ? (home.data?.path ?? []) : [];
+
+  const reveal = (collectionId: number) => {
+    if (toggle.visible) toggle.open();
+    revealInTree({ kind: 'collection', id: collectionId, expand: true, focus: true });
+  };
+
+  return (
+    <CollectionBreadcrumbs
+      label="Breadcrumb"
+      className="flex items-center pb-0"
+      path={path}
+      root={
+        <>
+          <Library aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="max-w-32 truncate">{workspace.data?.name ?? 'Workspace'}</span>
+        </>
+      }
+      current={current}
+      onSelectCollection={reveal}
+    />
   );
 }
 
@@ -186,7 +240,9 @@ function focusOpenedTool(attempt = 0) {
  * leaves, and this has to stay until it is fixed.
  */
 function SaveStatus() {
-  const { documentId, lastSavedAt, isAutoSaving, saveError, saveConflict, hasPendingEdits, save } = useEditor();
+  const documentId = useDocumentId();
+  const { lastSavedAt, isAutoSaving, saveError, saveConflict, inTrash } = useDocumentStatus();
+  const { hasPendingEdits, save } = useDocumentActions();
 
   // Follows the failure state per document, to tell "saving works again" from
   // "another document opened".
@@ -209,6 +265,17 @@ function SaveStatus() {
       {announcement}
     </span>
   );
+
+  // Nothing is saved while the page is in the Trash; the bar below says why.
+  if (inTrash) {
+    return (
+      <span className="flex shrink-0 items-center gap-1 px-1.5 text-xs text-destructive" title="Restore the page to save it">
+        {announcer}
+        <Trash2 aria-hidden="true" className="size-3.5" />
+        <span className="max-sm:sr-only">In the Trash</span>
+      </span>
+    );
+  }
 
   if (saveError) {
     return (

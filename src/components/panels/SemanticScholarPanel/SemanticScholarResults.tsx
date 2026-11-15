@@ -5,7 +5,7 @@ import {
   type ClaimEvidenceFinding,
   type ClaimVerdict,
   type ResearchPaper,
-} from '@/services/semanticScholar';
+} from '@/data/semanticScholar';
 import semanticScholarMark from '@/assets/semantic-scholar-mark.svg';
 import { ArrowLeft, ExternalLink, GitFork, Network, Quote, Scale, SearchX, Sparkles } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';

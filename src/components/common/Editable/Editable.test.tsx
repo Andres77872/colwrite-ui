@@ -1,20 +1,34 @@
+import { itemAt } from '@/lib/itemAt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup, fireEvent, screen } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, Fragment, useImperativeHandle } from 'react';
 import type { Block } from '@/editor/types';
+import { TEST_WORKSPACE_ID, TestWorkspace } from '@/__tests__/workspace';
+import type { ReactNode } from 'react';
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
 
-const { EditorProvider, useEditor } = await import('@/editor');
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const { EditorProvider } = await import('@/editor');
+const { useEditorProbe } = await import('@/editor/__tests__/editorHarness');
 const { Editable } = await import('./Editable');
 
-const editorRef = createRef<ReturnType<typeof useEditor>>();
+const editorRef = createRef<ReturnType<typeof useEditorProbe>>();
 
 function currentEditor() {
   if (!editorRef.current) throw new Error('Editor harness is not mounted');
@@ -22,21 +36,21 @@ function currentEditor() {
 }
 
 function CaptureEditor() {
-  const editor = useEditor();
+  const editor = useEditorProbe();
   useImperativeHandle(editorRef, () => editor, [editor]);
   return null;
 }
 
 /** Mirrors how Canvas renders an Editable: the html prop tracks editor state. */
 function BlockEditable({ id }: { id: string }) {
-  const { blocks } = useEditor();
+  const { blocks } = useEditorProbe();
   const block = blocks.find((b): b is Block & { html: string } => b.id === id && 'html' in b);
   return <Editable id={id} html={block?.html ?? ''} />;
 }
 
 function seedLocal(blocks: Block[]) {
   localStorage.setItem(
-    'colwrite:doc:local',
+    `colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`,
     JSON.stringify({ documentId: null, doc: { version: 1, blocks } }),
   );
 }
@@ -84,6 +98,38 @@ describe('Editable accessibility', () => {
     expect(field.getAttribute('contenteditable')).toBe('false');
     expect(field.getAttribute('aria-readonly')).toBe('true');
     expect(field.tabIndex).toBe(0);
+  });
+
+  it('makes every block read-only for a viewer, and no key edits it (M6.UI-2)', () => {
+    seedLocal([
+      { id: 'p1', type: 'paragraph', html: 'A viewer reads this', children: [] },
+      { id: 'p2', type: 'paragraph', html: 'And this', children: [] },
+    ]);
+    const asViewer = ({ children }: { children: ReactNode }) => (
+      <TestWorkspace
+        workspace={{ id: TEST_WORKSPACE_ID, name: 'Personal', kind: 'personal', role: 'viewer', icon: null, last_opened_at: null, member_count: 1 }}
+        initialDocumentId={null}
+      >
+        {children}
+      </TestWorkspace>
+    );
+    render(
+      <EditorProvider>
+        <CaptureEditor />
+        <BlockEditable id="p1" />
+      </EditorProvider>,
+      { wrapper: asViewer },
+    );
+    const field = screen.getByRole('textbox', { name: 'Page text' });
+    expect(field.getAttribute('contenteditable')).toBe('false');
+    expect(field.getAttribute('aria-readonly')).toBe('true');
+    expect(field.tabIndex).toBe(0);
+    field.focus();
+    fireEvent.keyDown(field, { key: 'Enter' });
+    fireEvent.keyDown(field, { key: 'd', ctrlKey: true });
+    fireEvent.keyDown(field, { key: 'Backspace' });
+    expect(currentEditor().blocks.map((block) => block.id)).toEqual(['p1', 'p2']);
+    expect(currentEditor().readOnly).toBe(true);
   });
 });
 
@@ -248,7 +294,7 @@ describe('Editable cross-block keyboard', () => {
     ]);
     // Only paragraphs render editables; p2 is the second one rendered.
     const els = document.querySelectorAll<HTMLDivElement>('.editable');
-    const el = els[1];
+    const el = itemAt(els, 1);
     act(() => currentEditor().setActive('p2'));
     setCaret(el, 0);
 

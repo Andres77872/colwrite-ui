@@ -1,31 +1,42 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useImperativeHandle } from 'react';
 import type { Doc } from '@/editor/types';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
 
-const { EditorProvider, useEditor } = await import('@/editor');
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const { EditorProvider } = await import('@/editor');
+const { useEditorProbe } = await import('@/editor/__tests__/editorHarness');
 const { PanelsContext } = await import('../panelsContextState');
 const { ToastContext } = await import('@/components/ui/toastContext');
 const { SourcesPanel } = await import('./SourcesPanel');
 
-const editorRef = createRef<ReturnType<typeof useEditor>>();
+const editorRef = createRef<ReturnType<typeof useEditorProbe>>();
 
 function Probe() {
-  const editor = useEditor();
+  const editor = useEditorProbe();
   useImperativeHandle(editorRef, () => editor, [editor]);
   return null;
 }
 
 const DOC: Doc = {
-  version: 1,
   name: 'Findings',
   sources: [
     { key: '10.1/cited', title: 'A cited paper', provider: 'crossref' },
@@ -47,7 +58,7 @@ const DOC: Doc = {
 
 beforeEach(() => {
   localStorage.clear();
-  localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc: DOC }));
+  localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: null, doc: DOC }));
 });
 
 afterEach(cleanup);

@@ -1,96 +1,14 @@
-import { createContext, useContext, useMemo, type MutableRefObject } from 'react';
-import type {
-  DocumentInput,
-  DocumentListOptions,
-  DocumentListResult,
-} from '../services';
+import { createContext, useContext, type MutableRefObject } from 'react';
 import type { ApplyPatchResult } from './docOps';
 import type { Block, CitationSource, Doc, ParagraphChild, ToolOperation } from './types';
 import type { BlockKindId } from './blockKinds';
 
-/** Why the open document was replaced by a server copy (see `restoreReason`). */
-export type RestoreReason = 'restore' | 'newer-version';
-
 /**
- * State slices of the editor. A keystroke replaces `doc`/`blocks`, so this
- * value changes identity on every edit — only consumers that actually render
- * document state should subscribe to it.
+ * Edits of the open page's blocks and library (`createBlockActions`). Each
+ * one arms autosave and is one undo step, unless it coalesces with the
+ * typing burst before it.
  */
-export type EditorStateContextValue = {
-  doc: Doc;
-  blocks: Block[];
-  documentId: string | null;
-  /**
-   * Which document the workspace is on, independent of whether it has been
-   * saved yet.
-   *
-   * Changes on a genuine navigation — opening another document, starting a new
-   * one — and *not* when a local draft is first saved and acquires an id. State
-   * that belongs to the open document rather than to its stored identity, such
-   * as the assistant's transcript, keys on this.
-   */
-  documentSessionId: string;
-  /** The requested document while the committed document remains on screen. */
-  loadingDocumentId: string | null;
-  activeId: string | null;
-  openMenuBlockId: string | null;
-  openMenuType: 'add' | 'options' | null;
-  /** Changes only after a successful mutation that can affect list contents/order. */
-  documentListRevision: number;
-  lastSavedAt: number | null;
-  isAutoSaving: boolean;
-  lastSaveSource: 'auto' | 'manual' | null;
-  saveError: string | null;
-  /**
-   * The server refused the last save because it holds a newer version of the
-   * open document. Autosave waits until `resolveSaveConflict` is called.
-   */
-  saveConflict: boolean;
-  /**
-   * When edits of the open document that never reached the server were kept
-   * on this device, or null when there are none to offer back.
-   */
-  unsavedDraftAt: number | null;
-  /** Whether the open document has a previous local edit state to restore. */
-  canUndo: boolean;
-  /** Whether an undone local edit can be re-applied. */
-  canRedo: boolean;
-  documentLoadNotice: {
-    id: number;
-    title: string;
-    description: string;
-  } | null;
-  /**
-   * Increments every time a restore moves the document onto another version
-   * of its tree. State computed against the pre-restore content — staged
-   * assistant proposals, in-flight agent streams — keys on this to know it
-   * no longer describes the document on screen.
-   */
-  restoreEpoch: number;
-  /**
-   * Why the epoch last moved. A History restore puts the document on another
-   * branch, so suggestions made for the old one are retired; opening the
-   * server's newer version after a refused save keeps the same line of
-   * history, so they are staged again against it.
-   */
-  restoreReason: RestoreReason;
-  hasAnyRemoteDocs: boolean | null;
-  recentlyChanged: ReadonlySet<string>;
-  /** Blocks selected as whole blocks, in document order. */
-  selectedBlockIds: readonly string[];
-};
-
-/**
- * Everything the editor can *do*, plus the few containers that never change
- * identity (`refs`). Every action closes over refs or stable setters, so this
- * value is referentially stable across document edits: a component that only
- * needs actions does not re-render per keystroke.
- */
-export type EditorActionsContextValue = {
-  refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
-  registerEditable: (id: string, element: HTMLDivElement | null) => void;
-  setActive: (id: string | null) => void;
-  setBlockMenu: (blockId: string | null, type: 'add' | 'options' | null) => void;
+export type BlockActions = {
   setDocMeta: (meta: Partial<Doc>) => void;
   setDocName: (name: string) => void;
   addBlockAtStart: (type: Block['type']) => string;
@@ -106,8 +24,6 @@ export type EditorActionsContextValue = {
   mergeWithPrevious: (id: string) => { targetId: string; caretOffset: number } | null;
   removeBlock: (id: string) => void;
   updateHtml: (id: string, html: string) => void;
-  /** Run several edits as one undo step. */
-  batch: <T>(run: () => T) => T;
   setParagraphColumns: (id: string, columns: number) => void;
   toggleAiHidden: (id: string) => void;
   toggleLocked: (id: string) => void;
@@ -123,6 +39,12 @@ export type EditorActionsContextValue = {
   setBlockKind: (id: string, kind: BlockKindId, options?: { html?: string }) => void;
   /** A block as it is now, read at call time without subscribing to state. */
   getBlock: (id: string) => Block | undefined;
+  /**
+   * Block order at call time, without subscribing to `blocks`. Arrow-key
+   * navigation needs the answer at keydown time; subscribing would re-render
+   * every editable on every keystroke.
+   */
+  getBlockIds: () => string[];
   /** Add sources to the library, or refresh entries with the same key. */
   upsertSources: (sources: readonly CitationSource[]) => void;
   /** Edit a library entry's metadata. */
@@ -155,74 +77,33 @@ export type EditorActionsContextValue = {
     blocks: readonly Block[],
     options?: { replaceAnchor?: boolean },
   ) => string[];
-  exec: (cmd: string, value?: string) => void;
-  /**
-   * Block order at call time, without subscribing to `blocks`. Arrow-key
-   * navigation needs the answer at keydown time; subscribing would re-render
-   * every editable on every keystroke.
-   */
-  getBlockIds: () => string[];
-  getJSON: () => string;
-  setFromJSON: (json: string) => void;
-  save: () => void;
+};
+
+/**
+ * Everything the editor core can *do*, plus the few containers that never
+ * change identity (`refs`). Every action closes over refs or stable setters,
+ * so this value is referentially stable across document edits: a component
+ * that only needs actions does not re-render per keystroke.
+ *
+ * Opening, saving and deleting pages are the session's (`useDocumentActions`).
+ */
+export type EditorActionsContextValue = BlockActions & {
+  refs: MutableRefObject<Record<string, HTMLDivElement | null>>;
+  registerEditable: (id: string, element: HTMLDivElement | null) => void;
+  setActive: (id: string | null) => void;
+  setBlockMenu: (blockId: string | null, type: 'add' | 'options' | null) => void;
+  /** Run several edits as one undo step. */
+  batch: <T>(run: () => T) => T;
   undo: () => void;
   redo: () => void;
-  newLocal: () => void;
+  exec: (cmd: string, value?: string) => void;
+  getJSON: () => string;
+  setFromJSON: (json: string) => void;
   getExportSnapshot: () => {
     document: Doc;
-    baseVersion: number;
     localRevision: number;
     dirty: boolean;
   };
-  createRemote: (docOverride?: DocumentInput) => Promise<string>;
-  createAndSwitch: (doc: DocumentInput) => Promise<string>;
-  /**
-   * The open document's server id, creating it first if it has none.
-   *
-   * Resolves to `null` when creation failed — the caller says so rather than
-   * the editor throwing at whatever the author was doing. Concurrent callers
-   * share one creation, so the document is never created twice.
-   */
-  ensureRemoteDocument: () => Promise<string | null>;
-  saveRemote: (docOverride?: DocumentInput) => Promise<void>;
-  loadRemote: (id: string) => Promise<boolean>;
-  switchTo: (
-    id: string,
-    options?: { source?: 'selection' | 'history' },
-  ) => Promise<boolean>;
-  deleteRemote: (id: string) => Promise<void>;
-  listRemote: (
-    options?: DocumentListOptions,
-    init?: { signal?: AbortSignal },
-  ) => Promise<DocumentListResult>;
-  /**
-   * Whether an edit is queued for autosave or a save is in flight.
-   *
-   * A function rather than a value: the only caller is a `beforeunload`
-   * handler, which needs the answer at event time, and making it reactive would
-   * re-render the editor twice per debounce for nothing.
-   */
-  hasPendingEdits: () => boolean;
-  /**
-   * Settle a refused save: `mine` writes the open body over the server's newer
-   * version; `theirs` opens that version and keeps the open body on this
-   * device, to be offered back.
-   */
-  resolveSaveConflict: (keep: 'mine' | 'theirs') => Promise<void>;
-  /** Put the kept edits back in the open document (one undo step). */
-  restoreKeptDraft: () => boolean;
-  discardKeptDraft: () => void;
-  /** Last server-confirmed head sequence, or null before the first save. */
-  savedHeadSeq: () => number | null;
-  clearSaveError: () => void;
-  clearDocumentLoadNotice: () => void;
-  adoptServerVersion: (version: number | undefined | null) => void;
-  /**
-   * Take a server-side restore's content and version as the new persisted
-   * baseline of the open document — without arming autosave and without
-   * starting a new document session.
-   */
-  adoptRestoredDocument: (doc: Doc, serverVersion: number, reason?: RestoreReason) => void;
   applyPatch: (
     ops: ToolOperation[],
     options?: { persist?: boolean; base?: Block[] },
@@ -235,27 +116,35 @@ export type EditorActionsContextValue = {
   clearBlockSelection: () => void;
 };
 
-export type EditorContextValue = EditorStateContextValue & EditorActionsContextValue;
+/**
+ * What the editor shows around the text: the open block menu, the block
+ * selection, the undo state and the blocks a change just landed on.
+ */
+export type EditorViewValue = {
+  openMenuBlockId: string | null;
+  openMenuType: 'add' | 'options' | null;
+  /** Blocks selected as whole blocks, in document order. */
+  selectedBlockIds: readonly string[];
+  recentlyChanged: ReadonlySet<string>;
+  /** Whether the open document has a previous local edit state to restore. */
+  canUndo: boolean;
+  /** Whether an undone local edit can be re-applied. */
+  canRedo: boolean;
+};
 
 /**
  * The one piece of state an editable needs reactively. Focus moves are rare
- * next to keystrokes, so this lives apart from the full state context, which
- * changes on every edit.
+ * next to keystrokes, so this lives apart from the view context, which
+ * changes with the blocks.
  */
 export type EditorActiveBlockContextValue = {
   activeId: string | null;
   setActive: (id: string | null) => void;
 };
 
-export const EditorContext = createContext<EditorStateContextValue | null>(null);
 export const EditorActionsContext = createContext<EditorActionsContextValue | null>(null);
+export const EditorViewContext = createContext<EditorViewValue | null>(null);
 export const EditorActiveBlockContext = createContext<EditorActiveBlockContextValue | null>(null);
-
-export function useEditorState(): EditorStateContextValue {
-  const context = useContext(EditorContext);
-  if (!context) throw new Error('useEditorState must be used within EditorProvider');
-  return context;
-}
 
 export function useEditorActions(): EditorActionsContextValue {
   const context = useContext(EditorActionsContext);
@@ -268,19 +157,14 @@ export function useOptionalEditorActions(): EditorActionsContextValue | null {
   return useContext(EditorActionsContext);
 }
 
+export function useEditorView(): EditorViewValue {
+  const context = useContext(EditorViewContext);
+  if (!context) throw new Error('useEditorView must be used within EditorProvider');
+  return context;
+}
+
 export function useActiveBlock(): EditorActiveBlockContextValue {
   const context = useContext(EditorActiveBlockContext);
   if (!context) throw new Error('useActiveBlock must be used within EditorProvider');
   return context;
-}
-
-/**
- * The merged view kept for consumers that predate the split — and for any
- * component that genuinely needs both state and actions. Subscribing through
- * this hook means re-rendering on every state change, exactly as before.
- */
-export function useEditor(): EditorContextValue {
-  const state = useEditorState();
-  const actions = useEditorActions();
-  return useMemo(() => ({ ...state, ...actions }), [state, actions]);
 }

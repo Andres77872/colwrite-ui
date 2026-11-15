@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -77,7 +78,7 @@ describe('MermaidDiagram', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Download diagram as SVG' }));
 
     expect(download.downloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'routing.svg');
-    const file = download.downloadBlob.mock.calls[0][0] as Blob;
+    const file = itemAt(download.downloadBlob.mock.calls, 0)[0] as Blob;
     expect(file.type).toBe('image/svg+xml;charset=utf-8');
     const text = await file.text();
     expect(text.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg"')).toBe(true);

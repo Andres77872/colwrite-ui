@@ -1,19 +1,20 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
 import { useToast } from '@/components/ui/toastContext';
-import { ApiError } from '@/services/contracts';
+import { ApiError } from '@/api/errors';
 import type {
   AgentCapabilityOption,
   AgentPaperSource,
   AgentToolOption,
   AgentToolSettings,
   AgentToolSettingsUpdate,
-} from '@/services/agentTools';
-import { useAgentTools } from './agentToolsContextState';
+} from '@/data/agentTools';
+import { POLICY_FEATURE, useAgentTools, type PolicySwitch } from './agentToolsContextState';
+import { WorkspaceContext } from '@/components/workspace/workspaceContextState';
 import { RefreshCw, RotateCcw } from 'lucide-react';
 
 /**
@@ -35,13 +36,13 @@ const TOOL_COPY: Record<string, string> = {
   validate_claim: 'Check whether the literature supports a claim.',
   web_search: 'Search the public web.',
   web_read: 'Read a web page found by a search.',
-  resource_ls: 'See which PDFs this document can use.',
+  resource_ls: 'See which PDFs this page can use.',
   resource_read: 'Read one of those PDFs.',
   resource_retrieve: 'Find the passages in your PDFs most relevant to a question.',
   resource_search: 'Find exact words in your PDFs.',
   doc_read: 'Re-read the page during a longer task.',
   doc_edit: 'Suggest edits to this page for you to review.',
-  doc_create: 'Create new documents.',
+  doc_create: 'Create new pages.',
 };
 
 /** Short copy for a tool: the map above, else its catalog text's first sentence. */
@@ -416,6 +417,8 @@ function AgentToolsPreferencesForm({
         </p>
       </div>
 
+      <WorkspacePolicyNote />
+
       {leading}
 
       {!!settings.features?.length && (
@@ -468,7 +471,9 @@ function AgentToolsPreferencesForm({
           description={category.description}
           note={
             category.id === 'document'
-              ? 'The visible page is always sent with a question. “Reload document snapshot” only controls the explicit re-read tool; it is not a document-privacy switch.'
+              ? `The visible page is always sent with a question. “${
+                  category.tools.find((tool) => tool.id === 'doc_read')?.label ?? 'Re-read the page'
+                }” only controls the explicit re-read tool; it does not keep the page private.`
               : undefined
           }
         >
@@ -595,5 +600,25 @@ function SettingSwitchRow({
           .join(' ')}
       />
     </div>
+  );
+}
+
+/**
+ * The workspace being shown switched some of these off for everyone in it
+ * (its policy, D7). The switches below stay the person's own and apply in
+ * their other workspaces; here the policy wins.
+ */
+function WorkspacePolicyNote() {
+  const { policy } = useAgentTools();
+  const workspace = useContext(WorkspaceContext)?.workspace;
+  if (!policy || !workspace) return null;
+  const off = (Object.keys(POLICY_FEATURE) as PolicySwitch[]).filter((key) => !policy[key]);
+  if (off.length === 0) return null;
+  const names = off.map((key) => POLICY_FEATURE[key]);
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+  return (
+    <Alert variant="info" role="status">
+      {list} {off.length === 1 ? 'is' : 'are'} switched off for everyone in {workspace.name}. Your choices below still apply in your other workspaces.
+    </Alert>
   );
 }

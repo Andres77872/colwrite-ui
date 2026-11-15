@@ -8,21 +8,33 @@ import {
   it,
   vi,
 } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useImperativeHandle, useLayoutEffect } from 'react';
 import type { Doc, ParagraphBlock as ParagraphBlockType } from '@/editor/types';
 import { ASK_AI_EVENT, type AskAiRequest } from '../AskAi/askAiEvents';
 import { PanelsContext, type PanelsContextValue } from '@/components/panels/panelsContextState';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
 
-const { EditorProvider, useEditor } = await import('@/editor');
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const { EditorProvider } = await import('@/editor');
+const { useEditorProbe } = await import('@/editor/__tests__/editorHarness');
 const { Editable } = await import('@/components/common/Editable');
 const { FloatingToolbar } = await import('./FloatingToolbar');
 
@@ -54,11 +66,11 @@ afterAll(() => {
   });
 });
 
-const editorRef = createRef<ReturnType<typeof useEditor>>();
+const editorRef = createRef<ReturnType<typeof useEditorProbe>>();
 let committedDocs: Doc[] = [];
 
 function Harness() {
-  const editor = useEditor();
+  const editor = useEditorProbe();
   useImperativeHandle(editorRef, () => editor, [editor]);
 
   // A layout effect observes every committed provider state, including any
@@ -79,7 +91,6 @@ function Harness() {
 
 async function mountEditor(panels?: Partial<PanelsContextValue>, html = 'Evidence claim') {
   const doc: Doc = {
-    version: 1,
     name: 'Floating toolbar test',
     blocks: [
       {
@@ -91,7 +102,7 @@ async function mountEditor(panels?: Partial<PanelsContextValue>, html = 'Evidenc
       },
     ],
   };
-  localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc }));
+  localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: null, doc }));
 
   const editor = (
     <EditorProvider>
@@ -245,13 +256,13 @@ describe('FloatingToolbar from the keyboard (Alt+F10)', () => {
 
     const items = Array.from(toolbar.querySelectorAll<HTMLElement>('[data-toolbar-item]'));
     expect(document.activeElement).toBe(items[0]);
-    expect(items[0].getAttribute('aria-label')).toMatch(/^Ask AI/);
+    expect(items[0]?.getAttribute('aria-label')).toMatch(/^Ask AI/);
 
     // One tab stop, arrows between the buttons.
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowRight' });
     expect(document.activeElement).toBe(items[1]);
-    await waitFor(() => expect(items[1].tabIndex).toBe(0));
-    expect(items[0].tabIndex).toBe(-1);
+    await waitFor(() => expect(items[1]?.tabIndex).toBe(0));
+    expect(items[0]?.tabIndex).toBe(-1);
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'End' });
     expect(document.activeElement?.getAttribute('aria-label')).toBe('More AI actions');
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowRight' });
@@ -478,7 +489,7 @@ describe('FloatingToolbar actions', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Cite/ }));
 
     await waitFor(() => {
-      const block = paragraph(editorRef.current?.doc ?? { version: 1, blocks: [] });
+      const block = paragraph(editorRef.current?.doc ?? { blocks: [] });
       expect(block.children).toHaveLength(1);
     });
     const finalBlock = paragraph(editorRef.current!.doc);
@@ -493,7 +504,7 @@ describe('FloatingToolbar actions', () => {
       const childIds = new Set((block.children ?? []).map((entry) => entry.id));
       const placeholderIds = Array.from(
         block.html.matchAll(/data-child-id="([^"]+)"/g),
-        (match) => match[1],
+        ([, id]) => id ?? '',
       );
       for (const id of placeholderIds) expect(childIds.has(id)).toBe(true);
     }

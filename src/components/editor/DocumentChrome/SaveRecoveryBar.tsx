@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { useEditor } from '@/editor';
+import { useDocumentActions, useDocumentStatus, usePageReadOnly } from '@/editor';
 import { History, TriangleAlert } from 'lucide-react';
 
 /** The answers are 44px tall on touch: a wrong tap here opens or overwrites a version. */
@@ -18,14 +18,15 @@ const ANSWER = 'pointer-coarse:h-11 pointer-coarse:px-3.5';
  * device.
  */
 export function SaveRecoveryBar() {
-  const {
-    saveConflict,
-    unsavedDraftAt,
-    resolveSaveConflict,
-    restoreKeptDraft,
-    discardKeptDraft,
-  } = useEditor();
+  const { saveConflict, unsavedDraftAt, inTrash } = useDocumentStatus();
+  const { resolveSaveConflict, restoreKeptDraft, discardKeptDraft } = useDocumentActions();
   const [busy, setBusy] = useState<'mine' | 'theirs' | null>(null);
+  const readOnly = usePageReadOnly();
+
+  // A page in the Trash takes no save; its own bar comes first. A read-only
+  // page takes none either: kept edits wait on this device for an open that
+  // can edit (`ViewOnlyBar` says so).
+  if (inTrash || readOnly) return null;
 
   if (saveConflict) {
     const choose = (keep: 'mine' | 'theirs') => {
@@ -39,7 +40,7 @@ export function SaveRecoveryBar() {
       >
         <TriangleAlert aria-hidden="true" className="size-4 shrink-0" />
         <p className="min-w-0 flex-1 basis-64">
-          <strong className="font-medium">This document was changed somewhere else.</strong>{' '}
+          <strong className="font-medium">This page was changed somewhere else.</strong>{' '}
           Your latest edits are not saved yet. Whichever version you keep, the other is not lost:
           yours stays on this device, theirs stays in History.
         </p>

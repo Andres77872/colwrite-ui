@@ -3,7 +3,8 @@ import {
   isListItem,
   kindOf,
   useEditorActions,
-  useEditorState,
+  useEditorDoc,
+  useEditorView,
   type Block,
   type BlockKindId,
 } from '@/editor';
@@ -51,7 +52,8 @@ function typingElsewhere(target: EventTarget | null): boolean {
  * requires of any drag interaction.
  */
 export function useBlockSelection() {
-  const { blocks, selectedBlockIds } = useEditorState();
+  const { blocks } = useEditorDoc();
+  const { selectedBlockIds } = useEditorView();
   const {
     selectBlocks,
     clearBlockSelection,
@@ -79,8 +81,8 @@ export function useBlockSelection() {
       return;
     }
     if (!anchorRef.current || !selectedBlockIds.includes(anchorRef.current)) {
-      anchorRef.current = selectedBlockIds[0];
-      focusRef.current = selectedBlockIds[selectedBlockIds.length - 1];
+      anchorRef.current = selectedBlockIds[0] ?? null;
+      focusRef.current = selectedBlockIds.at(-1) ?? null;
     }
   }, [selectedBlockIds]);
 
@@ -96,7 +98,8 @@ export function useBlockSelection() {
       active === document.body ||
       (active instanceof HTMLElement && active.matches('.block-row, .canvas'));
     if (!managed) return;
-    const target = focusRef.current ?? selectedBlockIds[selectedBlockIds.length - 1];
+    const target = focusRef.current ?? selectedBlockIds.at(-1);
+    if (!target) return;
     const row = document.querySelector<HTMLElement>(`.block-row[data-block-id="${CSS.escape(target)}"]`);
     if (!row || row === active) return;
     row.focus({ preventScroll: true });
@@ -133,7 +136,8 @@ export function useBlockSelection() {
       if (event.defaultPrevented || typingElsewhere(event.target)) return;
       const order = ids();
       const first = selectedBlockIds[0];
-      const last = selectedBlockIds[selectedBlockIds.length - 1];
+      const last = selectedBlockIds.at(-1);
+      if (first === undefined || last === undefined) return;
 
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -200,9 +204,9 @@ export function useBlockSelection() {
         if (copies.length) selectBlocks(copies.reverse());
         return;
       }
-      if (isMod(event) && event.altKey && TURN_INTO_DIGITS[event.code]) {
+      const kind = TURN_INTO_DIGITS[event.code];
+      if (isMod(event) && event.altKey && kind) {
         event.preventDefault();
-        const kind = TURN_INTO_DIGITS[event.code];
         batch(() => {
           for (const block of selectedBlocks()) {
             if (kindOf(block) !== kind && block.type !== 'divider') setBlockKind(block.id, kind);
@@ -310,8 +314,7 @@ const MARQUEE_THRESHOLD = 4;
 
 /** The row at viewport height `y`: the one it falls in, else the nearest one above it. */
 function rowAtY(rows: HTMLElement[], y: number): HTMLElement | null {
-  if (rows.length === 0) return null;
-  let hit: HTMLElement = rows[0];
+  let hit = rows[0] ?? null;
   for (const row of rows) {
     if (row.getBoundingClientRect().top <= y) hit = row;
     else break;
@@ -443,8 +446,10 @@ function useDragToSelect({
           return;
         }
         const fromBelow = lastY < startY - canvas.scrollTop;
-        anchorRef.current = fromBelow ? ids[ids.length - 1] : ids[0];
-        focusRef.current = fromBelow ? ids[0] : ids[ids.length - 1];
+        const topId = ids[0] ?? null;
+        const bottomId = ids.at(-1) ?? null;
+        anchorRef.current = fromBelow ? bottomId : topId;
+        focusRef.current = fromBelow ? topId : bottomId;
         select(ids);
       };
 

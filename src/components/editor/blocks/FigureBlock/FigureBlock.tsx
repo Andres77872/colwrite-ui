@@ -1,7 +1,7 @@
 import { memo, useCallback, useRef, useState, type FocusEvent, type MouseEvent } from 'react';
 import { BookOpen, Check, ChevronDown, Pencil, Shapes, Sparkles, WandSparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useEditorActions, type CodeBlock as CodeBlockModel } from '@/editor';
+import { useEditorActions, usePageReadOnly, type CodeBlock as CodeBlockModel } from '@/editor';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,7 +72,9 @@ export const FigureBlock = memo(function FigureBlock({
   const [compiled, setCompiled] = useState<CompiledFigure | null>(null);
   const [selection, setSelection] = useState<FigureSelection | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
-  const locked = block.locked === true;
+  // A read-only page (a viewer) only ever shows the figure.
+  const readOnly = usePageReadOnly();
+  const locked = block.locked === true || readOnly;
   const empty = block.text.trim() === '';
   const starter = isStarter(block.text);
   // A starter has nothing to show at rest, so it opens on its source and the

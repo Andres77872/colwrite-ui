@@ -1,11 +1,11 @@
-import { BookMarked, FileCode, FileSearch, History, Network, ScanSearch, Search, Sparkles, Telescope } from 'lucide-react';
+import { BookMarked, BookOpen, FileCode, History, Network, ScanSearch, Search, Sparkles, Telescope } from 'lucide-react';
 import type { ElementType } from 'react';
 import type { ResearchSourceId, SidebarTab, ToolId } from './panelsContextState';
 
 export type PaperSourceId = 'arxiv' | 'semantic_scholar';
 
 export interface ToolMeta {
-  id: Exclude<ToolId, 'chats'>;
+  id: ToolId;
   label: string;
   description: string;
   icon: ElementType;
@@ -22,13 +22,13 @@ export const TOOLS: readonly ToolMeta[] = [
   {
     id: 'assistant',
     label: 'AI',
-    description: 'Ask about this document, draft and revise it with AI.',
+    description: 'Ask about this page, draft and revise it with AI.',
     icon: Sparkles,
   },
   {
     id: 'research',
     label: 'Research',
-    description: 'Find papers to read and cite without leaving the document.',
+    description: 'Find papers to read and cite without leaving the page.',
     icon: Telescope,
   },
   {
@@ -47,33 +47,33 @@ export const TOOLS: readonly ToolMeta[] = [
   },
   {
     id: 'colpali',
-    label: 'Search pages',
+    label: 'Search paper pages',
     description: 'Find the exact pages of arXiv papers that answer a question.',
     icon: ScanSearch,
     sourceId: 'arxiv',
   },
   {
     id: 'library',
-    label: 'My PDFs',
-    description: 'Your uploaded PDFs — search inside them, upload and organise.',
-    icon: FileSearch,
+    label: 'Library',
+    description: 'Your PDFs: what this page uses, every collection, and search inside them.',
+    icon: BookOpen,
   },
   {
     id: 'sources',
     label: 'Sources',
-    description: 'What this document cites and keeps — verify, cite, export BibTeX.',
+    description: 'What this page cites and keeps — verify, cite, export BibTeX.',
     icon: BookMarked,
   },
   {
     id: 'history',
     label: 'History',
-    description: 'Saved versions of this document — see what changed and restore.',
+    description: 'Saved versions of this page — see what changed and restore.',
     icon: History,
   },
   {
     id: 'json',
     label: 'Document JSON',
-    description: 'Inspect and replace the raw document structure.',
+    description: 'Inspect and replace the raw JSON of this page.',
     icon: FileCode,
   },
 ] as const;
@@ -94,6 +94,7 @@ export function toolsForEnabledSources(
 export const SIDEBAR_TABS: readonly Exclude<SidebarTab, 'json'>[] = [
   'assistant',
   'research',
+  'library',
   'sources',
   'history',
 ];
@@ -102,7 +103,7 @@ export const RESEARCH_SOURCE_IDS: readonly ResearchSourceId[] = [
   'arxiv',
   'semantic-scholar',
   'colpali',
-  'library',
+  'pdfs',
 ];
 
 export interface ResearchSourceMeta {
@@ -132,16 +133,16 @@ export const RESEARCH_SOURCES: Record<ResearchSourceId, ResearchSourceMeta> = {
   },
   colpali: {
     id: 'colpali',
-    label: 'Pages',
+    label: 'Paper pages',
     shortLabel: 'Pages',
-    placeholder: 'Find pages that answer a question…',
+    placeholder: 'Find paper pages that answer a question…',
     sourceId: 'arxiv',
   },
-  library: {
-    id: 'library',
-    label: 'My PDFs',
+  pdfs: {
+    id: 'pdfs',
+    label: 'Inside my PDFs',
     shortLabel: 'PDFs',
-    placeholder: 'Search inside your PDFs…',
+    placeholder: 'Search inside my PDFs…',
   },
 };
 
@@ -154,11 +155,13 @@ export const isResearchSource = (value: unknown): value is ResearchSourceId =>
   typeof value === 'string' && (RESEARCH_SOURCE_IDS as readonly string[]).includes(value);
 
 export const isToolId = (value: unknown): value is ToolId =>
-  isSidebarTab(value) || isResearchSource(value) || value === 'chats';
+  isSidebarTab(value) || isResearchSource(value);
+
+/** A tab the sidebar reopens on after a reload; JSON is never restored. */
+export const isPersistedTab = (value: unknown): value is Exclude<SidebarTab, 'json'> =>
+  typeof value === 'string' && (SIDEBAR_TABS as readonly string[]).includes(value);
 
 /** The tab a tool id opens. */
 export function tabForTool(tool: ToolId): SidebarTab {
-  if (isResearchSource(tool)) return 'research';
-  if (tool === 'chats') return 'assistant';
-  return tool;
+  return isResearchSource(tool) ? 'research' : tool;
 }

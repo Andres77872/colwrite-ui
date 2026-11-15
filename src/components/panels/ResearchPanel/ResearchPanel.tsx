@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import { ArrowRight, Search, SlidersHorizontal, X } from 'lucide-react';
-import { searchArxiv } from '@/services/arxiv';
-import { searchColpaliArxiv } from '@/services/colpali';
+import { ArrowRight, FileSearch, Search, SlidersHorizontal, X } from 'lucide-react';
+import { searchArxiv } from '@/data/arxiv';
+import { searchColpaliArxiv } from '@/data/colpali';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -11,11 +12,9 @@ import { NativeSelect } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAgentTools } from '@/components/preferences';
-import { useEditor } from '@/editor';
 import { cn } from '@/lib/utils';
 import { usePanels, type ResearchSourceId } from '../panelsContextState';
 import { RESEARCH_SOURCE_IDS, RESEARCH_SOURCES } from '../toolsConfig';
-import { LibraryPanel, type LibraryFocus } from '../LibraryPanel/LibraryPanel';
 import {
   NO_FILTERS,
   SemanticScholarResults,
@@ -24,8 +23,6 @@ import {
   type SemanticScholarFilters,
 } from '../SemanticScholarPanel';
 import { ArxivResults, ColpaliResults } from './PaperResults';
-import { PdfResults } from './PdfSearch';
-import { usePdfSearch } from './usePdfSearch';
 import { usePaperSearch } from './usePaperSearch';
 
 const RESULT_LIMITS = [10, 20, 30, 40, 50] as const;
@@ -38,28 +35,26 @@ type S2Mode = 'papers' | 'claim';
 /**
  * ResearchPanel — one search box over every paper source.
  *
- * arXiv, Semantic Scholar, ColPali and the account's own PDFs used to be four
- * rail panels with four copies of the same query row, each forgetting its
- * results the moment another panel opened. Here the query is typed once, the
- * source is a switch under it, and every source keeps its own results for as
- * long as the sidebar is open. A source the account has not enabled cannot be
- * picked, so its API is never called.
+ * The query is typed once, the source is a switch under it, and every source
+ * keeps its own results for as long as the sidebar is open. A source the
+ * account has not enabled cannot be picked, so its API is never called.
+ *
+ * "Inside my PDFs" is not searched here: it hands the query to the Library,
+ * which owns the one PDF search and shows its matches where each PDF can be
+ * read, moved and used.
  */
 export function ResearchPanel() {
-  const { researchSource, setResearchSource, intent } = usePanels();
-  const { isSourceEnabled } = useAgentTools();
-  const { documentId } = useEditor();
+  const { researchSource, setResearchSource, intent, openSidebar, setTool } = usePanels();
+  const { isSourceEnabled, switchedOffBy } = useAgentTools();
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(20);
   const [filters, setFilters] = useState<SemanticScholarFilters>(NO_FILTERS);
   const [claimYear, setClaimYear] = useState('');
   const [s2Mode, setS2Mode] = useState<S2Mode>('papers');
-  const [managing, setManaging] = useState<{ focus: LibraryFocus | null } | null>(null);
 
-  const arxiv = usePaperSearch(runArxiv);
-  const colpali = usePaperSearch(runColpali);
+  const arxiv = usePaperSearch('arxiv', runArxiv);
+  const colpali = usePaperSearch('colpali', runColpali);
   const s2 = useSemanticScholar();
-  const pdfs = usePdfSearch();
 
   const enabled = (id: ResearchSourceId) => {
     const gate = RESEARCH_SOURCES[id].sourceId;
@@ -68,12 +63,12 @@ export function ResearchPanel() {
   // A persisted choice can outlive the account setting that allowed it.
   const source = enabled(researchSource)
     ? researchSource
-    : RESEARCH_SOURCE_IDS.find(enabled) ?? 'library';
+    : RESEARCH_SOURCE_IDS.find(enabled) ?? 'pdfs';
   const claimMode = source === 'semantic-scholar' && s2Mode === 'claim';
   const loading =
     source === 'arxiv' ? arxiv.loading
     : source === 'colpali' ? colpali.loading
-    : source === 'library' ? pdfs.loading
+    : source === 'pdfs' ? false
     : claimMode ? Boolean(s2.assessment?.loading)
     : s2.loading;
 
@@ -81,7 +76,7 @@ export function ResearchPanel() {
     if (!text.trim()) return;
     if (source === 'arxiv') void arxiv.search(text, limit);
     else if (source === 'colpali') void colpali.search(text, limit);
-    else if (source === 'library') void pdfs.search(text);
+    else if (source === 'pdfs') openSidebar('library', { tab: 'library', query: text.trim() });
     else if (claimMode) void s2.assess(text, limit, claimYear);
     else void s2.search(text, limit, filters);
   };
@@ -91,7 +86,6 @@ export function ResearchPanel() {
   useEffect(() => {
     if (intent?.tab !== 'research' || handledIntent.current === intent.id) return;
     handledIntent.current = intent.id;
-    setManaging(null);
     setQuery(intent.query);
     run(intent.query);
     // Runs once per intent; `run` reads the current source and filters.
@@ -103,29 +97,14 @@ export function ResearchPanel() {
     run(query);
   };
 
-  if (managing) {
-    return (
-      <div className="flex h-full min-h-0 flex-col">
-        {/* The file manager draws its own one-row header ("← My PDFs", or
-            "← title" on a file), so there is only ever one way back. */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-          <LibraryPanel initialResource={managing.focus} onExit={() => setManaging(null)} />
-        </div>
-      </div>
-    );
-  }
-
-  const clearQuery = () => {
-    setQuery('');
-    if (source === 'library') pdfs.clear();
-  };
+  const clearQuery = () => setQuery('');
 
   const meta = RESEARCH_SOURCES[source];
   const filterCount =
     source !== 'semantic-scholar' ? 0
     : claimMode ? Number(Boolean(claimYear.trim()))
     : activeFilterCount(filters);
-  const hasFilters = source !== 'library';
+  const hasFilters = source !== 'pdfs';
 
   return (
     <div className="@container/research flex h-full min-h-0 flex-col">
@@ -176,7 +155,7 @@ export function ResearchPanel() {
               </button>
             )}
           </div>
-          {/* My PDFs has nothing to filter, but the button's slot stays, so
+          {/* A PDF search has nothing to filter, but the button's slot stays, so
               the field keeps its width when the source changes. */}
           {hasFilters ? (
             <FiltersPopover
@@ -215,7 +194,16 @@ export function ResearchPanel() {
           </Tooltip>
         </form>
 
-        <SourceSwitch source={source} onChange={setResearchSource} enabled={enabled} />
+        <SourceSwitch
+          source={source}
+          onChange={setResearchSource}
+          enabled={enabled}
+          // The workspace's policy, not the person's setting, took it away here.
+          offHere={(id) => {
+            const gate = RESEARCH_SOURCES[id].sourceId;
+            return Boolean(gate && switchedOffBy('source', gate));
+          }}
+        />
         {source === 'semantic-scholar' && <S2ModeSwitch mode={s2Mode} onChange={setS2Mode} />}
       </div>
 
@@ -223,8 +211,17 @@ export function ResearchPanel() {
         {source === 'arxiv' && <ArxivResults state={arxiv} />}
         {source === 'colpali' && <ColpaliResults state={colpali} />}
         {source === 'semantic-scholar' && <SemanticScholarResults state={s2} mode={s2Mode} />}
-        {source === 'library' && (
-          <PdfResults state={pdfs} documentId={documentId} onManage={(focus) => setManaging({ focus })} />
+        {source === 'pdfs' && (
+          <EmptyState
+            icon={FileSearch}
+            title="Search inside my PDFs"
+            description="Every PDF you uploaded, searched word for word. The matches open in the Library, where you can read each one in context."
+            action={
+              <Button variant="outline" size="sm" onClick={() => setTool('library')}>
+                Open Library
+              </Button>
+            }
+          />
         )}
       </div>
     </div>
@@ -238,7 +235,8 @@ const PILL_ON = 'bg-active font-medium text-foreground';
 const PILL_OFF = 'text-muted-foreground hover:bg-hover hover:text-foreground';
 
 /**
- * arXiv · Semantic Scholar · Pages · My PDFs, as one row of quiet pills.
+ * arXiv · Semantic Scholar · Paper pages · Inside my PDFs, as one row of quiet
+ * pills.
  *
  * Never scrolls: in a narrow sidebar the labels shorten — arXiv · Scholar ·
  * Pages · PDFs — and the full name stays the accessible name and the tooltip.
@@ -249,10 +247,12 @@ function SourceSwitch({
   source,
   onChange,
   enabled,
+  offHere,
 }: {
   source: ResearchSourceId;
   onChange: (source: ResearchSourceId) => void;
   enabled: (source: ResearchSourceId) => boolean;
+  offHere: (source: ResearchSourceId) => boolean;
 }) {
   return (
     <div role="radiogroup" aria-label="Search in" className="-mx-1 flex min-w-0 items-center gap-0.5 px-1">
@@ -262,6 +262,7 @@ function SourceSwitch({
           id={id}
           active={id === source}
           available={enabled(id)}
+          offInWorkspace={!enabled(id) && offHere(id)}
           onSelect={() => onChange(id)}
         />
       ))}
@@ -286,11 +287,14 @@ function SourcePill({
   id,
   active,
   available,
+  offInWorkspace,
   onSelect,
 }: {
   id: ResearchSourceId;
   active: boolean;
   available: boolean;
+  /** The workspace's policy switched outside research off for everyone here. */
+  offInWorkspace: boolean;
   onSelect: () => void;
 }) {
   const reasonId = useId();
@@ -326,7 +330,9 @@ function SourcePill({
       </Tooltip>
     );
   }
-  const reason = `Enable ${label} in Settings → AI & tools`;
+  const reason = offInWorkspace
+    ? `${label} is switched off in this workspace`
+    : `Enable ${label} in Settings → AI & tools`;
   // A disabled button gets no pointer events, so the tooltip hangs off a
   // wrapper; the same reason is the button's description.
   return (

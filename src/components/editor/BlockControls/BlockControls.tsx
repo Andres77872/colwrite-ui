@@ -25,10 +25,11 @@ import {
   htmlToText,
   kindLabel,
   kindOf,
-  useEditor,
+  useDocumentStatus,
   useEditorActions,
   type Block,
   type BlockKindId,
+  usePageReadOnly,
 } from '@/editor';
 import { blocksToMarkdown } from '@/editor/markdown';
 import { uid } from '@/lib/uid';
@@ -212,6 +213,9 @@ export const BlockControls = memo(function BlockControls({
     toggleLocked,
   } = useEditorActions();
   const { toast } = useToast();
+  // A read-only page (a viewer): the handle opens what reads, copies and
+  // asks; nothing adds, moves, converts, flags or deletes a block.
+  const readOnly = usePageReadOnly();
   const id = block.id;
   const label = kindLabel(block);
   const current = kindOf(block);
@@ -302,7 +306,9 @@ export const BlockControls = memo(function BlockControls({
   const moveTargets = useCallback((dir: -1 | 1) => {
     const ids = targetIds();
     const order = getBlockIds();
-    const edge = order.indexOf(dir < 0 ? ids[0] : ids[ids.length - 1]) + dir;
+    const end = dir < 0 ? ids[0] : ids.at(-1);
+    if (end === undefined) return;
+    const edge = order.indexOf(end) + dir;
     if (edge < 0 || edge >= order.length) return;
     // The far end moves first, and the whole move is one undo step.
     batch(() => {
@@ -366,6 +372,12 @@ export const BlockControls = memo(function BlockControls({
     return list;
   }, [batch, block, copyText, duplicateBlock, getBlock, id, isFirst, isLast, locked, moveTargets, removeBlocks, selectBlocks, targetIds, toggleCollapsed, toggleTargets]);
 
+  /** The commands that change nothing, for a read-only page. */
+  const readOnlyActions = useMemo(
+    () => actions.filter((action) => action.id === 'link' || action.id === 'markdown' || action.id === 'ai'),
+    [actions],
+  );
+
   const [query, setQuery] = useState('');
   const [handleTip, setHandleTip] = useState(false);
   // Closing the menu hands focus back to the handle; that focus must not pop
@@ -387,6 +399,7 @@ export const BlockControls = memo(function BlockControls({
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return null;
+    if (readOnly) return readOnlyActions.filter((action) => `${action.label} ${action.keywords ?? ''}`.toLowerCase().includes(needle));
     const turnInto: MenuAction[] =
       block.type === 'divider' || locked
         ? []
@@ -403,7 +416,7 @@ export const BlockControls = memo(function BlockControls({
     return [...actions, ...turnInto].filter((action) =>
       `${action.label} ${action.keywords ?? ''}`.toLowerCase().includes(needle),
     );
-  }, [actions, block.type, current, focusBlock, id, locked, query, turnTargetsInto]);
+  }, [actions, block.type, current, focusBlock, id, locked, query, readOnly, readOnlyActions, turnTargetsInto]);
 
   const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     const items = () =>
@@ -450,6 +463,7 @@ export const BlockControls = memo(function BlockControls({
         className="block-controls flex items-center gap-px pr-1"
         data-open={menuOpen || undefined}
       >
+        {!readOnly && (
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -471,6 +485,7 @@ export const BlockControls = memo(function BlockControls({
             <HandleTip first="Click to add below" second={`${alt}click to add above`} />
           </TooltipContent>
         </Tooltip>
+        )}
 
         <DropdownMenu open={menuOpen} onOpenChange={setOpen} modal={false}>
           {/* Inert anchor for positioning; the handle below opens the menu. */}
@@ -490,12 +505,14 @@ export const BlockControls = memo(function BlockControls({
                 type="button"
                 className={cn(
                   'flex h-6 w-[18px] items-center justify-center rounded-sm text-icon-tertiary transition-colors hover:bg-hover hover:text-muted-foreground',
-                  locked ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
+                  locked || readOnly ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   menuOpen && 'bg-hover text-muted-foreground',
                 )}
                 aria-label={
-                  locked
+                  readOnly
+                    ? `${label} block: click for options`
+                    : locked
                     ? `${label} block, locked: click for options`
                     : `${label} block: drag to move, click for options`
                 }
@@ -503,7 +520,7 @@ export const BlockControls = memo(function BlockControls({
                 aria-expanded={menuOpen}
                 // A locked block stays put, as Move up/down and ⌘⇧↑/↓ already
                 // make it.
-                draggable={!locked}
+                draggable={!locked && !readOnly}
                 onMouseDown={(event) => {
                   event.stopPropagation();
                   draggedRef.current = false;
@@ -537,7 +554,7 @@ export const BlockControls = memo(function BlockControls({
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <HandleTip first={locked ? 'Locked in place' : 'Drag to move'} second="Click to open menu" />
+              <HandleTip first={readOnly ? 'View only' : locked ? 'Locked in place' : 'Drag to move'} second="Click to open menu" />
             </TooltipContent>
           </Tooltip>
 
@@ -599,6 +616,8 @@ export const BlockControls = memo(function BlockControls({
                 ) : (
                   <p className="px-2 py-1.5 text-sm text-muted-foreground">No matching actions</p>
                 )
+              ) : readOnly ? (
+                <DropdownMenuGroup>{readOnlyActions.map(renderAction)}</DropdownMenuGroup>
               ) : (
                 <>
                   <DropdownMenuGroup>
@@ -755,7 +774,7 @@ function HandleTip({ first, second }: { first: string; second: string }) {
  * the editor state here costs nothing while writing.
  */
 function MenuFooter({ block, label }: { block: Block; label: string }) {
-  const { lastSavedAt } = useEditor();
+  const { lastSavedAt } = useDocumentStatus();
   const text = block.type === 'code' ? block.text : 'html' in block ? htmlToText(block.html) : '';
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
   const edited = editedLabel(lastSavedAt);

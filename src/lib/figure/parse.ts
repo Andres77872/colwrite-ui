@@ -196,10 +196,10 @@ function contentWindow(source: string): { start: number; end: number; afterFence
   open.lastIndex = start;
   const match = open.exec(source);
   // A backtick fence's info string may not contain a backtick (CommonMark).
-  if (!match || (match[1][0] === '`' && match[2].includes('`'))) {
+  const fence = match?.[1];
+  if (!match || !fence || (fence.startsWith('`') && (match[2] ?? '').includes('`'))) {
     return { start, end: source.length, afterFence: null };
   }
-  const fence = match[1];
   const contentStart = open.lastIndex;
   const close = new RegExp(`^[ \\t]*${fence[0] === '`' ? '`' : '~'}{${fence.length},}[ \\t]*\\r?$`, 'gm');
   close.lastIndex = contentStart;
@@ -501,7 +501,8 @@ class Reader {
           pos += 6;
           continue;
         }
-        if ('bfnrt'.includes(e)) {
+        const control = e === undefined ? undefined : CONTROL_ESCAPES[e];
+        if (control !== undefined) {
           if (math.inMath && isAsciiLetter(this.code(pos + 2))) {
             // `\beta`, `\frac`, `\nabla`, `\rho`, `\times`: keep the backslash;
             // the letter is read next as itself.
@@ -509,7 +510,7 @@ class Reader {
             pos += 1;
             continue;
           }
-          emit(CONTROL_ESCAPES[e]);
+          emit(control);
           pos += 2;
           continue;
         }
@@ -552,11 +553,11 @@ class Reader {
                 : `A raw control character (U+${c.toString(16).toUpperCase().padStart(4, '0')}) inside a string was kept; strict JSON escapes it.`;
           this.report('warning', 'json.raw-control', what, [pos, pos + 1], path);
         }
-        emit(src[pos]);
+        emit(src.charAt(pos));
         pos += 1;
         continue;
       }
-      emit(src[pos]);
+      emit(src.charAt(pos));
       pos += 1;
     }
     this.pos = pos;
@@ -747,8 +748,8 @@ export function lineColumn(source: string, offset: number): { line: number; colu
   let hi = starts.length - 1;
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1;
-    if (starts[mid] <= at) lo = mid;
+    if ((starts[mid] ?? 0) <= at) lo = mid;
     else hi = mid - 1;
   }
-  return { line: lo + 1, column: at - starts[lo] + 1 };
+  return { line: lo + 1, column: at - (starts[lo] ?? 0) + 1 };
 }

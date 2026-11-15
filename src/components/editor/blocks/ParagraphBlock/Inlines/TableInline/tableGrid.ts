@@ -57,9 +57,10 @@ export function removeColumn(grid: string[][], at: number): string[][] {
  */
 export function parseClipboardTable(text: string): string[][] | null {
   const rows = text.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n');
-  if (rows.length === 0) return null;
+  const [first] = rows;
+  if (first === undefined) return null;
 
-  const delimiter = rows[0].includes('\t') ? '\t' : rows.every((r) => r.includes(',')) ? ',' : null;
+  const delimiter = first.includes('\t') ? '\t' : rows.every((r) => r.includes(',')) ? ',' : null;
   if (!delimiter) return null;
 
   const grid = rows.map((row) => row.split(delimiter));
@@ -91,8 +92,10 @@ export function mergeAt(
   const out = normalizeGrid(grid, height, width);
 
   pasted.forEach((pastedRow, r) => {
+    const target = out[row + r];
+    if (!target) return;
     pastedRow.forEach((value, c) => {
-      out[row + r][col + c] = value;
+      target[col + c] = value;
     });
   });
   return out;

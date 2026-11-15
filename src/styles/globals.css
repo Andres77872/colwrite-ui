@@ -1306,6 +1306,19 @@
       }
     }
 
+    /* The pages tree: rows are 44px tall (`pointer-coarse:min-h-11`), and a
+       row's "+" and "…" (selected by their names and `aria-haspopup`, which
+       the row markup keeps) are 44px targets drawn at 28px. */
+    .pages-tree [role="treeitem"] button:is([aria-haspopup="menu"], [aria-label^="New page in"]) {
+      position: relative;
+    }
+
+    .pages-tree [role="treeitem"] button:is([aria-haspopup="menu"], [aria-label^="New page in"])::after {
+      content: "";
+      position: absolute;
+      inset: -8px -4px;
+    }
+
     /* Diagram and figure "Edit": 44px tall over the drawing. */
     .block-action::after {
       content: "";

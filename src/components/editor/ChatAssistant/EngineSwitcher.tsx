@@ -16,10 +16,10 @@ import { useAgentEngine } from '@/components/preferences/agentEngineContextState
 import { engineBadge, engineName } from '@/components/preferences/agentEngineCopy';
 import { ViewContext } from '@/components/layout/viewContextState';
 import { requestSettingsPane } from '@/components/profile/settingsPane';
-import { AGENT_ENGINE_IDS, isAgentEngineId, type AgentEngineId } from '@/services/agentEngines';
+import { AGENT_ENGINE_IDS, isAgentEngineId, type AgentEngineId } from '@/data/agentEngines';
 
 const SHORT_NAMES: Record<AgentEngineId, string> = {
-  legacy: 'Gateway',
+  gateway: 'Gateway',
   claude: 'Claude Code',
   codex: 'Codex',
 };
@@ -56,7 +56,7 @@ export function EngineSwitcher({ disabled = false }: { disabled?: boolean }) {
 
   const openSettings = () => {
     requestSettingsPane('ai');
-    view?.setView('profile');
+    view?.setView('settings');
   };
 
   return (
@@ -114,7 +114,7 @@ export function EngineSwitcher({ disabled = false }: { disabled?: boolean }) {
           })}
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
-        {current !== 'legacy' && (
+        {current !== 'gateway' && (
           <DropdownMenuItem
             disabled={checking === current}
             onSelect={(event) => {

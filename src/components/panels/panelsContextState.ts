@@ -4,10 +4,13 @@ import { createContext, useContext } from 'react';
  * The right sidebar's tabs. `json` is transient: it only shows while it is
  * the active tab, and choosing any other tab dismisses it.
  */
-export type SidebarTab = 'assistant' | 'research' | 'sources' | 'history' | 'json';
+export type SidebarTab = 'assistant' | 'research' | 'library' | 'sources' | 'history' | 'json';
 
-/** Where the Research tab searches. `library` is the account's own PDFs. */
-export type ResearchSourceId = 'arxiv' | 'semantic-scholar' | 'colpali' | 'library';
+/**
+ * Where the Research tab searches. `pdfs` is "Search inside my PDFs", which
+ * hands the query to the Library tab and shows its matches there.
+ */
+export type ResearchSourceId = 'arxiv' | 'semantic-scholar' | 'colpali' | 'pdfs';
 
 /**
  * Everything `setTool` accepts: a tab, or a research source (which opens the
@@ -15,11 +18,15 @@ export type ResearchSourceId = 'arxiv' | 'semantic-scholar' | 'colpali' | 'libra
  * lives inside the Assistant tab. The source ids are also the ids the old
  * tool rail persisted, so saved preferences keep meaning something.
  */
-export type ToolId = SidebarTab | ResearchSourceId | 'chats';
+export type ToolId = SidebarTab | ResearchSourceId;
 
 /** Context for opening the sidebar on a specific thing, not just a tab. */
 export type SidebarIntent =
   | { tab: 'research'; query: string }
+  /** Search inside every PDF, in the Library. */
+  | { tab: 'library'; query: string }
+  /** Browse one collection in the Library: its pages, collections and PDFs. */
+  | { tab: 'library'; collectionId: number }
   | { tab: 'sources'; sourceKey: string };
 
 type SetStateAction<T> = T | ((previous: T) => T);
@@ -33,7 +40,8 @@ export type PanelsContextValue = {
   setResearchSource: (source: ResearchSourceId) => void;
   /**
    * Open a tab and hand it something to act on: a query for Research (run on
-   * the current source), a source key for Sources (scrolled to and marked).
+   * the current source) or for the Library (searched inside the PDFs), a
+   * source key for Sources (scrolled to and marked).
    */
   openSidebar: (tab: SidebarTab, intent?: SidebarIntent) => void;
   /** The last intent, for the tab it names to consume. `id` changes per call. */

@@ -162,6 +162,6 @@ describe('mergeAt', () => {
       ['keep', 'keep'],
       ['keep', 'keep'],
     ];
-    expect(mergeAt(grid, [['new']], 0, 0)[0][1]).toBe('keep');
+    expect(mergeAt(grid, [['new']], 0, 0)[0]?.[1]).toBe('keep');
   });
 });

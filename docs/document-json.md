@@ -1,11 +1,13 @@
 # Document JSON and Block Structure
 
+> **Secondary copy.** The authoritative description is `ColWrite-api/docs/document-json.md`, with the shared fixture corpus in `ColWrite-api/tests/fixtures/document_contract/`. Where the two differ, the API's copy is right.
+
 This doc explains the document JSON format used by the editor, how blocks and inline children are represented, and how to create/edit/persist documents.
 
 It references the following source files for ground truth:
 
 - `src/editor/types.ts`
-- `src/editor/EditorContext.tsx`
+- `src/editor/EditorContext.tsx` and `src/editor/blockActions.ts`
 - `src/components/common/Editable/Editable.tsx`
 - `src/components/editor/SlashMenu/items/aiBeat.ts`
 - `src/components/editor/SlashMenu/items/table.ts`
@@ -21,8 +23,8 @@ It references the following source files for ground truth:
 - `src/components/editor/blocks/ParagraphBlock/Inlines/EquationInline/EquationInline.tsx`
 - `src/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/GraphInline.tsx`
 - `src/components/editor/BlockControls/BlockControls.tsx`
-- `src/components/editor/DocumentChrome/DocumentHeader.tsx`
-- `src/services/documents.ts`
+- `src/components/editor/DocumentChrome/PageMenu.tsx`
+- `src/data/documents.ts` and `src/api/content.ts`
 - `src/components/panels/JsonPanel/JsonPanel.tsx`
 - `src/editor/storage.ts`
 - `src/components/editor/DocumentsMenu/DocumentsMenu.tsx`
@@ -239,7 +241,7 @@ Creation flow (in `src/editor/EditorContext.tsx`):
   - blocks: a level-2 heading and one empty paragraph (`columns: 1`), with `children: []`.
 - On first run, state initializes from `loadDoc()` (localStorage) or falls back to `makeDefaultDoc()`.
 
-Working with blocks (via `useEditor()` in `EditorContext`):
+Working with blocks (via `useEditorActions()`, implemented in `src/editor/blockActions.ts`):
 
 - `addBlockAtStart(type)` / `addBlockAfter(afterId, type)` create a new block with generated `id` and default fields.
 - `moveBlock(id, dir)` and `reorderBlock(id, toIndex)` change order.
@@ -269,20 +271,17 @@ AI suggestions vs. inline children:
 - Accept/Reject removes the wrapper and commits the chosen content back into the block HTML.
 - Only placeholders with `data-child-id` and corresponding entries in a paragraph's `children` array are part of the formal JSON schema for inline widgets.
 
-Migration note:
-
-- On mount, the provider runs a one-time migration that converts legacy inline `.ai-beat-widget` markup embedded directly in paragraph HTML into proper placeholders with a matching `children` entry (see the migration `useEffect` in `EditorContext.tsx`).
 
 
 ## Persistence: local and remote
 
 Local storage (`src/editor/storage.ts`):
 
-- `saveDoc(doc)` and `loadDoc()` persist/load from `localStorage` under key `colwrite:doc`.
-- Current document ID is stored under `colwrite:docId`.
-- The provider auto-saves to `localStorage` on any doc change (via `requestAnimationFrame`) and persists the current `documentId` using `saveDocumentId(...)`.
+- `saveDoc(doc, id)` and `loadDoc(id)` keep a local copy of each page, keyed by its id (`draftKey`, `src/lib/storageKeys.ts`); a page with no id yet is the local starter page.
+- The last open page's id is kept with `saveDocumentId(...)` (`LAST_PAGE_KEY`).
+- Sign-out removes every account key, drafts included.
 
-Remote API (`src/services/documents.ts`):
+Remote API (`src/data/documents.ts`):
 
 - `createDocument(docOrBlocks)`: POST `/document/create` with `{ document: <object> }` and returns `{ document_id }`.
 - `saveDocument(id, docOrBlocks)`: PUT `/document/save/:id` with `{ document: <object> }`.
@@ -297,16 +296,10 @@ Backend payload mapping helpers:
 
 UI integrations:
 
-- `DocumentHeader` (`src/components/editor/DocumentChrome/DocumentHeader.tsx`):
-  - Rename: on blur/Enter it normalizes the title and immediately calls `saveRemote(override)` so the latest name is persisted. Shows the current `documentId`.
-  - Save: `Save` button calls `saveRemote()` which creates the remote document if needed and updates `lastSavedAt`.
-  - Delete: calls `deleteRemote(documentId)` and then `newLocal()` to reset to a fresh local doc; `New` also calls `newLocal()`.
-  - Displays last save time using `lastSavedAt`.
-- `DocumentsMenu` (`src/components/editor/DocumentsMenu/DocumentsMenu.tsx`):
-  - Lists documents via `listRemote(page, limit, query)` with a 350ms debounced search and paging controls.
-  - `New` creates an empty remote document with `createRemote({ name: 'New document', blocks: [] })` and refreshes the list.
-  - Clicking an item loads it via `loadRemote(id)`; Delete confirms and calls `deleteRemote(id)` then refreshes/paginates.
-- `ChatAssistant` (`src/components/editor/ChatAssistant/ChatAssistant.tsx`): ensures a `documentId` exists by calling `createRemote()` when missing before starting a streaming chat; it does not save editor content.
+- The page title (`useDocumentTitle`) normalizes the name on blur or Enter and saves it at once with `saveRemote(override)`.
+- The page menu (`PageMenu`) and the sidebar's page list (`DocumentsMenu`) delete through `useTrash()`, at the version they show; creating a page goes through `useNewPage()`.
+- The page list reads `listRemote` and patches the open page's row from the editor after a save.
+- The chat assistant calls `ensureRemoteDocument()` before a turn, so a page that was never saved gets an id first.
 - `FloatingToolbar` (`src/components/editor/FloatingToolbar/FloatingToolbar.tsx`): does not call remote persistence; it listens to `SLASH_MENU_VISIBILITY_EVENT` to hide while the slash menu is open and provides ephemeral AI suggestions not encoded in JSON.
 - `JsonPanel` (`src/components/panels/JsonPanel/JsonPanel.tsx`): inspect/apply raw JSON via `getJSON()` and `setFromJSON()`, and invoke API methods for testing.
 
@@ -318,7 +311,7 @@ Minimal empty document:
 ```json
 {
   "version": 1,
-  "name": "Untitled document",
+  "name": "Untitled page",
   "blocks": []
 }
 ```
@@ -440,7 +433,6 @@ Block metadata usage:
 - Use `getJSON()` / `setFromJSON()` to inspect/apply document JSON in the editor safely.
 - Treat the floating toolbar's `ai-suggest` wrapper as temporary UI; it is not part of the formal JSON schema. Accept or reject suggestions to commit clean HTML.
 - Use metadata flags (`aiHidden`, `locked`, `collapsed`) to control AI and UI behavior. The backend should enforce AI-related flags.
-- If migrating legacy documents that embedded `.ai-beat-widget` markup inside paragraph HTML, the provider will convert them into placeholders and child entries automatically on first load.
 
 
 ## Creating a new document JSON manually
@@ -451,7 +443,7 @@ Block metadata usage:
 ```json
 {
   "version": 1,
-  "name": "Untitled document",
+  "name": "Untitled page",
   "blocks": [
     { "id": "<uid>", "type": "heading", "level": 2, "html": "Your document" },
     { "id": "<uid>", "type": "paragraph", "html": "Write something here. Select text to format. Use the + to insert blocks.", "columns": 1, "children": [] }

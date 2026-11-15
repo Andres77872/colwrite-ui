@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { useConfirm } from '@/components/ui/confirmContext';
 import { modifierLabel } from '@/components/layout/Shortcuts/shortcuts';
-import { useEditor } from '@/editor';
+import { useEditorDoc, usePageReadOnly } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
 import {
   blockText,
@@ -17,7 +17,7 @@ import {
 } from '@/editor/proposals';
 import { ProposedBlockView, ProposedRewriteView, STRIKE_WIDGETS } from './ProposedBlockView';
 import { previewBibliography } from './diffText';
-import { ArrowDownUp, Check, History, Lock, Pencil, Plus, TextCursorInput, Trash2, X } from 'lucide-react';
+import { ArrowDownUp, Check, Eye, History, Lock, Pencil, Plus, TextCursorInput, Trash2, X } from 'lucide-react';
 
 /**
  * One proposed change, rendered in the document at the position it would take.
@@ -53,7 +53,7 @@ function shortText(text: string, max = 42): string {
 }
 
 function ChangeBody({ change }: { change: ProposedChange }) {
-  const { blocks, doc } = useEditor();
+  const { blocks, doc } = useEditorDoc();
 
   if (change.kind === 'rename') {
     const next = change.op.op === 'update_meta' ? change.op.meta?.name?.trim() : undefined;
@@ -77,7 +77,7 @@ function ChangeBody({ change }: { change: ProposedChange }) {
       <p className="text-sm text-muted-foreground">
         {above
           ? <>Move below “{shortText(blockText(above))}”.</>
-          : 'Move to the top of the document.'}
+          : 'Move to the top of the page.'}
       </p>
     );
   }
@@ -87,7 +87,7 @@ function ChangeBody({ change }: { change: ProposedChange }) {
   if (!current && change.anchorBlockId) {
     return (
       <p className="text-sm text-muted-foreground">
-        The block this was written for is no longer in the document, so it cannot be applied.
+        The block this was written for is no longer on the page, so it cannot be applied.
       </p>
     );
   }
@@ -184,9 +184,12 @@ function reviewKeys() {
 }
 
 export function ChangeCard({ change }: { change: ProposedChange }) {
-  const { blocks } = useEditor();
+  const { blocks } = useEditorDoc();
   const { accept, reject, ready, focusedChangeId, sets, pending } = useProposals();
   const confirm = useConfirm();
+  // A viewer sees the suggestion and decides nothing: deciding is an edit (D6).
+  const readOnly = usePageReadOnly();
+  const viewOnlyNote = 'Viewers can’t accept or reject changes';
 
   const style = KIND[change.kind];
   const isReady = ready(change);
@@ -210,7 +213,7 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
       return 'This continues the addition above. Accept or reject that one first.';
     }
     if (change.anchorBlockId && !blocks.some((block) => block.id === change.anchorBlockId)) {
-      return 'The block this was written for is no longer in the document.';
+      return 'The block this was written for is no longer on the page.';
     }
     if (stale) return 'The text changed after this was suggested.';
     return 'Decide the change above it first — the two would not combine cleanly.';
@@ -245,6 +248,7 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (readOnly) return;
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
@@ -293,7 +297,7 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
       <div className="flex min-h-6 min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
         <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
         <span className="shrink-0">{style.label}</span>
-        {!isReady && (
+        {!isReady && !readOnly && (
           <span className="flex min-w-0 items-center gap-1 truncate">
             <span aria-hidden="true">·</span>
             <BlockedIcon aria-hidden="true" className="h-3 w-3 shrink-0" />
@@ -301,16 +305,25 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
           </span>
         )}
 
+        {readOnly && (
+          <span className="flex min-w-0 items-center gap-1 truncate">
+            <span aria-hidden="true">·</span>
+            <Eye aria-hidden="true" className="h-3 w-3 shrink-0" />
+            <span className="truncate">{viewOnlyNote}</span>
+          </span>
+        )}
+
         <span className="ml-auto flex shrink-0 items-center gap-0.5">
-          {isReady && (
+          {(isReady || readOnly) && (
             <Button
               size="xs"
               variant="ghost"
               className="font-normal text-diff-add-fg hover:bg-diff-add hover:text-diff-add-fg"
               onClick={() => accept(change.id)}
+              disabled={readOnly}
               aria-label={`Accept: ${summary}`}
-              aria-keyshortcuts={keys.accept.aria}
-              title={`Accept (${keys.accept.hint})`}
+              aria-keyshortcuts={readOnly ? undefined : keys.accept.aria}
+              title={readOnly ? viewOnlyNote : `Accept (${keys.accept.hint})`}
             >
               <Check />
               <HoverLabel>Accept</HoverLabel>
@@ -325,9 +338,10 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
             variant="ghost"
             className="font-normal text-muted-foreground hover:text-foreground"
             onClick={() => void onReject()}
+            disabled={readOnly}
             aria-label={`Reject: ${summary}`}
-            aria-keyshortcuts={keys.reject.aria}
-            title={`Reject (${keys.reject.hint})`}
+            aria-keyshortcuts={readOnly ? undefined : keys.reject.aria}
+            title={readOnly ? viewOnlyNote : `Reject (${keys.reject.hint})`}
           >
             <X />
             <HoverLabel>Reject</HoverLabel>

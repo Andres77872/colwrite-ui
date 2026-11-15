@@ -1,75 +1,52 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
-  getAgentToolSettings,
-  updateAgentToolSettings,
+  agentToolSettingsQuery,
+  useUpdateAgentToolSettings,
   type AgentToolSettings,
   type AgentToolSettingsUpdate,
-} from '@/services/agentTools';
-import { errorMessage } from '@/services/contracts';
+} from '@/data/agentTools';
+import { workspaceQuery } from '@/data/workspaces';
+import { errorMessage } from '@/api/errors';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import {
   AgentToolsContext,
+  policySwitchFor,
   type AgentToolsContextValue,
 } from './agentToolsContextState';
 
 /**
- * Account-scoped agent capabilities shared by the workspace and preferences.
+ * What the assistant and the research surfaces may use here: the person's
+ * own tool settings (account-wide, shown in Settings → AI & tools), narrowed
+ * by the workspace's policy, which can only switch features off (D7). It sits
+ * inside the workspace scope so the policy of the workspace shown applies.
  *
- * Until the server answers, source/tool checks fail closed. If loading fails,
- * the UI continues without optional research integrations rather than
- * accidentally contacting a provider the account may have disabled.
+ * Until both answer, source/tool checks fail closed. If loading fails, the
+ * UI continues without optional research integrations rather than
+ * accidentally contacting a provider the account or the workspace switched
+ * off.
  */
 export function AgentToolsProvider({ children }: { children: ReactNode }) {
-  const [settings, setSettings] = useState<AgentToolSettings | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const requestEpoch = useRef(0);
+  const read = useQuery(agentToolSettingsQuery());
+  const workspaceId = useWorkspaceId();
+  const policy = useQuery(workspaceQuery(workspaceId)).data?.policy ?? null;
+  // A read that failed shows nothing, even after an earlier one succeeded:
+  // the checks below fail closed.
+  const settings = read.isError ? null : (read.data ?? null);
+  const loading = read.isFetching;
+  const loaded = read.isFetched || read.isSuccess;
+  const error = read.isError ? errorMessage(read.error, 'Could not load agent preferences') : null;
 
+  const refetch = read.refetch;
   const refresh = useCallback(async (): Promise<AgentToolSettings | null> => {
-    const epoch = ++requestEpoch.current;
-    setLoading(true);
-    try {
-      const next = await getAgentToolSettings();
-      if (epoch !== requestEpoch.current) return null;
-      setSettings(next);
-      setError(null);
-      return next;
-    } catch (caught) {
-      if (epoch !== requestEpoch.current) return null;
-      setSettings(null);
-      setError(errorMessage(caught, 'Could not load agent preferences'));
-      return null;
-    } finally {
-      if (epoch === requestEpoch.current) {
-        setLoaded(true);
-        setLoading(false);
-      }
-    }
-  }, []);
+    const result = await refetch();
+    return result.isError ? null : (result.data ?? null);
+  }, [refetch]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void refresh();
-    }, 0);
-    return () => {
-      window.clearTimeout(timer);
-      requestEpoch.current += 1;
-    };
-  }, [refresh]);
-
+  const save = useUpdateAgentToolSettings().mutateAsync;
   const updateSettings = useCallback(
-    async (changes: AgentToolSettingsUpdate): Promise<AgentToolSettings> => {
-      // A save supersedes any older GET so a slow refresh cannot restore its
-      // stale response over the mutation result.
-      requestEpoch.current += 1;
-      const next = await updateAgentToolSettings(changes);
-      setSettings(next);
-      setError(null);
-      setLoaded(true);
-      setLoading(false);
-      return next;
-    },
-    [],
+    (changes: AgentToolSettingsUpdate): Promise<AgentToolSettings> => save(changes),
+    [save],
   );
 
   const sourceState = useMemo(
@@ -86,13 +63,17 @@ export function AgentToolsProvider({ children }: { children: ReactNode }) {
     [settings],
   );
 
+  const switchedOffBy = useCallback(
+    (kind: 'source' | 'tool', id: string) => (policy ? policySwitchFor(policy, kind, id) : null),
+    [policy],
+  );
   const isSourceEnabled = useCallback(
-    (sourceId: string) => sourceState.get(sourceId) === true,
-    [sourceState],
+    (sourceId: string) => policy !== null && sourceState.get(sourceId) === true && !policySwitchFor(policy, 'source', sourceId),
+    [policy, sourceState],
   );
   const isToolEnabled = useCallback(
-    (toolId: string) => toolState.get(toolId) === true,
-    [toolState],
+    (toolId: string) => policy !== null && toolState.get(toolId) === true && !policySwitchFor(policy, 'tool', toolId),
+    [policy, toolState],
   );
 
   const value = useMemo<AgentToolsContextValue>(
@@ -105,6 +86,8 @@ export function AgentToolsProvider({ children }: { children: ReactNode }) {
       updateSettings,
       isSourceEnabled,
       isToolEnabled,
+      policy,
+      switchedOffBy,
     }),
     [
       error,
@@ -112,8 +95,10 @@ export function AgentToolsProvider({ children }: { children: ReactNode }) {
       isToolEnabled,
       loaded,
       loading,
+      policy,
       refresh,
       settings,
+      switchedOffBy,
       updateSettings,
     ],
   );

@@ -1,6 +1,6 @@
 import { EmptyState } from '@/components/ui/empty-state';
 import { formatNumber } from '@/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/chartScale';
-import type { ToolUsage } from '@/services/userProfile';
+import type { ToolUsage } from '@/data/userProfile';
 import { Wrench } from 'lucide-react';
 
 /**
@@ -23,7 +23,7 @@ export function ToolUsageList({ tools }: { tools: ToolUsage[] }) {
         <EmptyState
           icon={Wrench}
           title="No tool runs yet"
-          description="Tools the assistant runs on your documents are counted here."
+          description="Tools the assistant runs on your pages are counted here."
         />
       ) : (
         <ul className="mt-3 space-y-2">

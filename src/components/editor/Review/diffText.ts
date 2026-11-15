@@ -105,7 +105,7 @@ export function diffPieces(value: string, table: WidgetTable): DiffPiece[] {
 export function edgeIsSpace(value: string, edge: 'start' | 'end'): boolean {
   const text = value.split(JOIN).join('');
   if (!text) return true;
-  return /\s/.test(edge === 'start' ? text[0] : text[text.length - 1]);
+  return /\s/.test(edge === 'start' ? text.charAt(0) : text.charAt(text.length - 1));
 }
 
 /* ----------------------------------------

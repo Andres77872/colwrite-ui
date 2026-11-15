@@ -128,8 +128,8 @@ export function parseLabel(text: string): Label {
   }
   breakLine();
 
-  while (lines.length > 0 && lines[0].length === 0) lines.shift();
-  while (lines.length > 0 && lines[lines.length - 1].length === 0) lines.pop();
+  while (lines[0]?.length === 0) lines.shift();
+  while (lines.at(-1)?.length === 0) lines.pop();
   return { lines, source, hasMath: lines.some((segments) => segments.some((segment) => segment.kind === 'math')) };
 }
 
@@ -211,7 +211,10 @@ function splitWords(segments: LabelSegment[]): Word[] {
   const endWord = (joint: Word['joint']) => {
     flushRun();
     if (current.length > 0) words.push({ segments: current, joint });
-    else if (words.length > 0 && joint === 'space') words[words.length - 1].joint = 'space';
+    else if (joint === 'space') {
+      const last = words.at(-1);
+      if (last) last.joint = 'space';
+    }
     current = [];
   };
   for (const segment of segments) {

@@ -48,7 +48,7 @@ describe('diffWords', () => {
     const inserts = segments.filter((s) => s.type === 'insert');
 
     expect(inserts).toHaveLength(1);
-    expect(inserts[0].value.trim()).toBe('nine ten');
+    expect(inserts[0]?.value.trim()).toBe('nine ten');
   });
 
   it('preserves whitespace exactly', () => {

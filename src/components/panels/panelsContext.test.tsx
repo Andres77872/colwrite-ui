@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { panelKey } from '@/lib/storageKeys';
 import { useEffect } from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { PanelsProvider } from './panelsContext';
@@ -65,24 +66,28 @@ describe('PanelsProvider', () => {
   });
 
   it.each([
-    ['arxiv', 'research', 'arxiv'],
-    ['semantic-scholar', 'research', 'semantic-scholar'],
-    ['colpali', 'research', 'colpali'],
-    ['library', 'research', 'library'],
-    ['chats', 'assistant', 'arxiv'],
-    ['json', 'assistant', 'arxiv'],
-    ['history', 'history', 'arxiv'],
-  ])('reopens a tool the old rail saved (%s) on the matching tab', (saved, tab, source) => {
+    ['research', 'research'],
+    ['library', 'library'],
+    ['history', 'history'],
+  ])('reopens on the tab it was last on (%s)', (saved, tab) => {
     installDesktopMatchMedia();
-    localStorage.setItem('panels.activeTool', JSON.stringify(saved));
+    localStorage.setItem(panelKey('tab'), JSON.stringify(saved));
     const state = renderProvider();
 
-    expect(state()).toMatchObject({ activeTool: tab, researchSource: source });
+    expect(state()).toMatchObject({ activeTool: tab, researchSource: 'arxiv' });
+  });
+
+  it('never reopens on the developer JSON view', () => {
+    installDesktopMatchMedia();
+    localStorage.setItem(panelKey('tab'), JSON.stringify('json'));
+    const state = renderProvider();
+
+    expect(state().activeTool).toBe('assistant');
   });
 
   it('falls back to the assistant when nothing valid was saved', () => {
     installDesktopMatchMedia();
-    localStorage.setItem('panels.activeTool', 'null');
+    localStorage.setItem(panelKey('tab'), 'null');
     const state = renderProvider();
 
     expect(state().activeTool).toBe('assistant');
@@ -129,6 +134,17 @@ describe('PanelsProvider', () => {
     cleanup();
     const reloaded = renderProvider();
     expect(reloaded().activeTool).toBe('history');
+  });
+
+  it('opens the Library as a tab of its own', () => {
+    installDesktopMatchMedia();
+    const state = renderProvider();
+
+    act(() => handle.current!.setTool('library'));
+    expect(state()).toMatchObject({ activeTool: 'library', researchSource: 'arxiv', isOpen: true });
+
+    act(() => handle.current!.openSidebar('library', { tab: 'library', query: 'router' }));
+    expect(handle.current!.intent).toMatchObject({ tab: 'library', query: 'router' });
   });
 
   it('hands an intent to the tab it opens, once per call', () => {

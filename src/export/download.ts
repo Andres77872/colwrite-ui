@@ -1,5 +1,5 @@
 export function exportFilename(name: string | undefined, extension: 'html' | 'pdf' | 'bib' | 'md' | 'svg' | 'tex'): string {
-  const raw = (name?.trim() || 'Untitled document').replaceAll('\\', '/');
+  const raw = (name?.trim() || 'Untitled page').replaceAll('\\', '/');
   const basename = Array.from(raw.split('/').at(-1) ?? '')
     .map((character) => {
       const codePoint = character.codePointAt(0) ?? 0;
@@ -11,7 +11,7 @@ export function exportFilename(name: string | undefined, extension: 'html' | 'pd
     })
     .join('')
     .trim();
-  const safe = (basename || 'Untitled document').slice(0, 120).replace(/\.+$/, '');
+  const safe = (basename || 'Untitled page').slice(0, 120).replace(/\.+$/, '');
   return safe.toLocaleLowerCase().endsWith(`.${extension}`) ? safe : `${safe}.${extension}`;
 }
 

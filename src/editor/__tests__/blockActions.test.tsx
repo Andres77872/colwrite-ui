@@ -1,23 +1,36 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useImperativeHandle } from 'react';
 import type { Block, ParagraphBlock } from '../types';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
 
-const { EditorProvider, useEditor } = await import('@/editor');
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const { EditorProvider } = await import('@/editor');
+const { useEditorProbe } = await import('./editorHarness');
 const { replayFootprint } = await import('@/editor/docOps');
 
-const editorRef = createRef<ReturnType<typeof useEditor>>();
+const editorRef = createRef<ReturnType<typeof useEditorProbe>>();
 
 function Capture() {
-  const editor = useEditor();
+  const editor = useEditorProbe();
   useImperativeHandle(editorRef, () => editor, [editor]);
   return null;
 }
@@ -28,7 +41,7 @@ function editor() {
 }
 
 function mount(blocks: Block[]) {
-  localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc: { version: 1, blocks } }));
+  localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: null, doc: { version: 1, blocks } }));
   render(
     <EditorProvider>
       <Capture />
@@ -86,7 +99,7 @@ describe('block actions', () => {
     act(() => {
       copyId = editor().duplicateBlock('a');
     });
-    const [original, copy] = editor().blocks as ParagraphBlock[];
+    const [original, copy] = takeItems(editor().blocks as ParagraphBlock[], 2);
     expect(copy.id).toBe(copyId);
     const copyChild = copy.children?.[0];
     expect(copyChild?.id).not.toBe('e1');
@@ -221,13 +234,13 @@ describe('replayFootprint', () => {
 
   it('names only the block that travelled when it passed many others', () => {
     const blocks = Array.from({ length: 12 }, (_, i) => para(`b${i}`));
-    const moved = [...blocks.slice(1), blocks[0]];
+    const moved = [...blocks.slice(1), itemAt(blocks, 0)];
     expect(replayFootprint(doc(blocks), doc(moved))).toEqual({ changed: ['b0'], near: null });
   });
 
   it('has nothing to show for a change outside the blocks', () => {
     const blocks = [para('a')];
-    expect(replayFootprint({ version: 1, blocks, name: 'One' }, { version: 1, blocks, name: 'Two' })).toEqual({
+    expect(replayFootprint({ blocks, name: 'One' }, { blocks, name: 'Two' })).toEqual({
       changed: [],
       near: null,
     });

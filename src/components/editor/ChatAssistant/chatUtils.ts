@@ -1,8 +1,8 @@
-import type { ChatAttachment } from '@/services/chatAttachments';
+import type { ChatAttachment } from '@/api/assistant/chatAttachments';
 import { uid } from '@/lib/uid';
 import type { ToolRun } from './AgentActivity';
-import type { AgentTodo, AgentWorker, AgentSource } from '@/services/streamParser';
-import type { AgentChatContext } from '@/services/agentChat';
+import type { AgentTodo, AgentWorker, AgentSource } from '@/api/assistant/streamParser';
+import type { AgentChatContext } from '@/api/assistant/agentChat';
 import type { EditorFocus } from '@/components/editor/References';
 import { extractRefSpans } from './ChatRefTags/refTags';
 
@@ -16,15 +16,11 @@ export type ChatMessage = {
   /** Tools the agent ran while producing this reply, in order. */
   runs: ToolRun[];
   /**
-   * The changes this reply put up for review, by id.
-   *
-   * Ids rather than a count, because the button under the reply jumps to them:
-   * it used to jump to `pending[0]`, so with two replies open for review the
-   * second one sent the author to the first one's paragraph.
+   * The stored change sets this reply's edits went into, by id. The button
+   * under the reply jumps to their changes still open, and an Auto turn's
+   * line ("Applied 3 changes · Undo · Review") is found by them.
    */
-  proposedIds: string[];
-  /** Changes a server in auto-apply mode had already written when this ran. */
-  applied: number;
+  changeSetIds: string[];
   /** Token usage the server reported for this reply, once it completed. */
   usage?: { promptTokens: number; completionTokens: number };
   /**
@@ -46,6 +42,25 @@ export type ChatMessage = {
   thinkingMs?: number;
   /** When the stretch of reasoning under way began; unset between them. */
   thinkingSince?: number;
+  /**
+   * When the question was sent, or the reply ended, in ms since the epoch:
+   * the server's `created_at` for a stored message, this browser's clock for
+   * one sent here.
+   */
+  createdAt?: number;
+  /**
+   * How long the reply took, from the question to its end. Measured here for
+   * a turn sent from this browser; for a stored reply, the gap between its
+   * `created_at` and its question's, when the same run wrote both.
+   */
+  durationMs?: number;
+  /** A turn sent from this browser: how long until the answer's first word. */
+  firstTokenMs?: number;
+  /**
+   * A turn sent from this browser with a chosen engine or model: which one
+   * it asked for. Absent for the server's default.
+   */
+  engine?: { name: string; model?: string };
 };
 
 /**
@@ -68,7 +83,7 @@ export type LastExchange = {
   attachments?: ChatAttachment[];
   userMessageId: string;
   assistantMessageId: string;
-  run?: import('@/services/agentSessionChat').ResumeAgentRun;
+  run?: import('@/api/assistant/agentSessionChat').ResumeAgentRun;
 };
 
 /** The server keeps at most this many referenced blocks. */
@@ -112,7 +127,38 @@ export function friendlyStreamError(code: string, message: string): ChatError {
       return { message: message || 'Update the attachments before sending again.', detail: code, retryable: false };
     case 'DOCUMENT_NOT_FOUND':
       return {
-        message: 'The assistant could not find this document on the server.',
+        message: 'The assistant could not find this page on the server.',
+        detail: message || code,
+        retryable: false,
+      };
+    // The account left the workspace during the run (removed, or the
+    // workspace deleted): the run stopped at its next step (M6). Asking
+    // again cannot help; the app moves on once it reads the workspace.
+    case 'no_workspace_context':
+    case 'workspace_not_found':
+      return {
+        message: 'This workspace is no longer available to you, so the assistant stopped. You may have been removed from it, or it was deleted.',
+        detail: message || code,
+        retryable: false,
+      };
+    case 'no_document_context':
+      return {
+        message: 'This page is no longer available, so the assistant stopped. It may have been moved to the Trash.',
+        detail: message || code,
+        retryable: false,
+      };
+    // A demotion to viewer during the run: what needed the editor role was refused.
+    case 'workspace_role_required':
+      return {
+        message: 'Your role in this workspace changed: you can ask the assistant about this page, but it can’t edit it for you.',
+        detail: message || code,
+        retryable: false,
+      };
+    // The page was stored in a format this server cannot read, so no run on
+    // it can start until the page is converted.
+    case 'DOCUMENT_SCHEMA_UNSUPPORTED':
+      return {
+        message: 'This page was saved by a newer version of ColWrite, so the assistant cannot read it.',
         detail: message || code,
         retryable: false,
       };
@@ -200,7 +246,38 @@ export function friendlyStreamError(code: string, message: string): ChatError {
 }
 
 export function emptyMessage(role: string, content = '', attachments?: ChatAttachment[], runId?: string | null): ChatMessage {
-  return { id: uid(), role, content, ...(attachments?.length ? { attachments } : {}), ...(runId ? { runId } : {}), runs: [], proposedIds: [], applied: 0 };
+  return { id: uid(), role, content, ...(attachments?.length ? { attachments } : {}), ...(runId ? { runId } : {}), runs: [], changeSetIds: [] };
+}
+
+/** A stored message as `GET …/messages` answers it, as far as the transcript reads it. */
+export type StoredChatMessage = {
+  role: string;
+  content: string;
+  attachments?: ChatAttachment[];
+  run_id?: string | null;
+  created_at?: string | null;
+};
+
+/**
+ * A stored branch as transcript rows, with when each was written.
+ *
+ * A reply's duration is the gap to its question only when one run wrote
+ * both: a regenerated answer hangs under the original question, so its gap
+ * would count the time between the two runs.
+ */
+export function historyMessages(items: readonly StoredChatMessage[]): ChatMessage[] {
+  return items.map((item, index) => {
+    const message = emptyMessage(item.role, item.content, item.attachments, item.run_id);
+    const createdAt = item.created_at ? Date.parse(item.created_at) : Number.NaN;
+    if (Number.isNaN(createdAt)) return message;
+    message.createdAt = createdAt;
+    const question = items[index - 1];
+    if (item.role === 'assistant' && question?.role === 'user' && item.run_id && question.run_id === item.run_id) {
+      const askedAt = question.created_at ? Date.parse(question.created_at) : Number.NaN;
+      if (!Number.isNaN(askedAt) && createdAt >= askedAt) message.durationMs = createdAt - askedAt;
+    }
+    return message;
+  });
 }
 
 function boundedArgument(value: unknown, limit = 120): string | null {

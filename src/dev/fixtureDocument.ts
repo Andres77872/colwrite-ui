@@ -39,7 +39,7 @@ export function fixtureDocument() {
   return {
     _id: FIXTURE_DOCUMENT_ID,
     name: 'Sparse Routing for Long-Context Pretraining',
-    version: 3,
+    head_seq: 3,
     citationStyle: 'numeric',
     sources: [vaswani, fedus, lepikhin],
     blocks: [

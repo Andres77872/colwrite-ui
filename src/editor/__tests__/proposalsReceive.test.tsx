@@ -1,13 +1,15 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import { createRef, useImperativeHandle } from 'react';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProposalsProvider } from '../ProposalsContext';
-import { EditorActionsContext, EditorContext, type EditorContextValue } from '../editorContextState';
+import { FakeEditorProviders, type EditorProbe } from './editorHarness';
 import { useProposals, type ProposalsContextValue } from '../proposalsContextState';
 import { pendingInDocumentOrder } from '../proposals';
 import { applyPatchToBlocks } from '../docOps';
-import { ApiError } from '../../services/contracts';
-import type { Block, ToolAction } from '../types';
+import { ApiError } from '@/api/errors';
+import type { Block, ToolAction, ToolOperation } from '../types';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
 /**
  * What the review layer accepts from the wire, and what it tells the caller it
@@ -17,17 +19,15 @@ import type { Block, ToolAction } from '../types';
 
 const getChangeSet = vi.fn();
 const listPendingChangeSets = vi.fn();
-const acceptChangeSet = vi.fn();
 const rejectChangeSet = vi.fn();
 const decideChangeSetOperations = vi.fn();
 
-vi.mock('../../services', async () => ({
-  ...(await vi.importActual<Record<string, unknown>>('../../services')),
-  getChangeSet: (...args: unknown[]) => getChangeSet(...(args as [])),
-  listPendingChangeSets: (...args: unknown[]) => listPendingChangeSets(...(args as [])),
-  acceptChangeSet: (...args: unknown[]) => acceptChangeSet(...(args as [])),
-  rejectChangeSet: (...args: unknown[]) => rejectChangeSet(...(args as [])),
-  decideChangeSetOperations: (...args: unknown[]) => decideChangeSetOperations(...(args as [])),
+vi.mock('@/data/documentHistory', async () => ({
+  ...(await vi.importActual<Record<string, unknown>>('@/data/documentHistory')),
+  getChangeSet: (_workspaceId: unknown, ...args: unknown[]) => getChangeSet(...(args as [])),
+  listPendingChangeSets: (_workspaceId: unknown, ...args: unknown[]) => listPendingChangeSets(...(args as [])),
+  rejectChangeSet: (_workspaceId: unknown, ...args: unknown[]) => rejectChangeSet(...(args as [])),
+  decideChangeSetOperations: (_workspaceId: unknown, ...args: unknown[]) => decideChangeSetOperations(...(args as [])),
 }));
 
 const captureRef = createRef<ProposalsContextValue>();
@@ -38,7 +38,6 @@ const blocks: Block[] = [
 ];
 
 const applyPatch = vi.fn(() => ({ blocks, desynced: [], touched: [] }));
-const adoptServerVersion = vi.fn();
 const adoptRestoredDocument = vi.fn();
 const markRecentlyChanged = vi.fn();
 
@@ -54,22 +53,18 @@ function mount(documentId: string | null = 'doc-1') {
       documentId,
       blocks,
       applyPatch,
-      adoptServerVersion,
       adoptRestoredDocument,
       markRecentlyChanged,
       restoreEpoch,
       restoreReason,
-    } as unknown as EditorContextValue;
+    } as unknown as EditorProbe;
     return (
-      // The fake carries both state and actions, so it feeds both halves of
-      // the split context.
-      <EditorContext.Provider value={value}>
-        <EditorActionsContext.Provider value={value}>
-          <ProposalsProvider>
-            <Capture />
-          </ProposalsProvider>
-        </EditorActionsContext.Provider>
-      </EditorContext.Provider>
+      // The fake carries every slice, so it feeds every editor context.
+      <FakeEditorProviders value={value}>
+        <ProposalsProvider>
+          <Capture />
+        </ProposalsProvider>
+      </FakeEditorProviders>
     );
   };
   const result = render(tree(0));
@@ -87,17 +82,63 @@ function review(): ProposalsContextValue {
   return captureRef.current;
 }
 
-function action(overrides: Partial<ToolAction> = {}): ToolAction {
+/** A `tool_action` as the stream sends it, with no change set of its own. */
+function toolAction(overrides: Partial<ToolAction> = {}): ToolAction {
   return {
     tool: 'doc_edit',
     toolCallId: 'call_1',
     documentId: 'doc-1',
-    version: 2,
     status: 'proposed',
-    actions: [{ op: 'append_block', block: { id: 'X', type: 'divider' } }],
+    actions: [],
     ...overrides,
   };
 }
+
+/** A pending change set as `getChangeSet` reads it. */
+function storedSet(over: Record<string, unknown> = {}) {
+  return {
+    changeSetId: 'cs-1',
+    documentId: 'doc-1',
+    status: 'pending',
+    operations: [] as ToolOperation[],
+    unmappableOperations: [] as string[],
+    baseEtag: 'cw:2',
+    toolCallId: 'call_1',
+    summary: null,
+    expiresAt: '2026-11-20T00:00:00Z',
+    proposedAt: '2026-11-14T10:00:00Z',
+    dependsOnChangeSetId: null,
+    applyPolicy: 'review',
+    autoBlockedReason: null,
+    operationDecisions: [],
+    operationTargets: null,
+    ...over,
+  };
+}
+
+/** The change sets the server holds, by id. */
+const storedSets = new Map<string, ReturnType<typeof storedSet>>();
+
+/**
+ * The server stores a change set with these operations, and the stream
+ * announces it: its id and size, and none of its operations.
+ */
+function proposal(operations: ToolOperation[], overrides: Partial<ToolAction> = {}): ToolAction {
+  const changeSetId = overrides.changeSetId ?? `cs-${storedSets.size + 1}`;
+  storedSets.set(changeSetId, storedSet({ changeSetId, operations, toolCallId: overrides.toolCallId ?? 'call_1' }));
+  return toolAction({ changeSetId, proposalOperationCount: operations.length, ...overrides });
+}
+
+/** Take a `tool_action`, and let the review layer read the change set it names. */
+async function receive(action: ToolAction): Promise<ReturnType<ProposalsContextValue['receive']>> {
+  let result!: ReturnType<ProposalsContextValue['receive']>;
+  await act(async () => {
+    result = review().receive(action);
+  });
+  return result;
+}
+
+const divider = (id: string): ToolOperation => ({ op: 'append_block', block: { id, type: 'divider' } });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -108,105 +149,67 @@ beforeEach(() => {
   // would otherwise be staged again by every later mount.
   listPendingChangeSets.mockResolvedValue([]);
   decideChangeSetOperations.mockResolvedValue({});
+  storedSets.clear();
+  getChangeSet.mockReset().mockImplementation(async (_documentId: string, changeSetId: string) => {
+    const stored = storedSets.get(changeSetId);
+    if (!stored) throw new ApiError('Change set not found', 404, { code: 'change_set_not_found' });
+    return stored;
+  });
 });
 afterEach(() => cleanup());
 
 describe('receive', () => {
-  it('stages a proposed batch and reports its change ids', () => {
+  it('stages only a change set the server stored: operations on the stream are not a proposal', async () => {
     mount();
-    let result!: ReturnType<ProposalsContextValue['receive']>;
-    act(() => {
-      result = review().receive(action());
-    });
+    const result = await receive(toolAction({ actions: [divider('X')] }));
 
-    expect(result.changes).toBe(1);
-    expect(result.changeIds).toHaveLength(1);
-    expect(result.applied).toBe(0);
-    expect(review().pendingCount).toBe(1);
-    expect(result.changeIds[0]).toBe(review().pending[0].id);
+    expect(result.changes).toBe(0);
+    expect(getChangeSet).not.toHaveBeenCalled();
+    expect(review().pendingCount).toBe(0);
   });
 
-  it('reports nothing for a redelivered batch', () => {
+  it('does not offer a failed batch for acceptance', async () => {
     mount();
-    act(() => {
-      review().receive(action());
-    });
-
-    let repeat!: ReturnType<ProposalsContextValue['receive']>;
-    act(() => {
-      repeat = review().receive(action());
-    });
-
-    // The batch is correctly ignored. Reporting it as new anyway made the
-    // reply claim a second set of changes that were never there.
-    expect(repeat.changes).toBe(0);
-    expect(repeat.changeIds).toEqual([]);
-    expect(review().pendingCount).toBe(1);
-  });
-
-  it('does not offer a failed batch for acceptance', () => {
-    mount();
-    act(() => {
-      review().receive(action({ status: 'error', message: 'The tool failed' }));
-    });
+    await receive(toolAction({ status: 'error', message: 'The tool failed' }));
 
     expect(review().pendingCount).toBe(0);
     expect(review().error).toBe('The tool failed');
   });
 
-  it('does not offer a skipped batch for acceptance', () => {
-    mount();
-    act(() => {
-      review().receive(action({ status: 'skipped' }));
-    });
-    expect(review().pendingCount).toBe(0);
-  });
-
-  it('accepts a batch that names no document as belonging to this one', () => {
+  it('accepts a change set that names no document as belonging to this one', async () => {
     // The request was addressed to this document; a payload that omits the id
     // is answering it. Requiring an exact match dropped it silently.
     mount();
-    act(() => {
-      review().receive(action({ documentId: '' }));
-    });
+    await receive(proposal([divider('X')], { documentId: '' }));
     expect(review().pendingCount).toBe(1);
   });
 
-  it('still refuses a batch belonging to a different document', () => {
+  it('still refuses a change set belonging to a different document', async () => {
     mount();
-    act(() => {
-      review().receive(action({ documentId: 'doc-other' }));
-    });
+    await receive(proposal([divider('X')], { documentId: 'doc-other' }));
+    expect(getChangeSet).not.toHaveBeenCalled();
     expect(review().pendingCount).toBe(0);
   });
 
-  it('reports an auto-applied batch so the reply can mention it', () => {
+  it('never writes an `applied` action into the page: only a stored set can be applied', async () => {
+    // `doc_edit` always stores a change set (D18); an action that claims to
+    // have committed block operations is not one the editor replays.
     mount();
-    let result!: ReturnType<ProposalsContextValue['receive']>;
-    act(() => {
-      result = review().receive(action({ status: 'applied' }));
-    });
+    const result = await receive(toolAction({ status: 'applied', actions: [divider('X')] }));
 
-    expect(result.applied).toBe(1);
     expect(result.changes).toBe(0);
     expect(review().pendingCount).toBe(0);
-    expect(applyPatch).toHaveBeenCalled();
+    expect(applyPatch).not.toHaveBeenCalled();
   });
 });
 
 describe('reject', () => {
-  it('clears a change that could never be applied', () => {
+  it('clears a change that could never be applied', async () => {
     mount();
-    act(() => {
-      review().receive(
-        action({
-          actions: [{ op: 'replace_block', blockId: 'gone', block: { html: 'x' } }],
-        }),
-      );
-    });
+    await receive(proposal([{ op: 'replace_block', blockId: 'gone', block: { html: 'x' } }]));
     expect(review().pendingCount).toBe(1);
 
-    act(() => review().reject(review().pending[0].id));
+    act(() => review().reject(itemAt(review().pending, 0).id));
     expect(review().pendingCount).toBe(0);
   });
 });
@@ -218,7 +221,7 @@ describe('reject', () => {
 describe('accepting through the provider', () => {
   function mountStateful(initial: Block[]) {
     const live = { blocks: initial };
-    const patch = vi.fn((ops: Parameters<EditorContextValue['applyPatch']>[0]) => {
+    const patch = vi.fn((ops: Parameters<EditorProbe['applyPatch']>[0]) => {
       const outcome = applyPatchToBlocks(live.blocks, ops);
       live.blocks = outcome.blocks;
       return outcome;
@@ -239,19 +242,15 @@ describe('accepting through the provider', () => {
           return live.blocks;
         },
         applyPatch: patch,
-        adoptServerVersion,
         markRecentlyChanged,
-      } as unknown as EditorContextValue;
-      // The fake carries both state and actions, so it feeds both halves of
-      // the split context.
+      } as unknown as EditorProbe;
+      // The fake carries every slice, so it feeds every editor context.
       return (
-        <EditorContext.Provider value={value}>
-          <EditorActionsContext.Provider value={value}>
-            <ProposalsProvider>
-              <Host />
-            </ProposalsProvider>
-          </EditorActionsContext.Provider>
-        </EditorContext.Provider>
+        <FakeEditorProviders value={value}>
+          <ProposalsProvider>
+            <Host />
+          </ProposalsProvider>
+        </FakeEditorProviders>
       );
     };
 
@@ -260,28 +259,23 @@ describe('accepting through the provider', () => {
   }
 
   const appendBatch = (callId: string, blockId: string): ToolAction =>
-    action({
-      toolCallId: callId,
-      actions: [{ op: 'append_block', block: { id: blockId, type: 'divider' } }],
-    });
+    proposal([divider(blockId)], { toolCallId: callId });
 
   it.each([
     ['in the order they arrived', [0, 1]],
     ['in the reverse order', [1, 0]],
-  ])('puts one-operation batches in authoring order, accepted %s', (_name, clicks) => {
+  ])('puts one-operation batches in authoring order, accepted %s', async (_name, clicks) => {
     const { live, rerender } = mountStateful([{ id: 'A', type: 'divider' }]);
 
-    act(() => {
-      review().receive(appendBatch('call_1', 'X'));
-      review().receive(appendBatch('call_2', 'Y'));
-    });
+    await receive(appendBatch('call_1', 'X'));
+    await receive(appendBatch('call_2', 'Y'));
     rerender();
 
     const staged = review().pending.map((change) => change.id);
     expect(staged).toHaveLength(2);
 
     for (const index of clicks as number[]) {
-      act(() => review().accept(staged[index]));
+      act(() => review().accept(itemAt(staged, index)));
       rerender();
     }
 
@@ -295,20 +289,13 @@ describe('accepting through the provider', () => {
 });
 
 describe('pendingInDocumentOrder', () => {
-  it('walks the page rather than the order batches arrived in', () => {
+  it('walks the page rather than the order batches arrived in', async () => {
     mount();
-    act(() => {
-      // Authored against the end of the document, then the start.
-      review().receive(
-        action({
-          toolCallId: 'call_late',
-          actions: [
-            { op: 'replace_block', blockId: 'B', block: { html: 'later' } },
-            { op: 'replace_block', blockId: 'A', block: { html: 'earlier' } },
-          ],
-        }),
-      );
-    });
+    // Authored against the end of the document, then the start.
+    await receive(proposal([
+      { op: 'replace_block', blockId: 'B', block: { html: 'later' } },
+      { op: 'replace_block', blockId: 'A', block: { html: 'earlier' } },
+    ], { toolCallId: 'call_late' }));
 
     const arrival = review().pending.map((change) => change.anchorBlockId);
     const reading = pendingInDocumentOrder(blocks, review().sets).map(
@@ -322,8 +309,7 @@ describe('pendingInDocumentOrder', () => {
 
 describe('durable change sets', () => {
   const durableAction = (overrides: Partial<ToolAction> = {}): ToolAction =>
-    action({
-      actions: [],
+    toolAction({
       changeSetId: 'cs-1',
       proposalOperationCount: 3,
       ...overrides,
@@ -338,13 +324,19 @@ describe('durable change sets', () => {
       { op: 'append_block', block: { id: 'N1', type: 'divider' } },
     ],
     unmappableOperations: [] as string[],
-    baseHeadSeq: 2,
     baseEtag: 'cw:2',
     toolCallId: 'call_1',
     summary: null,
-    expiresAt: null,
+    expiresAt: '2026-08-03T12:00:00Z',
+    proposedAt: '2026-08-02T12:00:00Z',
+    dependsOnChangeSetId: null,
+    operationDecisions: [],
+    operationTargets: null,
     ...over,
   });
+
+  /** The decisions sent to the server, one request each. */
+  const sentDecisions = () => decideChangeSetOperations.mock.calls.map((call) => call[2] as unknown[]);
 
   it('fetches the redacted batch by id and stages it for review', async () => {
     getChangeSet.mockResolvedValue(fetchedSet());
@@ -357,12 +349,11 @@ describe('durable change sets', () => {
 
     // Reported synchronously from the server-counted preview.
     expect(result.changes).toBe(3);
-    expect(result.applied).toBe(0);
 
     await act(async () => {});
     expect(getChangeSet).toHaveBeenCalledWith('doc-1', 'cs-1');
     expect(review().pendingCount).toBe(2);
-    expect(review().sets[0].changeSetId).toBe('cs-1');
+    expect(review().sets[0]?.changeSetId).toBe('cs-1');
   });
 
   it('delivers the same change set once', async () => {
@@ -399,7 +390,7 @@ describe('durable change sets', () => {
     expect(rejectChangeSet).toHaveBeenCalledWith(
       'doc-1',
       'cs-1',
-      'Superseded: the document was restored to another version',
+      'Superseded: the page was restored to another version',
     );
   });
 
@@ -448,7 +439,7 @@ describe('durable change sets', () => {
 
     act(() => void review().receive(durableAction()));
     await act(async () => {});
-    const changeId = review().pending[0].id;
+    const changeId = itemAt(review().pending, 0).id;
     await act(async () => {
       review().accept(changeId);
     });
@@ -456,40 +447,32 @@ describe('durable change sets', () => {
     // Per-change review is local: the operation lands in the editor and the
     // sibling stays pending. Nothing is decided wholesale on the server.
     expect(applyPatch).toHaveBeenCalledTimes(1);
-    expect(acceptChangeSet).not.toHaveBeenCalled();
     expect(rejectChangeSet).not.toHaveBeenCalled();
     expect(review().pendingCount).toBe(1);
   });
 
-  it('retires the server record once every change is decided', async () => {
+  it('records each decision on the server, which retires the set on the last one', async () => {
     getChangeSet.mockResolvedValue(fetchedSet());
-    rejectChangeSet.mockResolvedValue(fetchedSet({ status: 'rejected' }));
     mount();
 
     act(() => void review().receive(durableAction()));
     await act(async () => {});
     await act(async () => {
-      review().accept(review().pending[0].id);
+      review().accept(itemAt(review().pending, 0).id);
     });
-    expect(rejectChangeSet).not.toHaveBeenCalled();
     await act(async () => {
-      review().reject(review().pending[0].id);
+      review().reject(itemAt(review().pending, 0).id);
     });
 
-    // Accepted ops were applied as author edits, so the stored change set is
-    // superseded — cleared so it neither re-stages on reload nor blocks the
-    // agent's next proposal.
-    expect(rejectChangeSet).toHaveBeenCalledWith(
-      'doc-1',
-      'cs-1',
-      expect.stringMatching(/Decided per change/),
-    );
+    // Accepted ops were applied as author edits; the record keeps both
+    // decisions, and nothing is rejected wholesale.
+    expect(sentDecisions()).toEqual([[{ opIndex: 0, decision: 'accepted' }], [{ opIndex: 1, decision: 'rejected' }]]);
+    expect(rejectChangeSet).not.toHaveBeenCalled();
     expect(review().pendingCount).toBe(0);
   });
 
-  it('rejecting everything rejects the server record as such', async () => {
+  it('rejecting everything records every operation as rejected', async () => {
     getChangeSet.mockResolvedValue(fetchedSet());
-    rejectChangeSet.mockResolvedValue(fetchedSet({ status: 'rejected' }));
     mount();
 
     act(() => void review().receive(durableAction()));
@@ -499,17 +482,13 @@ describe('durable change sets', () => {
     });
 
     expect(applyPatch).not.toHaveBeenCalled();
-    expect(rejectChangeSet).toHaveBeenCalledWith(
-      'doc-1',
-      'cs-1',
-      'Rejected in the editor',
-    );
+    expect(sentDecisions()).toEqual([[{ opIndex: 0, decision: 'rejected' }, { opIndex: 1, decision: 'rejected' }]]);
+    expect(rejectChangeSet).not.toHaveBeenCalled();
     expect(review().pendingCount).toBe(0);
   });
 
-  it('accept-all applies locally and retires the record', async () => {
+  it('accept-all applies locally and records every operation as accepted', async () => {
     getChangeSet.mockResolvedValue(fetchedSet());
-    rejectChangeSet.mockResolvedValue(fetchedSet({ status: 'rejected' }));
     mount();
 
     act(() => void review().receive(durableAction()));
@@ -519,18 +498,14 @@ describe('durable change sets', () => {
     });
 
     expect(applyPatch).toHaveBeenCalled();
-    expect(acceptChangeSet).not.toHaveBeenCalled();
-    expect(rejectChangeSet).toHaveBeenCalledWith(
-      'doc-1',
-      'cs-1',
-      expect.stringMatching(/Decided per change/),
-    );
+    expect(sentDecisions()).toEqual([[{ opIndex: 0, decision: 'accepted' }, { opIndex: 1, decision: 'accepted' }]]);
+    expect(rejectChangeSet).not.toHaveBeenCalled();
     expect(review().pendingCount).toBe(0);
   });
 
-  it('a failed record cleanup never blocks the author', async () => {
+  it('a decision that cannot be sent never blocks the author', async () => {
     getChangeSet.mockResolvedValue(fetchedSet());
-    rejectChangeSet.mockRejectedValue(new Error('offline'));
+    decideChangeSetOperations.mockRejectedValue(new Error('offline'));
     mount();
 
     act(() => void review().receive(durableAction()));
@@ -579,7 +554,7 @@ describe('durable change sets', () => {
  * mounted again to stand for a reload or a return to the document.
  */
 function mountLive(live: { blocks: Block[] }, { cards = false }: { cards?: boolean } = {}) {
-  const patch = vi.fn((ops: Parameters<EditorContextValue['applyPatch']>[0]) => {
+  const patch = vi.fn((ops: Parameters<EditorProbe['applyPatch']>[0]) => {
     const outcome = applyPatchToBlocks(live.blocks, ops);
     live.blocks = outcome.blocks;
     return outcome;
@@ -611,18 +586,15 @@ function mountLive(live: { blocks: Block[] }, { cards = false }: { cards?: boole
         return live.blocks;
       },
       applyPatch: patch,
-      adoptServerVersion,
       markRecentlyChanged,
       restoreEpoch: 0,
-    } as unknown as EditorContextValue;
+    } as unknown as EditorProbe;
     return (
-      <EditorContext.Provider value={value}>
-        <EditorActionsContext.Provider value={value}>
-          <ProposalsProvider>
-            <Page />
-          </ProposalsProvider>
-        </EditorActionsContext.Provider>
-      </EditorContext.Provider>
+      <FakeEditorProviders value={value}>
+        <ProposalsProvider>
+          <Page />
+        </ProposalsProvider>
+      </FakeEditorProviders>
     );
   };
 
@@ -632,8 +604,11 @@ function mountLive(live: { blocks: Block[] }, { cards = false }: { cards?: boole
 
 const para = (id: string, html = id): Block => ({ id, type: 'paragraph', html, children: [], columns: 1 });
 
+/** A change set stored before the server recorded targets: staleness comes from this browser's fingerprints. */
 describe('a durable batch reviewed in part', () => {
-  const stored = () => ({
+  type Decision = { opIndex: number; decision: 'accepted' | 'rejected' };
+
+  const stored = (over: Record<string, unknown> = {}) => ({
     changeSetId: 'cs-1',
     documentId: 'doc-1',
     status: 'pending',
@@ -643,20 +618,24 @@ describe('a durable batch reviewed in part', () => {
       { op: 'append_block', block: para('N2', 'new two') },
     ],
     unmappableOperations: [] as string[],
-    baseHeadSeq: 2,
     baseEtag: 'cw:2',
     toolCallId: 'call_1',
     summary: null,
-    expiresAt: null,
+    expiresAt: '2026-11-10T10:00:00Z',
+    proposedAt: '2026-11-09T10:00:00Z',
+    dependsOnChangeSetId: null,
+    operationDecisions: [] as Decision[],
+    operationTargets: null,
+    ...over,
   });
 
   const byProduces = (id: string) => review().pending.find((change) => change.producesBlockId === id)!;
   const byAnchor = (id: string) =>
     review().pending.find((change) => change.anchorBlockId === id && change.kind !== 'insert')!;
+  const sent = () => decideChangeSetOperations.mock.calls.map((call) => call[2] as Decision[]);
 
   it('comes back after a reload with only the undecided changes', async () => {
     listPendingChangeSets.mockResolvedValue([stored()]);
-    rejectChangeSet.mockResolvedValue({ ...stored(), status: 'rejected' });
     const live = { blocks: [para('A'), para('B')] };
     const first = mountLive(live);
     await act(async () => {});
@@ -667,12 +646,16 @@ describe('a durable batch reviewed in part', () => {
     act(() => review().reject(byAnchor('A').id));
     first.rerender();
     expect(review().pendingCount).toBe(1);
-    // Half-decided: the server still holds the batch as pending.
-    expect(rejectChangeSet).not.toHaveBeenCalled();
     expect(live.blocks.map((block) => block.id)).toEqual(['A', 'N1', 'B']);
+    await act(async () => {});
+    expect(sent()).toEqual([[{ opIndex: 1, decision: 'accepted' }], [{ opIndex: 0, decision: 'rejected' }]]);
 
-    // The reload: the server hands back all three operations again.
+    // The reload: the server hands back all three operations, and the two
+    // decisions it recorded.
     first.unmount();
+    listPendingChangeSets.mockResolvedValue([stored({
+      operationDecisions: [{ opIndex: 1, decision: 'accepted' }, { opIndex: 0, decision: 'rejected' }],
+    })]);
     const second = mountLive(live);
     await act(async () => {});
 
@@ -682,21 +665,17 @@ describe('a durable batch reviewed in part', () => {
     expect(review().pending.map((change) => change.producesBlockId)).toEqual(['N2']);
 
     await act(async () => {
-      review().accept(review().pending[0].id);
+      review().accept(review().pending[0]!.id);
     });
     second.rerender();
     expect(live.blocks.map((block) => block.id)).toEqual(['A', 'N1', 'B', 'N2']);
-    expect(rejectChangeSet).toHaveBeenCalledWith(
-      'doc-1',
-      'cs-1',
-      expect.stringMatching(/Decided per change/),
-    );
-    // Retired, so there is nothing left to remember.
-    expect(Object.keys(localStorage).some((key) => key.includes('cs-1'))).toBe(false);
+    // The last decision retires the set on the server; nothing is rejected by hand.
+    expect(sent().at(-1)).toEqual([{ opIndex: 2, decision: 'accepted' }]);
+    expect(rejectChangeSet).not.toHaveBeenCalled();
   });
 
   it('does not offer an insert again when its block is already in the document', async () => {
-    // No record in this browser — decided in another one.
+    // Decided in another browser that could not send it.
     listPendingChangeSets.mockResolvedValue([stored()]);
     const live = { blocks: [para('A'), para('N1', 'new one'), para('B')] };
     mountLive(live);
@@ -704,28 +683,33 @@ describe('a durable batch reviewed in part', () => {
 
     expect(review().pending.map((change) => change.kind)).toEqual(['replace', 'insert']);
     expect(review().pending.some((change) => change.producesBlockId === 'N1')).toBe(false);
+    // What the document already holds is recorded as accepted.
+    expect(sent()).toEqual([[{ opIndex: 1, decision: 'accepted' }]]);
   });
 
-  it('retires a batch this browser already decided in full, instead of staging it', async () => {
+  it('does not stage a batch this browser decided in full but could not send, and sends it again', async () => {
     listPendingChangeSets.mockResolvedValue([stored()]);
-    rejectChangeSet.mockResolvedValue({ ...stored(), status: 'rejected' });
     const live = { blocks: [para('A'), para('B')] };
     const first = mountLive(live);
     await act(async () => {});
-    // Retiring fails, as it can when the network drops.
-    rejectChangeSet.mockRejectedValueOnce(new Error('offline'));
+    // The network drops while the decisions are sent.
+    decideChangeSetOperations.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     await act(async () => {
       review().rejectAll();
     });
     first.rerender();
-    expect(rejectChangeSet).toHaveBeenCalledTimes(1);
+    expect(decideChangeSetOperations).toHaveBeenCalledTimes(1);
     first.unmount();
 
     mountLive(live);
     await act(async () => {});
     expect(review().pendingCount).toBe(0);
-    expect(rejectChangeSet).toHaveBeenCalledTimes(2);
-    expect(rejectChangeSet).toHaveBeenLastCalledWith('doc-1', 'cs-1', 'Rejected in the editor');
+    expect(sent().at(-1)).toEqual([
+      { opIndex: 0, decision: 'rejected' },
+      { opIndex: 1, decision: 'rejected' },
+      { opIndex: 2, decision: 'rejected' },
+    ]);
+    expect(rejectChangeSet).not.toHaveBeenCalled();
   });
 });
 
@@ -743,7 +727,6 @@ describe('a durable batch whose decisions the server records', () => {
       { op: 'append_block', block: para('N2', 'new two') },
     ],
     unmappableOperations: [] as string[],
-    baseHeadSeq: 2,
     baseEtag: 'cw:2',
     toolCallId: 'call_1',
     summary: null,
@@ -776,17 +759,17 @@ describe('a durable batch whose decisions the server records', () => {
     view.rerender();
 
     expect(decideChangeSetOperations).toHaveBeenCalledTimes(2);
+    // The author's own decisions.
     expect(decideChangeSetOperations).toHaveBeenNthCalledWith(1, 'doc-1', 'cs-1', [
       { opIndex: 1, decision: 'accepted' },
-    ]);
+    ], 'manual');
     expect(decideChangeSetOperations).toHaveBeenNthCalledWith(2, 'doc-1', 'cs-1', [
       { opIndex: 0, decision: 'rejected' },
-    ]);
+    ], 'manual');
     expect(review().pending.map((change) => change.producesBlockId)).toEqual(['N2']);
     // The accepted insert is an ordinary edit; the set is not decided wholesale.
     expect(live.blocks.map((block) => block.id)).toEqual(['A', 'N1', 'B']);
     expect(rejectChangeSet).not.toHaveBeenCalled();
-    expect(acceptChangeSet).not.toHaveBeenCalled();
     expect(records()).toEqual([]);
   });
 
@@ -866,7 +849,7 @@ describe('a durable batch whose decisions the server records', () => {
       { opIndex: 0, decision: 'rejected' },
       { opIndex: 1, decision: 'rejected' },
       { opIndex: 2, decision: 'rejected' },
-    ]);
+    ], 'manual');
     expect(rejectChangeSet).not.toHaveBeenCalled();
   });
 
@@ -932,7 +915,7 @@ describe('a durable batch whose decisions the server records', () => {
   it('lets the server’s record win over one made here that it never received', async () => {
     // This browser rejected the rewrite while offline; another device accepted it.
     localStorage.setItem(
-      'colwrite:review:v1:doc-1:cs-1',
+      `colwrite:ws:${TEST_WORKSPACE_ID}:review:doc-1:cs-1`,
       JSON.stringify({
         documentId: 'doc-1',
         changeSetId: 'cs-1',
@@ -1007,7 +990,7 @@ describe('a durable batch whose decisions the server records', () => {
   it('a restore still retires what is left of a partly decided set, with its note', async () => {
     getChangeSet.mockResolvedValue(stored());
     const { setRestoreEpoch } = mount();
-    act(() => void review().receive(action({ actions: [], changeSetId: 'cs-1' })));
+    act(() => void review().receive(toolAction({ changeSetId: 'cs-1' })));
     await settle();
     expect(review().pendingCount).toBe(3);
 
@@ -1017,7 +1000,7 @@ describe('a durable batch whose decisions the server records', () => {
     expect(rejectChangeSet).toHaveBeenCalledWith(
       'doc-1',
       'cs-1',
-      'Superseded: the document was restored to another version',
+      'Superseded: the page was restored to another version',
     );
   });
 
@@ -1142,94 +1125,16 @@ describe('a durable batch whose decisions the server records', () => {
   });
 });
 
-describe('a durable batch on an API that records no decisions', () => {
-  /** What an older API returns: neither `operation_decisions` nor `operation_targets`. */
-  const stored = () => ({
-    changeSetId: 'cs-1',
-    documentId: 'doc-1',
-    status: 'pending',
-    operations: [
-      { op: 'replace_block', blockId: 'A', block: { html: 'A, rewritten' } },
-      { op: 'append_block', block: para('N2', 'new two') },
-    ],
-    unmappableOperations: [] as string[],
-    baseHeadSeq: 2,
-    baseEtag: 'cw:2',
-    toolCallId: 'call_1',
-    summary: null,
-    expiresAt: null,
-    proposedAt: null,
-    dependsOnChangeSetId: null,
-    operationDecisions: null,
-    operationTargets: null,
-  });
-
-  it('remembers the decisions in this browser and retires the set by rejecting it', async () => {
-    listPendingChangeSets.mockResolvedValue([stored()]);
-    rejectChangeSet.mockResolvedValue({ ...stored(), status: 'rejected' });
-    const live = { blocks: [para('A'), para('B')] };
-    const first = mountLive(live);
-    await act(async () => {});
-
-    const rewrite = review().pending.find((change) => change.kind === 'replace')!;
-    await act(async () => review().reject(rewrite.id));
-    first.rerender();
-
-    // No route to send it to: the record is kept here, as before.
-    expect(decideChangeSetOperations).not.toHaveBeenCalled();
-    const record = JSON.parse(localStorage.getItem('colwrite:review:v1:doc-1:cs-1') ?? 'null');
-    expect(record.decisions).toEqual([[0, 'rejected']]);
-    expect(Object.keys(record.bases)).toEqual(['0']);
-    first.unmount();
-
-    const second = mountLive(live);
-    await act(async () => {});
-    expect(review().pending.map((change) => change.kind)).toEqual(['insert']);
-
-    await act(async () => review().accept(review().pending[0].id));
-    second.rerender();
-    expect(decideChangeSetOperations).not.toHaveBeenCalled();
-    expect(rejectChangeSet).toHaveBeenCalledWith(
-      'doc-1',
-      'cs-1',
-      expect.stringMatching(/Decided per change/),
-    );
-  });
-
-  it('keeps the staging fingerprints for a change set stored before targets were recorded', async () => {
-    // Decisions are on the server; the targets are not.
-    listPendingChangeSets.mockResolvedValue([{ ...stored(), operationDecisions: [] }]);
-    const live = { blocks: [para('A', 'first'), para('B')] };
-    const first = mountLive(live);
-    await act(async () => {});
-    // Edited after staging, then the page is reloaded.
-    live.blocks = [para('A', 'first, edited'), live.blocks[1]];
-    first.unmount();
-
-    mountLive(live);
-    await act(async () => {});
-
-    const rewrite = review().pending.find((change) => change.kind === 'replace')!;
-    expect(review().ready(rewrite)).toBe(false);
-  });
-});
-
 describe('rejecting one paragraph of a suggested section', () => {
-  it('keeps the paragraphs after it, in order, instead of rejecting them too', () => {
+  it('keeps the paragraphs after it, in order, instead of rejecting them too', async () => {
     const live = { blocks: [para('A'), para('B')] };
     const { rerender } = mountLive(live);
-    act(() => {
-      review().receive(
-        action({
-          actions: [
-            { op: 'insert_block_after', referenceId: 'A', block: para('H') },
-            { op: 'insert_block_after', referenceId: 'H', block: para('P1') },
-            { op: 'insert_block_after', referenceId: 'P1', block: para('P2') },
-            { op: 'insert_block_after', referenceId: 'P2', block: para('P3') },
-          ],
-        }),
-      );
-    });
+    await receive(proposal([
+      { op: 'insert_block_after', referenceId: 'A', block: para('H') },
+      { op: 'insert_block_after', referenceId: 'H', block: para('P1') },
+      { op: 'insert_block_after', referenceId: 'P1', block: para('P2') },
+      { op: 'insert_block_after', referenceId: 'P2', block: para('P3') },
+    ]));
     rerender();
     const id = (produces: string) =>
       review().pending.find((change) => change.producesBlockId === produces)!.id;
@@ -1250,19 +1155,15 @@ describe('rejecting one paragraph of a suggested section', () => {
 });
 
 describe('a suggestion for text the author changed since', () => {
-  it('is not applied over the edit, and can still be rejected', () => {
+  it('is not applied over the edit, and can still be rejected', async () => {
     const live = { blocks: [para('A', 'first'), para('B', 'second')] };
     const { patch, rerender } = mountLive(live);
-    act(() => {
-      review().receive(
-        action({ actions: [{ op: 'replace_block', blockId: 'A', block: { html: 'assistant' } }] }),
-      );
-    });
+    await receive(proposal([{ op: 'replace_block', blockId: 'A', block: { html: 'assistant' } }]));
     // The author types into the paragraph after the suggestion arrived.
-    live.blocks = [para('A', 'first, edited'), live.blocks[1]];
+    live.blocks = [para('A', 'first, edited'), itemAt(live.blocks, 1)];
     rerender();
 
-    const change = review().pending[0];
+    const change = itemAt(review().pending, 0);
     expect(review().ready(change)).toBe(false);
     act(() => review().accept(change.id));
     expect(patch).not.toHaveBeenCalled();
@@ -1274,20 +1175,14 @@ describe('a suggestion for text the author changed since', () => {
     expect(review().pendingCount).toBe(0);
   });
 
-  it('is left out of Accept all, which says so', () => {
+  it('is left out of Accept all, which says so', async () => {
     const live = { blocks: [para('A', 'first'), para('B', 'second')] };
     const { rerender } = mountLive(live);
-    act(() => {
-      review().receive(
-        action({
-          actions: [
-            { op: 'replace_block', blockId: 'A', block: { html: 'assistant A' } },
-            { op: 'replace_block', blockId: 'B', block: { html: 'assistant B' } },
-          ],
-        }),
-      );
-    });
-    live.blocks = [para('A', 'first, edited'), live.blocks[1]];
+    await receive(proposal([
+      { op: 'replace_block', blockId: 'A', block: { html: 'assistant A' } },
+      { op: 'replace_block', blockId: 'B', block: { html: 'assistant B' } },
+    ]));
+    live.blocks = [para('A', 'first, edited'), itemAt(live.blocks, 1)];
     rerender();
 
     act(() => review().acceptAll());
@@ -1308,19 +1203,13 @@ describe('focus after a decision', () => {
   it('moves to the next suggestion down the page, then back into the text', async () => {
     const live = { blocks: [para('A'), para('B'), para('C')] };
     const { rerender } = mountLive(live, { cards: true });
-    act(() => {
-      review().receive(
-        action({
-          actions: [
-            { op: 'replace_block', blockId: 'B', block: { html: 'B2' } },
-            { op: 'replace_block', blockId: 'A', block: { html: 'A2' } },
-            { op: 'replace_block', blockId: 'C', block: { html: 'C2' } },
-          ],
-        }),
-      );
-    });
+    await receive(proposal([
+      { op: 'replace_block', blockId: 'B', block: { html: 'B2' } },
+      { op: 'replace_block', blockId: 'A', block: { html: 'A2' } },
+      { op: 'replace_block', blockId: 'C', block: { html: 'C2' } },
+    ]));
     rerender();
-    const [onB, onA, onC] = review().pending.map((change) => change.id);
+    const [onB, onA, onC] = takeItems(review().pending.map((change) => change.id), 3);
     card(onA)!.focus();
 
     // Reading order is A, B, C, whatever order they were written in.
@@ -1347,18 +1236,12 @@ describe('focus after a decision', () => {
   it('goes to the nearest one above when the last one down the page is decided', async () => {
     const live = { blocks: [para('A'), para('B')] };
     const { rerender } = mountLive(live, { cards: true });
-    act(() => {
-      review().receive(
-        action({
-          actions: [
-            { op: 'replace_block', blockId: 'A', block: { html: 'A2' } },
-            { op: 'replace_block', blockId: 'B', block: { html: 'B2' } },
-          ],
-        }),
-      );
-    });
+    await receive(proposal([
+      { op: 'replace_block', blockId: 'A', block: { html: 'A2' } },
+      { op: 'replace_block', blockId: 'B', block: { html: 'B2' } },
+    ]));
     rerender();
-    const [onA, onB] = review().pending.map((change) => change.id);
+    const [onA, onB] = takeItems(review().pending.map((change) => change.id), 2);
 
     act(() => review().reject(onB));
     rerender();
@@ -1368,14 +1251,10 @@ describe('focus after a decision', () => {
   it('stays on the card when an accept is refused', async () => {
     const live = { blocks: [para('A')] };
     const { rerender } = mountLive(live, { cards: true });
-    act(() => {
-      review().receive(
-        action({ actions: [{ op: 'replace_block', blockId: 'A', block: { html: 'A2' } }] }),
-      );
-    });
+    await receive(proposal([{ op: 'replace_block', blockId: 'A', block: { html: 'A2' } }]));
     live.blocks = [para('A', 'edited')];
     rerender();
-    const only = review().pending[0].id;
+    const only = itemAt(review().pending, 0).id;
     card(only)!.focus();
 
     act(() => review().accept(only));

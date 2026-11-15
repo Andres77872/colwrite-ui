@@ -1,16 +1,9 @@
 import { blocksToHtml, markdownToBlocks } from '@/editor/markdown';
-import type { AgentSource } from '@/services/streamParser';
+import type { AgentSource } from '@/api/assistant/streamParser';
+import { escapeHtml } from '@/lib/clipboard';
 import { citedOrder } from './answerSourceMarkers';
 
 const MARKER = /\[(S\d{1,5}(?:\s*[,;]\s*S\d{1,5})*)\](?!\()/g;
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 /** "William Fedus, Barret Zoph, Noam Shazeer" → "Fedus, Zoph, Shazeer". */
 function surnames(authors: string | undefined): string {
@@ -84,23 +77,4 @@ export function answerForClipboard(
     (entries.length > 0 ? `<p><strong>Sources</strong></p>${htmlSources}` : '');
 
   return { plain, html };
-}
-
-/** Rich text where the browser allows it, plain text where it does not. */
-export async function copyAnswer(text: string, sources: readonly AgentSource[]): Promise<void> {
-  const { plain, html } = answerForClipboard(text, sources);
-  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
-    try {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'text/plain': new Blob([plain], { type: 'text/plain' }),
-          'text/html': new Blob([html], { type: 'text/html' }),
-        }),
-      ]);
-      return;
-    } catch {
-      /* fall through to plain text */
-    }
-  }
-  await navigator.clipboard.writeText(plain);
 }

@@ -52,7 +52,7 @@ describe('ProposedRewriteView', () => {
     expect(container.textContent).not.toContain('\uE000');
     const equations = container.querySelectorAll('[aria-label="Equation: x_t"]');
     expect(equations).toHaveLength(1);
-    expect(equations[0].closest('del, ins')).toBeNull();
+    expect(equations[0]?.closest('del, ins')).toBeNull();
   });
 
   it('keeps a removed word and its replacement apart', () => {

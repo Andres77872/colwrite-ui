@@ -18,19 +18,20 @@ import {
   formatReference,
   referenceMarker,
   useBibliography,
-  useEditor,
+  useEditorActions,
+  useEditorDoc,
   yearOf,
   type BibliographyEntry,
 } from '@/editor';
 import { revealReferenceEntry } from '@/components/editor/References/navigation';
 import { PanelsContext } from '@/components/panels/panelsContextState';
-import { searchArxiv, type ArxivResult } from '@/services/arxiv';
+import { searchArxiv, type ArxivResult } from '@/data/arxiv';
 import {
   researchAuthorsLabel,
   researchExternalId,
   searchSemanticScholar,
   type ResearchPaper,
-} from '@/services/semanticScholar';
+} from '@/data/semanticScholar';
 import {
   InlineTrigger,
   InlinePopover,
@@ -176,7 +177,8 @@ function needsLeadingGap(host: HTMLElement): boolean {
 function CitationInlineContent(props: InlineWidgetProps<CitationChild>) {
   const { child } = props;
   const { patch, remove } = useInlineChild(props);
-  const { blocks, updateParagraphChild } = useEditor();
+  const { blocks } = useEditorDoc();
+  const { updateParagraphChild } = useEditorActions();
   const bibliography = useBibliography();
   const { isSourceEnabled, loading: preferencesLoading } = useAgentTools();
   // Optional: the widget also renders outside the workspace (tests, the
@@ -835,7 +837,7 @@ function SourceRow({
         {entry && entry.usages.length > 1 && (
           <span className="mt-0.5 flex items-center gap-1 text-2xs text-muted-foreground">
             <ListOrdered aria-hidden="true" className="h-3 w-3" />
-            Cited {entry.usages.length} times in this document
+            Cited {entry.usages.length} times on this page
           </span>
         )}
       </span>

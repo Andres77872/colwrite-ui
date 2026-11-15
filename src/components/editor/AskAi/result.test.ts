@@ -1,6 +1,7 @@
+import { takeItems } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import type { ParagraphBlock } from '@/editor';
-import type { AgentSource } from '@/services/streamParser';
+import type { AgentSource } from '@/api/assistant/streamParser';
 import { presetGroupsFor, presetsFor } from './presets';
 import { resultBlocks } from './result';
 
@@ -8,7 +9,7 @@ const NONE = new Map();
 
 function onlyParagraph(blocks: ReturnType<typeof resultBlocks>): ParagraphBlock {
   expect(blocks).toHaveLength(1);
-  const [block] = blocks;
+  const [block] = takeItems(blocks, 1);
   if (block.type !== 'paragraph') throw new Error('Expected a paragraph');
   return block;
 }

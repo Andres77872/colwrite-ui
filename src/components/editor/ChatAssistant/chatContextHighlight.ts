@@ -72,9 +72,7 @@ function findAnchor(focus: EditorFocus): ContextAnchor | null {
   const wanted = focus.selection?.trim();
   const block = blockElement(focus.blockId);
   if (!wanted || !block) return null;
-  const editables = editablesOf(block);
-  for (let index = 0; index < editables.length; index++) {
-    const editable = editables[index];
+  for (const [index, editable] of editablesOf(block).entries()) {
     const whole = document.createRange();
     whole.selectNodeContents(editable);
     const text = plainText(whole);

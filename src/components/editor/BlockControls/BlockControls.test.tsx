@@ -9,6 +9,8 @@ import type { Block } from '@/editor/types';
  */
 
 const selection = vi.hoisted(() => ({ ids: [] as string[], order: ['p1', 'p2', 'h1', 'todo', 'locked'] }));
+/** The page is read-only here (a viewer, M6.UI-2). */
+const page = vi.hoisted(() => ({ readOnly: false }));
 
 const actions = vi.hoisted(() => ({
   // Runs its edits at once: the real one only groups them into an undo step.
@@ -36,7 +38,12 @@ const actions = vi.hoisted(() => ({
 vi.mock('@/editor', async () => {
   const actual = await vi.importActual<typeof import('@/editor')>('@/editor');
   // The menu footer reads when the page was last saved.
-  return { ...actual, useEditorActions: () => actions, useEditor: () => ({ lastSavedAt: null }) };
+  return {
+    ...actual,
+    useEditorActions: () => actions,
+    useDocumentStatus: () => ({ lastSavedAt: null }),
+    usePageReadOnly: () => page.readOnly,
+  };
 });
 vi.mock('@/components/ui/toastContext', () => ({ useToast: () => ({ toast: vi.fn() }) }));
 
@@ -50,10 +57,16 @@ const BLOCKS: Record<string, Block> = {
   locked: { id: 'locked', type: 'paragraph', html: 'fixed', children: [], columns: 1, locked: true },
 };
 
+function blockFixture(id: string): Block {
+  const block = BLOCKS[id];
+  if (!block) throw new Error(`No fixture block "${id}"`);
+  return block;
+}
+
 function renderControls(id: string, options: { open?: boolean; first?: boolean; last?: boolean } = {}) {
   return render(
     <BlockControls
-      block={BLOCKS[id]}
+      block={blockFixture(id)}
       isFirst={options.first ?? false}
       isLast={options.last ?? false}
       menuOpen={options.open ?? false}
@@ -63,6 +76,7 @@ function renderControls(id: string, options: { open?: boolean; first?: boolean; 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  page.readOnly = false;
   selection.ids = [];
   actions.getBlock.mockImplementation((id: string) => BLOCKS[id]);
 });
@@ -343,5 +357,21 @@ describe('BlockControls menu search', () => {
     renderControls('p1', { open: true });
     expect(screen.queryByRole('menuitem', { name: /Copy as Markdown/ })).toBeNull();
     expect(screen.getByRole('menuitem', { name: /More/ })).toBeTruthy();
+  });
+});
+
+describe('BlockControls on a read-only page (M6.UI-2)', () => {
+  it('offers no add button and no drag, and a menu of what reads, copies and asks', () => {
+    page.readOnly = true;
+    renderControls('p1', { open: true });
+    expect(screen.queryByRole('button', { name: 'Add a block below' })).toBeNull();
+    const handle = screen.getByRole('button', { name: 'Text block: click for options' });
+    expect(handle.getAttribute('draggable')).toBe('false');
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent?.replace(/(⌘|Ctrl\+).*$/, '').trim())).toEqual([
+      'Copy link to block',
+      'Ask AI',
+      'Copy as Markdown',
+    ]);
+    expect(screen.queryByRole('menuitem', { name: /Delete|Duplicate|Turn into|Move up/ })).toBeNull();
   });
 });

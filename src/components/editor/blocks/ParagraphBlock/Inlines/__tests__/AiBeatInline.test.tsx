@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { act, render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { act, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { useState, type MutableRefObject } from 'react';
 import type { AiBeatChild, ParagraphChild } from '@/editor';
-import type { SSEEventHandlers } from '@/services/streamParser';
+import type { AgentEventHandlers } from '@/api/assistant/streamParser';
+import { renderInWorkspace } from '@/__tests__/renderInWorkspace';
 
-const streamAgentChat = vi.fn();
+const runAgentTurn = vi.fn();
 
-vi.mock('@/services/agentChat', () => ({
-  streamAgentChat: (...args: unknown[]) => streamAgentChat(...args),
+vi.mock('@/api/assistant/agentChat', () => ({
+  runAgentTurn: (...args: unknown[]) => runAgentTurn(...args),
 }));
 vi.mock('@/components/common/Editable/Editable', () => ({
   serializeEditableHtml: vi.fn((root: HTMLElement) => root.innerHTML),
@@ -73,21 +74,21 @@ afterEach(() => {
 
 describe('AiBeatInline', () => {
   it('renders its stored message and prompt', () => {
-    render(<Harness initial={{ message: 'hello', prompt: 'world' }} />);
+    renderInWorkspace(<Harness initial={{ message: 'hello', prompt: 'world' }} />);
 
     expect(messageField().value).toBe('hello');
     expect(promptField().value).toBe('world');
   });
 
   it('writes edits straight to the document', () => {
-    render(<Harness />);
+    renderInWorkspace(<Harness />);
     fireEvent.change(messageField(), { target: { value: 'summarise this' } });
 
     expect(messageField().value).toBe('summarise this');
   });
 
   it('blocks generation past the message length limit', () => {
-    render(<Harness initial={{ message: 'x' }} />);
+    renderInWorkspace(<Harness initial={{ message: 'x' }} />);
     fireEvent.change(messageField(), { target: { value: 'a'.repeat(2001) } });
 
     expect(screen.getByText(/Message must be.*2000 characters/)).toBeTruthy();
@@ -95,7 +96,7 @@ describe('AiBeatInline', () => {
   });
 
   it('blocks generation past the prompt length limit', () => {
-    render(<Harness initial={{ message: 'ok' }} />);
+    renderInWorkspace(<Harness initial={{ message: 'ok' }} />);
     fireEvent.change(promptField(), { target: { value: 'b'.repeat(2001) } });
 
     expect(screen.getByText(/Prompt must be.*2000 characters/)).toBeTruthy();
@@ -103,7 +104,7 @@ describe('AiBeatInline', () => {
   });
 
   it('re-enables generation once back under the limit', () => {
-    render(<Harness initial={{ message: 'ok' }} />);
+    renderInWorkspace(<Harness initial={{ message: 'ok' }} />);
     fireEvent.change(promptField(), { target: { value: 'b'.repeat(2001) } });
     fireEvent.change(promptField(), { target: { value: 'short prompt' } });
 
@@ -112,7 +113,7 @@ describe('AiBeatInline', () => {
   });
 
   it('will not generate from an empty message', () => {
-    render(<Harness />);
+    renderInWorkspace(<Harness />);
     expect((generateButton() as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -120,24 +121,24 @@ describe('AiBeatInline', () => {
     // This widget produces text for the author to place. Running it with the
     // document tools let it rewrite the paper while the author was still
     // deciding whether to keep the passage.
-    streamAgentChat.mockResolvedValue({ chatId: null, threadId: null, usage: null });
-    render(<Harness initial={{ message: 'write an abstract' }} />);
+    runAgentTurn.mockResolvedValue({ chatId: null, messageId: null, usage: null });
+    renderInWorkspace(<Harness initial={{ message: 'write an abstract' }} />);
 
     await act(async () => {
       generateButton().click();
     });
 
-    await waitFor(() => expect(streamAgentChat).toHaveBeenCalled());
-    expect(streamAgentChat.mock.calls[0][0]).toMatchObject({ mode: 'rewrite' });
+    await waitFor(() => expect(runAgentTurn).toHaveBeenCalled());
+    expect(runAgentTurn.mock.calls[0]?.[0]).toMatchObject({ mode: 'rewrite' });
   });
 
   it('streams tokens into the output and keeps them', async () => {
-    streamAgentChat.mockImplementation(async (_params: unknown, handlers: SSEEventHandlers) => {
+    runAgentTurn.mockImplementation(async (_params: unknown, handlers: AgentEventHandlers) => {
       handlers.onToken?.('Hello ');
       handlers.onToken?.('world');
-      return { chatId: null, threadId: null, usage: null };
+      return { chatId: null, messageId: null, usage: null };
     });
-    render(<Harness initial={{ message: 'write' }} />);
+    renderInWorkspace(<Harness initial={{ message: 'write' }} />);
 
     await act(async () => {
       generateButton().click();
@@ -147,8 +148,8 @@ describe('AiBeatInline', () => {
   });
 
   it('surfaces a failure instead of silently doing nothing', async () => {
-    streamAgentChat.mockRejectedValue(new Error('Model unavailable'));
-    render(<Harness initial={{ message: 'write' }} />);
+    runAgentTurn.mockRejectedValue(new Error('Model unavailable'));
+    renderInWorkspace(<Harness initial={{ message: 'write' }} />);
 
     await act(async () => {
       generateButton().click();
@@ -162,7 +163,7 @@ describe('AiBeatInline', () => {
     host.innerHTML = '<span data-child-id="child-1" contenteditable="false"></span>';
     const onRemoveChild = vi.fn();
 
-    render(<Harness initial={{ message: 'x', output: 'Generated prose.' }} onRemoveChild={onRemoveChild} host={host} />);
+    renderInWorkspace(<Harness initial={{ message: 'x', output: 'Generated prose.' }} onRemoveChild={onRemoveChild} host={host} />);
 
     await act(async () => {
       screen.getByRole('button', { name: /insert into text/i }).click();
@@ -175,19 +176,19 @@ describe('AiBeatInline', () => {
   });
 
   it('says what the engine is doing while nothing has been written', async () => {
-    let handlers!: SSEEventHandlers;
+    let handlers!: AgentEventHandlers;
     let finish!: () => void;
-    streamAgentChat.mockImplementation((_params: unknown, next: SSEEventHandlers) => {
+    runAgentTurn.mockImplementation((_params: unknown, next: AgentEventHandlers) => {
       handlers = next;
       return new Promise((resolve) => {
-        finish = () => resolve({ chatId: null, threadId: null, usage: null, terminal: 'done' });
+        finish = () => resolve({ chatId: null, messageId: null, usage: null, terminal: 'done' });
       });
     });
-    render(<Harness initial={{ message: 'write' }} />);
+    renderInWorkspace(<Harness initial={{ message: 'write' }} />);
     await act(async () => {
       generateButton().click();
     });
-    await waitFor(() => expect(streamAgentChat).toHaveBeenCalled());
+    await waitFor(() => expect(runAgentTurn).toHaveBeenCalled());
 
     expect(screen.getByRole('status').textContent).toContain('Thinking…');
     act(() => handlers.onStatus?.('starting', 'Starting Claude Code…'));
@@ -203,11 +204,11 @@ describe('AiBeatInline', () => {
   });
 
   it('says so when the stream closed before finishing', async () => {
-    streamAgentChat.mockImplementation(async (_params: unknown, handlers: SSEEventHandlers) => {
+    runAgentTurn.mockImplementation(async (_params: unknown, handlers: AgentEventHandlers) => {
       handlers.onToken?.('Half a sent');
-      return { chatId: null, threadId: null, usage: null, terminal: null };
+      return { chatId: null, messageId: null, usage: null, terminal: null };
     });
-    render(<Harness initial={{ message: 'write' }} />);
+    renderInWorkspace(<Harness initial={{ message: 'write' }} />);
     await act(async () => {
       generateButton().click();
     });

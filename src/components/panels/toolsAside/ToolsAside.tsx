@@ -1,16 +1,17 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ElementType, type ReactNode } from 'react';
-import { BookMarked, Braces, History, Sparkles, Telescope, X } from 'lucide-react';
+import { BookMarked, BookOpen, Braces, History, Sparkles, Telescope, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ErrorBoundary } from '@/components/common/ErrorBoundary';
 import { ChatAssistant } from '@/components/editor/ChatAssistant';
 import { modifierLabel } from '@/components/layout/Shortcuts';
-import { canonicalCitationKey, useBibliography, useEditorState } from '@/editor';
+import { canonicalCitationKey, useBibliography, useEditorDoc } from '@/editor';
 import { cn } from '@/lib/utils';
 import { usePanels, type SidebarTab } from '../panelsContextState';
 import { isSidebarTab, SIDEBAR_TABS, toolMeta } from '../toolsConfig';
 import { ResearchPanel } from '../ResearchPanel';
+import { LibraryPanel } from '../Library';
 import { SourcesPanel } from '../SourcesPanel';
 import { HistoryPanel } from '../HistoryPanel';
 import { JsonPanel } from '../JsonPanel';
@@ -19,6 +20,7 @@ import { JsonPanel } from '../JsonPanel';
 const TAB_LABELS: Record<SidebarTab, string> = {
   assistant: 'AI',
   research: 'Research',
+  library: 'Library',
   sources: 'Sources',
   history: 'History',
   json: 'JSON',
@@ -27,6 +29,7 @@ const TAB_LABELS: Record<SidebarTab, string> = {
 const TAB_ICONS: Record<SidebarTab, ElementType> = {
   assistant: Sparkles,
   research: Telescope,
+  library: BookOpen,
   sources: BookMarked,
   history: History,
   json: Braces,
@@ -35,6 +38,7 @@ const TAB_ICONS: Record<SidebarTab, ElementType> = {
 const PANELS: Record<SidebarTab, () => ReactNode> = {
   assistant: () => <ChatAssistant />,
   research: () => <ResearchPanel />,
+  library: () => <LibraryPanel />,
   sources: () => <SourcesPanel />,
   history: () => (
     <div className="h-full overflow-y-auto px-2 py-3">
@@ -55,7 +59,7 @@ const PANELS: Record<SidebarTab, () => ReactNode> = {
  * types, does not re-render every mounted tab along with the strip.
  */
 function useSourcesCount(): number {
-  const { doc } = useEditorState();
+  const { doc } = useEditorDoc();
   const { entries } = useBibliography();
   return useMemo(() => {
     const keys = new Set(entries.map((entry) => entry.key));
@@ -120,8 +124,8 @@ function returnFocusTarget(tab: SidebarTab): HTMLElement | null {
 }
 
 /**
- * ToolsAside — the right sidebar: AI, Research, Sources and History behind
- * one tab strip.
+ * ToolsAside — the right sidebar: AI, Research, Library, Sources and History
+ * behind one tab strip.
  *
  * There is always a tab, so opening the sidebar always shows something. A tab
  * stays mounted once visited, so a running reply, search results or an

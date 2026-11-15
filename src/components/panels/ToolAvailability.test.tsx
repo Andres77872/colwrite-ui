@@ -1,4 +1,6 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, screen } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
+import { panelKey } from '@/lib/storageKeys';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ToastProvider } from '@/components/ui/toast';
@@ -11,22 +13,24 @@ const state = vi.hoisted(() => ({
 vi.mock('@/components/preferences', () => ({
   useAgentTools: () => ({
     isSourceEnabled: (sourceId: string) => sourceId === 'arxiv' || state.semanticScholar,
+    switchedOffBy: () => null,
   }),
 }));
 
-vi.mock('@/services/semanticScholar', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/services/semanticScholar')>()),
+vi.mock('@/data/semanticScholar', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/data/semanticScholar')>()),
   searchSemanticScholar: state.s2Search,
 }));
 
 vi.mock('@/editor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/editor')>()),
-  useEditor: () => ({ documentId: null }),
-  useEditorState: () => ({ doc: { sources: [] } }),
+  useDocumentId: () => null,
+  useEditorDoc: () => ({ doc: { sources: [] }, blocks: [] }),
 }));
 
 // The other tabs have their own tests; here they only need to exist.
 vi.mock('@/components/editor/ChatAssistant', () => ({ ChatAssistant: () => <p>Assistant body</p> }));
+vi.mock('./Library', () => ({ LibraryPanel: () => <p>Library body</p> }));
 vi.mock('./SourcesPanel', () => ({ SourcesPanel: () => <p>Sources body</p> }));
 vi.mock('./HistoryPanel', () => ({ HistoryPanel: () => <p>History body</p> }));
 vi.mock('./JsonPanel', () => ({ JsonPanel: () => <p>JSON body</p> }));
@@ -59,12 +63,20 @@ describe('right sidebar', () => {
     renderSidebar();
 
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
-    expect(tabs).toEqual(['AI', 'Research', 'Sources', 'History']);
+    expect(tabs).toEqual(['AI', 'Research', 'Library', 'Sources', 'History']);
     expect(screen.getByRole('tab', { name: 'AI' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByText('Assistant body')).toBeTruthy();
     expect(screen.queryByText(/No tool selected/)).toBeNull();
     // Not "Close sidebar": that is the left sidebar's button.
     expect(screen.getByRole('button', { name: 'Close right sidebar' })).toBeTruthy();
+  });
+
+  it('opens the Library straight onto its own tab', () => {
+    localStorage.setItem(panelKey('tab'), JSON.stringify('library'));
+    renderSidebar();
+
+    expect(screen.getByRole('tab', { name: 'Library' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByText('Library body')).toBeTruthy();
   });
 
   it('keeps a visited tab mounted, hidden, while another shows', () => {
@@ -82,7 +94,7 @@ describe('right sidebar', () => {
 
 describe('workspace paper-source enforcement', () => {
   it('does not offer Semantic Scholar in Research before opt-in', () => {
-    localStorage.setItem('panels.activeTool', JSON.stringify('research'));
+    localStorage.setItem(panelKey('tab'), JSON.stringify('research'));
     renderSidebar();
 
     const s2 = screen.getByRole('radio', { name: 'Semantic Scholar' }) as HTMLButtonElement;
@@ -92,8 +104,8 @@ describe('workspace paper-source enforcement', () => {
   });
 
   it('does not open or query a persisted Semantic Scholar panel while disabled', () => {
-    // What the old rail saved when Semantic Scholar was last open.
-    localStorage.setItem('panels.activeTool', JSON.stringify('semantic-scholar'));
+    localStorage.setItem(panelKey('tab'), JSON.stringify('research'));
+    localStorage.setItem(panelKey('researchSource'), JSON.stringify('semantic-scholar'));
     renderSidebar();
 
     expect(screen.getByRole('radio', { name: 'arXiv' }).getAttribute('aria-checked')).toBe('true');
@@ -104,7 +116,8 @@ describe('workspace paper-source enforcement', () => {
 
   it('opens Semantic Scholar once the account enables it', () => {
     state.semanticScholar = true;
-    localStorage.setItem('panels.activeTool', JSON.stringify('semantic-scholar'));
+    localStorage.setItem(panelKey('tab'), JSON.stringify('research'));
+    localStorage.setItem(panelKey('researchSource'), JSON.stringify('semantic-scholar'));
     renderSidebar();
 
     expect(screen.getByRole('radio', { name: 'Semantic Scholar' }).getAttribute('aria-checked')).toBe('true');

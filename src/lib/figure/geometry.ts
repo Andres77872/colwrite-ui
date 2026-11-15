@@ -146,6 +146,16 @@ export function roundedRectPath(rect: Rect, radius: number): string {
   );
 }
 
+/** An open polyline's segments, each from a point to the next. */
+export function polylineSegments(points: readonly Point[]): Array<[Point, Point]> {
+  return points.slice(1).map((b, i) => [points[i] ?? b, b]);
+}
+
+/** A closed polygon's edges, each from a vertex to the next, the last back to the first. */
+export function polygonEdges(points: readonly Point[]): Array<[Point, Point]> {
+  return points.map((a, i) => [a, points[(i + 1) % points.length] ?? a]);
+}
+
 export function polygonPath(points: Point[]): string {
   return points.map((p, i) => `${i === 0 ? 'M' : 'L'}${fmt(p.x)} ${fmt(p.y)}`).join('') + 'Z';
 }
@@ -313,10 +323,7 @@ export function portPoint(outline: Outline, side: Side, offset: number): Point {
   // Polygon: intersect the line through `offset`, perpendicular to the side,
   // with every edge, and keep the hit nearest to that side.
   const hits: Point[] = [];
-  const pts = outline.points;
-  for (let i = 0; i < pts.length; i += 1) {
-    const a = pts[i];
-    const b = pts[(i + 1) % pts.length];
+  for (const [a, b] of polygonEdges(outline.points)) {
     if (horizontalSide) {
       if ((a.x - offset) * (b.x - offset) > 0 || a.x === b.x) continue;
       const k = (offset - a.x) / (b.x - a.x);
@@ -327,7 +334,10 @@ export function portPoint(outline: Outline, side: Side, offset: number): Point {
       hits.push({ x: a.x + k * (b.x - a.x), y: offset });
     }
   }
-  if (hits.length === 0) {
+  const key = (p: Point) =>
+    side === 'top' ? p.y : side === 'bottom' ? -p.y : side === 'left' ? p.x : -p.x;
+  const [nearest] = hits.sort((p, q) => key(p) - key(q));
+  if (!nearest) {
     // Outside the span: retry at the nearest point the polygon covers. The
     // retry is inside the span, so it cannot recurse again.
     const inside = clamp(offset, lo + 0.5, hi - 0.5);
@@ -344,10 +354,7 @@ export function portPoint(outline: Outline, side: Side, offset: number): Point {
         return { x: bounds.x + bounds.width, y: offset };
     }
   }
-  const key = (p: Point) =>
-    side === 'top' ? p.y : side === 'bottom' ? -p.y : side === 'left' ? p.x : -p.x;
-  hits.sort((p, q) => key(p) - key(q));
-  return hits[0];
+  return nearest;
 }
 
 /** The range of cross-coordinates a port on `side` can use. */
@@ -415,9 +422,7 @@ export function clipToOutline(outline: Outline, inside: Point, toward: Point): P
           { x: outline.rect.x, y: outline.rect.y + outline.rect.height },
         ];
   let best = Infinity;
-  for (let i = 0; i < points.length; i += 1) {
-    const a = points[i];
-    const b = points[(i + 1) % points.length];
+  for (const [a, b] of polygonEdges(points)) {
     const ex = b.x - a.x;
     const ey = b.y - a.y;
     const denom = dx * ey - dy * ex;

@@ -1,3 +1,5 @@
+import type { ChangeSetResponse, ToolActionData } from '@/api/schema';
+
 // Inline child components that can live inside a paragraph's HTML
 export type AiBeatChild = {
   id: string;
@@ -122,6 +124,9 @@ type BlockMeta = {
  */
 export type ParagraphVariant = 'bullet' | 'numbered' | 'todo' | 'quote' | 'callout';
 
+/** The name a page gets when it has none, here and on the server. Lists and exports show it. */
+export const DEFAULT_DOCUMENT_TITLE = 'Untitled page';
+
 /** Deepest list nesting the canonical model accepts (0 is top level). */
 export const MAX_BLOCK_INDENT = 4;
 
@@ -148,7 +153,6 @@ export type CodeBlock = { id: string; type: 'code'; text: string; language?: str
 export type Block = ParagraphBlock | HeadingBlock | DividerBlock | CodeBlock;
 export type BlockType = Block['type'];
 export type Doc = {
-  version: number;
   blocks: Block[];
   name?: string;
   /**
@@ -181,19 +185,30 @@ export type ToolOperationResult = {
   message?: string;
 };
 
+/**
+ * Who accepts a stored change set (D18): `review`, the author; `auto`, the
+ * open editor at once, while the author has Auto on. The server decides it
+ * per run.
+ */
+export type ApplyPolicy = ChangeSetResponse['apply_policy'];
+/** Why a run that asked for Auto was given `review`. */
+export type AutoBlockedReason = NonNullable<ChangeSetResponse['auto_blocked_reason']>;
+
 export type ToolAction = {
   tool: string;
   toolCallId: string;
   actions: ToolOperation[];
   documentId: string;
-  version: number;
   /**
-   * `proposed` — staged for the author to accept in the editor; storage is
-   * unchanged and `version` is still the stored one. This is the default the
-   * server runs in.
-   * `applied` — already committed server-side, so the client replays it.
+   * `proposed` — a stored change set (`changeSetId`) for the author to
+   * review; storage is unchanged.
+   * `applied` — a page `doc_create` made, announced by its
+   * `create_document` operation. `doc_edit` never commits by itself.
    */
-  status: 'proposed' | 'applied' | 'skipped' | 'error';
+  status: ToolActionData['status'];
+  /** The stored set's policy; `null` when the action stores no set. */
+  applyPolicy?: ApplyPolicy | null;
+  autoBlockedReason?: AutoBlockedReason | null;
   message?: string;
   /**
    * Per-operation outcomes from the server. A batch can succeed overall while
@@ -202,12 +217,16 @@ export type ToolAction = {
    */
   operationResults?: ToolOperationResult[];
   /**
-   * Durable review workflow: the server persisted this proposal as a change
-   * set and redacted the operations out of the stream. The authoritative
-   * operations must be fetched by this id, and accept/reject must be decided
-   * against the server — the change set is the record of the decision.
+   * The change set a `proposed` action stored. The stream carries no
+   * operations for it: they are read by this id, and each decision is
+   * recorded against it.
    */
   changeSetId?: string | null;
   /** Operation count from the redacted proposal preview, for reporting. */
   proposalOperationCount?: number;
+  /**
+   * Where a page `doc_create` made lives: its source page's collection, or
+   * `null` for the top level. The pages tree refreshes that branch.
+   */
+  collectionId?: number | null;
 };

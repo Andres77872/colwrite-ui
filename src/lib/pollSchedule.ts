@@ -5,7 +5,7 @@
  * scan, so a fixed interval is wrong in both directions: too slow to feel live
  * at the start, and a permanent background request afterwards. The dashboard
  * used to poll every 4s forever while mounted, which meant one stuck file kept
- * asking until the page was closed. One schedule, used by both pollers.
+ * asking until the page was closed.
  */
 export const SETTLING_POLL = {
   /** Fast enough that a normal conversion appears to resolve on its own. */
@@ -16,31 +16,32 @@ export const SETTLING_POLL = {
   ceiling: 4 * 60_000,
 } as const;
 
-export type PollSchedule = {
-  /** How long to wait before the next attempt. */
-  delay: () => number;
-  /** Record that an attempt was made and back off. */
-  advance: () => void;
-  /** Whether the ceiling has been reached and polling should stop. */
-  exhausted: () => boolean;
-  /** Back to the first delay — call when there is nothing left to watch. */
-  reset: () => void;
-};
+/**
+ * How long to wait before the next look, `elapsed` ms after the first one
+ * that found something still converting; `false` once the ceiling is reached.
+ *
+ * Waits that grow by `factor` from `first` add up so that each one is
+ * `first + (factor - 1) × elapsed`, so the schedule needs only the elapsed
+ * time and can be a query's `refetchInterval`.
+ */
+export function settlingPollInterval(elapsed: number): number | false {
+  if (elapsed >= SETTLING_POLL.ceiling) return false;
+  return Math.min(SETTLING_POLL.first + (SETTLING_POLL.factor - 1) * Math.max(0, elapsed), SETTLING_POLL.max);
+}
 
-export function createPollSchedule(): PollSchedule {
-  let delay: number = SETTLING_POLL.first;
-  let elapsed = 0;
+/**
+ * The backoff for following a workspace job (a collection's pages moving to
+ * or from the Trash, a purge). Most finish within a second or two, so the
+ * first looks come quickly; a long one is asked about every few seconds
+ * until it is `done` or `failed`. A job always ends, so there is no ceiling.
+ */
+export const JOB_POLL = {
+  first: 400,
+  factor: 1.6,
+  max: 5_000,
+} as const;
 
-  return {
-    delay: () => delay,
-    advance: () => {
-      elapsed += delay;
-      delay = Math.min(delay * SETTLING_POLL.factor, SETTLING_POLL.max);
-    },
-    exhausted: () => elapsed >= SETTLING_POLL.ceiling,
-    reset: () => {
-      delay = SETTLING_POLL.first;
-      elapsed = 0;
-    },
-  };
+/** How long to wait before the `attempt`-th look at a job (0 is the first). */
+export function jobPollDelay(attempt: number): number {
+  return Math.min(JOB_POLL.first * JOB_POLL.factor ** Math.max(0, attempt), JOB_POLL.max);
 }

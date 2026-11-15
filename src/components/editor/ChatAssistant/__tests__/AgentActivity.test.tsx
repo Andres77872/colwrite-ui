@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { describe, it, expect, afterEach } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { AgentActivity } from '../AgentActivity';
@@ -94,7 +95,7 @@ describe('AgentActivity', () => {
 
   it('folds a long finished run under one summary line', () => {
     const runs = [1, 2, 3, 4].map((n) => doneRun({ id: `call-${n}` }));
-    runs[2] = { ...runs[2], state: 'error' };
+    runs[2] = { ...itemAt(runs, 2), state: 'error' };
     render(<AgentActivity live={false} runs={runs} />);
 
     const summary = screen.getByRole('button', { name: /Used 4 tools/ });
@@ -137,8 +138,8 @@ describe('research workers in the activity list', () => {
     doneRun({ id: 'w1:call_b', tool: 'web_read', state: 'running', durationMs: undefined }),
   ];
   const workers = [
-    { id: 'w1', status: 'running', engine: 'legacy' },
-    { id: 'w2', status: 'completed', engine: 'legacy' },
+    { id: 'w1', status: 'running', engine: 'gateway' },
+    { id: 'w2', status: 'completed', engine: 'gateway' },
   ];
 
   it('gathers each worker\u2019s steps under its own line', () => {
@@ -168,7 +169,7 @@ describe('research workers in the activity list', () => {
     ['running', false, 'interrupted'],
     ['running', true, 'working'],
   ])('says how a worker with status %s (live: %s) ended', (status, live, text) => {
-    render(<AgentActivity live={live} runs={[]} workers={[{ id: 'w1', status, engine: 'legacy' }]} />);
+    render(<AgentActivity live={live} runs={[]} workers={[{ id: 'w1', status, engine: 'gateway' }]} />);
     expect(screen.getByText(new RegExp(`Research worker 1.*${text}`))).toBeTruthy();
   });
 

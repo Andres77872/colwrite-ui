@@ -3,7 +3,6 @@ import type { Doc } from '@/editor/types';
 import { documentToMarkdown } from './markdown';
 
 const DOC: Doc = {
-  version: 3,
   name: 'Sparse experts',
   citationStyle: 'numeric',
   sources: [
@@ -67,7 +66,7 @@ describe('documentToMarkdown', () => {
 
   it('leaves the reference list out when nothing is cited', () => {
     const markdown = documentToMarkdown(
-      { version: 1, name: 'Empty', blocks: [{ id: 'p', type: 'paragraph', html: 'Text.', children: [], columns: 1 }] },
+      { name: 'Empty', blocks: [{ id: 'p', type: 'paragraph', html: 'Text.', children: [], columns: 1 }] },
       { includeTitle: false, includeReferences: true, aiBeat: 'omit' },
     );
     expect(markdown).toBe('Text.\n');

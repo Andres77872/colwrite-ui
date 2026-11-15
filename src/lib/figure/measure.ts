@@ -127,7 +127,8 @@ function isArrow(ch: string): boolean {
 function fallbackCharWidth(ch: string, table: readonly number[]): number {
   // Accented Latin letters are as wide as their base letter.
   const base = ch.normalize('NFD').charCodeAt(0);
-  if (base >= 32 && base <= 126) return table[base - 32] / 1000;
+  const ascii = base >= 32 && base <= 126 ? table[base - 32] : undefined;
+  if (ascii !== undefined) return ascii / 1000;
   if (ZERO_WIDTH.test(ch)) return 0;
   if (isWide(ch)) return 1;
   if (PICTOGRAPH.test(ch)) return 1.25;
@@ -152,14 +153,16 @@ function heuristicTextWidth(value: string, font: FontSpec): number {
   for (const ch of value) {
     const code = ch.codePointAt(0) ?? 0;
     const regional = code >= 0x1f1e6 && code <= 0x1f1ff;
-    if (code >= 32 && code <= 126) {
-      em += table[code - 32] / 1000;
-    } else if (ch === '\t') {
-      em += table[0] / 1000; // SVG and HTML draw a tab as a space
-    } else if (Object.hasOwn(LATIN_EXTRAS, ch)) {
-      em += LATIN_EXTRAS[ch][column] / 1000;
-    } else if (Object.hasOwn(SPACE_WIDTHS, ch)) {
-      em += SPACE_WIDTHS[ch];
+    const ascii = code >= 32 && code <= 126 ? table[code - 32] : ch === '\t' ? table[0] : undefined;
+    const extra = Object.hasOwn(LATIN_EXTRAS, ch) ? LATIN_EXTRAS[ch]?.[column] : undefined;
+    const space = Object.hasOwn(SPACE_WIDTHS, ch) ? SPACE_WIDTHS[ch] : undefined;
+    // SVG and HTML draw a tab as a space.
+    if (ascii !== undefined) {
+      em += ascii / 1000;
+    } else if (extra !== undefined) {
+      em += extra / 1000;
+    } else if (space !== undefined) {
+      em += space;
     } else if (regional) {
       // Regional indicators draw a flag per pair.
       if (!flagHalf) em += 1.25;

@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildChangeSet, type ChangeSet, type ProposedChange } from '@/editor/proposals';
@@ -35,7 +36,7 @@ const reviewState = {
 
 vi.mock('@/editor', async () => ({
   ...(await vi.importActual<Record<string, unknown>>('@/editor')),
-  useEditor: () => editorState,
+  useEditorDoc: () => editorState,
 }));
 vi.mock('@/editor/proposalsContextState', () => ({ useProposals: () => reviewState }));
 vi.mock('@/components/ui/confirmContext', () => ({ useConfirm: () => confirm }));
@@ -46,7 +47,7 @@ const para = (id: string, html = id): Block => ({ id, type: 'paragraph', html, c
 
 function stage(actions: ToolOperation[], blocks: Block[]): ChangeSet {
   const set = buildChangeSet(
-    { tool: 'doc_edit', toolCallId: 'call_1', documentId: 'doc-1', version: 1, status: 'proposed', actions },
+    { tool: 'doc_edit', toolCallId: 'call_1', documentId: 'doc-1', status: 'proposed', actions, changeSetId: 'cs-1' },
     blocks,
   );
   reviewState.sets = [set];
@@ -68,7 +69,7 @@ afterEach(cleanup);
 describe('deciding from the keyboard', () => {
   it('accepts with Mod+Enter and rejects with Mod+Backspace while the card has focus', async () => {
     const set = stage([{ op: 'replace_block', blockId: 'p', block: { html: 'New text' } }], editorState.blocks);
-    const change = set.changes[0];
+    const change = itemAt(set.changes, 0);
     render(<ChangeCard change={change} />);
     const card = screen.getByRole('group');
     card.focus();
@@ -84,7 +85,7 @@ describe('deciding from the keyboard', () => {
 
   it('leaves plain keys alone, so nothing is decided by accident', () => {
     const set = stage([{ op: 'replace_block', blockId: 'p', block: { html: 'New text' } }], editorState.blocks);
-    render(<ChangeCard change={set.changes[0]} />);
+    render(<ChangeCard change={itemAt(set.changes, 0)} />);
     const card = screen.getByRole('group');
 
     fireEvent.keyDown(card, { key: 'Enter' });
@@ -97,7 +98,7 @@ describe('deciding from the keyboard', () => {
   it('does not accept from the keyboard when Accept is not offered', () => {
     const set = stage([{ op: 'replace_block', blockId: 'p', block: { html: 'New text' } }], editorState.blocks);
     reviewState.ready = () => false;
-    render(<ChangeCard change={set.changes[0]} />);
+    render(<ChangeCard change={itemAt(set.changes, 0)} />);
 
     fireEvent.keyDown(screen.getByRole('group'), { key: 'Enter', ctrlKey: true });
     expect(accept).not.toHaveBeenCalled();
@@ -105,7 +106,7 @@ describe('deciding from the keyboard', () => {
 
   it('names the keys on the buttons', () => {
     const set = stage([{ op: 'replace_block', blockId: 'p', block: { html: 'New text' } }], editorState.blocks);
-    render(<ChangeCard change={set.changes[0]} />);
+    render(<ChangeCard change={itemAt(set.changes, 0)} />);
 
     const acceptButton = screen.getByRole('button', { name: /^Accept:/ });
     const rejectButton = screen.getByRole('button', { name: /^Reject:/ });
@@ -121,7 +122,7 @@ describe('when Accept is not offered', () => {
     // The author edits the paragraph after the suggestion arrived.
     editorState.blocks = [para('p', 'Body text, edited')];
     reviewState.ready = () => false;
-    render(<ChangeCard change={set.changes[0]} />);
+    render(<ChangeCard change={itemAt(set.changes, 0)} />);
 
     expect(screen.getByText('The text changed after this was suggested.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^Accept:/ })).toBeNull();
@@ -138,7 +139,7 @@ describe('when Accept is not offered', () => {
       editorState.blocks,
     );
     reviewState.ready = () => false;
-    render(<ChangeCard change={set.changes[1]} />);
+    render(<ChangeCard change={itemAt(set.changes, 1)} />);
 
     expect(screen.getByText('This continues the addition above. Accept or reject that one first.')).toBeTruthy();
   });
@@ -153,13 +154,13 @@ describe('rejecting an addition', () => {
       ],
       editorState.blocks,
     );
-    render(<ChangeCard change={set.changes[0]} />);
+    render(<ChangeCard change={itemAt(set.changes, 0)} />);
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^Reject:/ }));
     });
     expect(confirm).not.toHaveBeenCalled();
-    expect(reject).toHaveBeenCalledWith(set.changes[0].id);
+    expect(reject).toHaveBeenCalledWith(itemAt(set.changes, 0).id);
   });
 
   it('asks first when a change to the added block would go with it', async () => {
@@ -170,7 +171,7 @@ describe('rejecting an addition', () => {
       ],
       editorState.blocks,
     );
-    render(<ChangeCard change={set.changes[0]} />);
+    render(<ChangeCard change={itemAt(set.changes, 0)} />);
 
     confirm.mockResolvedValueOnce(false);
     await act(async () => {
@@ -185,6 +186,6 @@ describe('rejecting an addition', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^Reject:/ }));
     });
-    expect(reject).toHaveBeenCalledWith(set.changes[0].id);
+    expect(reject).toHaveBeenCalledWith(itemAt(set.changes, 0).id);
   });
 });

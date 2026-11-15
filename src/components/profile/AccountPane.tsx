@@ -1,4 +1,4 @@
-import { useCallback, useContext, useId, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useId, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -8,18 +8,22 @@ import { useToast } from '@/components/ui/toastContext';
 import { useConfirm } from '@/components/ui/confirmContext';
 import { AuthContext } from '@/components/auth/authContextState';
 import { formatDateTime } from '@/lib/text';
-import { cn } from '@/lib/utils';
 import { relativeTime } from '@/components/layout/relativeTime';
 import { shortDate } from '@/components/layout/editedLabel';
-import { errorMessage } from '@/services/contracts';
+import { errorMessage, problemBody, problemCode } from '@/api/errors';
 import {
-  updateProfile,
+  deleteAccount,
+  useUpdateProfile,
   type ProfileUpdate,
   type UserIdentity,
   type UserProfile,
-} from '@/services/userProfile';
-import { AlertCircle, LogOut } from 'lucide-react';
+} from '@/data/userProfile';
+import { AlertCircle, LogOut, UserX } from 'lucide-react';
+import { WorkspaceContext } from '@/components/workspace/workspaceContextState';
+import { listOf } from '@/components/collections/trashCopy';
+import { TypedConfirmDialog } from './TypedConfirmDialog';
 import { useSettingsEscape } from './settingsEscape';
+import { ReadOnlyValue, Row, Section } from './SettingsSection';
 
 /** Two-letter monogram from a display name or username. */
 function initialsFor(value: string): string {
@@ -66,13 +70,13 @@ function sameValues(a: Values, b: Values): boolean {
 export function AccountPane({
   identity,
   profile,
-  onSaved,
 }: {
   identity: UserIdentity;
+  /** The saved profile; a save shows here through the dashboard's cache. */
   profile: UserProfile;
-  onSaved: (profile: UserProfile) => void;
 }) {
   const auth = useContext(AuthContext);
+  const updateProfile = useUpdateProfile().mutateAsync;
   const { toast } = useToast();
   const confirm = useConfirm();
   const id = useId();
@@ -136,7 +140,6 @@ export function AccountPane({
       const response = await updateProfile(changes);
       setBaseline(response.profile);
       setValues(valuesFrom(response.profile));
-      onSaved(response.profile);
       toast({ title: 'Profile updated', variant: 'success' });
     } catch (caught) {
       setError(errorMessage(caught, 'Could not save your profile'));
@@ -292,6 +295,8 @@ export function AccountPane({
         )}
       </Section>
 
+      <DeleteAccountSection username={identity.username} />
+
       {(dirty || error) && (
         // Pinned to the foot of the pane while there is something to save,
         // the way Notion confirms an edit to your account.
@@ -323,64 +328,6 @@ export function AccountPane({
   );
 }
 
-function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
-  const headingId = useId();
-  return (
-    <section aria-labelledby={headingId}>
-      <h3 id={headingId} className="border-b border-border pb-2.5 text-sm font-medium text-foreground">
-        {title}
-      </h3>
-      <div className="divide-y divide-border">{children}</div>
-      {note && <p className="pt-2 text-xs text-muted-foreground">{note}</p>}
-    </section>
-  );
-}
-
-/**
- * One settings row: the label and a short description on the left, the
- * control on the right. On a phone, or for a long field, the control goes
- * under the label at full width.
- */
-function Row({
-  id,
-  label,
-  description,
-  stacked = false,
-  children,
-}: {
-  id?: string;
-  label: string;
-  description?: string;
-  stacked?: boolean;
-  children: ReactNode;
-}) {
-  const LabelTag = id ? 'label' : 'p';
-  return (
-    <div
-      className={cn(
-        'grid gap-x-8 gap-y-2 py-3.5',
-        !stacked && 'sm:grid-cols-[minmax(0,1fr)_minmax(0,17rem)] sm:items-center',
-      )}
-    >
-      <div className="min-w-0">
-        <LabelTag {...(id ? { htmlFor: id } : {})} className="text-sm font-medium text-foreground">
-          {label}
-        </LabelTag>
-        {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
-      </div>
-      <div className="min-w-0">{children}</div>
-    </div>
-  );
-}
-
-function ReadOnlyValue({ value }: { value: string }) {
-  return (
-    <p className={cn('truncate text-sm sm:text-right', value ? 'text-foreground' : 'text-muted-foreground')} title={value || undefined}>
-      {value || 'Not available'}
-    </p>
-  );
-}
-
 /** "Jan 2026". */
 function monthYear(value: string | null | undefined): string {
   if (!value) return '';
@@ -398,4 +345,66 @@ function lastSeenLabel(value: string | null | undefined): string {
   const days = Math.floor((Date.now() - time) / (24 * 3600 * 1000));
   if (days < 7) return days <= 0 ? 'today' : relativeTime(time);
   return shortDate(date);
+}
+
+/**
+ * Settings → Account → Delete account (07 §8): the username typed exactly.
+ * While a shared workspace has this account as its only owner the server
+ * refuses, naming them, and the author deletes those first. Once deleted,
+ * the session is over: the server already signed it out, and nothing of the
+ * account stays in this browser.
+ */
+function DeleteAccountSection({ username }: { username: string }) {
+  const auth = useContext(AuthContext);
+  const workspaces = useContext(WorkspaceContext);
+  const { toast } = useToast();
+  const [confirming, setConfirming] = useState(false);
+
+  const namesOf = (ids: readonly string[]) =>
+    ids.map((id) => workspaces?.workspaces.find((item) => item.id === id)?.name ?? 'A workspace that is no longer listed');
+
+  const describe = (error: unknown) => {
+    switch (problemCode(error)) {
+      case 'sole_owner': {
+        const names = namesOf(problemBody(error)?.workspace_ids ?? []);
+        const one = names.length === 1;
+        return `You are the only owner of ${listOf(names)}. For each, make another member the owner in Settings → Members, or delete ${one ? 'it' : 'the workspace'} in Settings → Workspace, then delete your account.`;
+      }
+      case 'confirmation_mismatch':
+        return 'The username you typed is not this account’s. Type it exactly, with the same capitals.';
+      default:
+        return errorMessage(error, 'Could not delete your account.');
+    }
+  };
+
+  return (
+    <Section title="Delete account">
+      <Row
+        label="Delete your account"
+        description="Deletes your personal workspace with everything in it, and takes you out of every other workspace. It can’t be undone."
+      >
+        <div className="flex sm:justify-end">
+          <Button type="button" variant="outline" className="text-destructive" onClick={() => setConfirming(true)}>
+            <UserX aria-hidden="true" />
+            Delete account
+          </Button>
+        </div>
+      </Row>
+      {confirming && (
+        <TypedConfirmDialog
+          title="Delete your account?"
+          description="Your personal workspace and everything in it is deleted for good, and you leave every other workspace. Shared workspaces you alone own must be deleted first."
+          expected={username}
+          confirmLabel="Delete account"
+          onClose={() => setConfirming(false)}
+          describe={describe}
+          onConfirm={async () => {
+            await deleteAccount(username);
+            toast({ title: 'Your account was deleted', description: 'You have been signed out.' });
+            auth?.endSession();
+          }}
+        />
+      )}
+    </Section>
+  );
 }

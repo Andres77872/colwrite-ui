@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ChevronRight, Circle, CircleCheck, CircleDot, ListChecks, LoaderCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { AgentTodo } from '@/services/streamParser';
+import type { AgentTodo } from '@/api/assistant/streamParser';
 
 /** What a task's state reads as, for the accessible name of its row. */
 function statusText(status: AgentTodo['status'], live: boolean): string {

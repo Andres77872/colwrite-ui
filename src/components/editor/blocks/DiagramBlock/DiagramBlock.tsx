@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 import {
   useEditorActions,
   type CodeBlock as CodeBlockModel,
+  usePageReadOnly,
 } from '@/editor';
 import {
   DropdownMenu,
@@ -44,7 +45,9 @@ function intoOwnMenu(target: EventTarget | null): boolean {
 export const DiagramBlock = memo(function DiagramBlock({ block }: { block: CodeBlockModel }) {
   const { refs, updateCodeText } = useEditorActions();
   const [editing, setEditing] = useState(false);
-  const locked = block.locked === true;
+  // A read-only page (a viewer) only ever shows the drawing.
+  const readOnly = usePageReadOnly();
+  const locked = block.locked === true || readOnly;
   const empty = block.text.trim() === '';
   // An empty diagram has nothing to show at rest, so it opens on its source.
   // Focus inside turns that into editing (`onFocus` below), so the first

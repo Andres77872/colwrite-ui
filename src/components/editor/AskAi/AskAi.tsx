@@ -16,11 +16,20 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { menuItem, menuItemDestructive, menuLabel, menuSeparator, menuSurface } from '@/components/ui/menuStyles';
-import { useEditorActions, useEditorState, type Block, type CitationChild } from '@/editor';
-import { streamAgentChat } from '@/services/agentChat';
-import type { AgentSource } from '@/services/streamParser';
+import {
+  useDocumentActions,
+  useDocumentId,
+  useEditorActions,
+  useEditorDoc,
+  type Block,
+  type CitationChild,
+  usePageReadOnly,
+} from '@/editor';
+import { runAgentTurn } from '@/api/assistant/agentChat';
+import type { AgentSource } from '@/api/assistant/streamParser';
 import { AgentToolsContext } from '@/components/preferences/agentToolsContextState';
 import { useAgentEngine } from '@/components/preferences/agentEngineContextState';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import { ProposedBlockView, ProposedRewriteView } from '../Review/ProposedBlockView';
 import { previewBibliography } from '../Review/diffText';
 import { toolRunningLabel } from '../ChatAssistant/AgentActivity/toolMeta';
@@ -152,10 +161,12 @@ type MenuRow = {
  * `aria-activedescendant`, like the slash menu.
  */
 export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: () => void }) {
-  const { documentId, doc, blocks: documentBlocks } = useEditorState();
+  const { doc, blocks: documentBlocks } = useEditorDoc();
+  const documentId = useDocumentId();
+  const { ensureRemoteDocument } = useDocumentActions();
+  const readOnly = usePageReadOnly();
   const {
     refs,
-    ensureRemoteDocument,
     replaceBlocks,
     insertBlocksAfter,
     addParagraphChild,
@@ -164,6 +175,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
   } = useEditorActions();
   const agentTools = useContext(AgentToolsContext);
   const engines = useAgentEngine();
+  const workspaceId = useWorkspaceId();
   const [query, setQuery] = useState('');
   const [submenu, setSubmenu] = useState<AskAiPreset | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -316,7 +328,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
       const docId = documentId ?? (await ensureRemoteDocument());
       if (!docId) {
         setPhase('error');
-        setError('The document could not be saved, so the assistant cannot see it yet.');
+        setError('The page could not be saved, so the assistant cannot see it yet.');
         return;
       }
 
@@ -327,8 +339,9 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
         if (!controller.signal.aborted) setProgress((current) => advanceProgress(current, next));
       };
       try {
-        const outcome = await streamAgentChat(
+        const outcome = await runAgentTurn(
           {
+            workspace_id: workspaceId,
             message: buildAskAiMessage({
               preset: chosen,
               target: target.kind,
@@ -390,7 +403,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
         setError(caught instanceof Error ? caught.message : 'The assistant could not be reached.');
       }
     },
-    [documentId, engines, ensureRemoteDocument, target],
+    [documentId, engines, ensureRemoteDocument, target, workspaceId],
   );
 
   const stop = useCallback(() => {
@@ -404,7 +417,8 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
   /** Put the result into the document. */
   const apply = useCallback(
     (how: 'replace' | 'below' | 'note') => {
-      if (blocks.length === 0) return;
+      // A viewer's result is theirs to copy; it never goes into the page.
+      if (blocks.length === 0 || readOnly) return;
       let inserted: string[];
       if (how === 'note') {
         inserted = insertBlocksAfter(target.anchorId, asNotes(blocks));
@@ -412,11 +426,12 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
         inserted = insertBlocksAfter(target.anchorId, blocks);
       } else if (target.kind === 'selection' && target.range) {
         const [blockId] = target.blockIds;
-        const el = refs.current[blockId];
+        const el = blockId ? refs.current[blockId] : undefined;
         const range = target.range;
         const intact = el && range.startContainer.isConnected && el.contains(range.commonAncestorContainer);
-        const single = blocks.length === 1 && blocks[0].type === 'paragraph' && !blocks[0].variant;
-        if (intact && el) {
+        const [only] = blocks;
+        const single = blocks.length === 1 && only?.type === 'paragraph' && !only.variant ? only : null;
+        if (intact && el && blockId) {
           // A selection made by double-click or drag often carries the space
           // after the last word; the reply comes back trimmed. Keep the
           // selection's own edges so the sentence does not run together.
@@ -424,14 +439,14 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
           const lead = /^\s*/.exec(selected)?.[0] ?? '';
           const trail = /\s*$/.exec(selected)?.[0] ?? '';
           range.deleteContents();
-          if (single && blocks[0].type === 'paragraph') {
+          if (single) {
             // One paragraph back: it takes the selection's place in the
             // sentence, widgets and all.
             const template = document.createElement('template');
-            template.innerHTML = blocks[0].html;
+            template.innerHTML = single.html;
             if (lead) template.content.prepend(lead);
             if (trail) template.content.append(trail);
-            for (const child of blocks[0].children ?? []) addParagraphChild(blockId, child);
+            for (const child of single.children ?? []) addParagraphChild(blockId, child);
             range.insertNode(template.content);
             updateHtml(blockId, serializeEditableHtml(el as HTMLDivElement));
             inserted = [blockId];
@@ -457,7 +472,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
         });
       }
     },
-    [addParagraphChild, blocks, insertBlocksAfter, markRecentlyChanged, onClose, refs, replaceBlocks, target, updateHtml],
+    [addParagraphChild, blocks, insertBlocksAfter, markRecentlyChanged, onClose, readOnly, refs, replaceBlocks, target, updateHtml],
   );
 
   const copy = useCallback(async () => {
@@ -469,7 +484,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
   }, [result]);
 
   const use = preset?.use ?? 'replace';
-  const canReplace = !target.locked;
+  const canReplace = !target.locked && !readOnly;
   const primary: 'replace' | 'below' | 'note' =
     use === 'note' ? 'note' : use === 'insert' || !canReplace ? 'below' : 'replace';
   const empty = blocks.length === 0;
@@ -496,6 +511,11 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
       hint: 'Esc',
     };
     if (phase === 'error') return [retry, discard];
+    // Read-only here: the result can be copied, and nothing else.
+    if (readOnly) {
+      const copyRow: MenuRow = { id: 'copy', label: 'Copy', icon: Copy, action: { type: 'copy' }, hint: stopped ? undefined : modEnterLabel(), disabled: empty };
+      return stopped ? [retry, copyRow, discard] : [copyRow, retry, discard];
+    }
 
     const actions: MenuRow[] = [];
     if (primary === 'replace') {
@@ -532,7 +552,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
     // and ⌘↵ used to replace the selection with the truncated text.
     if (stopped) return [retry, ...actions.map((action) => ({ ...action, hint: undefined })), discard];
     return [...actions, retry, discard];
-  }, [empty, options, phase, preset, primary, stopped, target.kind]);
+  }, [empty, options, phase, preset, primary, readOnly, stopped, target.kind]);
 
   // Fit (and make room) whenever the menu appears or changes length; keep it
   // fitted while the page scrolls or the window resizes.
@@ -594,7 +614,10 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
     if (event.target instanceof Element && event.target.closest('button')) return;
     if (phase === 'done' && mod && event.key === 'Enter') {
       event.preventDefault();
-      if (!stopped) apply(primary);
+      if (!stopped) {
+        if (readOnly) void copy();
+        else apply(primary);
+      }
       return;
     }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -722,13 +745,18 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
 
   // A rewrite of one block reads best as a diff against what it replaces;
   // anything structural (a list, several blocks) is shown as the new blocks.
-  const showDiff =
+  // One rewritten heading or plain paragraph is shown as a diff of the text.
+  const [onlyBlock] = blocks;
+  const diffBlock =
     phase === 'done' &&
     primary === 'replace' &&
     target.kind !== 'empty' &&
     target.kind !== 'blocks' &&
     blocks.length === 1 &&
-    (blocks[0].type === 'heading' || (blocks[0].type === 'paragraph' && !blocks[0].variant));
+    onlyBlock &&
+    (onlyBlock.type === 'heading' || (onlyBlock.type === 'paragraph' && !onlyBlock.variant))
+      ? onlyBlock
+      : null;
 
   const sections: Array<{ id: string; label: string; rows: MenuRow[] }> =
     phase !== 'prompt'
@@ -774,11 +802,11 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
           className="mb-2 max-h-[50vh] overflow-y-auto border-l-2 border-ai/50 py-1 pl-4 pr-1"
           aria-live="off"
         >
-          {showDiff ? (
+          {diffBlock ? (
             <ProposedRewriteView
               before={target.diffBase ?? target.text}
-              after={blocks[0]}
-              block={blocks[0]}
+              after={diffBlock}
+              block={diffBlock}
               bibliography={bibliography}
             />
           ) : blocks.length > 0 ? (
@@ -963,7 +991,9 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
           </p>
         )}
       </div>
-      {target.locked && phase === 'done' && (
+      {readOnly && phase === 'done' ? (
+        <p className="mt-1.5 text-xs text-muted-foreground">You can view this page, not edit it: copy the result to use it elsewhere.</p>
+      ) : target.locked && phase === 'done' && (
         <p className="mt-1.5 text-xs text-muted-foreground">Locked blocks are never replaced.</p>
       )}
     </div>

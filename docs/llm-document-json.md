@@ -1,5 +1,7 @@
 # LLM Guide: Generate Editor Document JSON
 
+> **Secondary copy.** The authoritative description is `ColWrite-api/docs/llm-document-json.md`. Where the two differ, the API's copy is right.
+
 Use this guide to produce a valid JSON document for the editor. Return only a single JSON object with the structure below. Do not include any explanations, comments, or markdown fences in your output.
 
 ## Output requirements
@@ -226,7 +228,7 @@ Example paragraph with a table child:
 ```json
 {
   "version": 1,
-  "name": "Untitled document",
+  "name": "Untitled page",
   "blocks": []
 }
 ```

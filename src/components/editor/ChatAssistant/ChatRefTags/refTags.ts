@@ -1,6 +1,7 @@
 import type { Block } from '@/editor';
 import { kindLabel } from '@/editor';
 import { blockText } from '@/editor/proposals';
+import { escapeHtml, type ClipboardContent } from '@/lib/clipboard';
 
 export type ChatRefTag = {
   kind: 'document' | 'block';
@@ -89,7 +90,24 @@ function blockRefLabel(blocks: readonly Block[], blockId: string): string {
  * sent).
  */
 export function refLabel(ref: ChatRefTag, blocks: readonly Block[]): string {
-  if (ref.kind === 'document') return `Doc ${shorten(ref.docId ?? '')}`;
+  if (ref.kind === 'document') return `Page ${shorten(ref.docId ?? '')}`;
   if (ref.source === 'this') return blockRefLabel(blocks, ref.blockId ?? '');
-  return `Block ${shorten(ref.blockId ?? '')} · Doc ${shorten(ref.docId ?? '')}`;
+  return `Block ${shorten(ref.blockId ?? '')} · Page ${shorten(ref.docId ?? '')}`;
+}
+
+/**
+ * A sent message, ready to paste.
+ *
+ * The plain text is the message exactly as written, references and all: the
+ * composer reads only plain text and turns `#this/…` back into chips, so a
+ * question copied and pasted there asks about the same blocks. Rich-text
+ * editors (a doc, an email) read the html instead, where each reference is
+ * the label its chip showed, not an id.
+ */
+export function messageForClipboard(text: string, blocks: readonly Block[]): ClipboardContent {
+  const html = parseRefs(text)
+    .parts.map((part) => escapeHtml(typeof part === 'string' ? part : `“${refLabel(part, blocks)}”`))
+    .join('')
+    .replace(/\n/g, '<br>');
+  return { plain: text, html };
 }

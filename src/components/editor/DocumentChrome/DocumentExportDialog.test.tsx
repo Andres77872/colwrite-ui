@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { itemAt } from '@/lib/itemAt';
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -15,9 +16,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/editor', () => ({
-  useEditor: () => ({
-    getExportSnapshot: mocks.getExportSnapshot,
-    documentId: mocks.documentId,
+  useEditorActions: () => ({ getExportSnapshot: mocks.getExportSnapshot }),
+  useDocumentId: () => mocks.documentId,
+  useDocumentActions: () => ({
     saveRemote: mocks.saveRemote,
     ensureRemoteDocument: mocks.ensureRemoteDocument,
   }),
@@ -27,8 +28,8 @@ vi.mock('@/export/markdown', () => ({
   documentToMarkdown: mocks.documentToMarkdown,
 }));
 
-vi.mock('@/services/documentExport', async () => {
-  const actual = await vi.importActual<typeof import('@/services/documentExport')>('@/services/documentExport');
+vi.mock('@/data/documentExport', async () => {
+  const actual = await vi.importActual<typeof import('@/data/documentExport')>('@/data/documentExport');
   return { ...actual, exportDocumentLatex: mocks.exportDocumentLatex };
 });
 
@@ -42,19 +43,21 @@ vi.mock('@/export/print', () => ({
 
 vi.mock('@/export/download', () => ({
   downloadBlob: mocks.downloadBlob,
-  exportFilename: (name: string | undefined, extension: string) => `${name ?? 'Untitled document'}.${extension}`,
+  exportFilename: (name: string | undefined, extension: string) => `${name ?? 'Untitled page'}.${extension}`,
 }));
 
 vi.mock('@/components/ui/toastContext', () => ({
   useToast: () => ({ toast: mocks.toast }),
 }));
 
+import { recordRequests } from '@/__tests__/server';
 import { DocumentExportDialog } from './DocumentExportDialog';
-import { ApiError } from '@/services/contracts';
+import { ApiError } from '@/api/errors';
+import { renderInWorkspace } from '@/__tests__/renderInWorkspace';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
 const documentSnapshot = {
-  document: { version: 4, name: 'Current draft', blocks: [] },
-  baseVersion: 4,
+  document: { name: 'Current draft', blocks: [] },
   localRevision: 12,
   dirty: true,
 };
@@ -80,10 +83,9 @@ afterEach(() => {
 
 describe('DocumentExportDialog', () => {
   it('renders once in the browser and opens print preview without calling the API', async () => {
-    const fetch = vi.fn();
-    vi.stubGlobal('fetch', fetch);
+    const sent = recordRequests();
     const onOpenChange = vi.fn();
-    render(<DocumentExportDialog open onOpenChange={onOpenChange} />);
+    renderInWorkspace(<DocumentExportDialog open onOpenChange={onOpenChange} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Print / Save PDF' }));
 
@@ -99,14 +101,14 @@ describe('DocumentExportDialog', () => {
         ai_beat: 'omit',
         include_references: true,
       },
-      { base_version: 4, local_revision: 12, dirty: true },
+      { local_revision: 12, dirty: true },
       new Map(),
     );
     expect(mocks.printStandaloneHtml).toHaveBeenCalledWith(
       '<!doctype html><title>Current draft</title>',
     );
     expect(mocks.downloadBlob).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
     expect(mocks.toast).toHaveBeenCalledWith({
       title: 'Print dialog opened',
       variant: 'success',
@@ -116,7 +118,7 @@ describe('DocumentExportDialog', () => {
 
   it('downloads standalone HTML locally and never opens print preview', async () => {
     const onOpenChange = vi.fn();
-    render(<DocumentExportDialog open onOpenChange={onOpenChange} />);
+    renderInWorkspace(<DocumentExportDialog open onOpenChange={onOpenChange} />);
     fireEvent.change(screen.getByLabelText('Format'), { target: { value: 'html' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Export HTML' }));
@@ -135,7 +137,7 @@ describe('DocumentExportDialog', () => {
       throw new Error('Invalid document');
     });
     const onOpenChange = vi.fn();
-    render(<DocumentExportDialog open onOpenChange={onOpenChange} />);
+    renderInWorkspace(<DocumentExportDialog open onOpenChange={onOpenChange} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Print / Save PDF' }));
 
@@ -151,10 +153,9 @@ describe('DocumentExportDialog', () => {
   });
 
   it('downloads the whole document as Markdown, built in the browser', async () => {
-    const fetch = vi.fn();
-    vi.stubGlobal('fetch', fetch);
+    const sent = recordRequests();
     const onOpenChange = vi.fn();
-    render(<DocumentExportDialog open onOpenChange={onOpenChange} />);
+    renderInWorkspace(<DocumentExportDialog open onOpenChange={onOpenChange} />);
     fireEvent.change(screen.getByLabelText('Format'), { target: { value: 'markdown' } });
     expect(screen.getByText(/Pandoc keys/)).toBeTruthy();
     // Page layout does not apply to a text file.
@@ -172,13 +173,13 @@ describe('DocumentExportDialog', () => {
     expect(blob.type).toBe('text/markdown;charset=utf-8');
     expect(filename).toBe('Current draft.md');
     expect(mocks.renderStandaloneHtml).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it('saves pending edits, then downloads the server’s LaTeX under its file name', async () => {
     const onOpenChange = vi.fn();
-    render(<DocumentExportDialog open onOpenChange={onOpenChange} />);
+    renderInWorkspace(<DocumentExportDialog open onOpenChange={onOpenChange} />);
     fireEvent.change(screen.getByLabelText('Format'), { target: { value: 'latex' } });
     expect(screen.getByText(/Copy TikZ/)).toBeTruthy();
 
@@ -188,9 +189,9 @@ describe('DocumentExportDialog', () => {
     // The snapshot is dirty: the server must have it before it renders it.
     expect(mocks.saveRemote).toHaveBeenCalledOnce();
     expect(mocks.saveRemote.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.exportDocumentLatex.mock.invocationCallOrder[0],
+      itemAt(mocks.exportDocumentLatex.mock.invocationCallOrder, 0),
     );
-    expect(mocks.exportDocumentLatex).toHaveBeenCalledWith('doc-1');
+    expect(mocks.exportDocumentLatex).toHaveBeenCalledWith(TEST_WORKSPACE_ID, 'doc-1');
     const [blob, filename] = mocks.downloadBlob.mock.calls[0] as [Blob, string];
     expect(blob.type).toBe('application/x-tex;charset=utf-8');
     expect(await blob.text()).toBe('\\documentclass{article}');
@@ -202,10 +203,10 @@ describe('DocumentExportDialog', () => {
   it('explains a LaTeX rejection inline and retries on request', async () => {
     mocks.getExportSnapshot.mockReturnValue({ ...documentSnapshot, dirty: false });
     mocks.exportDocumentLatex.mockRejectedValueOnce(
-      new ApiError('Document could not be exported', 422, { detail: 'Document could not be exported' }),
+      new ApiError('Document could not be exported', 422, { code: 'export_failed', detail: 'Document could not be exported', retryable: false }),
     );
     const onOpenChange = vi.fn();
-    render(<DocumentExportDialog open onOpenChange={onOpenChange} />);
+    renderInWorkspace(<DocumentExportDialog open onOpenChange={onOpenChange} />);
     fireEvent.change(screen.getByLabelText('Format'), { target: { value: 'latex' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Export LaTeX' }));
@@ -222,7 +223,7 @@ describe('DocumentExportDialog', () => {
 
   it('does not export an older copy when the save before a LaTeX export fails', async () => {
     mocks.saveRemote.mockRejectedValueOnce(new TypeError('Failed to fetch'));
-    render(<DocumentExportDialog open onOpenChange={() => undefined} />);
+    renderInWorkspace(<DocumentExportDialog open onOpenChange={() => undefined} />);
     fireEvent.change(screen.getByLabelText('Format'), { target: { value: 'latex' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Export LaTeX' }));

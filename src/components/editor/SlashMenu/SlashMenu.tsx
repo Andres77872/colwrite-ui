@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { menuItem, menuLabel, menuSurface } from '@/components/ui/menuStyles';
-import { blankBlockOfKind, useEditorActions, useEditorState } from '@/editor';
+import { blankBlockOfKind, useDocumentSession, useEditorActions } from '@/editor';
 import { uid } from '@/lib/uid';
 import { aiBeatItem } from './items/aiBeat';
 import { askAiItem } from './items/askAi';
@@ -102,7 +102,7 @@ function rectOfTrigger(trigger: Trigger): DOMRect | null {
  * removes the `/query` and runs the command in its place.
  */
 export function SlashMenu() {
-  const { documentId, loadingDocumentId } = useEditorState();
+  const { documentId, loadingDocumentId } = useDocumentSession();
   const {
     refs,
     updateHtml,
@@ -111,7 +111,6 @@ export function SlashMenu() {
     getBlock,
     setBlockKind,
     insertBlocksAfter,
-    createRemote,
   } = useEditorActions();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState<Placement>({ top: 0, left: 0, maxHeight: 320 });
@@ -309,8 +308,6 @@ export function SlashMenu() {
           target.focus();
           restoreCaretOffset(target, Number.MAX_SAFE_INTEGER);
         }),
-      documentId,
-      createRemote: () => createRemote(),
     }),
     [
       refs,
@@ -320,8 +317,6 @@ export function SlashMenu() {
       getBlock,
       setBlockKind,
       insertBlocksAfter,
-      documentId,
-      createRemote,
     ],
   );
 

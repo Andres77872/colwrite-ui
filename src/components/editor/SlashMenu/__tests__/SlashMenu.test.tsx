@@ -1,18 +1,31 @@
+import { itemAt } from '@/lib/itemAt';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useImperativeHandle } from 'react';
 import type { Doc, ParagraphBlock as ParagraphBlockType, ParagraphChild } from '@/editor/types';
 import type { SlashContext, SlashItem } from '../types';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
 
-const { EditorProvider, useEditor } = await import('@/editor');
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const { EditorProvider } = await import('@/editor');
+const { useEditorProbe } = await import('@/editor/__tests__/editorHarness');
 const { ParagraphBlock } = await import('../../blocks/ParagraphBlock');
 const { SlashMenu } = await import('../SlashMenu');
 const { aiBeatItem } = await import('../items/aiBeat');
@@ -67,7 +80,7 @@ afterAll(() => {
   });
 });
 
-const captureRef = createRef<ReturnType<typeof useEditor>>();
+const captureRef = createRef<ReturnType<typeof useEditorProbe>>();
 const harness = {
   get editor() {
     if (!captureRef.current) throw new Error('Editor harness is not mounted');
@@ -76,7 +89,7 @@ const harness = {
 };
 
 function Harness() {
-  const editor = useEditor();
+  const editor = useEditorProbe();
   useImperativeHandle(captureRef, () => editor, [editor]);
   const block = editor.blocks.find((candidate) => candidate.id === 'p1');
   if (!block || block.type !== 'paragraph') return null;
@@ -92,11 +105,10 @@ function Harness() {
 
 async function mountEditor(html = 'alpha omega') {
   const doc: Doc = {
-    version: 1,
     name: 'Slash test',
     blocks: [{ id: 'p1', type: 'paragraph', html, children: [], columns: 1 }],
   };
-  localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc }));
+  localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: null, doc }));
 
   const result = render(
     <EditorProvider>
@@ -205,7 +217,7 @@ describe('SlashMenu inline commands', () => {
 
     const groups = within(listbox).getAllByRole('group').map((group) => group.getAttribute('aria-label'));
     expect(groups).toEqual(['AI', 'Basic blocks', 'Insert']);
-    expect(within(listbox).getAllByRole('option')[0].textContent).toMatch(/^Ask AI/);
+    expect(within(listbox).getAllByRole('option')[0]?.textContent).toMatch(/^Ask AI/);
     // The shortcut sits at the end of the row, no longer folded into the
     // description where a long one was truncated away.
     const heading = within(listbox).getByRole('option', { name: /^Heading 2/ });
@@ -235,7 +247,7 @@ describe('SlashMenu inline commands', () => {
 
     await waitFor(() => {
       const options = screen.getAllByRole('option');
-      expect(options[0].textContent).toMatch(/Display equation/);
+      expect(options[0]?.textContent).toMatch(/Display equation/);
     });
     fireEvent.keyDown(editable, { key: 'Enter' });
 
@@ -253,7 +265,7 @@ describe('SlashMenu inline commands', () => {
     const { editable } = await mountEditor();
     await openMenuAt(editable, 6);
     typeAtCaret(editable, 'equation');
-    await waitFor(() => expect(screen.getAllByRole('option')[0].textContent).toMatch(/^Equation/));
+    await waitFor(() => expect(screen.getAllByRole('option')[0]?.textContent).toMatch(/^Equation/));
     fireEvent.keyDown(editable, { key: 'Enter' });
 
     const latex = await waitFor(() => {
@@ -274,7 +286,7 @@ describe('SlashMenu inline commands', () => {
     const { editable } = await mountEditor();
     await openMenuAt(editable, 6);
     typeAtCaret(editable, 'equation');
-    await waitFor(() => expect(screen.getAllByRole('option')[0].textContent).toMatch(/^Equation/));
+    await waitFor(() => expect(screen.getAllByRole('option')[0]?.textContent).toMatch(/^Equation/));
     fireEvent.keyDown(editable, { key: 'Enter' });
 
     const latex = await waitFor(() => {
@@ -293,7 +305,7 @@ describe('SlashMenu inline commands', () => {
     const { editable } = await mountEditor('');
     await openMenuAt(editable, 0);
     typeAtCaret(editable, 'h2');
-    await waitFor(() => expect(screen.getAllByRole('option')[0].textContent).toMatch(/Heading 2/));
+    await waitFor(() => expect(screen.getAllByRole('option')[0]?.textContent).toMatch(/Heading 2/));
 
     fireEvent.keyDown(editable, { key: 'Enter' });
 
@@ -308,7 +320,7 @@ describe('SlashMenu inline commands', () => {
     const { editable } = await mountEditor('alpha omega ');
     await openMenuAt(editable, 12);
     typeAtCaret(editable, 'todo');
-    await waitFor(() => expect(screen.getAllByRole('option')[0].textContent).toMatch(/To-do/));
+    await waitFor(() => expect(screen.getAllByRole('option')[0]?.textContent).toMatch(/To-do/));
 
     fireEvent.keyDown(editable, { key: 'Enter' });
 
@@ -439,8 +451,6 @@ function commandContext(
     // inline-widget commands.
     applyKind: vi.fn(() => 'p1'),
     focusBlock: vi.fn(),
-    documentId: null,
-    createRemote: vi.fn(async () => 'created-doc'),
   };
   return { context, editable, addParagraphChild, updateHtml };
 }
@@ -455,7 +465,7 @@ describe('slash command payloads and range safety', () => {
     await item.onSelect(context);
 
     expect(addParagraphChild).toHaveBeenCalledTimes(1);
-    const child = addParagraphChild.mock.calls[0][1] as ParagraphChild;
+    const child = itemAt(addParagraphChild.mock.calls, 0)[1] as ParagraphChild;
     expect(child).toMatchObject(expected);
 
     const placeholder = editable.querySelector(`[data-child-id="${child.id}"]`);

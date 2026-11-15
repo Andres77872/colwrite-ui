@@ -407,7 +407,7 @@ export const ASK_AI_PRESETS: readonly AskAiPreset[] = [
   },
   {
     id: 'summary-so-far',
-    label: 'Summarize the document',
+    label: 'Summarize the page',
     icon: FileText,
     group: 'understand',
     keywords: ['recap', 'overview', 'tldr'],

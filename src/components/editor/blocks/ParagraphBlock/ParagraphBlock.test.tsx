@@ -7,8 +7,9 @@ vi.mock('../../../../editor', () => ({
     updateParagraphChild: vi.fn(),
     removeParagraphChild: vi.fn(),
     updateHtml: vi.fn(),
-    ensureRemoteDocument: vi.fn(),
   }),
+  useDocumentActions: () => ({ ensureRemoteDocument: vi.fn() }),
+  usePageReadOnly: () => false,
 }));
 
 vi.mock('./Inlines', () => ({

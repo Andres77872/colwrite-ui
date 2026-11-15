@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { compileFigure, describeFigure, figureMeta, resetFigureCacheForTests } from '../compile';
 import { inflateRect, rectsOverlap } from '../geometry';
@@ -35,8 +36,8 @@ function checkScene(scene: FigureScene, label: string) {
   // Sibling nodes never overlap.
   for (let i = 0; i < scene.nodes.length; i += 1) {
     for (let j = i + 1; j < scene.nodes.length; j += 1) {
-      const a = scene.nodes[i];
-      const b = scene.nodes[j];
+      const a = itemAt(scene.nodes, i);
+      const b = itemAt(scene.nodes, j);
       expect(rectsOverlap(a.shape, b.shape, 0.5), `${label}: ${a.id} overlaps ${b.id}`).toBe(false);
     }
   }
@@ -70,8 +71,8 @@ function checkScene(scene: FigureScene, label: string) {
     if (edge.model.route !== 'ortho' || edge.model.from === edge.model.to) continue;
     const points = edge.points;
     for (let k = 1; k < points.length; k += 1) {
-      const a = points[k - 1];
-      const b = points[k];
+      const a = itemAt(points, k - 1);
+      const b = itemAt(points, k);
       expect(Math.abs(a.x - b.x) < 0.01 || Math.abs(a.y - b.y) < 0.01, `${label}: ${edge.id} segment ${k} is axis-aligned`).toBe(true);
       for (const node of scene.nodes) {
         if (node.id === edge.model.from || node.id === edge.model.to) continue;
@@ -122,7 +123,7 @@ describe('compileFigure', () => {
   });
 
   it('caches by source and measurer, and is deterministic', () => {
-    const source = FIGURE_TEMPLATES[0].source;
+    const source = itemAt(FIGURE_TEMPLATES, 0).source;
     const first = compileFigure(source, measurer);
     expect(compileFigure(source, measurer)).toBe(first);
     resetFigureCacheForTests();
@@ -156,7 +157,7 @@ describe('compileFigure', () => {
       JSON.stringify({ nodes: ['a', 'b'], edges: ['a -> b'], legend: [{ label: 'Cached', tone: 'teal' }] }),
       measurer,
     );
-    const legend = compiled.scene!.legend!.items[0].label.font.size;
+    const legend = itemAt(compiled.scene!.legend!.items, 0).label.font.size;
     expect(legend).toBeLessThan(12);
     expect(compiled.scene!.legibleScale).toBeCloseTo(6.5 / (legend * 0.75), 6);
   });
@@ -201,9 +202,9 @@ describe('compileFigure', () => {
       // The stroke data moved with the points: it starts where the route does.
       for (const edge of compiled.scene!.edges) {
         if (edge.start) continue;
-        const [x, y] = edge.d.slice(1).split(/[LAC]/)[0].split(' ').map(Number);
-        expect(x).toBeCloseTo(edge.points[0].x, 1);
-        expect(y).toBeCloseTo(edge.points[0].y, 1);
+        const [x, y] = itemAt(edge.d.slice(1).split(/[LAC]/), 0).split(' ').map(Number);
+        expect(x).toBeCloseTo(itemAt(edge.points, 0).x, 1);
+        expect(y).toBeCloseTo(itemAt(edge.points, 0).y, 1);
       }
     }
   });
@@ -329,7 +330,7 @@ describe('compileFigure — speed', () => {
     for (const edge of scene.edges) {
       if (edge.model.route !== 'ortho' || edge.model.from === edge.model.to) continue;
       edge.points.slice(1).forEach((b, k) => {
-        const a = edge.points[k];
+        const a = itemAt(edge.points, k);
         expect(Math.abs(a.x - b.x) < 0.01 || Math.abs(a.y - b.y) < 0.01, `${edge.id} is orthogonal`).toBe(true);
       });
     }
@@ -384,6 +385,6 @@ describe('maths that cannot be typeset', () => {
       expect.stringContaining('node "b"'),
       expect.stringContaining('edge a → b'),
     ]);
-    expect(math[1].line).toBe(1);
+    expect(math[1]?.line).toBe(1);
   });
 });

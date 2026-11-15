@@ -12,7 +12,7 @@ import {
   AGENT_ENGINE_IDS,
   type AgentEngineId,
   type AgentEngineStatus,
-} from '@/services/agentEngines';
+} from '@/data/agentEngines';
 import {
   CLAUDE_MODEL_ALIASES,
   ENGINE_SUMMARY,
@@ -126,7 +126,7 @@ function EngineRow({
   const radioId = useId();
   const badge = engineBadge(status);
   const available = status?.available === true;
-  const isCli = engine !== 'legacy';
+  const isCli = engine !== 'gateway';
   const signedIn = engineSignedInLine(status);
 
   return (

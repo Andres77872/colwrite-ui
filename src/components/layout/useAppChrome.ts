@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useEditor } from '@/editor';
+import { useDocumentActions, useEditorDoc } from '@/editor';
 import { useToast } from '@/components/ui/toastContext';
 import { isFileDrag, unplaceableFileMessage } from '@/lib/fileDrop';
 import { APP_NAME } from '@/components/common/Brand';
@@ -14,12 +14,12 @@ import { displayTitle } from './displayTitle';
  * differs between them, was the part not shown.
  */
 export function useDocumentTitle(view: AppView) {
-  const { doc } = useEditor();
+  const { doc } = useEditorDoc();
   // "Untitled", as the sidebar and breadcrumb call a page with no name.
   const name = doc ? displayTitle(doc.name) : '';
 
   useEffect(() => {
-    if (view === 'profile') {
+    if (view === 'settings') {
       document.title = `Settings — ${APP_NAME}`;
       return;
     }
@@ -34,7 +34,7 @@ export function useDocumentTitle(view: AppView) {
  * closing the tab mid-debounce dropped the last edit silently.
  */
 export function useUnsavedGuard() {
-  const { hasPendingEdits } = useEditor();
+  const { hasPendingEdits } = useDocumentActions();
 
   useEffect(() => {
     const onBeforeUnload = (event: BeforeUnloadEvent) => {

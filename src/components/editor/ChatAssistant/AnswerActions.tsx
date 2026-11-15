@@ -1,47 +1,20 @@
-import { useContext, useEffect, useState, type ReactNode } from 'react';
-import { Check, Copy, FileInput, RotateCcw, Sparkles } from 'lucide-react';
+import { useContext, useEffect, useState } from 'react';
+import { Check, FileInput, RotateCcw, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useEditorActions, type Block } from '@/editor';
-import type { AgentSource } from '@/services/streamParser';
+import { useEditorActions, usePageReadOnly, type Block } from '@/editor';
+import type { AgentSource } from '@/api/assistant/streamParser';
 import { rememberedBlockId, useEditorFocus } from '@/components/editor/References';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ToastContext } from '@/components/ui/toastContext';
-import { formatTokens } from './AgentActivity/toolMeta';
 import { replyToBlocks } from './replyToBlocks';
-import { copyAnswer } from './answerClipboard';
+import { answerForClipboard } from './answerClipboard';
+import { ActionButton, CopyButton, REVEAL_ON_HOVER } from './MessageActions';
+import { ReplyDetails } from './ReplyDetails';
+import type { ReplyMeta } from './replyMeta';
 import { scrollBehavior } from '@/lib/motion';
 
 const isListItem = (block: Block | undefined) =>
   block?.type === 'paragraph' &&
   (block.variant === 'bullet' || block.variant === 'numbered' || block.variant === 'todo');
-
-function ActionButton({
-  label,
-  tooltip,
-  onClick,
-  children,
-}: {
-  label: string;
-  tooltip: ReactNode;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={onClick}
-          aria-label={label}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors duration-120 hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {children}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>{tooltip}</TooltipContent>
-    </Tooltip>
-  );
-}
 
 /** A confirmation that lasts long enough to read, then goes back. */
 function useFlag(): [boolean, () => void] {
@@ -57,6 +30,8 @@ function useFlag(): [boolean, () => void] {
 /**
  * What can be done with a finished answer: copy it, put it into the page with
  * its citations, ask again, and — when it proposed edits — go review them.
+ * At the end of the row, when it was written, how long it took and what it
+ * used, with the details a click away.
  *
  * Shown on hover for older answers and always for the latest one; always on
  * touch screens, which have no hover to reveal them.
@@ -67,7 +42,7 @@ export function AnswerActions({
   openChangeCount,
   onReviewChanges,
   onRetry,
-  usage,
+  meta,
   pinned,
 }: {
   text: string;
@@ -76,28 +51,18 @@ export function AnswerActions({
   onReviewChanges: () => void;
   /** Ask the same question again; absent where that is not on offer. */
   onRetry?: () => void;
-  usage?: { promptTokens: number; completionTokens: number };
+  meta: ReplyMeta;
   /** Keep the row visible without hover (the latest answer). */
   pinned: boolean;
 }) {
   const { insertBlocksAfter, getBlockIds, getBlock, markRecentlyChanged, upsertSources } = useEditorActions();
+  // A viewer copies an answer; nothing puts it into the page.
+  const readOnly = usePageReadOnly();
   const focus = useEditorFocus();
   // Optional: the panel also renders outside the app shell (tests, previews).
   const toaster = useContext(ToastContext);
-  const [copied, flagCopied] = useFlag();
   const [inserted, flagInserted] = useFlag();
   const [placed, setPlaced] = useState('');
-
-  const copy = async () => {
-    try {
-      // The numbers the answer shows, with the list they point to — not the
-      // chat's internal [S1] handles.
-      await copyAnswer(text, sources);
-      flagCopied();
-    } catch {
-      /* a clipboard the browser refuses is not worth an error banner */
-    }
-  };
 
   // Below where the author was writing, or at the end of the page.
   const insert = () => {
@@ -110,9 +75,9 @@ export function AnswerActions({
     // A reply that opens with prose does not belong inside a list: it goes
     // after the list the caret was in instead of splitting it in two.
     if (remembered && isListItem(getBlock(remembered)) && !isListItem(blocks[0])) {
-      let index = ids.indexOf(remembered);
-      while (index + 1 < ids.length && isListItem(getBlock(ids[index + 1]))) index++;
-      anchor = ids[index];
+      const rest = ids.slice(ids.indexOf(remembered) + 1);
+      const past = rest.findIndex((id) => !isListItem(getBlock(id)));
+      anchor = (past === -1 ? rest.at(-1) : rest[past - 1]) ?? remembered;
       where = 'Below the list you were writing in';
     }
     const added = insertBlocksAfter(anchor, blocks);
@@ -141,21 +106,6 @@ export function AnswerActions({
     });
   };
 
-  const hasUsage = usage && (usage.promptTokens > 0 || usage.completionTokens > 0);
-  // What the reply cost is for the curious, not part of the answer: it
-  // rides in the Copy tooltip instead of a line of telemetry under every reply.
-  const copyTooltip = copied ? (
-    'Copied'
-  ) : hasUsage ? (
-    <span className="flex flex-col">
-      <span>Copy</span>
-      <span className="text-xs tabular-nums opacity-70">
-        {formatTokens(usage.promptTokens)} tokens in · {formatTokens(usage.completionTokens)} out
-      </span>
-    </span>
-  ) : (
-    'Copy'
-  );
   const insertTooltip = inserted
     ? `Inserted · ${placed.toLowerCase()}`
     : focus
@@ -164,14 +114,10 @@ export function AnswerActions({
 
   // Proposed edits are the one thing on this row that cannot wait for a
   // hover: it stays in view, and the quiet icons fade in beside it.
-  const faded = cn(
-    'flex items-center gap-0.5 transition-opacity duration-120',
-    !pinned &&
-      'opacity-0 focus-within:opacity-100 group-hover/message:opacity-100 [@media(hover:none)]:opacity-100',
-  );
+  const faded = cn('flex items-center gap-0.5 transition-opacity duration-120', !pinned && REVEAL_ON_HOVER);
 
   return (
-    <div className="-ml-1.5 flex min-h-7 flex-wrap items-center gap-x-1 gap-y-1">
+    <div className="-mx-1.5 flex min-h-7 flex-wrap items-center gap-x-1 gap-y-1">
       {openChangeCount > 0 && (
         <button
           type="button"
@@ -184,16 +130,18 @@ export function AnswerActions({
       )}
       {text && (
         <div className={faded}>
-          <ActionButton label={copied ? 'Copied' : 'Copy'} tooltip={copyTooltip} onClick={copy}>
-            {copied ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
-          </ActionButton>
-          <ActionButton
-            label={inserted ? 'Inserted into page' : 'Insert into page'}
-            tooltip={insertTooltip}
-            onClick={insert}
-          >
-            {inserted ? <Check className="h-4 w-4 text-success" /> : <FileInput className="h-4 w-4" />}
-          </ActionButton>
+          {/* The numbers the answer shows, with the list they point to — not
+              the chat's internal [S1] handles. */}
+          <CopyButton label="Copy" read={() => answerForClipboard(text, sources)} />
+          {!readOnly && (
+            <ActionButton
+              label={inserted ? 'Inserted into page' : 'Insert into page'}
+              tooltip={insertTooltip}
+              onClick={insert}
+            >
+              {inserted ? <Check className="h-4 w-4 text-success" /> : <FileInput className="h-4 w-4" />}
+            </ActionButton>
+          )}
           {onRetry && (
             <ActionButton label="Retry" tooltip="Ask again" onClick={onRetry}>
               <RotateCcw className="h-4 w-4" />
@@ -201,6 +149,12 @@ export function AnswerActions({
           )}
         </div>
       )}
+      {/* Its own fade, so it stays while its popover is open and the
+          pointer has gone to read it. */}
+      <ReplyDetails
+        meta={meta}
+        className={cn('ml-auto', !pinned && REVEAL_ON_HOVER, 'focus-visible:opacity-100 data-[state=open]:opacity-100')}
+      />
     </div>
   );
 }

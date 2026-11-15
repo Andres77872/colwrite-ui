@@ -1,10 +1,11 @@
+import { takeItems } from '@/lib/itemAt';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { ChatMarkdown } from '../ChatMarkdown';
 import { citedOrder } from '../answerSourceMarkers';
 import { answerForClipboard } from '../answerClipboard';
 import { replyToBlocks } from '../replyToBlocks';
-import type { AgentSource } from '@/services/streamParser';
+import type { AgentSource } from '@/api/assistant/streamParser';
 import type { ParagraphBlock } from '@/editor/types';
 
 afterEach(cleanup);
@@ -83,9 +84,9 @@ describe('inserting a reply', () => {
   it('turns markers for received sources into citations carrying their records', () => {
     const blocks = replyToBlocks('## Findings\n\n- Scaling works [S1, S3].\n- Invented [S7].', SOURCES);
     expect(blocks[0]).toMatchObject({ type: 'heading', level: 2, html: 'Findings' });
-    const [first, second] = blocks.slice(1) as ParagraphBlock[];
+    const [first, second] = takeItems(blocks.slice(1) as ParagraphBlock[], 2);
     expect(first.variant).toBe('bullet');
-    const [citation] = first.children ?? [];
+    const [citation] = takeItems(first.children ?? [], 1);
     expect(citation).toMatchObject({ type: 'citation', keys: ['10.1234/a', '2101.00001'] });
     expect(citation.type === 'citation' && citation.sources?.map((source) => source.title)).toEqual([
       'Paper A',

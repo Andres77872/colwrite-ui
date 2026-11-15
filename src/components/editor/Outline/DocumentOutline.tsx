@@ -87,7 +87,7 @@ export function DocumentOutline({
     // visually at the top, where the sticky offset measures from.
     <div className="pointer-events-none sticky top-32 z-[var(--z-chrome)] order-first hidden h-0 @min-[820px]/canvas:block">
       <nav
-        aria-label="Document outline"
+        aria-label="Page outline"
         className="group/outline pointer-events-auto absolute right-6 top-0 flex max-h-[60vh] flex-col items-end"
       >
         {/* The dashes are the outline: one button per heading, longer for

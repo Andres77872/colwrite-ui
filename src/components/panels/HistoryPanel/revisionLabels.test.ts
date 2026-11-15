@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RevisionSummary } from '@/services/documentHistory';
+import type { RevisionSummary } from '@/data/documentHistory';
 import { distinctSummary, kindLabel, revisionTime } from './revisionLabels';
 
 const revision = (kind: string, summary: string | null = null) =>

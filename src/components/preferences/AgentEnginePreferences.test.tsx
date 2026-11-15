@@ -1,20 +1,18 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mockAgentEngines } from '@/data/__tests__/agentEngineFixtures';
 import { ToastProvider } from '@/components/ui/toast';
-import type { AgentEngineCatalog, AgentEngineStatus } from '@/services/agentEngines';
+import type { AgentEngineCatalog, AgentEngineStatus } from '@/data/agentEngines';
 
-const api = vi.hoisted(() => ({ list: vi.fn(), check: vi.fn() }));
-
-vi.mock('@/services/agentEngines', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/services/agentEngines')>();
-  return { ...actual, getAgentEngines: api.list, checkAgentEngine: api.check };
-});
+/** The server's engine routes. */
+const api = { list: vi.fn(), check: vi.fn() };
 
 const { AgentEngineProvider } = await import('./AgentEngineContext');
 const { AgentEnginePreferences } = await import('./AgentEnginePreferences');
 
 const LEGACY: AgentEngineStatus = {
-  engine: 'legacy',
+  engine: 'gateway',
   name: 'ColWrite model gateway',
   state: 'ready',
   available: true,
@@ -45,7 +43,7 @@ function radio(element: HTMLElement): HTMLInputElement {
 
 function catalog(runtime: 'local' | 'deployed', engines: AgentEngineStatus[]): AgentEngineCatalog {
   return {
-    runtime, default_engine: 'legacy', engines,
+    runtime, default_engine: 'gateway', engines,
     gateway_models: {
       main: ['openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5', 'google/gemini-4-hydrogen'],
       lite: ['openai/gpt-6-luna', 'anthropic/claude-haiku-5.5', 'google/gemini-4-hydrogen'],
@@ -67,9 +65,13 @@ beforeEach(() => {
   window.localStorage.clear();
   api.list.mockReset();
   api.check.mockReset();
+  mockAgentEngines(api);
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe('AgentEnginePreferences', () => {
   it('offers gateway models but no local engines on a deployed server', async () => {
@@ -109,7 +111,7 @@ describe('AgentEnginePreferences', () => {
     fireEvent.click(await screen.findByRole('radio', { name: /Claude Code/ }));
     expect(radio(screen.getByRole('radio', { name: /Claude Code/ })).checked).toBe(true);
     await waitFor(() =>
-      expect(JSON.parse(window.localStorage.getItem('colwrite:agent-engine:v1') ?? '{}').chat).toBe(
+      expect(JSON.parse(window.localStorage.getItem('colwrite:device:agent-engine') ?? '{}').chat).toBe(
         'claude',
       ),
     );
@@ -122,14 +124,14 @@ describe('AgentEnginePreferences', () => {
     fireEvent.change(claudeModel, { target: { value: 'opus' } });
     await waitFor(() =>
       expect(
-        JSON.parse(window.localStorage.getItem('colwrite:agent-engine:v1') ?? '{}').models,
+        JSON.parse(window.localStorage.getItem('colwrite:device:agent-engine') ?? '{}').models,
       ).toEqual({ claude: 'opus' }),
     );
   });
 
   it('refuses a gateway id for a CLI and keeps the saved model', async () => {
     window.localStorage.setItem(
-      'colwrite:agent-engine:v1',
+      'colwrite:device:agent-engine',
       JSON.stringify({ chat: 'claude', inline: 'chat', models: { claude: 'sonnet' } }),
     );
     api.list.mockResolvedValue(catalog('local', [LEGACY, CLAUDE, CODEX_SIGNED_OUT]));
@@ -146,7 +148,7 @@ describe('AgentEnginePreferences', () => {
     expect(await screen.findByText(/not a gateway id\. Still using sonnet\./)).toBeTruthy();
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(
-      JSON.parse(window.localStorage.getItem('colwrite:agent-engine:v1') ?? '{}').models,
+      JSON.parse(window.localStorage.getItem('colwrite:device:agent-engine') ?? '{}').models,
     ).toEqual({ claude: 'sonnet' });
   });
 
@@ -172,7 +174,7 @@ describe('AgentEnginePreferences', () => {
 
   it('warns when the chosen engine can no longer run', async () => {
     window.localStorage.setItem(
-      'colwrite:agent-engine:v1',
+      'colwrite:device:agent-engine',
       JSON.stringify({ chat: 'codex', inline: 'chat', models: {} }),
     );
     api.list.mockResolvedValue(catalog('local', [LEGACY, CLAUDE, CODEX_SIGNED_OUT]));
@@ -193,10 +195,10 @@ describe('AgentEnginePreferences', () => {
       'ColWrite model gateway',
       'Claude Code',
     ]);
-    fireEvent.change(inline, { target: { value: 'legacy' } });
+    fireEvent.change(inline, { target: { value: 'gateway' } });
     await waitFor(() =>
-      expect(JSON.parse(window.localStorage.getItem('colwrite:agent-engine:v1') ?? '{}').inline).toBe(
-        'legacy',
+      expect(JSON.parse(window.localStorage.getItem('colwrite:device:agent-engine') ?? '{}').inline).toBe(
+        'gateway',
       ),
     );
   });
@@ -223,8 +225,8 @@ describe('AgentEnginePreferences', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Lite model' }), {
       target: { value: 'google/gemini-4-hydrogen' },
     });
-    await waitFor(() => expect(JSON.parse(localStorage.getItem('colwrite:agent-engine:v1') ?? '{}'))
-      .toMatchObject({ models: { legacy: 'anthropic/claude-sonnet-5.5' }, liteModel: 'google/gemini-4-hydrogen' }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('colwrite:device:agent-engine') ?? '{}'))
+      .toMatchObject({ models: { gateway: 'anthropic/claude-sonnet-5.5' }, liteModel: 'google/gemini-4-hydrogen' }));
 
     first.unmount();
     renderPreferences();
@@ -232,13 +234,13 @@ describe('AgentEnginePreferences', () => {
     expect(general.value).toBe('anthropic/claude-sonnet-5.5');
     expect((screen.getByRole('combobox', { name: 'Lite model' }) as HTMLSelectElement).value).toBe('google/gemini-4-hydrogen');
     fireEvent.change(general, { target: { value: '' } });
-    await waitFor(() => expect(JSON.parse(localStorage.getItem('colwrite:agent-engine:v1') ?? '{}'))
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('colwrite:device:agent-engine') ?? '{}'))
       .toMatchObject({ models: {}, liteModel: 'google/gemini-4-hydrogen' }));
   });
 
   it('does not offer a stale model saved against a different server', async () => {
-    localStorage.setItem('colwrite:agent-engine:v1', JSON.stringify({
-      chat: 'legacy', inline: 'chat', models: { legacy: 'old/general' }, liteModel: 'old/lite',
+    localStorage.setItem('colwrite:device:agent-engine', JSON.stringify({
+      chat: 'gateway', inline: 'chat', models: { gateway: 'old/general' }, liteModel: 'old/lite',
     }));
     api.list.mockResolvedValue(catalog('deployed', [LEGACY]));
     renderPreferences();
@@ -248,15 +250,6 @@ describe('AgentEnginePreferences', () => {
     expect(screen.getAllByText(/saved model is no longer configured/)).toHaveLength(2);
     expect(screen.queryByRole('option', { name: 'old/general' })).toBeNull();
     expect(screen.queryByRole('option', { name: 'old/lite' })).toBeNull();
-  });
-
-  it('explains when an older server does not expose choices instead of inventing models', async () => {
-    const older = catalog('deployed', [LEGACY]);
-    delete older.gateway_models;
-    api.list.mockResolvedValue(older);
-    renderPreferences();
-    expect(await screen.findByText(/does not expose model choices yet/)).toBeTruthy();
-    expect(screen.queryByRole('combobox')).toBeNull();
   });
 
   it('shows a configuration warning when the gateway has no configured models', async () => {

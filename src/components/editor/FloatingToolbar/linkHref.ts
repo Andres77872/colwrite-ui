@@ -40,7 +40,7 @@ export function normalizeHref(raw: string): LinkHref {
 
   // A host — a domain name with a top-level part, an IPv4 address or
   // localhost, optionally with a port — before any path, query or fragment.
-  const host = value.split(/[/?#]/, 1)[0].replace(/:\d+$/, '');
+  const host = (value.split(/[/?#]/, 1)[0] ?? '').replace(/:\d+$/, '');
   if (DOMAIN.test(host) || IPV4.test(host) || /^localhost$/i.test(host)) {
     return { ok: true, href: `https://${value}` };
   }
@@ -55,7 +55,7 @@ export function describeHref(href: string): {
 } {
   if (href.startsWith('#')) return { kind: 'anchor', title: 'Link in this page', url: href };
   if (/^mailto:/i.test(href)) {
-    const address = href.slice('mailto:'.length).split('?')[0];
+    const address = href.slice('mailto:'.length).split('?')[0] ?? '';
     return { kind: 'mail', title: decodeURIComponent(address), url: href };
   }
   if (/^tel:/i.test(href)) return { kind: 'phone', title: href.slice('tel:'.length), url: href };

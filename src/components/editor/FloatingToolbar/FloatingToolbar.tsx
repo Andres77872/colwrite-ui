@@ -5,7 +5,15 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { menuItem, menuLabel, menuSeparator } from '@/components/ui/menuStyles';
-import { TURN_INTO_KINDS, blockKind, kindOf, useEditor, type BlockKindId } from '@/editor';
+import {
+  TURN_INTO_KINDS,
+  blockKind,
+  kindOf,
+  useDocumentId,
+  useDocumentSession,
+  useEditorActions,
+  type BlockKindId,
+} from '@/editor';
 import { AgentToolsContext } from '@/components/preferences/agentToolsContextState';
 import { PanelsContext } from '@/components/panels/panelsContextState';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
@@ -139,7 +147,8 @@ function toggleInlineCode(range: Range): void {
  * class, which `Editable` renders on every prose block.
  */
 function useFloatingToolbar() {
-  const { exec, refs, updateHtml, addParagraphChild, getBlock, setBlockKind, documentId } = useEditor();
+  const { exec, refs, updateHtml, addParagraphChild, getBlock, setBlockKind } = useEditorActions();
+  const documentId = useDocumentId();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0, below: false });
   const [states, setStates] = useState<FormatState>(EMPTY_STATE);
@@ -700,7 +709,9 @@ export function FloatingToolbar() {
 }
 
 function SelectionToolbar() {
-  const { loadingDocumentId } = useEditor();
+  // A read-only page (a viewer) gets no formatting toolbar: the text can still
+  // be selected and copied, and Mod+J asks the assistant about it.
+  const { loadingDocumentId, readOnly } = useDocumentSession();
   const agentTools = useContext(AgentToolsContext);
   // Optional, like the agent tools: outside the workspace there is no sidebar.
   const panels = useContext(PanelsContext);
@@ -749,9 +760,10 @@ function SelectionToolbar() {
       return Boolean(field);
     }
     const index = landingIndex(items, activeIndex);
-    if (index < 0) return false;
+    const item = items[index];
+    if (!item) return false;
     setActiveIndex(index);
-    items[index].focus();
+    item.focus();
     return true;
   }, [activeIndex, setActiveIndex, toolbarRef]);
 
@@ -865,15 +877,16 @@ function SelectionToolbar() {
     else if (event.key === 'ArrowLeft') next = current === 0 ? items.length - 1 : current - 1;
     else if (event.key === 'Home') next = 0;
     else if (event.key === 'End') next = items.length - 1;
-    if (next === null) return;
+    const item = next === null ? undefined : items[next];
+    if (next === null || !item) return;
 
     event.preventDefault();
     setMenu(null);
     setActiveIndex(next);
-    items[next].focus();
+    item.focus();
   };
 
-  if (!visible || Boolean(loadingDocumentId)) return null;
+  if (!visible || Boolean(loadingDocumentId) || readOnly) return null;
 
   const locked = block?.locked === true;
   const kind = block && (block.type === 'paragraph' || block.type === 'heading') ? kindOf(block) : null;

@@ -1,3 +1,4 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import { describe, it, expect } from 'vitest';
 import type { Block, ToolAction, ToolOperation } from '../types';
 import { applyPatchToBlocks } from '../docOps';
@@ -30,8 +31,9 @@ function batch(actions: ToolOperation[], overrides: Partial<ToolAction> = {}): C
     documentId: 'doc-1',
     version: 3,
     status: 'proposed',
+    changeSetId: 'cs-1',
     ...overrides,
-  });
+  } as ToolAction & { changeSetId: string });
 }
 
 function para(id: string, html = id): Record<string, unknown> {
@@ -51,7 +53,7 @@ function permutations<T>(items: T[]): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += 1) {
     const rest = [...items.slice(0, i), ...items.slice(i + 1)];
-    for (const tail of permutations(rest)) out.push([items[i], ...tail]);
+    for (const tail of permutations(rest)) out.push([itemAt(items, i), ...tail]);
   }
   return out;
 }
@@ -80,13 +82,13 @@ function acceptOneByOne(blocks: Block[], set: ChangeSet, order: ProposedChange[]
   let sets: ChangeSet[] = [set];
 
   for (const change of order) {
-    const live = sets[0].changes.find((candidate) => candidate.id === change.id)!;
+    const live = itemAt(sets, 0).changes.find((candidate) => candidate.id === change.id)!;
     const op = resolveAcceptOp(live, sets, current);
     if (op) current = applyPatchToBlocks(current, [op]).blocks;
     sets = [
       {
-        ...sets[0],
-        changes: sets[0].changes.map((candidate) =>
+        ...itemAt(sets, 0),
+        changes: itemAt(sets, 0).changes.map((candidate) =>
           candidate.id === change.id ? { ...candidate, status: 'accepted' as const } : candidate,
         ),
       },
@@ -183,7 +185,7 @@ describe('accepting changes is order-independent', () => {
       { op: 'append_block', block: para('Y') },
       { op: 'append_block', block: para('Z') },
     ]);
-    const [x, y, z] = set.changes;
+    const [x, y, z] = takeItems(set.changes, 3);
 
     const naive = [z, x, y].reduce(
       (blocks, change) => applyPatchToBlocks(blocks, [change.op]).blocks,
@@ -249,7 +251,7 @@ describe('changes spread across several batches', () => {
     let current = doc;
     let live = sets;
     for (const [setIndex, changeIndex] of order) {
-      const target = live[setIndex].changes[changeIndex];
+      const target = itemAt(itemAt(live, setIndex).changes, changeIndex);
       const op = resolveAcceptOp(target, live, current);
       if (op) current = applyPatchToBlocks(current, [op]).blocks;
       live = live
@@ -290,7 +292,7 @@ describe('changes that cannot be commuted are gated instead', () => {
 
     const walk = (sets: ChangeSet[], current: Block[]) => {
       const precedence = linkPrecedence(sets);
-      const open = sets[0].changes.filter((change) => change.status === 'pending');
+      const open = itemAt(sets, 0).changes.filter((change) => change.status === 'pending');
       if (open.length === 0) {
         outcomes.add(ids(current));
         return;
@@ -310,8 +312,8 @@ describe('changes that cannot be commuted are gated instead', () => {
         walk(
           [
             {
-              ...sets[0],
-              changes: sets[0].changes.map((candidate) =>
+              ...itemAt(sets, 0),
+              changes: itemAt(sets, 0).changes.map((candidate) =>
                 candidate.id === change.id
                   ? { ...candidate, status: 'accepted' as const }
                   : candidate,
@@ -385,7 +387,7 @@ describe('a change whose block really is gone', () => {
 
   it('cannot be accepted, and says so rather than guessing', () => {
     const set = batch([{ op: 'insert_block_after', referenceId: 'deleted', block: para('X') }]);
-    expect(resolveAcceptOp(set.changes[0], [set], doc)).toBeNull();
+    expect(resolveAcceptOp(itemAt(set.changes, 0), [set], doc)).toBeNull();
   });
 });
 
@@ -466,7 +468,7 @@ describe('rejecting an insert that others continue from', () => {
         // Only the rejected block goes; nothing else is taken with it.
         expect(rejected, label).toEqual([rejectedChange.id]);
 
-        const remaining = sets[0].changes.filter((change) => change.status === 'pending');
+        const remaining = itemAt(sets, 0).changes.filter((change) => change.status === 'pending');
         expect(remaining, label).toHaveLength(set.changes.length - 1);
 
         const expected = before
@@ -476,7 +478,7 @@ describe('rejecting an insert that others continue from', () => {
         // The preview shows the section without the rejected paragraph…
         expect(projected(sets), label).toBe(expected);
         // …Accept all on what is left produces exactly that…
-        expect(acceptAll(doc, sets[0], remaining), label).toBe(expected);
+        expect(acceptAll(doc, itemAt(sets, 0), remaining), label).toBe(expected);
         // …and so does accepting the rest one by one, in any order the review
         // offers: a continuation only once what it continues from is in.
         const offered = permutations(remaining).filter((order) =>
@@ -486,32 +488,32 @@ describe('rejecting an insert that others continue from', () => {
         );
         expect(offered.length, label).toBeGreaterThan(0);
         for (const order of offered) {
-          expect(acceptOneByOne(doc, sets[0], order), label).toBe(expected);
+          expect(acceptOneByOne(doc, itemAt(sets, 0), order), label).toBe(expected);
         }
       }
     });
   }
 
   it('makes the next paragraph acceptable straight away', () => {
-    const set = batch(CHAINS[0].ops);
-    const [heading, first, second] = set.changes;
+    const set = batch(itemAt(CHAINS, 0).ops);
+    const [heading, first, second] = takeItems(set.changes, 3);
     expect(isReady(second, [set], doc)).toBe(false);
 
     const { sets } = rejectChange([set], first.id);
-    const moved = sets[0].changes.find((change) => change.id === second.id)!;
+    const moved = itemAt(sets, 0).changes.find((change) => change.id === second.id)!;
     // Now addressed to the heading, which is still to be decided.
     expect(moved).toMatchObject({ anchorBlockId: 'H', placement: 'after', dependsOn: [heading.id] });
     expect(moved.op).toMatchObject({ op: 'insert_block_after', referenceId: 'H' });
 
     const { sets: afterHeading } = rejectChange(sets, heading.id);
-    const top = afterHeading[0].changes.find((change) => change.id === second.id)!;
+    const top = itemAt(afterHeading, 0).changes.find((change) => change.id === second.id)!;
     expect(top).toMatchObject({ anchorBlockId: 'A', dependsOn: [] });
     expect(isReady(top, afterHeading, doc)).toBe(true);
   });
 
   it('ends in the same document whichever of two linked paragraphs is rejected first', () => {
-    const set = batch(CHAINS[0].ops);
-    const [, first, second] = set.changes;
+    const set = batch(itemAt(CHAINS, 0).ops);
+    const [, first, second] = takeItems(set.changes, 3);
 
     const one = rejectChange(rejectChange([set], first.id).sets, second.id).sets;
     const other = rejectChange(rejectChange([set], second.id).sets, first.id).sets;
@@ -525,7 +527,7 @@ describe('rejecting an insert that others continue from', () => {
       { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
       { op: 'replace_block', blockId: 'X', block: { html: 'X, rewritten' } },
     ]);
-    const [insert, continuation, rewrite] = set.changes;
+    const [insert, continuation, rewrite] = takeItems(set.changes, 3);
 
     // What the card asks about before rejecting.
     const plan = planRejection(insert.id, [set]);
@@ -535,13 +537,13 @@ describe('rejecting an insert that others continue from', () => {
     const { sets, rejected, reanchored } = rejectChange([set], insert.id);
     expect(rejected).toEqual([insert.id, rewrite.id]);
     expect(reanchored).toEqual([continuation.id]);
-    expect(sets[0].changes.find((change) => change.id === continuation.id)?.status).toBe('pending');
+    expect(sets[0]?.changes.find((change) => change.id === continuation.id)?.status).toBe('pending');
   });
 
   it('changes nothing for a change that is already decided or unknown', () => {
-    const set = batch(CHAINS[0].ops);
-    const decided = rejectChange([set], set.changes[0].id).sets;
-    expect(rejectChange(decided, set.changes[0].id).sets).toBe(decided);
+    const set = batch(itemAt(CHAINS, 0).ops);
+    const decided = rejectChange([set], itemAt(set.changes, 0).id).sets;
+    expect(rejectChange(decided, itemAt(set.changes, 0).id).sets).toBe(decided);
     expect(rejectChange(decided, 'missing').rejected).toEqual([]);
   });
 });
