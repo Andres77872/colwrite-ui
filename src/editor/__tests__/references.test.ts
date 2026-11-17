@@ -1,100 +1,130 @@
-import { takeItems } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
-import { buildBibliography, citationLabel } from '../citations';
+import { reference } from '@/__tests__/agentSource';
 import { parseBibtex, toBibtex, bibtexKey } from '../bibtex';
-import type { Block, CitationChild, ParagraphBlock } from '../types';
+import {
+  canonicalArxivId,
+  canonicalDoi,
+  identifierKey,
+  libraryEntry,
+  manualRecord,
+  referenceAuthors,
+  referenceByline,
+  referenceLink,
+  referenceMarks,
+} from '../referenceRecords';
+import type { ReferenceRecord } from '../types';
 
-const cite = (id: string, key: string, extra: Partial<CitationChild> = {}): CitationChild => ({
-  id,
-  type: 'citation',
-  keys: [key],
-  ...extra,
+describe('identifiers', () => {
+  it('reduces a DOI to its bare, lower-cased form, and rejects anything else', () => {
+    expect(canonicalDoi('https://doi.org/10.1234/ABC.def')).toBe('10.1234/abc.def');
+    expect(canonicalDoi('doi: 10.1234/x.')).toBe('10.1234/x');
+    expect(canonicalDoi('not a doi')).toBeUndefined();
+  });
+
+  it('strips host, version and extension from an arXiv id, in either scheme', () => {
+    expect(canonicalArxivId('https://arxiv.org/pdf/2101.03961v3.pdf')).toBe('2101.03961');
+    expect(canonicalArxivId('arXiv:hep-th/9901001v2')).toBe('hep-th/9901001');
+    expect(canonicalArxivId('Smith2020v2')).toBeUndefined();
+  });
+
+  it('turns a pasted identifier into a key with its scheme, and leaves a typed key alone', () => {
+    expect(identifierKey('10.1234/ABC')).toBe('doi:10.1234/abc');
+    expect(identifierKey('2101.03961v2')).toBe('arxiv:2101.03961');
+    expect(identifierKey('PMID: 123456')).toBe('pmid:123456');
+    expect(identifierKey('OpenAlex:W123')).toBe('openalex:W123');
+    expect(identifierKey('smith2020')).toBeNull();
+  });
 });
 
-function paragraph(html: string, children: CitationChild[]): ParagraphBlock {
-  return { id: 'p', type: 'paragraph', html, children };
-}
+describe('one record from every entry point', () => {
+  it('is the library entry as it came, its CSL id its key', () => {
+    const record = reference('doi:10.1/a', { title: 'A', state: 'verified' });
+    expect(libraryEntry(record)).toBe(record);
+    expect(libraryEntry({ ...record, key: 'doi:10.1/b' }).csl.id).toBe('doi:10.1/b');
+  });
 
-describe('bibliography from the text and the library', () => {
-  it('numbers in the order citations appear in the text, not the order they were added', () => {
-    // `b` was inserted after `a` but sits before it in the sentence.
-    const blocks: Block[] = [
-      paragraph(
-        'First <span data-child-id="b" contenteditable="false"></span> then <span data-child-id="a" contenteditable="false"></span>.',
-        [cite('a', '10.1234/alpha'), cite('b', '10.1234/beta')],
-      ),
-    ];
-    const bibliography = buildBibliography(blocks);
-    expect(bibliography.entries.map((entry) => [entry.key, entry.number])).toEqual([
-      ['10.1234/beta', 1],
-      ['10.1234/alpha', 2],
+  it('makes an entry the author typed `manual` and unchecked', () => {
+    expect(manualRecord('smith2020', { type: 'book', title: 'Typed' }, 'book')).toEqual({
+      key: 'smith2020', kind: 'book', provider: 'manual', state: 'unchecked', flags: [],
+      csl: { id: 'smith2020', type: 'book', title: 'Typed' },
+    });
+  });
+
+  it('reads the byline and the link from the CSL item', () => {
+    const record = reference('arxiv:2101.03961', { title: 'Switch', authors: 'William Fedus, Barret Zoph, Noam Shazeer, Jeff Dean', year: 2021, venue: 'JMLR' });
+    expect(referenceAuthors(record)).toBe('William Fedus, Barret Zoph, Noam Shazeer et al.');
+    expect(referenceByline(record)).toBe('William Fedus, Barret Zoph, Noam Shazeer et al. · 2021 · JMLR');
+    expect(referenceLink(record)).toEqual({ href: 'https://arxiv.org/abs/2101.03961', label: 'arXiv:2101.03961' });
+    expect(referenceLink(reference('k', { doi: '10.1234/X' }))?.href).toBe('https://doi.org/10.1234/x');
+    expect(referenceLink(reference('k', { url: 'javascript:alert(1)' }))).toBeNull();
+  });
+});
+
+describe('reference states and flags (09 §5)', () => {
+  const marks = (record: ReferenceRecord) => referenceMarks(record).map((mark) => [mark.kind, mark.label, mark.detail, mark.href ?? null]);
+
+  it('is quiet for a verified work and for one never checked', () => {
+    expect(referenceMarks(reference('k', { state: 'verified' }))).toEqual([]);
+    expect(referenceMarks(reference('k', { state: 'unchecked' }))).toEqual([]);
+    expect(referenceMarks(null)).toEqual([]);
+  });
+
+  it('names what differs on a work to review, and says when one registry has it', () => {
+    expect(marks(reference('k', { state: 'needs_review', differs: ['issued', 'container-title'] }))).toEqual([
+      ['needs_review', 'Needs review', 'Sources disagree on its year and venue. Check the details against the work.', null],
     ]);
+    expect(marks(reference('k', { state: 'needs_review' }))[0]?.[2]).toBe('Only one registry has this work. Check the details against the work.');
+    expect(marks(reference('k', { state: 'not_found' }))[0]?.[1]).toBe('Not found');
   });
 
-  it('takes metadata from the library before the copy a citation carries', () => {
-    const blocks: Block[] = [
-      paragraph('x <span data-child-id="a" contenteditable="false"></span>', [
-        cite('a', '10.1234/ALPHA', { sources: [{ key: '10.1234/ALPHA', title: 'Old title', provider: 'manual' }] }),
-      ]),
-    ];
-    const bibliography = buildBibliography(blocks, {
-      library: [{ key: 'https://doi.org/10.1234/alpha', title: 'Corrected title', provider: 'crossref' }],
+  it('marks a retraction with its notice, first', () => {
+    const retracted = reference('k', {
+      state: 'needs_review', flags: ['retracted'],
+      notices: [{ type: 'retraction', date: '2024-03-12', doi: '10.5555/R1', source: 'crossref' }],
     });
-    const [entry] = takeItems(bibliography.entries, 1);
-    expect(entry.source.title).toBe('Corrected title');
-    expect(entry.verified).toBe(true);
+    expect(marks(retracted)[0]).toEqual([
+      'retracted', 'Retracted', 'Retraction published on 2024-03-12 (reported by Crossref).', 'https://doi.org/10.5555/r1',
+    ]);
+    expect(marks(reference('k', { flags: ['retracted'], notices: [{ type: 'withdrawal' }] }))[0]?.[1]).toBe('Withdrawn');
   });
 
-  it('marks typed sources as unverified', () => {
-    const blocks: Block[] = [
-      paragraph('x <span data-child-id="a" contenteditable="false"></span>', [
-        cite('a', 'Smith2020', { sources: [{ key: 'Smith2020', title: 'Typed', provider: 'manual' }] }),
-      ]),
-    ];
-    expect(buildBibliography(blocks).entries[0]?.verified).toBe(false);
-  });
-
-  it('relabels every citation when the document chooses a style', () => {
-    const child = cite('a', '10.1234/alpha', {
-      style: 'numeric',
-      sources: [{ key: '10.1234/alpha', title: 'T', authors: 'Ada Lovelace', year: '1843' }],
-    });
-    const blocks: Block[] = [paragraph('x <span data-child-id="a" contenteditable="false"></span>', [child])];
-    expect(citationLabel(child, buildBibliography(blocks))).toBe('[1]');
-    expect(citationLabel(child, buildBibliography(blocks, { style: 'author-year' }))).toBe('(Lovelace, 1843)');
+  it('points a preprint to its published version', () => {
+    expect(marks(reference('k', { flags: ['preprint', 'has_published_version'], published_doi: '10.1234/pub' }))).toEqual([
+      ['published_version', 'Published version', 'A preprint. Its published version is doi:10.1234/pub.', 'https://doi.org/10.1234/pub'],
+    ]);
+    expect(marks(reference('k', { flags: ['preprint'] }))).toEqual([['preprint', 'Preprint', 'A preprint, not peer reviewed.', null]]);
   });
 });
 
 describe('BibTeX', () => {
-  const source = {
-    key: '10.5555/3295222.3295349',
-    title: 'Attention Is All You Need',
-    authors: 'Ashish Vaswani, Noam Shazeer',
-    year: '2017',
-    venue: 'Advances in Neural Information Processing Systems',
-    kind: 'conference' as const,
-    doi: '10.5555/3295222.3295349',
-  };
+  const record = reference('doi:10.5555/3295222.3295349', {
+    title: 'Attention Is All You Need', authors: 'Ashish Vaswani, Noam Shazeer', year: 2017,
+    venue: 'Advances in Neural Information Processing Systems', doi: '10.5555/3295222.3295349',
+    csl: { type: 'paper-conference' },
+  });
 
   it('writes readable keys and the fields a LaTeX workflow needs', () => {
-    expect(bibtexKey(source)).toBe('vaswani2017attention');
-    const bib = toBibtex([source, { ...source, key: 'other' }]);
+    expect(bibtexKey(record)).toBe('vaswani2017attention');
+    const bib = toBibtex([record, { ...record, key: 'other' }]);
     expect(bib).toContain('@inproceedings{vaswani2017attention,');
     expect(bib).toContain('title = {{Attention Is All You Need}}');
-    expect(bib).toContain('author = {Ashish Vaswani and Noam Shazeer}');
+    expect(bib).toContain('author = {Vaswani, Ashish and Shazeer, Noam}');
     expect(bib).toContain('booktitle = {Advances in Neural Information Processing Systems}');
     expect(bib).toContain('doi = {10.5555/3295222.3295349}');
     // Duplicate keys are disambiguated.
     expect(bib).toContain('@inproceedings{vaswani2017attentionb,');
   });
 
-  it('escapes BibTeX specials', () => {
-    expect(toBibtex([{ key: 'k', title: 'Cost & 50% of $x_1$ {braces}' }])).toContain(
+  it('escapes BibTeX specials, and braces an organisation', () => {
+    expect(toBibtex([reference('k', { title: 'Cost & 50% of $x_1$ {braces}' })])).toContain(
       'title = {{Cost \\& 50\\% of \\$x\\_1\\$ \\{braces\\}}}',
+    );
+    expect(toBibtex([reference('k', { title: 'T', csl: { author: [{ literal: 'World Health Organization' }] } })])).toContain(
+      'author = {{World Health Organization}}',
     );
   });
 
-  it('reads entries from reference managers as unverified sources', () => {
+  it('reads entries from reference managers as records entered by hand, unchecked', () => {
     const { sources, skipped } = parseBibtex(`
       @article{smith2020,
         title = {A {Study} of Things},
@@ -109,34 +139,29 @@ describe('BibTeX', () => {
     expect(skipped).toBe(1);
     expect(sources).toEqual([
       {
-        key: '10.1234/abc.def',
-        title: 'A Study of Things',
-        authors: 'John Smith, Jane Doe, et al.',
-        year: '2020',
-        venue: 'Journal of Stuff',
-        doi: '10.1234/abc.def',
-        kind: 'article',
-        provider: 'manual',
+        key: 'doi:10.1234/abc.def', kind: 'paper', provider: 'manual', state: 'unchecked', flags: [],
+        csl: {
+          id: 'doi:10.1234/abc.def', type: 'article-journal', title: 'A Study of Things',
+          author: [{ family: 'Smith', given: 'John' }, { family: 'Doe', given: 'Jane' }],
+          issued: { 'date-parts': [[2020]] }, 'container-title': 'Journal of Stuff', DOI: '10.1234/abc.def',
+        },
       },
       {
-        key: '1706.03762',
-        title: 'Attention',
-        venue: 'NeurIPS',
-        externalIds: { ArXiv: '1706.03762' },
-        kind: 'conference',
-        provider: 'manual',
+        key: 'arxiv:1706.03762', kind: 'paper', provider: 'manual', state: 'unchecked', flags: [],
+        csl: { id: 'arxiv:1706.03762', type: 'paper-conference', title: 'Attention', 'container-title': 'NeurIPS', number: 'arXiv:1706.03762' },
       },
     ]);
   });
 
   it('round-trips through its own export', () => {
-    const [parsed] = parseBibtex(toBibtex([source])).sources;
-    expect(parsed).toMatchObject({
-      key: '10.5555/3295222.3295349',
+    const [parsed] = parseBibtex(toBibtex([record])).sources;
+    expect(parsed?.key).toBe(record.key);
+    expect(parsed?.csl).toMatchObject({
+      type: 'paper-conference',
       title: 'Attention Is All You Need',
-      authors: 'Ashish Vaswani, Noam Shazeer',
-      year: '2017',
-      venue: 'Advances in Neural Information Processing Systems',
+      author: [{ family: 'Vaswani', given: 'Ashish' }, { family: 'Shazeer', given: 'Noam' }],
+      issued: { 'date-parts': [[2017]] },
+      'container-title': 'Advances in Neural Information Processing Systems',
     });
   });
 });

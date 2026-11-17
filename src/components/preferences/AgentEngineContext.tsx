@@ -15,7 +15,6 @@ import { errorMessage } from '@/api/errors';
 import {
   AgentEngineContext,
   DEFAULT_ENGINE_PREFS,
-  effectiveEngine,
   isAgentEnginePrefs,
   resolveEngineRequest,
   type AgentEngineContextValue,
@@ -126,7 +125,6 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
       prefs,
       selectable: catalog?.runtime === 'local',
       statusOf: (engine) => statuses.get(engine) ?? null,
-      engineFor: (surface: AgentEngineSurface) => effectiveEngine(prefs, catalog, surface),
       requestFor: (surface: AgentEngineSurface) => resolveEngineRequest(prefs, catalog, surface),
       setChatEngine,
       setInlineEngine,

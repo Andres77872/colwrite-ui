@@ -96,11 +96,13 @@ describe('changes an Auto turn left waiting', () => {
   const rename = (id: string): ProposedChange => ({
     id,
     order: 0,
-    kind: 'rename',
-    op: { op: 'update_meta', meta: { name: 'A better title' } },
+    kind: 'meta',
+    op: { op: 'set_meta', name: 'A better title' },
     anchorBlockId: null,
     placement: null,
-    producesBlockId: null,
+    targetBlockIds: [],
+    references: [],
+    producesBlockIds: [],
     dependsOn: [],
     status: 'pending',
   });
@@ -142,11 +144,13 @@ describe('ChangeCard', () => {
     const change: ProposedChange = {
       id: 'chg-1',
       order: 0,
-      kind: 'rename',
-      op: { op: 'update_meta', meta: { name: 'A better title' } },
+      kind: 'meta',
+      op: { op: 'set_meta', name: 'A better title' },
       anchorBlockId: null,
       placement: null,
-      producesBlockId: null,
+      targetBlockIds: [],
+      references: [],
+      producesBlockIds: [],
       dependsOn: [],
       status: 'pending',
     };
@@ -162,8 +166,8 @@ describe('ChangeCard', () => {
   it('shows a viewer the suggestion with Accept and Reject disabled, saying why (M6.UI-2)', () => {
     editorState.readOnly = true;
     const change: ProposedChange = {
-      id: 'chg-2', order: 0, kind: 'rename', op: { op: 'update_meta', meta: { name: 'A better title' } },
-      anchorBlockId: null, placement: null, producesBlockId: null, dependsOn: [], status: 'pending',
+      id: 'chg-2', order: 0, kind: 'meta', op: { op: 'set_meta', name: 'A better title' },
+      anchorBlockId: null, placement: null, targetBlockIds: [], references: [], producesBlockIds: [], dependsOn: [], status: 'pending',
     };
     render(<ChangeCard change={change} />);
     const card = screen.getByRole('group', { name: 'Rename page' });

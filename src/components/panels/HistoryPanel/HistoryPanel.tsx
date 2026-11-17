@@ -118,7 +118,7 @@ export function HistoryPanel() {
   // Optional: the panel also renders where there is no review (tests, previews).
   const pendingSuggestions = useContext(ProposalsContext)?.pendingCount ?? 0;
   const panels = useContext(PanelsContext);
-  const visible = !panels || (panels.isOpen && panels.activeTool === 'history');
+  const visible = !panels || (panels.isOpen && panels.activePanel === 'history');
 
   // Every save and restore gives the open page a new version. A hidden
   // History tab stays mounted and catches up once, when it is shown again,

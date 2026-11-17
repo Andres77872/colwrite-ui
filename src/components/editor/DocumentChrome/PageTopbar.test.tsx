@@ -39,9 +39,9 @@ const mocks = vi.hoisted(() => ({
   listDocuments: vi.fn(),
   createAndSwitch: vi.fn(),
   panels: {
-    activeTool: 'assistant',
+    activePanel: 'assistant',
     isOpen: false,
-    setTool: vi.fn(),
+    setPanel: vi.fn(),
     assistantOpen: false,
     toggleAssistant: vi.fn(),
     leftCollapsed: false,
@@ -49,7 +49,7 @@ const mocks = vi.hoisted(() => ({
     setMobileNavOpen: vi.fn(),
     close: vi.fn(),
     isDesktop: false,
-    toolsDocked: false,
+    panelsDocked: false,
   },
   sidebarDocked: true,
   proposals: { sets: [] as unknown[], pendingCount: 0 },
@@ -87,10 +87,12 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@/editor', () => {
-  // One fake answers every slice the top bar and its menus read.
+vi.mock('@/editor', async (importOriginal) => {
+  // One fake answers every slice the top bar and its menus read; the rest
+  // (the citation styles the page menu lists) is the editor's own.
   const editor = () => ({ ...mocks.editor, createAndSwitch: mocks.createAndSwitch });
   return {
+    ...(await importOriginal<typeof import('@/editor')>()),
     DEFAULT_DOCUMENT_TITLE: 'Untitled page',
     focusPageTitle: () => true,
     useDocumentActions: editor,
@@ -113,10 +115,12 @@ vi.mock('@/editor/proposalsContextState', () => ({
 }));
 vi.mock('@/editor/proposals', () => ({
   pendingInDocumentOrder: () => [
-    { id: 'change-1', kind: 'replace' },
-    { id: 'change-2', kind: 'insert' },
+    { id: 'change-1', kind: 'replace', op: { newInformation: false } },
+    { id: 'change-2', kind: 'insert', op: { newInformation: false } },
   ],
   describeChange: (change: { id: string }) => `Describe ${change.id}`,
+  groupChanges: () => [],
+  wordingChanges: () => [],
 }));
 vi.mock('@/components/panels/panelsContextState', () => ({
   usePanels: () => mocks.panels,
@@ -163,14 +167,14 @@ beforeEach(() => {
   mocks.focusChange.mockReset();
   mocks.createAndSwitch.mockReset().mockResolvedValue('new-doc');
   Object.assign(mocks.panels, {
-    activeTool: 'assistant',
+    activePanel: 'assistant',
     isOpen: false,
     assistantOpen: false,
     leftCollapsed: false,
     isDesktop: false,
-    toolsDocked: false,
+    panelsDocked: false,
   });
-  mocks.panels.setTool.mockReset();
+  mocks.panels.setPanel.mockReset();
   mocks.panels.close.mockReset();
   mocks.panels.toggleAssistant.mockReset();
   mocks.panels.toggleLeftCollapsed.mockReset();
@@ -373,13 +377,13 @@ describe('PageTopbar', () => {
 
   it('opens the right sidebar tabs and shows which one is showing', () => {
     mocks.panels.isOpen = true;
-    mocks.panels.activeTool = 'sources';
+    mocks.panels.activePanel = 'sources';
     renderTopbar();
 
     expect(screen.getByRole('button', { name: 'Sources' }).getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(screen.getByRole('button', { name: 'Research' }));
     fireEvent.click(screen.getByRole('button', { name: 'History' }));
-    expect(mocks.panels.setTool.mock.calls).toEqual([['research'], ['history']]);
+    expect(mocks.panels.setPanel.mock.calls).toEqual([['research'], ['history']]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Ask AI' }));
     expect(mocks.panels.toggleAssistant).toHaveBeenCalledTimes(1);
@@ -387,19 +391,19 @@ describe('PageTopbar', () => {
 
   it('closes the right sidebar when its own tab button is pressed again, like Ask AI', () => {
     mocks.panels.isOpen = true;
-    mocks.panels.activeTool = 'history';
+    mocks.panels.activePanel = 'history';
     renderTopbar();
 
     fireEvent.click(screen.getByRole('button', { name: 'History' }));
     expect(mocks.panels.close).toHaveBeenCalledTimes(1);
-    expect(mocks.panels.setTool).not.toHaveBeenCalled();
+    expect(mocks.panels.setPanel).not.toHaveBeenCalled();
   });
 
   it('leaves the tab buttons to the docked sidebar’s own tab strip while it is open', () => {
     mocks.panels.isOpen = true;
     mocks.panels.isDesktop = true;
-    mocks.panels.toolsDocked = true;
-    mocks.panels.activeTool = 'sources';
+    mocks.panels.panelsDocked = true;
+    mocks.panels.activePanel = 'sources';
     renderTopbar();
 
     expect(screen.queryByRole('button', { name: 'Sources' })).toBeNull();
@@ -475,6 +479,8 @@ describe('Page menu', () => {
       'Copy to workspace…',
       'Export…',
       'Version history',
+      'AI use…',
+      'Assistant instructions…',
       'Document JSON',
       'Citation style',
       'Style',
@@ -496,7 +502,7 @@ describe('Page menu', () => {
       .getAllByRole('menuitem')
       .filter((item) => !item.classList.contains('sm:hidden'))
       .map((item) => item.textContent?.replace(/(Developer|⌘.*|Ctrl.*)$/, '').trim());
-    expect(names).toEqual(['Copy link', 'Export…', 'Version history', 'Document JSON', 'Style']);
+    expect(names).toEqual(['Copy link', 'Export…', 'Version history', 'AI use…', 'Document JSON', 'Style']);
   });
 
   it('says when the role changed under unsaved edits, which stay on this device', () => {
@@ -553,7 +559,7 @@ describe('Page menu', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Version history' }));
     openPageMenu();
     fireEvent.click(screen.getByRole('menuitem', { name: /^Document JSON/ }));
-    expect(mocks.panels.setTool.mock.calls).toEqual([['history'], ['json']]);
+    expect(mocks.panels.setPanel.mock.calls).toEqual([['history'], ['json']]);
   });
 
   it('leaves creating a page to the sidebar and the palette', () => {

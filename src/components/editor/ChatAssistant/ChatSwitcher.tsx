@@ -18,12 +18,14 @@ export function ChatSwitcher({
   onNewChat,
   onSelect,
   onDeleted,
+  unreadChats,
 }: {
   title: string;
   history: ChatHistory;
   onNewChat: () => void;
   onSelect: (chat: ChatItem) => void;
   onDeleted: (chat: ChatItem) => void;
+  unreadChats?: ReadonlySet<string>;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -56,6 +58,7 @@ export function ChatSwitcher({
             onSelect(chat);
           }}
           onDeleted={onDeleted}
+          unreadChats={unreadChats}
         />
       </PopoverContent>
     </Popover>

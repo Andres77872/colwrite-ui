@@ -1,8 +1,22 @@
 import type { ChatAttachment } from '@/api/assistant/chatAttachments';
+import type { ChatMessage as WireChatMessage, RecordToolCall, ReplyRecord } from '@/api/schema';
 import { uid } from '@/lib/uid';
 import type { ToolRun } from './AgentActivity';
-import type { AgentTodo, AgentWorker, AgentSource } from '@/api/assistant/streamParser';
-import type { AgentChatContext } from '@/api/assistant/agentChat';
+import {
+  decodeClaims,
+  decodePassages,
+  decodePlan,
+  decodeQuestion,
+  decodeArtifact,
+  decodeSources,
+  decodeSkill,
+  decodeInstructions,
+  type AgentBudget, type AgentBudgetUpdate, type AgentClaim, type AgentPassage, type AgentPersistence, type AgentPlan, type AgentQuestion,
+  type AgentInstruction, type AgentServedModel, type AgentSkill, type AgentSource, type AgentTodo, type AgentUsage, type AgentWorker,
+} from '@/api/assistant/streamParser';
+import type { AgentChatContext, AgentChatParams } from '@/api/assistant/agentChat';
+import type { CheckpointResume, ResumeAgentRun } from '@/api/assistant/agentSessionChat';
+import type { AutoBlockedReason } from '@/editor/types';
 import type { EditorFocus } from '@/components/editor/References';
 import { extractRefSpans } from './ChatRefTags/refTags';
 
@@ -13,6 +27,14 @@ export type ChatMessage = {
   attachments?: ChatAttachment[];
   /** Server-owned identity of the run that stored this user message. */
   runId?: string;
+  /** A question that ran a server chat preset: its id. Its text is the preset's label. */
+  preset?: string;
+  /** A question's requested effort, also Deep for a planning turn budgeted within Standard. */
+  effort?: 'quick' | 'standard' | 'deep';
+  /** The author's Web choice, so Retry repeats it without granting permissions. */
+  web?: boolean;
+  /** A question that ran from a plan: the plan's id. Kept; P3 shows it. */
+  planId?: string;
   /** Tools the agent ran while producing this reply, in order. */
   runs: ToolRun[];
   /**
@@ -21,14 +43,51 @@ export type ChatMessage = {
    * line ("Applied 3 changes · Undo · Review") is found by them.
    */
   changeSetIds: string[];
-  /** Token usage the server reported for this reply, once it completed. */
-  usage?: { promptTokens: number; completionTokens: number };
+  /** Tokens the reply used, as its `done` (or its stored record) reported them. */
+  usage?: AgentUsage;
+  /** The models that served the reply, in the order they first did; a fallback is marked. */
+  models?: AgentServedModel[];
+  /** What the reply cost, in USD; `null` when no provider reported one (a CLI engine). */
+  cost?: number | null;
   /**
-   * Sources the assistant's research tools returned while writing this
-   * reply. Claims in the reply point at them as `[S3]`; the list under the
-   * reply offers to cite or save each one.
+   * The run's cost ceiling and the limit that made it answer early, if one
+   * did: as its `done` reported them, or its stored record kept them.
+   */
+  budget?: AgentBudget | null;
+  /**
+   * Writes of the run's own records that failed, as its `done` reported
+   * them. A turn sent from this browser only: the record does not keep them.
+   */
+  persistence?: AgentPersistence | null;
+  /**
+   * How a reply that did not complete ended: `stopped` (a Stop, a lost
+   * connection to its run, a shutdown) or `failed`. Unset for a completed
+   * reply, and while one runs.
+   */
+  ended?: 'stopped' | 'failed';
+  /** A stored failed reply's error, as its record kept it. Live, the alert above the composer says it. */
+  failure?: { code: string; message: string };
+  /**
+   * The sources this reply's tools found or found again, the latest entry
+   * of each handle. A handle lasts for the conversation, so the reply's
+   * `[S3]` markers are read against every reply's sources
+   * (`conversationSources`), not only these; the list under the reply
+   * offers to cite or save each.
    */
   sources?: AgentSource[];
+  skills?: AgentSkill[];
+  instructions?: AgentInstruction[];
+  /** The passages this reply's tools stored, by id and level; their text is the assistant's alone. Shown nowhere yet. */
+  passages?: AgentPassage[];
+  /** The reply's claim checks (`claim`), each shown as a claim card with its passages' sources. */
+  claims?: AgentClaim[];
+  /** The conversation's plan as this turn left it (the newest revision). Kept; P3's plan card shows it. */
+  plan?: AgentPlan;
+  /** The questions this turn put to the author. Kept; P3's question card shows them. */
+  question?: AgentQuestion;
+  artifacts?: import('@/api/assistant/streamParser').AgentArtifact[];
+  /** The run's ledger, from its latest `budget` event, while it runs: the quiet line under the progress. */
+  ledger?: AgentBudgetUpdate;
   todos?: AgentTodo[];
   workers?: AgentWorker[];
   /**
@@ -61,6 +120,12 @@ export type ChatMessage = {
    * it asked for. Absent for the server's default.
    */
   engine?: { name: string; model?: string };
+  /**
+   * Auto was on for this reply's turn and the server gave its run `review`,
+   * from the start or partway through (`untrusted_content`): why, so the
+   * reply can say it once the strip above the composer has moved on.
+   */
+  autoPaused?: AutoBlockedReason;
 };
 
 /**
@@ -75,15 +140,25 @@ export type ChatError = {
   retryable?: boolean;
 };
 
-/** The transcript rows a failed turn owns, so retry removes exactly those. */
-export type LastExchange = {
+export type ChatTurnOptions = Pick<AgentChatParams, 'context' | 'attachments' | 'preset' | 'effort' | 'web' | 'plan_id' | 'plan' | 'answers'> & {
+  /** Readable local text for an answers-only or plan-start request. Never serialized. */
+  displayText?: string;
+  /** Observe an admitted run, or replay an uncertain start with its original key. */
+  resume?: ResumeAgentRun;
+  checkpoint?: CheckpointResume;
+};
+
+/** The transcript rows and captured request a failed turn owns. */
+export type LastExchange = Omit<ChatTurnOptions, 'resume'> & {
   text: string;
   /** Sent again as it was: a retry is about the same place in the text. */
   context?: AgentChatContext;
   attachments?: ChatAttachment[];
+  /** A server chat preset the turn ran, sent again with it. */
+  preset?: string;
   userMessageId: string;
   assistantMessageId: string;
-  run?: import('@/api/assistant/agentSessionChat').ResumeAgentRun;
+  run?: ResumeAgentRun;
 };
 
 /** The server keeps at most this many referenced blocks. */
@@ -147,6 +222,14 @@ export function friendlyStreamError(code: string, message: string): ChatError {
         detail: message || code,
         retryable: false,
       };
+    // A page created after the run read outside material (a PDF, a paper, a
+    // web page, a worker's report) would be saved without review: refused.
+    case 'untrusted_content':
+      return {
+        message: 'The assistant read outside material in this run, so it can propose changes but not create pages. Start a new message to create one.',
+        detail: message || code,
+        retryable: false,
+      };
     // A demotion to viewer during the run: what needed the editor role was refused.
     case 'workspace_role_required':
       return {
@@ -179,6 +262,17 @@ export function friendlyStreamError(code: string, message: string): ChatError {
       return {
         message: message || 'The selected engine reached its plan’s usage limit.',
         detail: code,
+        retryable: true,
+      };
+    // Any other failure of a local CLI: the CLI's own words ("Claude Code
+    // failed: …"), which can quote a tool's error or a provider's body, so
+    // they are the detail, not the sentence. A status code inside them is
+    // not a sign-in or a plan limit; those come as their own codes.
+    case 'ENGINE_FAILED':
+      return {
+        message:
+          'The selected engine stopped with an error. Try again; if it keeps failing, switch engines from the menu next to the # button, or in Settings → AI & tools.',
+        detail: message || code,
         retryable: true,
       };
     // The hosted model service. Its credentials and credit are the site's,
@@ -224,6 +318,30 @@ export function friendlyStreamError(code: string, message: string): ChatError {
         detail: code,
         retryable: true,
       };
+    // A deep run from a plan (TD5): the plan is finished, discarded or
+    // superseded, or it was edited from an older revision. Sending the same
+    // request again ends the same way; the plan as it stands is the one to run.
+    case 'PLAN_NOT_FOUND':
+      return {
+        message: 'That plan is no longer open: it was finished, discarded or replaced by a newer one. Ask for a new plan, or run the newest one.',
+        detail: message || code,
+        retryable: false,
+      };
+    case 'STALE_PLAN':
+      return {
+        message: 'The plan changed since this run started from it. Open the plan again and run its newest version.',
+        detail: message || code,
+        retryable: false,
+      };
+    // `runs.resume`: no checkpoint, or the run's tools changed since (a
+    // switch, the policy, the role).
+    case 'RUN_NOT_RESUMABLE':
+    case 'run_not_resumable':
+      return {
+        message: 'This run can’t be resumed from where it stopped. Ask again to start it afresh.',
+        detail: message || code,
+        retryable: true,
+      };
     // The run's own endings, reported by the durable session.
     case 'AGENT_CANCELLED':
       return { message: message || 'The assistant was stopped.', detail: code, retryable: true };
@@ -250,16 +368,72 @@ export function emptyMessage(role: string, content = '', attachments?: ChatAttac
 }
 
 /** A stored message as `GET …/messages` answers it, as far as the transcript reads it. */
-export type StoredChatMessage = {
-  role: string;
-  content: string;
+export type StoredChatMessage = Pick<WireChatMessage, 'role' | 'content' | 'run_id' | 'created_at' | 'record'> & {
   attachments?: ChatAttachment[];
-  run_id?: string | null;
-  created_at?: string | null;
 };
 
+/** One call of a stored reply, as the activity list shows it: a call the turn stopped while it ran is interrupted. */
+function recordedRun(call: RecordToolCall, index: number): ToolRun {
+  return {
+    id: call.tool_call_id || `${call.tool}:recorded-${index}`,
+    tool: call.tool,
+    state: !call.finished ? 'interrupted' : call.is_error ? 'error' : 'done',
+    ...(call.duration_ms !== null ? { durationMs: call.duration_ms } : {}),
+    ...(call.error ? { error: call.error } : {}),
+    ...(call.error_type ? { errorType: call.error_type } : {}),
+    ...(call.arguments ? { args: call.arguments } : {}),
+    outputChars: call.output_chars,
+    outputTruncated: call.output_truncated,
+  };
+}
+
 /**
- * A stored branch as transcript rows, with when each was written.
+ * A stored reply as it was shown: its activity, sources, tasks, workers and
+ * change sets, the models that served it, its usage and cost against its
+ * ceiling, and how it ended (a limit it answered at included), from the
+ * record the server kept with it.
+ */
+function withRecord(message: ChatMessage, record: ReplyRecord): ChatMessage {
+  const paused = record.change_sets.find((set) => set.apply_policy === 'review' && set.auto_blocked_reason)?.auto_blocked_reason;
+  const sources = decodeSources(record.sources);
+  const passages = decodePassages(record.passages);
+  const claims = decodeClaims(record.claims);
+  const plan = decodePlan(record.plan);
+  const question = decodeQuestion(record.question);
+  return {
+    ...message,
+    ...(claims.length ? { claims } : {}),
+    ...(plan ? { plan } : {}),
+    ...(question ? { question } : {}),
+    artifacts: record.artifacts.flatMap((value) => decodeArtifact(value) ?? []),
+    runs: record.tool_calls.map(recordedRun),
+    changeSetIds: [...new Set(record.change_sets.map((set) => set.change_set_id))],
+    ...(sources.length ? { sources } : {}),
+    ...(passages.length ? { passages } : {}),
+    ...(record.tasks.length ? { todos: record.tasks } : {}),
+    ...(record.workers.length ? { workers: record.workers.map((worker) => ({ ...worker })) } : {}),
+    skills: record.skills.flatMap((value) => {
+      const skill = decodeSkill(value);
+      return skill ? [skill] : [];
+    }),
+    instructions: decodeInstructions(record.instructions),
+    usage: {
+      promptTokens: record.usage.prompt_tokens,
+      completionTokens: record.usage.completion_tokens,
+      cachedTokens: record.usage.cached_tokens,
+    },
+    ...(record.models.length ? { models: record.models } : {}),
+    cost: record.cost,
+    budget: { costLimit: record.cost_limit, limitReached: record.limit_reached },
+    ...(paused ? { autoPaused: paused } : {}),
+    ...(record.status === 'completed' ? {} : { ended: record.status }),
+    ...(record.status === 'failed' && record.error ? { failure: record.error } : {}),
+  };
+}
+
+/**
+ * A stored branch as transcript rows, with when each was written, each
+ * reply rebuilt from its record so a reload shows the reply the author saw.
  *
  * A reply's duration is the gap to its question only when one run wrote
  * both: a regenerated answer hangs under the original question, so its gap
@@ -267,7 +441,14 @@ export type StoredChatMessage = {
  */
 export function historyMessages(items: readonly StoredChatMessage[]): ChatMessage[] {
   return items.map((item, index) => {
-    const message = emptyMessage(item.role, item.content, item.attachments, item.run_id);
+    let message = emptyMessage(item.role, item.content, item.attachments, item.run_id);
+    if (item.role === 'assistant' && item.record?.kind === 'reply') message = withRecord(message, item.record);
+    if (item.role === 'user' && item.record?.kind === 'request') {
+      if (item.record.preset) message.preset = item.record.preset;
+      if (item.record.effort) message.effort = item.record.effort;
+      message.web = item.record.web;
+      if (item.record.plan_id) message.planId = item.record.plan_id;
+    }
     const createdAt = item.created_at ? Date.parse(item.created_at) : Number.NaN;
     if (Number.isNaN(createdAt)) return message;
     message.createdAt = createdAt;
@@ -278,46 +459,4 @@ export function historyMessages(items: readonly StoredChatMessage[]): ChatMessag
     }
     return message;
   });
-}
-
-function boundedArgument(value: unknown, limit = 120): string | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim().replace(/\s+/g, ' ');
-  if (!normalized) return null;
-  return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1)}…`;
-}
-
-export function toolRunDetail(tool: string, args: Record<string, unknown>): string | undefined {
-  if (tool === 'semantic_scholar_search') {
-    const query = boundedArgument(args.query);
-    return query ? `Query: “${query}”` : undefined;
-  }
-  if (tool === 'semantic_scholar_paper') {
-    const paperId = boundedArgument(args.paper_id);
-    return paperId ? `Paper: ${paperId}` : undefined;
-  }
-  if (tool === 'semantic_scholar_graph') {
-    const paperId = boundedArgument(args.paper_id, 80);
-    const direction = boundedArgument(args.direction, 20);
-    return [direction && `Direction: ${direction}`, paperId && `paper ${paperId}`]
-      .filter(Boolean)
-      .join(' · ') || undefined;
-  }
-  if (tool === 'semantic_scholar_recommendations') {
-    const paperId = boundedArgument(args.paper_id);
-    return paperId ? `Seed paper: ${paperId}` : undefined;
-  }
-  if (tool === 'semantic_scholar_snippets') {
-    const query = boundedArgument(args.query);
-    return query ? `Evidence query: “${query}”` : undefined;
-  }
-  if (tool === 'validate_claim') {
-    const claim = boundedArgument(args.claim);
-    return claim ? `Claim: “${claim}”` : undefined;
-  }
-  if (tool === 'search_citations') {
-    const text = typeof args.text === 'string' ? args.text.trim() : '';
-    return text ? `Checked a ${text.length.toLocaleString()}-character passage` : undefined;
-  }
-  return undefined;
 }

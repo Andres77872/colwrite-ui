@@ -143,12 +143,14 @@ describe('the half-reviewed change set', () => {
     expect(others).toEqual([]);
     expect(changeSet.unmappableOperations).toEqual([]);
     expect(changeSet.operations.map((operation) => operation.op)).toEqual([
-      'replace_block',
-      'insert_block_after',
-      'replace_block',
-      'delete_block',
-      'append_block',
+      'replace_text',
+      'write_blocks',
+      'write_blocks',
+      'delete_blocks',
+      'write_blocks',
     ]);
+    // The server's flag, on the rewrite that brings a number the page lacks.
+    expect(changeSet.operations.map((operation) => operation.newInformation)).toEqual([false, false, true, false, false]);
     expect(changeSet.operationDecisions).toEqual([
       { opIndex: 1, decision: 'accepted' },
       { opIndex: 3, decision: 'rejected' },
@@ -157,22 +159,22 @@ describe('the half-reviewed change set', () => {
 
   it('says which target the author changed after the proposal', async () => {
     const { operationTargets } = await getChangeSet(WS, REVIEW_DOCUMENT_ID, await reviewChangeSetId());
-    const current = (operationTargets ?? []).map((target) => target && target.headFingerprint === target.fingerprint);
+    const current = (operationTargets ?? []).map((entry) => entry.map((target) => target.headFingerprint === target.fingerprint));
 
     // The abstract and the thanks are as the assistant read them; the
     // results paragraph is not. Inserts have no target.
-    expect(current).toEqual([true, null, false, true, null]);
+    expect(current).toEqual([[true], [], [false], [true], []]);
   });
 
   it('follows the saved document, and ignores how a block is shown', async () => {
     const changeSetId = await reviewChangeSetId();
     await saveBlock('cr-abstract', 'Rewritten by the author.');
     const edited = await getChangeSet(WS, REVIEW_DOCUMENT_ID, changeSetId);
-    expect(edited.operationTargets?.[0]?.headFingerprint).not.toBe(edited.operationTargets?.[0]?.fingerprint);
+    expect(edited.operationTargets?.[0]?.[0]?.headFingerprint).not.toBe(edited.operationTargets?.[0]?.[0]?.fingerprint);
 
     await saveBlock('cr-abstract', 'We study sparse routing at long context lengths and find that it scales well.');
     const back = await getChangeSet(WS, REVIEW_DOCUMENT_ID, changeSetId);
-    expect(back.operationTargets?.[0]?.headFingerprint).toBe(back.operationTargets?.[0]?.fingerprint);
+    expect(back.operationTargets?.[0]?.[0]?.headFingerprint).toBe(back.operationTargets?.[0]?.[0]?.fingerprint);
   });
 
   it('records a decision once, and answers a repeat without changing anything', async () => {
@@ -252,7 +254,7 @@ describe('an assistant turn that improves the page', () => {
         workspace_id: WS,
         session_id: session.id,
         request_id: `improve-${request.apply_mode ?? 'propose'}`,
-        request: { document_id: FIXTURE_DOCUMENT_ID, message: 'improve the introduction', ephemeral: false, ...request },
+        request: { document_id: FIXTURE_DOCUMENT_ID, message: 'improve the introduction', ...request },
       });
       for (let waited = 0; waited < 30_000 && !events.some((event) => event.event === 'tool_action'); waited += 500) {
         await vi.advanceTimersByTimeAsync(500);
@@ -271,7 +273,13 @@ describe('an assistant turn that improves the page', () => {
     expect(action).toMatchObject({ status: 'proposed', actions: [], apply_policy: 'review' });
     const changeSet = await getChangeSet(WS, FIXTURE_DOCUMENT_ID, String(action.change_set_id));
     expect(changeSet).toMatchObject({ status: 'pending', applyPolicy: 'review' });
-    expect(changeSet.operations.map((operation) => operation.op)).toEqual(['replace_block', 'insert_block_after', 'delete_block']);
+    // Every operation kind, in the stored form the editor maps whole.
+    expect(changeSet.unmappableOperations).toEqual([]);
+    expect(changeSet.operations.map((operation) => operation.op)).toEqual([
+      'replace_text', 'write_blocks', 'write_blocks', 'delete_blocks', 'move_block', 'set_meta', 'add_sources', 'remove_sources', 'write_blocks',
+    ]);
+    // The tool action names the set, as the API's proposal summary does.
+    expect(action.proposal).toMatchObject({ change_set_id: action.change_set_id, operation_count: 9 });
   });
 
   it('stores an Auto turn’s set as `auto`, so the open editor applies it', async () => {
@@ -645,7 +653,7 @@ describe('the workspace lifecycle (M5)', () => {
 
   it('changes the name, the icon and the policy on the workspace’s ETag, an admin’s write', async () => {
     const workspace = await getWorkspace(OWNED_WORKSPACE_ID);
-    expect(workspace.policy).toEqual({ web_search: true, outside_research: true, auto: true });
+    expect(workspace.policy).toEqual({ web_search: true, outside_research: true, auto: true, images: true });
     const changed = await updateWorkspace(OWNED_WORKSPACE_ID, workspace.etag, { name: 'Side quest', icon: null, policy: { web_search: false } });
     expect(changed).toMatchObject({ name: 'Side quest', icon: null, policy: { web_search: false, outside_research: true, auto: true } });
     expect(changed.etag).not.toBe(workspace.etag);

@@ -54,7 +54,7 @@ export type SlashItem = {
   hint?: string;
   /** An AI command: its icon takes the AI colour, as AI does everywhere. */
   ai?: boolean;
+  disabledReason?: string;
   group: 'ai' | 'basic' | 'insert';
   onSelect: (ctx: SlashContext) => Promise<void> | void;
 };
-

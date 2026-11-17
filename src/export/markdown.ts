@@ -1,5 +1,5 @@
-import { buildBibliography, formatReference, referenceMarker, type Block, type Doc } from '@/editor';
-import { blocksToMarkdown } from '@/editor/markdown';
+import { buildBibliography, markupHasLink, markupMarkdown, referenceLink, referenceMarks, type Block, type Doc } from '@/editor';
+import { assistantOutputBlocks, blocksToMarkdown } from '@/editor/markdown';
 import type { AiBeatExportMode } from './types';
 
 export type MarkdownExportOptions = {
@@ -7,6 +7,7 @@ export type MarkdownExportOptions = {
   includeReferences: boolean;
   /** `omit` drops AI beat drafts; anything else keeps their generated text. */
   aiBeat: AiBeatExportMode;
+  imagePaths?: ReadonlyMap<string, string>;
 };
 
 /** A paragraph without its AI beat drafts (placeholders and children both). */
@@ -24,29 +25,42 @@ function escapeHeading(text: string): string {
 
 /**
  * The whole document as Markdown, the way "Copy as Markdown" writes a block:
- * citations as Pandoc keys (`[@10.1/abc]`), maths in `$…$`, diagrams and
+ * citations as Pandoc keys (`[@doi:10.1/abc]`), maths in `$…$`, diagrams and
  * figures as `mermaid` / `figure` fences. The reference list, when asked for,
- * is the document's bibliography in its own style, for readers without a .bib.
+ * is the document's bibliography in its CSL style, for readers without a .bib.
  */
 export function documentToMarkdown(doc: Doc, options: MarkdownExportOptions): string {
   const blocks = options.aiBeat === 'omit' ? doc.blocks.map(withoutAiBeats) : doc.blocks;
   const parts: string[] = [];
   const title = escapeHeading(doc.name ?? '');
   if (options.includeTitle && title) parts.push(`# ${title}`);
-  const body = blocksToMarkdown(blocks).trim();
+  if (blocks.some((block) => block.type === 'image' && !options.imagePaths?.has(block.assetId))) {
+    throw new Error('Image assets must be included in the Markdown bundle.');
+  }
+  const body = blocksToMarkdown(blocks, options.imagePaths).trim();
   if (body) parts.push(body);
 
   if (options.includeReferences) {
-    const bibliography = buildBibliography(doc.blocks, {
+    const draftBlocks = options.aiBeat === 'omit' ? [] : blocks.flatMap((block) => block.type === 'paragraph'
+      ? (block.children ?? []).flatMap((child) => child.type === 'aiBeat' ? assistantOutputBlocks(child.output) : [])
+      : []);
+    const bibliography = buildBibliography([...blocks, ...draftBlocks], {
       library: doc.sources,
       style: doc.citationStyle ?? null,
     });
     if (bibliography.entries.length > 0) {
       const rows = bibliography.entries.map((entry) => {
-        const reference = formatReference(entry, bibliography.style);
-        const marker = referenceMarker(entry, bibliography.style);
-        const link = reference.href ? ` <${reference.href}>` : '';
-        return `- ${marker ? `${marker} ` : ''}${reference.text}${link} \`@${entry.displayKey}\``;
+        const text = markupMarkdown(entry.formatted);
+        // A style that prints no link still gets one, for a reader without a .bib.
+        const href = entry.record && !markupHasLink(entry.formatted) ? referenceLink(entry.record)?.href : undefined;
+        const link = href ? ` <${href}>` : '';
+        const marks = referenceMarks(entry.record)
+          .filter((mark) => mark.tone !== 'neutral')
+          .map((mark) => ` **${mark.label}:** ${mark.detail}`)
+          .join('');
+        // "1." is Markdown's own numbered item; "[1]" and none follow a bullet.
+        const lead = entry.marker && /^\d+\.$/.test(entry.marker) ? `${entry.marker} ` : `- ${entry.marker ? `${entry.marker} ` : ''}`;
+        return `${lead}${text}${link}${marks} \`@${entry.key}\``;
       });
       parts.push(['## References', '', ...rows].join('\n'));
     }

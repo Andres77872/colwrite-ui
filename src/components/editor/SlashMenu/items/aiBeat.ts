@@ -16,6 +16,6 @@ export const aiBeatItem: SlashItem = {
       type: 'aiBeat',
       message: '',
       prompt: '',
-      output: '',
+      output: null,
     })),
 };

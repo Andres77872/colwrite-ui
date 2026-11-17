@@ -45,9 +45,6 @@ export function progressForStatus(
 ): Pick<AgentProgress, 'phase' | 'label'> | null {
   const text = detail.trim();
   switch (status) {
-    case 'attaching':
-    case 'saving':
-      return { phase: 'preparing', label: text || 'Saving…' };
     case 'queued':
       return { phase: 'queued', label: text || 'Waiting to start…' };
     case 'starting':
@@ -61,6 +58,12 @@ export function progressForStatus(
       return { phase: 'thinking', label: 'Working…' };
     case 'executing_tool':
       return null;
+    // Steps the server words itself (`ColWrite-api/docs/assistant-events.md`):
+    // condensing a long run to its context budget, saving the answer.
+    case 'compacting':
+      return { phase: 'thinking', label: text || 'Condensing earlier steps…' };
+    case 'finishing':
+      return { phase: 'thinking', label: text || 'Finishing up…' };
     default:
       // `thinking`, the durable run's `running`, and anything newer. The
       // engines' own copy ends in "…" and is shown as sent; older wording

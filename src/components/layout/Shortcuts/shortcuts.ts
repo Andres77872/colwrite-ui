@@ -97,12 +97,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     key: 'j',
     shift: true,
     keys: ['Mod', 'Shift', 'J'],
-    label: 'Show or hide the AI sidebar',
+    label: 'Show or hide the assistant',
     group: 'AI',
   },
-  // Outside a block the same chord opens the AI sidebar; inside one it asks
-  // AI about that block, which is what the reference calls it.
-  { id: 'toggle-assistant', key: 'j', keys: ['Mod', 'J'], label: 'Ask AI on the current block', group: 'AI' },
+  // Outside a block the same chord shows the assistant; inside one the block
+  // claims it for Ask AI, listed with the editor's own keys below.
+  { id: 'toggle-assistant', key: 'j', keys: ['Mod', 'J'], label: 'Show or hide the assistant', group: 'AI' },
 ];
 
 /**
@@ -117,6 +117,8 @@ export const EDITOR_SHORTCUTS: ReadonlyArray<{
   joiner?: string;
 }> = [
   { label: 'Ask AI on an empty line', bindings: [['Space']], group: 'AI' },
+  // Handled by the block (Editable, CodeEditable) and a block selection.
+  { label: 'Ask AI on the current block or selection', bindings: [['Mod', 'J']], group: 'AI' },
   { label: 'Insert a block', bindings: [['/']], group: 'Editing' },
   { label: 'Bold, italic, underline', bindings: [['Mod', 'B'], ['Mod', 'I'], ['Mod', 'U']], group: 'Editing', joiner: '·' },
   { label: 'Add a link to the selection', bindings: [['Mod', 'K']], group: 'Editing' },
@@ -140,6 +142,7 @@ export const EDITOR_SHORTCUTS: ReadonlyArray<{
   // `matchShortcut` never sees them: Mod+Enter stays "apply" in Ask AI and
   // "send" in the composer.
   { label: 'Accept the focused suggestion', bindings: [['Mod', 'Enter']], group: 'Review' },
+  { label: 'Step through review comments (Review panel open)', bindings: [['Alt', '↑'], ['Alt', '↓']], group: 'Review', joiner: '·' },
   { label: 'Reject the focused suggestion', bindings: [['Mod', 'Backspace'], ['Mod', 'Delete']], group: 'Review' },
 
   // The sidebar's pages tree, on its focused row (PagesTree). Type a name's
@@ -189,6 +192,11 @@ export function modifierLabel(): string {
   return /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent)
     ? '⌘'
     : 'Ctrl';
+}
+
+/** A chord with the platform modifier, as a hint reads it: `⌘J` on Apple platforms, `Ctrl+J` elsewhere. */
+export function modKeyLabel(key: string, modifier = modifierLabel()): string {
+  return modifier === '⌘' ? `⌘${key}` : `${modifier}+${key}`;
 }
 
 /**

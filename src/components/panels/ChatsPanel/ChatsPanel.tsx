@@ -46,6 +46,7 @@ type ChatsPanelProps = {
   /** Told after a conversation is deleted. */
   onDeleted?: (chat: ChatItem) => void;
   className?: string;
+  unreadChats?: ReadonlySet<string>;
 };
 
 /**
@@ -55,7 +56,7 @@ type ChatsPanelProps = {
  * title, a one-word time, and rename/delete on hover or focus. Touch screens
  * have no hover, so there rename/delete are always shown instead of the time.
  */
-export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, className }: ChatsPanelProps) {
+export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, className, unreadChats }: ChatsPanelProps) {
   const { selectedChatId } = useChatSessions();
 
   const [query, setQuery] = useState('');
@@ -175,6 +176,7 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
                     onClick={() => onSelect(chat)}
                     aria-current={isSelected ? 'true' : undefined}
                     title={formatDateTime(chat.updated_at) || undefined}
+                    aria-label={unreadChats?.has(chat.id) ? `${label}, reply finished elsewhere` : undefined}
                     className={cn(
                       'flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       // Touch has no hover: the actions stay shown in place of
@@ -186,6 +188,7 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
                     <span className={cn('min-w-0 flex-1 truncate', !chat.title?.trim() && 'text-muted-foreground')}>
                       {label}
                     </span>
+                    {unreadChats?.has(chat.id) && <span className="shrink-0 text-xs text-ai">New reply</span>}
                     <span className="shrink-0 text-xs text-muted-foreground tabular-nums group-focus-within:invisible group-hover:invisible [@media(hover:none)]:hidden">
                       {relativeTime(chat.updated_at)}
                     </span>

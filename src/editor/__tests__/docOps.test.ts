@@ -1,8 +1,10 @@
 import { takeItems } from '@/lib/itemAt';
 import { describe, it, expect } from 'vitest';
 import { ApiError } from '@/api/errors';
-import type { Block, ParagraphBlock, ToolOperation } from '../types';
+import type { Block, Doc, ParagraphBlock, ToolOperation } from '../types';
+import { append, deleteBlocks, moveBlock, replaceText, rewrite, setMeta, writeAfter, writeBefore } from './operations';
 import {
+  applyOperations,
   applyPatchToBlocks,
   coerceBlock,
   describeSaveError,
@@ -12,6 +14,7 @@ import {
   isSaveConflict,
   sameContent,
 } from '../docOps';
+import { reference } from '@/__tests__/agentSource';
 
 // ── Fixtures ──
 
@@ -21,7 +24,7 @@ import {
 const makeBlock = (id: string, overrides: Partial<ParagraphBlock> = {}): ParagraphBlock => ({
   id,
   type: 'paragraph',
-  html: `<p>${id}</p>`,
+  html: id,
   ...overrides,
 });
 
@@ -37,120 +40,125 @@ const blocksOf = (blocks: Block[], ops: ToolOperation[]) =>
 // ── applyPatchToBlocks ──
 
 describe('applyPatchToBlocks', () => {
-  it('replaces a block by id, merging partial fields', () => {
-    const result = blocksOf(initialBlocks, [
-      { op: 'replace_block', blockId: 'b', block: { html: '<p>Updated B</p>' } },
-    ]);
+  it('replaces a block with the stored block, keeping its id', () => {
+    const result = blocksOf(initialBlocks, [rewrite('b', { type: 'paragraph', html: 'Updated B' })]);
     expect(result).toHaveLength(3);
-    expect(htmlOf(result[1])).toBe('<p>Updated B</p>');
-    // Unspecified fields survive the merge, matching the server.
-    expect(result[1]?.type).toBe('paragraph');
+    expect(result[1]).toMatchObject({ id: 'b', type: 'paragraph', html: 'Updated B' });
   });
 
-  it('validates the merged block, not just the inserted ones', () => {
-    // `replace_block` used to spread the agent's payload over the current
-    // block and cast the result, so it was the one write path that could put
-    // an unrenderable child on the canvas.
+  it('puts several blocks in the place of one: the first keeps its id', () => {
     const result = blocksOf(initialBlocks, [
-      {
-        op: 'replace_block',
-        blockId: 'b',
-        block: {
-          html: '<span data-child-id="c1"></span><span data-child-id="c2"></span>',
-          children: [
-            { id: 'c1', type: 'footnote' },
-            { id: 'c2', type: 'citation', keys: ['k'], sources: [{ key: 'k', year: 2020 }] },
-          ],
-        },
-      },
+      rewrite('b', { type: 'paragraph', html: 'B, first half' }, makeBlock('b2', { html: 'B, second half' })),
+    ]);
+    expect(result.map((block) => [block.id, htmlOf(block)])).toEqual([
+      ['a', 'a'], ['b', 'B, first half'], ['b2', 'B, second half'], ['c', 'c'],
+    ]);
+  });
+
+  it('applies a replace_text as its stored block', () => {
+    const result = blocksOf(initialBlocks, [replaceText('b', 'b', 'bee', { type: 'paragraph', html: 'bee' })]);
+    expect(htmlOf(result[1])).toBe('bee');
+  });
+
+  it('keeps how the author shows the block over the stored flags', () => {
+    // The stored block carries the defaults as they were when it was proposed.
+    const folded: Block[] = [makeBlock('a'), makeBlock('b', { collapsed: true, locked: true }), makeBlock('c')];
+    const [, rewritten] = takeItems(blocksOf(folded, [
+      rewrite('b', { type: 'paragraph', html: 'new', collapsed: false, locked: false, aiHidden: false }),
+    ]), 2);
+    expect(rewritten).toMatchObject({ html: 'new', collapsed: true, locked: true });
+    expect(rewritten.aiHidden).toBeUndefined();
+    // Folding does not survive a change of type, as on the server.
+    const [, heading] = takeItems(blocksOf(folded, [rewrite('b', { type: 'heading', level: 2, html: 'B' })]), 2);
+    expect(heading).toMatchObject({ type: 'heading', locked: true });
+    expect(heading.collapsed).toBeUndefined();
+  });
+
+  it('validates the written block before it reaches the canvas', () => {
+    const result = blocksOf(initialBlocks, [
+      rewrite('b', {
+        type: 'paragraph',
+        html: '<span data-child-id="c1"></span><span data-child-id="c2"></span>',
+        children: [
+          { id: 'c1', type: 'footnote' },
+          { id: 'c2', type: 'citation', keys: ['k'], sources: [reference('k')] },
+        ],
+      }),
     ]);
 
     expect((result[1] as ParagraphBlock).children).toEqual([
-      { id: 'c2', type: 'citation', keys: ['k'], sources: [{ key: 'k', year: '2020' }] },
+      { id: 'c2', type: 'citation', keys: ['k'], sources: [reference('k')] },
     ]);
   });
 
-  it('reports a replace_block that would destroy the block as desynced', () => {
-    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
-      { op: 'replace_block', blockId: 'b', block: { type: 'sidebar' } },
-    ]);
+  it('reports a rewrite into a block the canvas cannot draw as desynced', () => {
+    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [rewrite('b', { type: 'sidebar' })]);
     expect(blocks).toEqual(initialBlocks);
     expect(desynced).toHaveLength(1);
   });
 
-  it('reports replace_block against a missing id as desynced', () => {
+  it('reports a rewrite of a missing block as desynced', () => {
     const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
-      { op: 'replace_block', blockId: 'nonexistent', block: { html: '<p>X</p>' } },
-    ]);
-    expect(blocks).toEqual(initialBlocks);
-    expect(desynced).toHaveLength(1);
-  });
-
-  it('inserts a block after a reference', () => {
-    const result = blocksOf(initialBlocks, [
-      { op: 'insert_block_after', referenceId: 'a', block: makeBlock('new') },
-    ]);
-    expect(result.map((b) => b.id)).toEqual(['a', 'new', 'b', 'c']);
-  });
-
-  it('inserts a block before a reference', () => {
-    const result = blocksOf(initialBlocks, [
-      { op: 'insert_block_before', referenceId: 'b', block: makeBlock('new') },
-    ]);
-    expect(result.map((b) => b.id)).toEqual(['a', 'new', 'b', 'c']);
-  });
-
-  it('does NOT guess a position when the reference block is missing', () => {
-    // Landing the block at the far end of the document instead reads as
-    // corruption — the agent asked for a specific position that this copy of
-    // the document cannot express.
-    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
-      { op: 'insert_block_after', referenceId: 'ghost', block: makeBlock('orphan') },
-      { op: 'insert_block_before', referenceId: 'ghost', block: makeBlock('lead') },
+      rewrite('nonexistent', { type: 'paragraph', html: 'X' }),
+      replaceText('nonexistent', 'X', 'Y', { type: 'paragraph', html: 'Y' }),
     ]);
     expect(blocks).toEqual(initialBlocks);
     expect(desynced).toHaveLength(2);
   });
 
-  it('inserts at the start and appends', () => {
-    expect(
-      blocksOf(initialBlocks, [
-        { op: 'insert_block_at_start', block: makeBlock('first') },
-        { op: 'append_block', block: makeBlock('last') },
-      ]).map((b) => b.id),
-    ).toEqual(['first', 'a', 'b', 'c', 'last']);
+  it('writes blocks after and before a block, in their order', () => {
+    expect(blocksOf(initialBlocks, [writeAfter('a', makeBlock('n1'), makeBlock('n2'))]).map((b) => b.id))
+      .toEqual(['a', 'n1', 'n2', 'b', 'c']);
+    expect(blocksOf(initialBlocks, [writeBefore('b', makeBlock('n1'), makeBlock('n2'))]).map((b) => b.id))
+      .toEqual(['a', 'n1', 'n2', 'b', 'c']);
   });
 
-  it('deletes a block by id', () => {
-    const result = blocksOf(initialBlocks, [{ op: 'delete_block', blockId: 'b' }]);
-    expect(result.map((b) => b.id)).toEqual(['a', 'c']);
-  });
-
-  it('reports delete of a missing block as desynced', () => {
+  it('does NOT guess a position when the anchor block is missing', () => {
+    // Landing the block at the far end of the document instead reads as
+    // corruption — the agent asked for a specific position that this copy of
+    // the document cannot express.
     const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
-      { op: 'delete_block', blockId: 'ghost' },
+      writeAfter('ghost', makeBlock('orphan')),
+      writeBefore('ghost', makeBlock('lead')),
     ]);
+    expect(blocks).toEqual(initialBlocks);
+    expect(desynced).toHaveLength(2);
+  });
+
+  it('writes before the first block and appends', () => {
+    expect(
+      blocksOf(initialBlocks, [writeBefore('a', makeBlock('first')), append(makeBlock('last'))]).map((b) => b.id),
+    ).toEqual(['first', 'a', 'b', 'c', 'last']);
+    expect(blocksOf([], [append(makeBlock('only'))]).map((b) => b.id)).toEqual(['only']);
+  });
+
+  it('deletes blocks by id, all or none', () => {
+    expect(blocksOf(initialBlocks, [deleteBlocks('a', 'c')]).map((b) => b.id)).toEqual(['b']);
+    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [deleteBlocks('b', 'ghost')]);
     expect(blocks).toHaveLength(3);
     expect(desynced).toHaveLength(1);
   });
 
-  it('reorders a block to a new index', () => {
-    const result = blocksOf(initialBlocks, [
-      { op: 'reorder_block', blockId: 'a', toIndex: 2 },
-    ]);
-    expect(result.map((b) => b.id)).toEqual(['b', 'c', 'a']);
+  it('moves a block before or after another', () => {
+    expect(blocksOf(initialBlocks, [moveBlock('a', 'after', 'c')]).map((b) => b.id)).toEqual(['b', 'c', 'a']);
+    expect(blocksOf(initialBlocks, [moveBlock('c', 'before', 'a')]).map((b) => b.id)).toEqual(['c', 'a', 'b']);
   });
 
-  it('clamps an out-of-range reorder index', () => {
-    const result = blocksOf(initialBlocks, [
-      { op: 'reorder_block', blockId: 'c', toIndex: 99 },
+  it('reports a move next to a missing block, or itself, as desynced', () => {
+    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
+      moveBlock('a', 'after', 'ghost'),
+      moveBlock('ghost', 'after', 'a'),
+      moveBlock('a', 'before', 'a'),
     ]);
-    expect(result[2]?.id).toBe('c');
+    expect(blocks).toEqual(initialBlocks);
+    expect(desynced).toHaveLength(3);
   });
 
-  it('treats update_meta and create_document as no-ops on blocks', () => {
+  it('leaves the page-level operations to applyOperations', () => {
     const result = blocksOf(initialBlocks, [
-      { op: 'update_meta', meta: { name: 'New Title' } },
+      setMeta({ name: 'New Title' }),
+      { op: 'add_sources', sources: [reference('k')] },
+      { op: 'remove_sources', keys: ['k'] },
       { op: 'create_document', documentId: 'new-doc' },
     ]);
     expect(result).toEqual(initialBlocks);
@@ -158,12 +166,12 @@ describe('applyPatchToBlocks', () => {
 
   it('applies mixed operations in a single batch', () => {
     const result = blocksOf(initialBlocks, [
-      { op: 'replace_block', blockId: 'b', block: { html: '<p>Updated</p>' } },
-      { op: 'delete_block', blockId: 'a' },
-      { op: 'insert_block_after', referenceId: 'c', block: makeBlock('new') },
+      rewrite('b', { type: 'paragraph', html: 'Updated' }),
+      deleteBlocks('a'),
+      writeAfter('c', makeBlock('new')),
     ]);
     expect(result.map((b) => b.id)).toEqual(['b', 'c', 'new']);
-    expect(htmlOf(result[0])).toBe('<p>Updated</p>');
+    expect(htmlOf(result[0])).toBe('Updated');
   });
 
   it('returns unchanged blocks for an empty op list', () => {
@@ -175,61 +183,97 @@ describe('applyPatchToBlocks', () => {
 
   it('reports touched block ids so changes can be highlighted', () => {
     const { touched } = applyPatchToBlocks(initialBlocks, [
-      { op: 'replace_block', blockId: 'b', block: { html: '<p>x</p>' } },
-      { op: 'append_block', block: makeBlock('new') },
+      rewrite('b', { type: 'paragraph', html: 'x' }),
+      append(makeBlock('new')),
+      moveBlock('a', 'after', 'c'),
     ]);
-    expect(touched).toEqual(['b', 'new']);
+    expect(touched).toEqual(['b', 'new', 'a']);
   });
 
   it('rejects a server block the canvas could not render', () => {
-    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
-      { op: 'append_block', block: { id: 'x', type: 'listItem' } },
-    ]);
+    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [append(makeBlock('ok'), { id: 'x', type: 'listItem' })]);
     expect(blocks).toEqual(initialBlocks);
     expect(desynced).toHaveLength(1);
   });
 
-  it('rejects an insert whose id already exists instead of duplicating it', () => {
+  it('rejects a write whose id already exists instead of duplicating it', () => {
     // Two blocks with one id means duplicate React keys and updates that
     // split-brain between the copies — a desync to report, not a position to
     // guess at.
     const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
-      { op: 'insert_block_after', referenceId: 'a', block: makeBlock('b') },
-      { op: 'append_block', block: makeBlock('c') },
-      { op: 'insert_block_at_start', block: makeBlock('a') },
+      writeAfter('a', makeBlock('b')),
+      append(makeBlock('c')),
+      writeBefore('a', makeBlock('a')),
+      rewrite('b', { type: 'paragraph' }, makeBlock('a')),
     ]);
     expect(blocks).toEqual(initialBlocks);
-    expect(desynced).toHaveLength(3);
+    expect(desynced).toHaveLength(4);
   });
 
-  it('rejects a replace whose merge renames onto an existing id', () => {
-    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
-      { op: 'replace_block', blockId: 'b', block: { id: 'a' } },
-    ]);
-    expect(blocks).toEqual(initialBlocks);
-    expect(desynced).toHaveLength(1);
-  });
-
-  it('lets a later op reference a block an earlier op inserted', () => {
+  it('lets a later op reference a block an earlier op wrote', () => {
     // The duplicate check runs against the batch as it stands, not the
     // pre-batch document.
     const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
-      { op: 'append_block', block: makeBlock('new') },
-      { op: 'replace_block', blockId: 'new', block: { html: '<p>edited</p>' } },
+      append(makeBlock('new')),
+      rewrite('new', { type: 'paragraph', html: 'edited' }),
+      moveBlock('new', 'before', 'a'),
     ]);
     expect(desynced).toEqual([]);
-    expect(blocks.map((b) => b.id)).toEqual(['a', 'b', 'c', 'new']);
+    expect(blocks.map((b) => [b.id, htmlOf(b)])).toEqual([
+      ['new', 'edited'], ['a', 'a'], ['b', 'b'], ['c', 'c'],
+    ]);
+  });
+});
+
+describe('applyOperations', () => {
+  const cited = makeBlock('p', {
+    html: 'x <span data-child-id="c1" contenteditable="false"></span>',
+    children: [{ id: 'c1', type: 'citation', keys: ['cited'], sources: [reference('cited')] }],
+  });
+  const page: Doc = { blocks: [cited], name: 'Page', sources: [reference('cited', { title: 'Cited' }), reference('spare', { title: 'Spare' })] };
+
+  it('sets the name and the citation style', () => {
+    const { doc, desynced } = applyOperations(page, [setMeta({ name: 'Renamed' }), setMeta({ citationStyle: 'apa' })]);
+    expect(desynced).toEqual([]);
+    expect(doc).toMatchObject({ name: 'Renamed', citationStyle: 'apa' });
   });
 
-  it('rejects a reorder to a non-finite index instead of moving the block to the top', () => {
-    // splice(NaN) coerces to 0 — the old code unshifted the block to the
-    // start of the document.
-    const { blocks, desynced } = applyPatchToBlocks(initialBlocks, [
-      { op: 'reorder_block', blockId: 'c', toIndex: Number.NaN },
-      { op: 'reorder_block', blockId: 'c', toIndex: Number.POSITIVE_INFINITY },
-    ]);
-    expect(blocks.map((b) => b.id)).toEqual(['a', 'b', 'c']);
-    expect(desynced).toHaveLength(2);
+  it('adds sources to the library, and refuses one already in it', () => {
+    const added = applyOperations(page, [{ op: 'add_sources', sources: [reference('new', { title: 'New' })] }]);
+    expect(added.doc.sources?.map((source) => source.key)).toEqual(['cited', 'spare', 'new']);
+    const again = applyOperations(page, [{ op: 'add_sources', sources: [reference('spare')] }]);
+    expect(again.desynced).toHaveLength(1);
+    expect(again.doc.sources).toEqual(page.sources);
+  });
+
+  it('removes uncited sources, and refuses one cited on the page or not in the library', () => {
+    expect(applyOperations(page, [{ op: 'remove_sources', keys: ['spare'] }]).doc.sources?.map((source) => source.key)).toEqual(['cited']);
+    for (const key of ['cited', 'absent']) {
+      const refused = applyOperations(page, [{ op: 'remove_sources', keys: [key] }]);
+      expect(refused.desynced).toHaveLength(1);
+      expect(refused.doc.sources).toEqual(page.sources);
+    }
+    // The last one gone leaves no library at all.
+    expect('sources' in applyOperations({ ...page, sources: [reference('spare')] }, [{ op: 'remove_sources', keys: ['spare'] }]).doc).toBe(false);
+  });
+
+  it('replaces library records by key, and refuses a key the library does not hold or one given twice', () => {
+    const fresher = reference('spare', { title: 'Spare, corrected', state: 'verified', flags: ['corrected'] });
+    const refreshed = applyOperations(page, [{ op: 'update_sources', sources: [fresher] }]);
+    expect(refreshed.desynced).toEqual([]);
+    expect(refreshed.doc.sources).toEqual([page.sources?.[0], fresher]);
+    for (const sources of [[reference('absent')], [fresher, fresher]]) {
+      const refused = applyOperations(page, [{ op: 'update_sources', sources }]);
+      expect(refused.desynced).toHaveLength(1);
+      expect(refused.doc.sources).toEqual(page.sources);
+    }
+  });
+
+  it('applies the blocks and the page together', () => {
+    const { doc, touched } = applyOperations(page, [append(makeBlock('n')), setMeta({ name: 'Both' })]);
+    expect(doc.blocks.map((block) => block.id)).toEqual(['p', 'n']);
+    expect(doc.name).toBe('Both');
+    expect(touched).toEqual(['n']);
   });
 });
 
@@ -300,35 +344,18 @@ describe('coerceChildren', () => {
     expect(block.children).toEqual([]);
   });
 
-  it('turns a provider-style integer year into the text the editor expects', () => {
-    const block = coerceBlock(
-      withChildren([
-        {
-          id: 'c1',
-          type: 'citation',
-          keys: ['k'],
-          sources: [{ key: 'k', title: 'T', year: 2020 }],
-        },
-      ]),
-    ) as ParagraphBlock;
-
-    expect(block.children?.[0]).toMatchObject({
-      sources: [{ key: 'k', title: 'T', year: '2020' }],
-    });
-  });
-
   it('sanitises a document loaded from storage, not just one from the wire', () => {
     // `reconcileBlocks` is the load path. A bad child already in the database
     // would otherwise crash the canvas before any tool call happens.
     const [block] = reconcileBlocks([
       withChildren([
         { id: 'c1', type: 'footnote' },
-        { id: 'c2', type: 'citation', keys: ['k'], sources: [{ key: 'k', year: 1999 }] },
+        { id: 'c2', type: 'citation', keys: ['k'], sources: [reference('k')] },
       ]) as unknown as Block,
     ]);
 
     expect((block as ParagraphBlock).children).toEqual([
-      { id: 'c2', type: 'citation', keys: ['k'], sources: [{ key: 'k', year: '1999' }] },
+      { id: 'c2', type: 'citation', keys: ['k'], sources: [reference('k')] },
     ]);
   });
 
@@ -364,6 +391,17 @@ describe('withoutOrphanChildren', () => {
     expect(
       placeholderIds('<span contenteditable="false" data-child-id="c1"></span>'),
     ).toEqual(new Set(['c1']));
+  });
+
+  it('reads an id the html escapes as the id itself', () => {
+    // `children` names the widget `cite&one`; the html holds it escaped.
+    expect(placeholderIds('<span data-child-id="cite&amp;one" contenteditable="false"></span><span data-child-id="q&quot;&#60;&#x3e;"></span>'))
+      .toEqual(new Set(['cite&one', 'q"<>']));
+    const block = makeBlock('p', {
+      html: '<span data-child-id="cite&amp;one" contenteditable="false"></span>',
+      children: [{ id: 'cite&one', type: 'citation', keys: ['k'] }],
+    });
+    expect(withoutOrphanChildren(block)).toBe(block);
   });
 
   it('drops children whose placeholder span is gone', () => {
@@ -452,5 +490,18 @@ describe('describeSaveError', () => {
   it('falls back to the underlying message', () => {
     expect(describeSaveError(new Error('network down'))).toContain('network down');
     expect(describeSaveError(null)).toBe('Changes could not be saved.');
+  });
+});
+
+describe('loading a paragraph with block markup in it', () => {
+  it('holds the html the API stores for it', () => {
+    // The API's sanitizer output for the same html (`sanitize_inline_html`).
+    const [loaded] = reconcileBlocks([makeBlock('p', { html: 'Intro <h2 id="r">Results</h2> <p>a<div>b</div>c</p>' })]);
+    expect(htmlOf(loaded)).toBe(
+      'Intro <span class="legacy-block">Results</span> <span class="legacy-block">a<span class="legacy-block">b</span>c</span>',
+    );
+    // And keeps it as it is from then on.
+    const clean = makeBlock('p', { html: htmlOf(loaded) });
+    expect(reconcileBlocks([clean])[0]).toBe(clean);
   });
 });

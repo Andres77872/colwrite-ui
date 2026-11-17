@@ -3,7 +3,8 @@ import { mockDocumentList } from '@/data/__tests__/documentFixtures';
 import { act, cleanup } from '@testing-library/react';
 import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useImperativeHandle } from 'react';
-import type { Block, CitationChild, CitationSource, ParagraphBlock } from '@/editor/types';
+import type { Block, CitationChild, ParagraphBlock, ReferenceRecord } from '@/editor/types';
+import { reference } from '@/__tests__/agentSource';
 import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
 vi.mock('@/data/documents', async () => ({
@@ -25,10 +26,11 @@ afterEach(() => {
 const { EditorProvider } = await import('@/editor');
 const { useEditorProbe } = await import('@/editor/__tests__/editorHarness');
 const { Editable } = await import('@/components/common/Editable');
-const { citeNotice, forgetCaret, useCiteAtCursor, useRememberCaret } = await import('./citeAtCursor');
+const { citeNotice, useCiteAtCursor, useRememberCaret } = await import('./citeAtCursor');
+const { resetModuleState } = await import('@/lib/moduleState');
 type Placement = import('./citeAtCursor').CitePlacement;
 
-type Cite = (sources: readonly CitationSource[]) => Placement | null;
+type Cite = (sources: readonly ReferenceRecord[]) => Placement | null;
 const citeRef = createRef<Cite>();
 const editorRef = createRef<ReturnType<typeof useEditorProbe>>();
 
@@ -52,14 +54,14 @@ function Harness() {
   );
 }
 
-const SOURCE: CitationSource = { key: 'vaswani2017', title: 'Attention is all you need' } as CitationSource;
-const OTHER: CitationSource = { key: 'fedus2021', title: 'Switch Transformers' } as CitationSource;
+const SOURCE = reference('vaswani2017', { title: 'Attention is all you need' });
+const OTHER = reference('fedus2021', { title: 'Switch Transformers' });
 
 const PARAGRAPH: Block = {
   id: 'p1',
   type: 'paragraph',
   html: 'Sparse routing <span data-child-id="c1" contenteditable="false"></span> scales well.',
-  children: [{ id: 'c1', type: 'citation', keys: ['a'], sources: [], style: 'numeric' }],
+  children: [{ id: 'c1', type: 'citation', keys: ['a'], sources: [], style: 'nlm-citation-sequence-brackets' }],
   columns: 1,
 };
 
@@ -130,7 +132,7 @@ beforeEach(() => {
             id: 'p1',
             type: 'paragraph',
             html: 'Sparse routing <span data-child-id="c1" contenteditable="false"></span> scales well.',
-            children: [{ id: 'c1', type: 'citation', keys: ['a'], sources: [], style: 'numeric' }],
+            children: [{ id: 'c1', type: 'citation', keys: ['a'], sources: [], style: 'nlm-citation-sequence-brackets' }],
           },
         ],
       },
@@ -140,7 +142,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  forgetCaret();
+  // The remembered caret is module state; it is forgotten with the rest.
+  resetModuleState();
   document.querySelectorAll('body > input').forEach((input) => input.remove());
 });
 

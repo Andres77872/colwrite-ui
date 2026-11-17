@@ -1,11 +1,12 @@
 import { problemCode } from '@/api/errors';
-import { citationYear } from './citations';
 import { sanitizeEditableHtml } from '@/export/sanitize';
+import { placeholderIdList } from './placeholderIds';
 import { MAX_BLOCK_INDENT } from './types';
 import type { Block, Doc, ParagraphBlock, ParagraphChild, ParagraphVariant, ToolOperation } from './types';
 
 /** Block types the canvas knows how to render. */
-const BLOCK_TYPES = new Set<Block['type']>(['paragraph', 'heading', 'divider', 'code']);
+const BLOCK_TYPES = new Set<Block['type']>(['paragraph', 'heading', 'divider', 'code', 'image']);
+const ASSET_ID_RE = /^ast-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const PARAGRAPH_VARIANTS = new Set<ParagraphVariant>(['bullet', 'numbered', 'todo', 'quote', 'callout']);
 
@@ -22,9 +23,10 @@ const CODE_LANGUAGE_RE = /^[A-Za-z0-9][A-Za-z0-9+#._-]{0,39}$/;
 const BLOCK_META_FIELDS = ['id', 'type', 'aiHidden', 'locked', 'collapsed'];
 const BLOCK_TYPE_FIELDS: Record<Block['type'], readonly string[]> = {
   paragraph: ['html', 'children', 'columns', 'variant', 'checked', 'indent'],
-  heading: ['html', 'level'],
+  heading: ['html', 'level', 'instructions'],
   divider: [],
   code: ['text', 'language'],
+  image: ['assetId', 'alt', 'caption', 'width', 'label', 'origin'],
 };
 
 /** Drop every field the block's type does not own. */
@@ -63,27 +65,17 @@ const CHILD_TYPES = new Set<ParagraphChild['type']>([
   'graph',
 ]);
 
-const CHILD_ID_RE = /data-child-id="([^"]+)"/g;
-
-/** Ids of the inline-widget placeholders present in a paragraph's html. */
+/** Ids of the inline-widget placeholders present in a paragraph's html, as its children name them. */
 export function placeholderIds(html: string): Set<string> {
-  const ids = new Set<string>();
-  for (const [, id] of html.matchAll(CHILD_ID_RE)) if (id) ids.add(id);
-  return ids;
+  return new Set(placeholderIdList(html));
 }
 
 /**
  * Validate inline children arriving from outside the editor.
  *
- * Two things get in here that the canvas cannot render. An unknown `type` has
- * no component in the widget registry, and rendering `undefined` as an element
- * takes down the whole document rather than the one widget. And a citation
- * `year` can arrive as a number — the agent's `doc_edit` schema accepts a
- * provider-style integer — which used to throw the moment the reference list
- * formatted it.
- *
- * Both are dropped or repaired here rather than at each reader, so the rest of
- * the editor can trust the declared types.
+ * An unknown `type` has no component in the widget registry, and rendering
+ * `undefined` as an element takes down the whole document rather than the
+ * one widget, so such a child is dropped here rather than at each reader.
  */
 export function coerceChildren(raw: unknown): ParagraphChild[] {
   if (!Array.isArray(raw)) return [];
@@ -93,20 +85,7 @@ export function coerceChildren(raw: unknown): ParagraphChild[] {
     const child = value as Record<string, unknown>;
     if (typeof child.id !== 'string' || child.id === '') continue;
     if (!CHILD_TYPES.has(child.type as ParagraphChild['type'])) continue;
-
-    if (child.type !== 'citation' || !Array.isArray(child.sources)) {
-      out.push(child as unknown as ParagraphChild);
-      continue;
-    }
-    out.push({
-      ...child,
-      sources: child.sources.map((source) => {
-        if (!source || typeof source !== 'object') return source;
-        const year = citationYear((source as Record<string, unknown>).year);
-        const { year: _dropped, ...rest } = source as Record<string, unknown>;
-        return year ? { ...rest, year } : rest;
-      }),
-    } as unknown as ParagraphChild);
+    out.push(child as unknown as ParagraphChild);
   }
   return out;
 }
@@ -150,7 +129,8 @@ export function reconcileBlocks(blocks: Block[]): Block[] {
       block &&
       typeof block.id === 'string' &&
       block.id !== '' &&
-      BLOCK_TYPES.has(block.type);
+      BLOCK_TYPES.has(block.type) &&
+      (block.type !== 'image' || coerceBlock(block) !== null);
     if (!ok) changed = true;
     return ok;
   });
@@ -208,6 +188,27 @@ export function coerceBlock(raw: unknown): Block | null {
 
   if (type === 'divider') return { ...own, id, type: 'divider' } as Block;
 
+  if (type === 'image') {
+    if (typeof candidate.assetId !== 'string' || !ASSET_ID_RE.test(candidate.assetId)
+      || typeof candidate.alt !== 'string' || !candidate.alt.trim() || candidate.alt.length > 4000) return null;
+    if (candidate.width !== undefined && (typeof candidate.width !== 'number'
+      || !Number.isFinite(candidate.width) || candidate.width < 0.2 || candidate.width > 1)) return null;
+    if (candidate.label != null && (typeof candidate.label !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9:_.-]{0,127}$/.test(candidate.label))) return null;
+    if (candidate.caption != null && (typeof candidate.caption !== 'string' || candidate.caption.length > 10000)) return null;
+    const origin = candidate.origin as Record<string, unknown> | undefined;
+    if (!origin || (origin.kind !== 'upload' && origin.kind !== 'generated')) return null;
+    if (origin.kind === 'generated' && (typeof origin.generationId !== 'string'
+      || !/^gen-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(origin.generationId))) return null;
+    return {
+      ...own, id, type, assetId: candidate.assetId, alt: candidate.alt,
+      caption: typeof candidate.caption === 'string' ? candidate.caption : undefined,
+      width: candidate.width ?? 1,
+      label: typeof candidate.label === 'string' ? candidate.label : undefined,
+      origin,
+    } as Block;
+  }
+
   if (type === 'code') {
     // Plain text rendered as text, never as markup, so it needs no html
     // sanitizing — only a string.
@@ -227,7 +228,8 @@ export function coerceBlock(raw: unknown): Block | null {
   if (type === 'heading') {
     const rawLevel = Number(candidate.level);
     const level = rawLevel === 1 || rawLevel === 2 || rawLevel === 3 ? rawLevel : 2;
-    return { ...own, id, type: 'heading', level, html } as Block;
+    return { ...own, id, type: 'heading', level, html,
+      instructions: typeof candidate.instructions === 'string' ? candidate.instructions : undefined } as Block;
   }
 
   const rawColumns = Number(candidate.columns);
@@ -262,14 +264,38 @@ export type ApplyPatchResult = {
   stale?: boolean;
 };
 
+/** The flags that say how the author shows a block, not what it says. */
+const VIEW_FLAGS = ['aiHidden', 'locked', 'collapsed'] as const;
+
 /**
- * Apply agent tool operations to a block list.
+ * A stored block put in the place of `current`, keeping how the author shows
+ * it. The stored block carries the flags as they were when it was proposed;
+ * folding, locking or hiding the block since is the author's, and accepting a
+ * rewrite of its text does not undo it. Folding only survives a block of the
+ * same type, as on the server (`_apply_write_blocks`).
+ */
+function keepingView(next: Block, current: Block): Block {
+  const out: Record<string, unknown> = { ...next };
+  for (const flag of VIEW_FLAGS) {
+    if (flag === 'collapsed' && next.type !== current.type) continue;
+    if (current[flag] === true) out[flag] = true;
+    else delete out[flag];
+  }
+  if (next.type === 'heading' && current.type === 'heading') out.instructions = current.instructions;
+  return out as Block;
+}
+
+/**
+ * Apply the block operations of a stored change set to a block list, as the
+ * server applies them (`ColWrite-api/src/documents/domain/operations.py`).
+ * Page-level operations (`set_meta`, the library) are `applyOperations`'.
  *
- * The server has already committed these operations, so the goal is to end up
- * with the same document it has. Where that is impossible — an insert whose
- * reference block does not exist locally — the op is reported as desynced
- * rather than guessed at: appending to the end or unshifting to the top puts
- * the content somewhere the agent never asked for, which reads as corruption.
+ * Accepting an operation is an edit of the author's document, so the goal is
+ * the document the server's own replay gives. Where that is impossible — an
+ * anchor that does not exist locally, an id already taken — the operation is
+ * reported as desynced rather than guessed at: appending to the end or
+ * unshifting to the top puts the content somewhere the agent never asked
+ * for, which reads as corruption. An operation applies whole or not at all.
  */
 export function applyPatchToBlocks(
   blocks: Block[],
@@ -278,107 +304,168 @@ export function applyPatchToBlocks(
   let next = [...blocks];
   const desynced: ToolOperation[] = [];
   const touched: string[] = [];
-
-  const insertAt = (index: number, op: ToolOperation, raw: unknown) => {
-    const block = coerceBlock(raw);
-    if (!block) {
-      desynced.push(op);
-      return;
-    }
-    // An id already in the document is a desync, not an insert: applying it
-    // produces duplicate React keys, and later updates split-brain between
-    // the two copies. Report rather than guess which copy is real.
-    if (next.some((existing) => existing.id === block.id)) {
-      desynced.push(op);
-      return;
-    }
-    next.splice(index, 0, block);
-    touched.push(block.id);
-  };
+  const indexOf = (id: string) => next.findIndex((block) => block.id === id);
 
   for (const op of ops) {
     switch (op.op) {
-      case 'replace_block': {
-        const idx = next.findIndex((b) => b.id === op.blockId);
-        if (idx === -1) {
+      case 'replace_text': {
+        const at = indexOf(op.blockId);
+        const current = next[at];
+        // Coerced rather than cast: the stored block is as agent-authored as
+        // an inserted one, and a bad child here would otherwise reach the
+        // canvas by the one path that never validated.
+        const block = coerceBlock(op.block);
+        if (!current || !block || block.id !== op.blockId) {
           desynced.push(op);
           break;
         }
-        // A partial merge, mirroring the server: unspecified fields are kept.
-        // Coerced rather than cast, because the merged result is as much
-        // agent-authored as an inserted block is — a bad child here would
-        // otherwise reach the canvas by the one path that never validated.
-        const merged = coerceBlock({ ...next[idx], ...op.block });
-        // A merge that renames the block onto an existing id is rejected for
-        // the same reason as a duplicate insert above.
-        if (!merged || (merged.id !== op.blockId && next.some((b) => b.id === merged.id))) {
-          desynced.push(op);
-          break;
-        }
-        next[idx] = merged;
+        next[at] = keepingView(block, current);
         touched.push(op.blockId);
         break;
       }
-      case 'insert_block_after': {
-        const idx = next.findIndex((b) => b.id === op.referenceId);
-        if (idx === -1) {
+      case 'write_blocks': {
+        const written = op.blocks.map(coerceBlock);
+        const fresh = written.filter((block): block is Block => block !== null);
+        const replaced = op.position === 'replace' && op.blockId !== null ? indexOf(op.blockId) : -1;
+        const anchor = op.position === 'before' || op.position === 'after' ? indexOf(op.blockId ?? '') : -1;
+        const taken = new Set(next.filter((_, index) => index !== replaced).map((block) => block.id));
+        // An id already in the document is a desync, not an insert: applying
+        // it produces duplicate React keys, and later updates split-brain
+        // between the two copies.
+        if (
+          fresh.length !== written.length
+          || new Set(fresh.map((block) => block.id)).size !== fresh.length
+          || fresh.some((block) => taken.has(block.id))
+          || (op.position === 'replace' && (replaced === -1 || fresh[0]?.id !== op.blockId))
+          || ((op.position === 'before' || op.position === 'after') && anchor === -1)
+        ) {
           desynced.push(op);
           break;
         }
-        insertAt(idx + 1, op, op.block);
+        if (op.position === 'replace') {
+          const current = next[replaced];
+          const [first, ...rest] = fresh;
+          if (!current || !first) {
+            desynced.push(op);
+            break;
+          }
+          next.splice(replaced, 1, keepingView(first, current), ...rest);
+        } else {
+          const at = op.position === 'append' ? next.length : anchor + (op.position === 'after' ? 1 : 0);
+          next.splice(at, 0, ...fresh);
+        }
+        touched.push(...fresh.map((block) => block.id));
         break;
       }
-      case 'insert_block_before': {
-        const idx = next.findIndex((b) => b.id === op.referenceId);
-        if (idx === -1) {
+      case 'delete_blocks': {
+        const gone = new Set(op.blockIds);
+        if (op.blockIds.some((id) => indexOf(id) === -1)) {
           desynced.push(op);
           break;
         }
-        insertAt(idx, op, op.block);
+        next = next.filter((block) => !gone.has(block.id));
         break;
       }
-      case 'insert_block_at_start':
-        insertAt(0, op, op.block);
-        break;
-      case 'append_block':
-        insertAt(next.length, op, op.block);
-        break;
-      case 'delete_block': {
-        const idx = next.findIndex((b) => b.id === op.blockId);
-        if (idx === -1) {
+      case 'move_block': {
+        const from = indexOf(op.blockId);
+        const moved = next[from];
+        if (!moved || op.blockId === op.targetBlockId || indexOf(op.targetBlockId) === -1) {
           desynced.push(op);
           break;
         }
-        next = [...next.slice(0, idx), ...next.slice(idx + 1)];
-        break;
-      }
-      case 'reorder_block': {
-        const from = next.findIndex((b) => b.id === op.blockId);
-        // A non-numeric target used to survive Math.min/max as NaN, and
-        // splice(NaN) coerces to 0 — silently moving the block to the top.
-        if (from === -1 || !Number.isFinite(op.toIndex)) {
-          desynced.push(op);
-          break;
-        }
-        const [moved] = next.splice(from, 1);
-        if (!moved) {
-          desynced.push(op);
-          break;
-        }
-        // The server sends an absolute index it already translated out of the
-        // AI-visible (aiHidden-filtered) index space.
-        next.splice(Math.max(0, Math.min(op.toIndex, next.length)), 0, moved);
+        next.splice(from, 1);
+        const target = indexOf(op.targetBlockId);
+        next.splice(target + (op.position === 'after' ? 1 : 0), 0, moved);
         touched.push(op.blockId);
         break;
       }
-      case 'update_meta':
+      case 'set_meta':
+      case 'add_sources':
+      case 'remove_sources':
+      case 'update_sources':
       case 'create_document':
-        // Handled by the caller — these target document state, not blocks.
+        // Page-level state, not blocks (`applyOperations`).
         break;
     }
   }
 
   return { blocks: next, desynced, touched };
+}
+
+/** Every key a citation on these blocks cites. */
+function citedKeys(blocks: readonly Block[]): Set<string> {
+  const keys = new Set<string>();
+  for (const block of blocks) {
+    if (block.type !== 'paragraph') continue;
+    for (const child of block.children ?? []) {
+      if (child.type === 'citation') for (const key of child.keys) keys.add(key);
+    }
+  }
+  return keys;
+}
+
+/**
+ * Apply operations to the whole page: the blocks (`applyPatchToBlocks`),
+ * then its name, citation style and library, with the server's refusals: a
+ * source already in the library is not added again, one still cited on the
+ * page is not removed, and a refresh names only works the library holds,
+ * each once (`_apply_update_sources`).
+ */
+export function applyOperations(doc: Doc, ops: ToolOperation[]): ApplyPatchResult & { doc: Doc } {
+  const outcome = applyPatchToBlocks(doc.blocks, ops);
+  let next: Doc = { ...doc, blocks: outcome.blocks };
+  const desynced = [...outcome.desynced];
+  for (const op of ops) {
+    switch (op.op) {
+      case 'set_meta':
+        next = {
+          ...next,
+          ...(op.name !== undefined ? { name: op.name } : {}),
+          ...(op.citationStyle !== undefined ? { citationStyle: op.citationStyle } : {}),
+        };
+        break;
+      case 'add_sources': {
+        const library = next.sources ?? [];
+        const held = new Set(library.map((source) => source.key));
+        if (op.sources.some((source) => held.has(source.key))) {
+          desynced.push(op);
+          break;
+        }
+        next = { ...next, sources: [...library, ...op.sources] };
+        break;
+      }
+      case 'remove_sources': {
+        const library = next.sources ?? [];
+        const held = new Set(library.map((source) => source.key));
+        const cited = citedKeys(next.blocks);
+        if (op.keys.some((key) => !held.has(key) || cited.has(key))) {
+          desynced.push(op);
+          break;
+        }
+        const gone = new Set(op.keys);
+        const remaining = library.filter((source) => !gone.has(source.key));
+        const { sources: _removed, ...rest } = next;
+        next = remaining.length > 0 ? { ...rest, sources: remaining } : rest;
+        break;
+      }
+      case 'update_sources': {
+        const library = next.sources ?? [];
+        const at = new Map(library.map((source, index) => [source.key, index]));
+        const keys = op.sources.map((source) => source.key);
+        if (keys.some((key) => !at.has(key)) || new Set(keys).size !== keys.length) {
+          desynced.push(op);
+          break;
+        }
+        const refreshed = [...library];
+        for (const source of op.sources) refreshed[at.get(source.key) as number] = source;
+        next = { ...next, sources: refreshed };
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return { ...outcome, doc: next, desynced };
 }
 
 /** Above this many reordered blocks, only the smaller group is reported. */

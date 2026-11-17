@@ -1,6 +1,7 @@
 import { resolveApiPath } from '@/api/url';
 import { isUnknownRecord } from '@/lib/json';
 import { uid } from '@/lib/uid';
+import { noteUnknownInput } from './protocolLog';
 import type {
   AgentChatRequestInput,
   AgentContext,
@@ -9,6 +10,7 @@ import type {
   ErrorBody,
   GatewayModelSelection,
   RunRef,
+  RunResume,
   RunStart,
   SessionCreate,
   SessionList,
@@ -31,6 +33,16 @@ export class AgentSocketError extends Error {
     this.retryable = retryable;
     this.closeCode = closeCode;
     this.name = 'AgentSocketError';
+  }
+}
+
+/** An actual command error reply, not a timeout, invalid frame or lost socket. */
+export class AgentCommandError extends AgentSocketError {
+  readonly method: AssistantMethod;
+  constructor(method: AssistantMethod, error: AgentSocketError) {
+    super(error.message, error.code, error.closeCode, error.retryable);
+    this.method = method;
+    this.name = 'AgentCommandError';
   }
 }
 
@@ -64,6 +76,8 @@ export type CommandParams = {
   'sessions.unsubscribe': SessionRef;
   'runs.start': Omit<RunStart, 'request'> & { request: AgentRunRequest };
   'runs.cancel': RunRef;
+  /** Admit a new run from an interrupted run's checkpoint. */
+  'runs.resume': RunResume;
 };
 
 /** A reply: `method` repeats the command's and fixes the shape of `result`. */
@@ -102,6 +116,9 @@ type CommandOutcome =
 
 /** A frame as this client reads it. */
 export type ServerFrame = AgentSessionEvent | SubscriptionFailure | CommandOutcome;
+
+/** The frame types this client reads; a reply has none. Any other is a newer server's, and skipped. */
+const KNOWN_FRAME_TYPES = new Set<unknown>(['event', 'subscription.error']);
 
 /** The server's `error` body, read defensively: it is untrusted like any frame. */
 function errorBody(value: unknown): Pick<ErrorBody, 'message' | 'retryable'> & { code: string } | null {
@@ -207,8 +224,14 @@ export class AgentSocket {
         try { raw = JSON.parse(data); } catch { this.close(4000); return; }
         const message = parseServerMessage(raw);
         if (!message) {
+          if (!isUnknownRecord(raw)) { this.close(4000); return; }
+          // A frame type a newer server added: skipped, the run goes on.
+          if (raw.type !== undefined && !KNOWN_FRAME_TYPES.has(raw.type)) {
+            noteUnknownInput('frame type', String(raw.type));
+            return;
+          }
           // An event the client cannot read is a gap in the log.
-          if (!isUnknownRecord(raw) || raw.type !== undefined) { this.close(4000); return; }
+          if (raw.type !== undefined) { this.close(4000); return; }
           const pending = typeof raw.id === 'string' ? this.pending.get(raw.id) : undefined;
           if (pending && typeof raw.id === 'string') {
             this.pending.delete(raw.id);
@@ -232,7 +255,7 @@ export class AgentSocket {
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
         if ('error' in message) {
-          pending.reject(socketError(message.error, 'The assistant request failed.', 'ASSISTANT_ERROR'));
+          pending.reject(new AgentCommandError(pending.method, socketError(message.error, 'The assistant request failed.', 'ASSISTANT_ERROR')));
         } else if (message.method !== pending.method) {
           pending.reject(new AgentSocketError('Invalid assistant response.', 'INVALID_RESPONSE'));
         } else {

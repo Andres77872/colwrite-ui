@@ -54,7 +54,7 @@ function subscribeOverride(listener: () => void) {
  * the left edge) while the right one is open, and comes back when it closes.
  */
 export function useLeftSidebarAutoHidden(): boolean {
-  const { isOpen, isDesktop, toolsDocked, leftWidth, rightWidth, leftCollapsed } = usePanels();
+  const { isOpen, isDesktop, panelsDocked, leftWidth, rightWidth, leftCollapsed } = usePanels();
   const docked = useSidebarDocked();
   const width = useWindowWidth();
   const override = useSyncExternalStore(subscribeOverride, () => leftOverride, () => false);
@@ -62,7 +62,7 @@ export function useLeftSidebarAutoHidden(): boolean {
   // Below the desktop width the right sidebar docks at a fixed share of the
   // window (900–1023px here, as the left one docks from 900px): the two
   // never fit beside a readable page, so the left one always steps aside.
-  if (!isDesktop) return toolsDocked;
+  if (!isDesktop) return panelsDocked;
   return width - leftWidth - rightWidth < MIN_MAIN_WIDTH;
 }
 

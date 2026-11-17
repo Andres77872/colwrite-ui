@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   listDocuments: vi.fn(),
   switchTo: vi.fn(),
   createAndSwitch: vi.fn(),
-  setTool: vi.fn(),
+  setPanel: vi.fn(),
   setAssistantOpen: vi.fn(),
   setView: vi.fn(),
   setPreference: vi.fn(),
@@ -36,7 +36,7 @@ vi.mock('@/editor', () => ({
 }));
 vi.mock('@/components/panels/panelsContextState', () => ({
   usePanels: () => ({
-    setTool: mocks.setTool,
+    setPanel: mocks.setPanel,
     toggle: vi.fn(),
     setAssistantOpen: mocks.setAssistantOpen,
     toggleLeftCollapsed: vi.fn(),
@@ -44,7 +44,7 @@ vi.mock('@/components/panels/panelsContextState', () => ({
   }),
 }));
 vi.mock('@/components/preferences', () => ({
-  useAgentTools: () => ({ isSourceEnabled: () => false }),
+  useAssistantCatalog: () => ({ papers: { on: false, reason: null } }),
 }));
 vi.mock('../viewContextState', () => ({
   useView: () => ({ view: 'editor', setView: mocks.setView }),
@@ -100,8 +100,10 @@ describe('CommandPalette', () => {
     ]);
     expect(screen.queryByRole('group', { name: 'On this page' })).toBeNull();
     // Commands carry their shortcut.
-    const askAi = within(screen.getByRole('group', { name: 'Commands' })).getByRole('option', { name: /Ask AI/ });
-    expect(askAi.textContent).toContain('J');
+    // "Ask AI" is the inline prompt; this command opens the chat (U-13).
+    const assistant = within(screen.getByRole('group', { name: 'Commands' })).getByRole('option', { name: /Open assistant/ });
+    expect(assistant.textContent).toContain('J');
+    expect(within(screen.getByRole('group', { name: 'Commands' })).queryByRole('option', { name: /Ask AI/ })).toBeNull();
   });
 
   it('searches headings, documents and the panels once something is typed', async () => {
@@ -176,7 +178,7 @@ describe('CommandPalette', () => {
     renderPalette();
     const commands = await screen.findByRole('group', { name: 'Commands' });
     fireEvent.click(within(commands).getByRole('option', { name: 'Library' }));
-    expect(mocks.setTool).toHaveBeenCalledWith('library');
+    expect(mocks.setPanel).toHaveBeenCalledWith('library');
   });
 
   it('opens the Trash', async () => {

@@ -1,16 +1,16 @@
-import { AiBeatInline } from 'colwrite-ui';
+import { AiBeatInline, LiteralEditor } from 'colwrite-ui';
 
 // AiBeatInline is the "AI passage" widget: a prompt the author keeps in the
 // document, plus the text the assistant generated from it. Unlike the other
 // inline widgets it is primary-tinted rather than neutral, because it marks a
 // span of the document that is machine-written and re-runnable.
 //
-// It takes AiBeatWidgetProps — the six shared InlineWidgetProps fields plus
-// `documentId` and `ensureRemoteDocument`, which it needs because the agent
-// addresses the document by id and a draft that has never been saved has none.
-// `ensureRemoteDocument` is never called in a static card; it is wired to a
-// rejected promise rather than a no-op so that an accidental call would surface
-// rather than hang.
+// It takes the six shared InlineWidgetProps fields, and reads the page's
+// session (`documentId`, `ensureRemoteDocument`, `hasPendingEdits`,
+// `saveRemote`) because a run saves the page first: the agent addresses the
+// document by id, and a draft that has never been saved has none. A static
+// card never runs; the page functions are wired to a rejected promise rather
+// than a no-op so that an accidental call would surface rather than hang.
 //
 // `output` is the only field the widget also keeps locally, because it arrives
 // token by token while generating. These cells pin it, so they show settled
@@ -25,12 +25,14 @@ const wiring = {
   removeParagraphChild: noop,
   updateHtml: noop,
   refs,
-  documentId: 'doc-1',
-  ensureRemoteDocument: () => Promise.reject(new Error('not reachable from a preview')),
 };
+
+const unreachable = () => Promise.reject(new Error('not reachable from a preview'));
+const page = { documentId: 'doc-1', ensureRemoteDocument: unreachable, hasPendingEdits: () => false, saveRemote: unreachable };
 
 export function Generated() {
   return (
+    <LiteralEditor value={page}>
     <div className="max-w-[38rem]">
       <AiBeatInline
         {...wiring}
@@ -44,11 +46,13 @@ export function Generated() {
         }}
       />
     </div>
+    </LiteralEditor>
   );
 }
 
 export function NotYetGenerated() {
   return (
+    <LiteralEditor value={page}>
     <div className="max-w-[38rem]">
       <AiBeatInline
         {...wiring}
@@ -61,11 +65,13 @@ export function NotYetGenerated() {
         }}
       />
     </div>
+    </LiteralEditor>
   );
 }
 
 export function Collapsed() {
   return (
+    <LiteralEditor value={page}>
     <div className="max-w-[38rem]">
       <AiBeatInline
         {...wiring}
@@ -80,5 +86,6 @@ export function Collapsed() {
         }}
       />
     </div>
+    </LiteralEditor>
   );
 }

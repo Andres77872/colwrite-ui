@@ -24,7 +24,7 @@ import { ToolUsageList } from './ToolUsageList';
 import { WorkspacePane } from './WorkspacePane';
 import { MembersPane } from './MembersPane';
 import { WorkspaceUsageTable } from './WorkspaceUsageTable';
-import { AgentEnginePreferences, AgentToolsPreferences } from '@/components/preferences';
+import { AgentEnginePreferences, AssistantPreferences } from '@/components/preferences';
 import { takeRequestedSettingsPane, type SettingsPane } from './settingsPane';
 import { BarChart3, Layers, RefreshCw, SlidersHorizontal, Sparkles, UserRound, Users, type LucideIcon } from 'lucide-react';
 
@@ -59,7 +59,7 @@ type UsageScope = 'workspace' | 'all';
  */
 export function ProfileView() {
   const { setView } = useView();
-  const { setTool } = usePanels();
+  const { setPanel } = usePanels();
 
   // Read once, on mount: the dialog remounts this view each time it opens.
   const [initialPane] = useState(() => takeRequestedSettingsPane() ?? 'account');
@@ -77,7 +77,7 @@ export function ProfileView() {
   // this dialog.
   const openLibrary = () => {
     setView('editor');
-    setTool('library');
+    setPanel('library');
   };
 
   const refreshButton = (
@@ -163,7 +163,7 @@ export function ProfileView() {
           <TabsContent value="ai" className="mt-0 flex flex-col gap-6" forceMount>
             {/* Model choices lead AI & tools on every server; local engine
                 controls are offered only when the server supports them. */}
-            <AgentToolsPreferences leading={<AgentEnginePreferences />} />
+            <AssistantPreferences leading={<AgentEnginePreferences />} />
           </TabsContent>
 
           <TabsContent value="workspace" className="mt-0 flex flex-col gap-6">

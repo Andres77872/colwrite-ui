@@ -2,6 +2,7 @@ import { notifyManager } from '@tanstack/react-query'
 import { afterAll, afterEach, beforeAll } from 'vitest'
 import { server, stopRecording, takeUnhandled } from './src/__tests__/server'
 import { resetMockApi } from './src/dev/msw/handlers'
+import { loadCitationProcessor } from './src/editor/csl/processor'
 
 // Enable act() support for React concurrent rendering in jsdom
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -26,6 +27,11 @@ if (typeof CSS.escape !== 'function') {
 // it even when the app swallows the error; a test's own handlers
 // (`server.use`) and whatever it wrote are gone before the next.
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
+
+// The citation processor is a chunk the app loads on first need; tests render
+// with it loaded, but `csl/__tests__/lazyProcessor.test.ts`, which reads the
+// neutral form a page shows until it arrives.
+beforeAll(() => loadCitationProcessor())
 afterEach(() => {
   server.resetHandlers()
   stopRecording()

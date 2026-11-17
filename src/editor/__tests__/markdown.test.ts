@@ -10,6 +10,7 @@ import {
   markdownToBlocks,
 } from '../markdown';
 import type { Block, CitationChild, ParagraphBlock } from '../types';
+import { reference } from '@/__tests__/agentSource';
 
 function shape(blocks: Block[]) {
   return blocks.map((block) => {
@@ -94,7 +95,7 @@ describe('markdownToBlocks', () => {
       id: 'c1',
       type: 'citation',
       keys: ['10.1/real'],
-      sources: [{ key: '10.1/real', title: 'Real paper', year: '2020' }],
+      sources: [reference('10.1/real', { title: 'Real paper', year: 2020 })],
     };
     const lookup = new Map([['10.1/real', known]]);
     const [block] = takeItems(markdownToBlocks('Shown [@10.1/real, p. 4] and [@10.9/invented].', {
@@ -106,7 +107,7 @@ describe('markdownToBlocks', () => {
       type: 'citation',
       keys: ['10.1/real'],
       locator: 'p. 4',
-      sources: [{ title: 'Real paper' }],
+      sources: [{ csl: { title: 'Real paper' } }],
     });
     // The invented key stays text, never a widget.
     expect(block.html).toContain('[@10.9/invented]');

@@ -493,7 +493,7 @@ describe('FloatingToolbar actions', () => {
       expect(block.children).toHaveLength(1);
     });
     const finalBlock = paragraph(editorRef.current!.doc);
-    expect(finalBlock.children?.[0]).toMatchObject({ type: 'citation', keys: [], style: 'numeric' });
+    expect(finalBlock.children?.[0]).toMatchObject({ type: 'citation', keys: [] });
     // Straight after the cited words, not at the start of the paragraph.
     expect(finalBlock.html).toMatch(/^Evidence<span data-child-id="[^"]+"/);
 

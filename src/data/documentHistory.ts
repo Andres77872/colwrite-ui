@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, queryOptions, type QueryClient } from '@tanstack/react-query';
 import { api, unwrap, unwrapWithHeaders } from '@/api/client';
-import { toEditorDoc } from '@/api/content';
+import { referenceRecordOf, toEditorDoc } from '@/api/content';
+import { isCitationStyle } from '@/editor/csl/styles';
 import { ApiError, problemBody, problemCode } from '@/api/errors';
 import type {
   ChangeSetOperationDecisionRequest,
@@ -10,7 +11,7 @@ import type {
   SemanticDiffEntry,
 } from '@/api/schema';
 import { isRetryableProblem } from '@/api/retry';
-import type { Doc, ToolOperation } from '@/editor/types';
+import type { Doc, OperationBasis, ToolOperation } from '@/editor/types';
 import { isUnknownRecord } from '@/lib/json';
 import { uid } from '@/lib/uid';
 import { workspaceScope } from './workspaces';
@@ -261,11 +262,12 @@ export interface AgentChangeSet {
   status: ChangeSetResponse['status'];
   operations: ToolOperation[];
   /**
-   * Names of stored operations with no editor mapping (`move_block`, future
-   * operations, malformed entries). A non-empty list means the review flow
-   * must refuse to stage the set: deciding the mappable subset would retire
-   * the whole server record and silently lose these. A server-side accept
-   * still applies them faithfully.
+   * Names of stored operations with no editor mapping: an operation a newer
+   * server added, a field it added to one, a name this app does not know (one
+   * the API retired, on a set stored before), or a malformed entry. A
+   * non-empty list means the review flow must refuse to stage the set:
+   * deciding the mappable subset would retire the whole server record and
+   * silently lose these.
    */
   unmappableOperations: string[];
   baseEtag: string;
@@ -286,12 +288,15 @@ export interface AgentChangeSet {
   /** The author's decisions on single operations, in the order they were made. */
   operationDecisions: ChangeSetOperationDecision[];
   /**
-   * One entry per stored operation: the server's fingerprint of the block a
-   * rewrite or deletion is aimed at, as the operation found it and as the
-   * saved document holds it now. `null` as a whole for a change set stored
-   * before targets were recorded.
+   * One list per stored operation: the server's fingerprints of the blocks it
+   * rewrites or deletes, as the operation found them and as the saved
+   * document holds them now (`[]` for an insert, a move, a metadata or
+   * library edit). `null` as a whole for a change set stored before targets
+   * were recorded.
    */
-  operationTargets: Array<ChangeSetOperationTarget | null> | null;
+  operationTargets: ChangeSetOperationTarget[][] | null;
+  /** Authoritative intent groups, addressed by stored operation index. */
+  groups: ChangeSetResponse['groups'];
 }
 
 /** One recorded decision, by the operation's position in the stored batch. */
@@ -319,57 +324,137 @@ export interface ChangeSetOperationTarget {
   headFingerprint: string | null;
 }
 
+
+/** Each stored operation's fields (`ColWrite-api/src/documents/domain/operations.py`). */
+const STORED_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = Object.fromEntries(
+  Object.entries({
+    replace_text: ['block_id', 'find', 'replace', 'block'],
+    write_blocks: ['position', 'block_id', 'blocks'],
+    delete_blocks: ['block_ids'],
+    move_block: ['block_id', 'position', 'target_block_id'],
+    set_meta: ['name', 'citation_style'],
+    add_sources: ['sources'],
+    remove_sources: ['keys'],
+    update_sources: ['sources'],
+  }).map(([op, fields]) => [op, new Set(['op', 'basis', 'new_information', ...fields])]),
+);
+
+/** The operation names a stored change set may use, which the editor applies. */
+export const STORED_OPERATION_NAMES: readonly string[] = Object.keys(STORED_FIELDS);
+
+const isString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+function strings(value: unknown): string[] | null {
+  return Array.isArray(value) && value.length > 0 && value.every(isString) && new Set(value).size === value.length
+    ? value
+    : null;
+}
+
+function records(value: unknown): Record<string, unknown>[] | null {
+  return Array.isArray(value) && value.length > 0 && value.every(isUnknownRecord) ? value : null;
+}
+
+/** `basis` and `new_information`, which every stored operation may carry. */
+function basisOf(value: Record<string, unknown>): OperationBasis | null {
+  const out: OperationBasis = {};
+  if (value.basis != null) {
+    // Always sent, and empty for an operation that rests on nothing named.
+    const basis = Array.isArray(value.basis) && value.basis.length === 0 ? [] : strings(value.basis);
+    if (!basis) return null;
+    out.basis = basis;
+  }
+  if (value.new_information != null) {
+    if (typeof value.new_information !== 'boolean') return null;
+    out.newInformation = value.new_information;
+  }
+  return out;
+}
+
 /**
- * Map one stored snake_case operation onto the editor's ToolOperation. The
- * contract types a stored operation as an open object.
+ * Map one stored operation onto the editor's `ToolOperation`, or `null` when
+ * the editor cannot apply it as stored: a name it does not know, a field it
+ * does not know, or a malformed entry. The contract types a stored operation
+ * as an open object.
  */
-function normalizeChangeSetOperation(value: Record<string, unknown>): ToolOperation | null {
-  if (typeof value.op !== 'string') return null;
-  const blockId = typeof value.block_id === 'string' ? value.block_id : null;
-  const referenceId = typeof value.reference_id === 'string' ? value.reference_id : null;
-  const block = isUnknownRecord(value.block) ? value.block : null;
+export function normalizeChangeSetOperation(value: Record<string, unknown>): ToolOperation | null {
+  const fields = typeof value.op === 'string' ? STORED_FIELDS[value.op] : undefined;
+  if (!fields || Object.keys(value).some((key) => !fields.has(key))) return null;
+  const basis = basisOf(value);
+  if (!basis) return null;
+  const operation = storedOperation(value);
+  return operation && { ...operation, ...basis };
+}
+
+function storedOperation(value: Record<string, unknown>): ToolOperation | null {
   switch (value.op) {
-    case 'replace_block':
-      return blockId && block ? { op: 'replace_block', blockId, block } : null;
-    case 'insert_block_after':
-      return referenceId && block
-        ? { op: 'insert_block_after', referenceId, block }
+    case 'replace_text':
+      return isString(value.block_id) && isString(value.find) && typeof value.replace === 'string' && isUnknownRecord(value.block)
+        ? { op: 'replace_text', blockId: value.block_id, find: value.find, replace: value.replace, block: value.block }
         : null;
-    case 'insert_block_before':
-      return referenceId && block
-        ? { op: 'insert_block_before', referenceId, block }
+    case 'write_blocks': {
+      const blocks = records(value.blocks);
+      const position = value.position;
+      if (!blocks) return null;
+      if (position === 'append') {
+        return value.block_id == null ? { op: 'write_blocks', position, blockId: null, blocks } : null;
+      }
+      if (position !== 'before' && position !== 'after' && position !== 'replace') return null;
+      if (!isString(value.block_id)) return null;
+      // The first block of a replace keeps the replaced block's id.
+      if (position === 'replace' && blocks[0]?.id !== value.block_id) return null;
+      return { op: 'write_blocks', position, blockId: value.block_id, blocks };
+    }
+    case 'delete_blocks': {
+      const blockIds = strings(value.block_ids);
+      return blockIds ? { op: 'delete_blocks', blockIds } : null;
+    }
+    case 'move_block':
+      return isString(value.block_id) && isString(value.target_block_id) && value.block_id !== value.target_block_id
+        && (value.position === 'before' || value.position === 'after')
+        ? { op: 'move_block', blockId: value.block_id, position: value.position, targetBlockId: value.target_block_id }
         : null;
-    case 'insert_block_at_start':
-      return block ? { op: 'insert_block_at_start', block } : null;
-    case 'append_block':
-      return block ? { op: 'append_block', block } : null;
-    case 'delete_block':
-      return blockId ? { op: 'delete_block', blockId } : null;
-    case 'reorder_block':
-      return blockId && typeof value.to_index === 'number'
-        ? { op: 'reorder_block', blockId, toIndex: value.to_index }
-        : null;
-    case 'update_meta':
-      return isUnknownRecord(value.meta)
-        ? { op: 'update_meta', meta: value.meta as { name?: string } }
-        : null;
+    case 'set_meta': {
+      const name = value.name == null ? undefined : isString(value.name) ? value.name : null;
+      const style = value.citation_style == null
+        ? undefined
+        : isCitationStyle(value.citation_style)
+          ? value.citation_style
+          : null;
+      if (name === null || style === null || (name === undefined && style === undefined)) return null;
+      return { op: 'set_meta', ...(name !== undefined ? { name } : {}), ...(style !== undefined ? { citationStyle: style } : {}) };
+    }
+    case 'add_sources': {
+      // Each a reference record; an operation holding anything else is not staged.
+      const sources = records(value.sources)?.map(referenceRecordOf);
+      if (!sources || sources.length === 0 || sources.some((source) => source === null)) return null;
+      return { op: 'add_sources', sources: sources as NonNullable<(typeof sources)[number]>[] };
+    }
+    case 'remove_sources': {
+      const keys = strings(value.keys);
+      return keys ? { op: 'remove_sources', keys } : null;
+    }
+    case 'update_sources': {
+      // Each a reference record, each key once, as the server stores it.
+      const sources = records(value.sources)?.map(referenceRecordOf);
+      if (!sources || sources.length === 0 || sources.some((source) => source === null)) return null;
+      const held = sources as NonNullable<(typeof sources)[number]>[];
+      return new Set(held.map((source) => source.key)).size === held.length ? { op: 'update_sources', sources: held } : null;
+    }
     default:
-      // move_block and future server operations have no editor mapping yet;
-      // the server-side accept still applies them faithfully.
       return null;
   }
 }
 
-function operationTargets(changeSet: ChangeSetResponse): Array<ChangeSetOperationTarget | null> | null {
+function operationTargets(changeSet: ChangeSetResponse): ChangeSetOperationTarget[][] | null {
   const targets = changeSet.operation_targets;
   // Entries are addressed by operation index, so a list that does not line
   // up with the operations says nothing reliable.
   if (!targets || targets.length !== changeSet.operations.length) return null;
-  return targets.map((target) => target && {
+  return targets.map((entry) => entry.map((target) => ({
     blockId: target.block_id,
     fingerprint: target.fingerprint,
     headFingerprint: target.head_fingerprint ?? null,
-  });
+  })));
 }
 
 function agentChangeSet(payload: ChangeSetResponse): AgentChangeSet {
@@ -401,6 +486,7 @@ function agentChangeSet(payload: ChangeSetResponse): AgentChangeSet {
     autoBlockedReason: payload.auto_blocked_reason ?? null,
     operationDecisions: payload.operation_decisions.map(({ index, decision }) => ({ opIndex: index, decision })),
     operationTargets: operationTargets(payload),
+    groups: payload.groups,
   };
 }
 

@@ -2,10 +2,10 @@ import type { ParagraphBlock as P, ParagraphChild, ParagraphVariant } from '../.
 import { Editable } from '../../../common/Editable';
 import { hideFigureGaps, startsWithFigure } from '../../../common/Editable/editableHtml';
 import { memo, useEffect, useLayoutEffect, useMemo, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
-import { numberLabel, useDocumentActions, useEditorActions, usePageReadOnly } from '../../../../editor';
+import { numberLabel, useEditorActions, usePageReadOnly } from '../../../../editor';
 import { createPortal } from 'react-dom';
 import { AiBeatInline, TableInline, CitationInline, EquationInline, GraphInline } from './Inlines';
-import type { AiBeatWidgetProps } from './Inlines/types';
+import type { InlineWidgetProps } from './Inlines/types';
 import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 import { Lightbulb } from 'lucide-react';
@@ -64,11 +64,10 @@ function ListMarker({ block, listNumber }: { block: P; listNumber?: number }) {
 
 /**
  * One registry instead of a per-widget portal branch: the six wiring props are
- * identical for every widget, and AI Beat's two extras ride along in
- * AiBeatWidgetProps, which every widget accepts and the others ignore.
- * A future widget (footnote, xref, var) is one line here, not a new branch.
+ * identical for every widget. A future widget (footnote, xref, var) is one
+ * line here, not a new branch.
  */
-const INLINE_WIDGETS: Record<ParagraphChild['type'], ComponentType<AiBeatWidgetProps>> = {
+const INLINE_WIDGETS: Record<ParagraphChild['type'], ComponentType<InlineWidgetProps>> = {
   aiBeat: AiBeatInline,
   table: TableInline,
   citation: CitationInline,
@@ -78,20 +77,15 @@ const INLINE_WIDGETS: Record<ParagraphChild['type'], ComponentType<AiBeatWidgetP
 
 export const ParagraphBlock = memo(function ParagraphBlock({
   block,
-  documentId,
   listNumber,
 }: {
   block: P;
-  documentId: string | null;
   /** Position within its numbered run; only read for numbered items. */
   listNumber?: number;
 }) {
   // Actions only: the merged context changes identity on every keystroke,
   // which re-rendered every paragraph on every edit anywhere in the document.
-  // `documentId` arrives as a prop from Canvas — it changes on navigation,
-  // not per keystroke, so the memo still holds while typing.
   const { refs, updateParagraphChild, removeParagraphChild, updateHtml } = useEditorActions();
-  const { ensureRemoteDocument } = useDocumentActions();
   const [mounts, setMounts] = useState<Array<{ id: string; el: HTMLElement }>>([]);
 
   // Mount child components referenced inside HTML placeholders.
@@ -213,8 +207,6 @@ export const ParagraphBlock = memo(function ParagraphBlock({
             removeParagraphChild={removeParagraphChild}
             updateHtml={updateHtml}
             refs={refs}
-            documentId={documentId}
-            ensureRemoteDocument={ensureRemoteDocument}
           />,
           el,
           id,

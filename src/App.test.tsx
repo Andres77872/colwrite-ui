@@ -59,12 +59,8 @@ vi.mock('./components/layout/Shortcuts', () => ({
 vi.mock('./components/landing', () => ({ LandingPage: () => null }));
 vi.mock('./components/profile', () => ({ SettingsDialog: () => null }));
 vi.mock('./components/preferences', () => ({
-  AgentToolsProvider: ({ children }: { children: React.ReactNode }) => children,
+  AssistantCatalogProvider: ({ children }: { children: React.ReactNode }) => children,
   AgentEngineProvider: ({ children }: { children: React.ReactNode }) => children,
-  useAgentTools: () => ({
-    isSourceEnabled: () => false,
-    isToolEnabled: () => false,
-  }),
 }));
 
 const { default: App } = await import('./App');

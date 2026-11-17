@@ -96,7 +96,7 @@ function Harness() {
 
   return (
     <>
-      <ParagraphBlock block={block} documentId={editor.documentId} />
+      <ParagraphBlock block={block} />
       <SlashMenu />
       <button type="button">Outside target</button>
     </>
@@ -387,7 +387,7 @@ type CommandCase = {
 const commandCases: CommandCase[] = [
   {
     item: aiBeatItem,
-    expected: { type: 'aiBeat', message: '', prompt: '', output: '' },
+    expected: { type: 'aiBeat', message: '', prompt: '', output: null },
   },
   {
     item: tableItem,
@@ -403,7 +403,7 @@ const commandCases: CommandCase[] = [
   },
   {
     item: citationItem,
-    expected: { type: 'citation', keys: [], style: 'numeric' },
+    expected: { type: 'citation', keys: [] },
   },
   {
     item: equationItem,

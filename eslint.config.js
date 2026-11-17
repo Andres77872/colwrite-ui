@@ -17,7 +17,7 @@ const STORAGE_PROPERTIES = [
   { object: 'window', property: 'sessionStorage', message: STORAGE_MESSAGE },
 ]
 
-const FETCH_MESSAGE = 'Call ColWrite-api through the typed client in src/api/client.ts; an external service goes through src/api/external.ts.'
+const FETCH_MESSAGE = 'Call ColWrite-api through the typed client in src/api/client.ts; the browser calls no other service.'
 const FETCH_GLOBALS = [{ name: 'fetch', message: FETCH_MESSAGE }]
 const FETCH_PROPERTIES = ['window', 'globalThis', 'self'].map((object) => ({ object, property: 'fetch', message: FETCH_MESSAGE }))
 const OPENAPI_FETCH_PATH = { name: 'openapi-fetch', message: 'Only src/api/ creates clients; use `api` from src/api/client.ts.' }
@@ -67,7 +67,7 @@ const UI_FILES = ['src/components/**/*.{ts,tsx}', 'src/editor/**/*.{ts,tsx}', 's
 const UI_IMPORTS = {
   paths: [OPENAPI_FETCH_PATH],
   patterns: [{
-    regex: '^(?:@/|(?:\\.\\.?/)+)api/(?:client|session|external)$',
+    regex: '^(?:@/|(?:\\.\\.?/)+)api/(?:client|session)$',
     message: 'Read and write server data through src/data/*, src/actions/*, `$api` (src/api/query.ts) or the assistant transport (src/api/assistant/*); the raw client is for src/data/* and src/api/*.',
   }],
 }

@@ -11,10 +11,10 @@ const panelState = {
   isOpen: true,
   close: vi.fn(),
   isDesktop: true,
-  toolsDocked: true,
+  panelsDocked: true,
   mobileNavOpen: false,
   setMobileNavOpen: vi.fn(),
-  activeTool: 'sources' as const,
+  activePanel: 'sources' as const,
 };
 const layout = { sidebarDocked: true, leftAutoHidden: false };
 
@@ -41,7 +41,7 @@ function renderShell() {
 
 beforeEach(() => {
   panelState.isDesktop = true;
-  panelState.toolsDocked = true;
+  panelState.panelsDocked = true;
   panelState.isOpen = true;
   panelState.leftCollapsed = false;
   panelState.mobileNavOpen = false;
@@ -171,7 +171,7 @@ describe('AppShell', () => {
 
   it('opens the right sidebar as a full-screen sheet below the docked width', () => {
     panelState.isDesktop = false;
-    panelState.toolsDocked = false;
+    panelState.panelsDocked = false;
     renderShell();
 
     const sheet = screen.getByRole('dialog', { name: 'Tools' });
@@ -182,7 +182,7 @@ describe('AppShell', () => {
 
   it('takes focus into the phone sheet, which Escape closes', async () => {
     panelState.isDesktop = false;
-    panelState.toolsDocked = false;
+    panelState.panelsDocked = false;
     panelState.isOpen = false;
     const { rerender } = render(
       <AppShell main={<button type="button">Open Sources</button>} aside={<button type="button">Inside</button>} />,
@@ -236,7 +236,7 @@ describe('AppShell on a tablet', () => {
   beforeEach(() => {
     installTabletWidth();
     panelState.isDesktop = false;
-    panelState.toolsDocked = true;
+    panelState.panelsDocked = true;
     panelState.isOpen = true;
     listOpen.value = false;
     layout.sidebarDocked = false;

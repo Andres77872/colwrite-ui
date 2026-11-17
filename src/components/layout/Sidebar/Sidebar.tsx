@@ -45,7 +45,7 @@ export function Sidebar({
   onShowShortcuts: () => void;
   onOpenTrash: () => void;
 }) {
-  const { toggleLeftCollapsed, leftCollapsed, setMobileNavOpen, setTool, setAssistantOpen } = usePanels();
+  const { toggleLeftCollapsed, leftCollapsed, setMobileNavOpen, setPanel, setAssistantOpen } = usePanels();
   const { setView } = useView();
   const docked = useSidebarDocked();
   // Collapsed, or stepping aside for the right sidebar: this copy is the
@@ -157,7 +157,7 @@ export function Sidebar({
       <div className="flex shrink-0 flex-col gap-px border-t border-border px-2 py-2">
         {/* Trash work the server is still finishing, with how far it is. */}
         <JobProgress workspaceId={workspaceId} className="space-y-1" />
-        <button type="button" className={sidebarRow} onClick={run(() => setTool('library'))}>
+        <button type="button" className={sidebarRow} onClick={run(() => setPanel('library'))}>
           <BookOpen aria-hidden="true" />
           <span className="flex-1 truncate">Library</span>
         </button>

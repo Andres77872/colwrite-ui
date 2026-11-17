@@ -3,22 +3,34 @@ import type {
   AiBeatChild,
   Block,
   CitationChild,
-  CitationSource,
+  CitationPassage,
   CodeBlock,
+  CslItem,
+  CslName,
   DividerBlock,
   Doc,
   EquationChild,
   GraphChild,
   HeadingBlock,
   ParagraphBlock,
+  ParagraphChild,
+  ReferenceNotice,
+  ReferenceRecord,
   TableChild,
 } from '@/editor/types';
-import { toEditorDoc, toEditorSource, toWireContent } from '../content';
+import { CITATION_STYLES } from '@/editor/csl/styles';
+import { reference } from '@/__tests__/agentSource';
+import { referenceRecordOf, toEditorDoc, toEditorRecord, toWireContent } from '../content';
 import type {
-  AiBeatChild as WireAiBeatChild,
-  CitationChild as WireCitationChild,
-  CitationSource as WireCitationSource,
+  AiBeatChildOutput as WireAiBeatChild,
+  CitationChildOutput as WireCitationChild,
+  CitationPassage as WireCitationPassage,
   CodeBlock as WireCodeBlock,
+  CslItem as WireCslItem,
+  CslName as WireCslName,
+  ReferenceNotice as WireReferenceNotice,
+  ReferenceRecordInput,
+  ReferenceRecordOutput,
   DividerBlock as WireDividerBlock,
   DocumentContentInput,
   DocumentContentOutput,
@@ -62,7 +74,11 @@ describe('the conversions, at the type level', () => {
     expectTypeOf<keyof CitationChild>().toEqualTypeOf<keyof WireCitationChild>();
     expectTypeOf<keyof EquationChild>().toEqualTypeOf<keyof WireEquationChild>();
     expectTypeOf<keyof GraphChild>().toEqualTypeOf<keyof WireGraphChild>();
-    expectTypeOf<keyof CitationSource>().toEqualTypeOf<keyof WireCitationSource>();
+    expectTypeOf<keyof ReferenceRecord>().toEqualTypeOf<keyof ReferenceRecordOutput>();
+    expectTypeOf<keyof CslItem>().toEqualTypeOf<keyof WireCslItem>();
+    expectTypeOf<keyof CslName>().toEqualTypeOf<keyof WireCslName>();
+    expectTypeOf<keyof ReferenceNotice>().toEqualTypeOf<keyof WireReferenceNotice>();
+    expectTypeOf<keyof CitationPassage>().toEqualTypeOf<keyof WireCitationPassage>();
   });
 
   it('every value the editor holds is one the API accepts', () => {
@@ -73,8 +89,18 @@ describe('the conversions, at the type level', () => {
     expectTypeOf<HeadingBlock['level']>().toEqualTypeOf<WireHeadingBlock['level']>();
     expectTypeOf<NonNullable<TableChild['align']>>().toExtend<NonNullable<WireTableChild['align']>>();
     expectTypeOf<GraphChild['kind']>().toEqualTypeOf<WireGraphChild['kind']>();
-    expectTypeOf<NonNullable<CitationSource['provider']>>().toEqualTypeOf<NonNullable<WireCitationSource['provider']>>();
-    expectTypeOf<NonNullable<CitationSource['kind']>>().toEqualTypeOf<NonNullable<WireCitationSource['kind']>>();
+    expectTypeOf<ReferenceRecord['provider']>().toEqualTypeOf<ReferenceRecordInput['provider']>();
+    expectTypeOf<ReferenceRecord['kind']>().toEqualTypeOf<ReferenceRecordInput['kind']>();
+    expectTypeOf<ReferenceRecord['state']>().toEqualTypeOf<ReferenceRecordInput['state']>();
+    expectTypeOf<CslItem['type']>().toEqualTypeOf<WireCslItem['type']>();
+    expectTypeOf<ReferenceRecord>().toExtend<ReferenceRecordInput>();
+    expectTypeOf<NonNullable<CitationChild['style']>>().toEqualTypeOf<NonNullable<WireCitationChild['style']>>();
+  });
+
+  it('offers exactly the API’s CSL style ids', () => {
+    type Listed = (typeof CITATION_STYLES)[number]['id'];
+    expectTypeOf<Listed>().toEqualTypeOf<NonNullable<DocumentContentInput['citationStyle']>>();
+    expect(new Set(CITATION_STYLES.map((style) => style.id)).size).toBe(8);
   });
 });
 
@@ -91,7 +117,7 @@ function stored(content: Partial<DocumentContentOutput>): DocumentContentOutput 
 describe('toWireContent', () => {
   it('sends the canonical content fields, and only those', () => {
     const content = toWireContent({ blocks: sampleBlocks, name: 'My Doc' });
-    expect(Object.keys(content).sort()).toEqual(['blocks', 'citationStyle', 'name', 'schema_version', 'sources']);
+    expect(Object.keys(content).sort()).toEqual(['blocks', 'citationStyle', 'documentType', 'instructions', 'name', 'schema_version', 'sources']);
     expect(content).toMatchObject({ schema_version: 1, name: 'My Doc' });
   });
 
@@ -112,6 +138,39 @@ describe('toWireContent', () => {
     ]);
   });
 
+  it('writes the defaults the server stores for each widget', () => {
+    const html = ['a', 'b', 'c'].map((id) => `<span data-child-id="${id}" contenteditable="false"></span>`).join(' ');
+    const content = toWireContent({
+      blocks: [{
+        id: 'p', type: 'paragraph', html,
+        children: [
+          // An AI passage an older page stored, with neither field.
+          { id: 'a', type: 'aiBeat', output: 'x' } as unknown as ParagraphChild,
+          { id: 'b', type: 'citation', keys: ['k'] },
+          { id: 'c', type: 'table', rows: 1, cols: 1, data: [['1']] },
+        ],
+      }],
+    });
+    const [paragraph] = content.blocks ?? [];
+    expect(paragraph?.type === 'paragraph' ? paragraph.children : null).toEqual([
+      { id: 'a', type: 'aiBeat', output: 'x', collapsed: false, message: '', prompt: '' },
+      { id: 'b', type: 'citation', keys: ['k'], style: 'nlm-citation-sequence-brackets', sources: [] },
+      { id: 'c', type: 'table', rows: 1, cols: 1, data: [['1']], header: false, align: [] },
+    ]);
+  });
+
+  it('keeps a widget whose id the html escapes', () => {
+    const content = toWireContent({
+      blocks: [{
+        id: 'p', type: 'paragraph',
+        html: '<span data-child-id="cite&amp;one" contenteditable="false"></span>',
+        children: [{ id: 'cite&one', type: 'citation', keys: ['k'] }],
+      }],
+    });
+    const [paragraph] = content.blocks ?? [];
+    expect(paragraph?.type === 'paragraph' ? paragraph.children?.map((child) => child.id) : null).toEqual(['cite&one']);
+  });
+
   it('saves a page with no name under the default one', () => {
     expect(toWireContent({ blocks: [], name: '' }).name).toBe('Untitled page');
     expect(toWireContent({ blocks: [] }).name).toBe('Untitled page');
@@ -124,8 +183,9 @@ describe('toWireContent', () => {
   });
 
   it('keeps one library entry per key', () => {
-    const content = toWireContent({ blocks: [], sources: [{ key: 'a', title: 'A' }, { key: 'a', title: 'again' }, { key: ' ' }] });
-    expect(content.sources).toEqual([{ key: 'a', title: 'A' }]);
+    const a = reference('a', { title: 'A' });
+    const content = toWireContent({ blocks: [], sources: [a, reference('a', { title: 'again' }), { ...reference('x'), key: ' ' }] });
+    expect(content.sources).toEqual([a]);
   });
 
   it('leaves out a widget entry that has no placeholder in the html', () => {
@@ -146,6 +206,31 @@ describe('toWireContent', () => {
 });
 
 describe('toEditorDoc', () => {
+  it('round-trips durable AI drafts, normalizes their records and preserves null output', () => {
+    const record = reference('doi:10.1234/draft', { title: 'Durable draft evidence', state: 'verified' });
+    const doc = toEditorDoc(stored({
+      blocks: [{
+        id: 'p', type: 'paragraph', aiHidden: false, collapsed: false, locked: false, columns: 1,
+        html: '<span data-child-id="draft"></span><span data-child-id="empty"></span>',
+        children: [
+          { id: 'draft', type: 'aiBeat', message: 'Write', prompt: '', collapsed: false,
+            output: { text: 'Supported [@doi:10.1234/draft]', sources: [{ ...record, checked: null, differs: null }] } },
+          { id: 'empty', type: 'aiBeat', message: '', prompt: '', collapsed: false, output: null },
+        ],
+      }],
+    }));
+    const [block] = doc.blocks;
+    expect(block?.type === 'paragraph' && block.children).toMatchObject([
+      { output: { text: 'Supported [@doi:10.1234/draft]', sources: [record] } },
+      { output: null },
+    ]);
+    const wire = toWireContent(doc);
+    expect(wire.blocks?.[0]?.type === 'paragraph' && wire.blocks[0].children).toMatchObject([
+      { output: { text: 'Supported [@doi:10.1234/draft]', sources: [record] } },
+      { output: null },
+    ]);
+  });
+
   it('reads the content, and nothing that is not content', () => {
     const doc = toEditorDoc(stored({ blocks: sampleBlocks as DocumentContentOutput['blocks'], name: 'X' }));
     expect(doc).toEqual({ blocks: sampleBlocks, name: 'X' });
@@ -166,28 +251,58 @@ describe('toEditorDoc', () => {
     expect(doc.blocks).toEqual([{ id: 'recovered', type: 'paragraph', html: '', columns: 1, children: [] }]);
   });
 
-  it('reads the library without nulls, with years as text', () => {
+  it('reads the library and the citations’ records without nulls, and a CSL style id', () => {
+    const wire = { ...reference('doi:10.1234/k', { title: 'T', year: 2021 }), checked: null, differs: null, published_doi: null, notices: null };
     const doc = toEditorDoc(stored({
-      sources: [{ key: 'k', title: 'T', year: 2021, doi: null, url: null }],
-      citationStyle: 'ieee',
+      sources: [wire as ReferenceRecordOutput],
+      citationStyle: 'apa',
+      blocks: [{
+        id: 'p', type: 'paragraph', html: '<span data-child-id="c" contenteditable="false"></span>', aiHidden: false, collapsed: false, locked: false, columns: 1,
+        children: [{ id: 'c', type: 'citation', keys: ['doi:10.1234/k'], style: 'apa', prefix: null, sources: [wire as ReferenceRecordOutput], passage: { id: 'S1.2', level: 'abstract', chat_id: null } }],
+      }] as DocumentContentOutput['blocks'],
     }));
-    expect(doc.sources).toEqual([{ key: 'k', title: 'T', year: '2021' }]);
-    expect(doc.citationStyle).toBe('ieee');
+    expect(doc.sources).toEqual([reference('doi:10.1234/k', { title: 'T', year: 2021 })]);
+    expect(doc.citationStyle).toBe('apa');
+    const [block] = doc.blocks;
+    expect(block?.type === 'paragraph' && block.children?.[0]).toEqual({
+      id: 'c', type: 'citation', keys: ['doi:10.1234/k'], style: 'apa', sources: [reference('doi:10.1234/k', { title: 'T', year: 2021 })],
+      passage: { id: 'S1.2', level: 'abstract' },
+    });
   });
 
   it('round-trips what toWireContent sends', () => {
-    const doc: Doc = { blocks: sampleBlocks, name: 'My Doc', sources: [{ key: 'k', year: '2020' }], citationStyle: 'numeric' };
+    const doc: Doc = { blocks: sampleBlocks, name: 'My Doc', sources: [reference('doi:10.1234/k', { year: 2020 })], citationStyle: 'nature' };
     const back = toEditorDoc(toWireContent(doc) as DocumentContentOutput);
     expect(back.name).toBe('My Doc');
     expect(back.sources).toEqual(doc.sources);
-    expect(back.citationStyle).toBe('numeric');
+    expect(back.citationStyle).toBe('nature');
     expect(back.blocks.map((block) => block.id)).toEqual(['b1', 'b2', 'b3']);
   });
 });
 
-describe('toEditorSource', () => {
-  it('drops null fields', () => {
-    expect(toEditorSource({ key: '10.1/x', title: 'Paper', authors: null, provider: 'crossref' }))
-      .toEqual({ key: '10.1/x', title: 'Paper', provider: 'crossref' });
+describe('references from outside the page', () => {
+  it('reads a paper route’s record without nulls', () => {
+    expect(toEditorRecord({ ...reference('doi:10.1234/x', { title: 'Paper' }), checked: null, published_doi: null } as ReferenceRecordOutput))
+      .toEqual(reference('doi:10.1234/x', { title: 'Paper' }));
+  });
+
+  it('keeps a socket’s record only when it is one, with the contract’s fields, each of its type', () => {
+    const record = {
+      ...reference('arxiv:2101.03961', { title: 'Switch', authors: 'William Fedus', year: 2021, flags: ['preprint'] }),
+      flags: ['preprint', 'preprint', 'from_the_future'],
+      notices: [{ type: 'retraction', date: '2024-01-01', doi: 3 }, { type: 'gossip' }],
+      extra: 'dropped',
+      csl: { id: 'arxiv:2101.03961', type: 'article', title: 'Switch', author: [{ given: 'William', family: 'Fedus' }, { given: 'No family' }], volume: 3, abstract: 'dropped' },
+    };
+    expect(referenceRecordOf(record)).toEqual({
+      key: 'arxiv:2101.03961', kind: 'paper', provider: 'openalex', state: 'unchecked', flags: ['preprint'],
+      notices: [{ type: 'retraction', date: '2024-01-01' }],
+      csl: { id: 'arxiv:2101.03961', type: 'article', title: 'Switch', author: [{ given: 'William', family: 'Fedus' }] },
+    });
+    // A CSL id that is not the key, no title, or a provider the contract does not name: no reference.
+    expect(referenceRecordOf({ ...record, csl: { ...record.csl, id: 'other' } })).toBeNull();
+    expect(referenceRecordOf({ ...record, csl: { ...record.csl, title: '' } })).toBeNull();
+    expect(referenceRecordOf({ ...record, provider: 'evil' })).toBeNull();
+    expect(referenceRecordOf({ key: 'k', title: 'An old flat source' })).toBeNull();
   });
 });

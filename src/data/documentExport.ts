@@ -4,14 +4,13 @@ import { ApiError, problemCode } from '@/api/errors';
 /**
  * `GET /workspaces/{w}/documents/{d}/export?format=tex` — the server's LaTeX export.
  *
- * It renders the document as last saved, not what is on screen, so callers
- * save first. The body is UTF-8 LaTeX source (`application/x-tex`), read as
- * text; the file name is in `Content-Disposition`.
+ * Saved content only. Pages with images return a ZIP of source and originals;
+ * other pages return UTF-8 LaTeX. Both are read as binary, without a second reader.
  *
  * Contract: ColWrite-api `docs/document.md#latex-and-pdf-document-export`.
  */
 export type LatexExport = {
-  source: string;
+  blob: Blob;
   /** From `Content-Disposition` (the UTF-8 `filename*` form first). */
   filename: string | null;
 };
@@ -38,10 +37,10 @@ export async function exportDocumentLatex(
 ): Promise<LatexExport> {
   const { data, headers } = await unwrapWithHeaders(api.GET('/workspaces/{workspace_id}/documents/{document_id}/export', {
     params: { path: { workspace_id: workspaceId, document_id: documentId }, query: { format: 'tex' } },
-    parseAs: 'text',
+    parseAs: 'blob',
     signal: init.signal,
   }));
-  return { source: data, filename: dispositionFilename(headers.get('Content-Disposition')) };
+  return { blob: data, filename: dispositionFilename(headers.get('Content-Disposition')) };
 }
 
 /** What a failed LaTeX export means for the author, by the API's problem codes. */

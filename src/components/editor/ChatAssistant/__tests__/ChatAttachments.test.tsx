@@ -1,6 +1,6 @@
 import { act, cleanup, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import * as attachments from '@/api/assistant/chatAttachments';
+import * as assets from '@/data/assets';
 import { MessageAttachments } from '../ChatAttachments';
 import { renderInWorkspace } from '@/__tests__/renderInWorkspace';
 import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
@@ -23,12 +23,14 @@ it('fetches thumbnails only near the viewport and releases their blob URLs on un
     static createObjectURL = createObjectURL;
     static revokeObjectURL = revokeObjectURL;
   });
-  const load = vi.spyOn(attachments, 'loadChatImageBlob').mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
-  const view = renderInWorkspace(<MessageAttachments attachments={[{ kind: 'image', image_id: 'image-1', filename: 'chart.png' }]} />);
+  const load = vi.spyOn(assets, 'loadAssetBlob').mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
+  const view = renderInWorkspace(<MessageAttachments attachments={[{ kind: 'image', asset_id: 'asset-1', filename: 'chart.png' }]} />);
   expect(load).not.toHaveBeenCalled();
+  // Said in text: an aria-label on a bare svg is read by few screen readers (U-19).
+  expect(screen.getByText('Loading image preview').className).toContain('sr-only');
   await act(async () => { visible(); visible(); });
   await waitFor(() => expect(screen.getByRole('img', { name: 'chart.png' }).getAttribute('src')).toBe('blob:test-image'));
-  expect(load).toHaveBeenCalledWith(TEST_WORKSPACE_ID, 'image-1', expect.any(AbortSignal));
+  expect(load).toHaveBeenCalledWith(TEST_WORKSPACE_ID, 'asset-1', expect.any(AbortSignal), 'thumbnail');
   expect(load).toHaveBeenCalledTimes(1);
   expect(disconnect).toHaveBeenCalled();
   view.unmount();

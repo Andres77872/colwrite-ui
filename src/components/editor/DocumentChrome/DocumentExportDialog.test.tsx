@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/editor', () => ({
   useEditorActions: () => ({ getExportSnapshot: mocks.getExportSnapshot }),
   useDocumentId: () => mocks.documentId,
+  // A page with no citations: the dialog says nothing of references.
+  useBibliography: () => ({ entries: [] }),
+  useEditorDoc: () => ({ doc: { blocks: [], sources: [] } }),
+  loadCitationProcessor: () => Promise.resolve(),
   useDocumentActions: () => ({
     saveRemote: mocks.saveRemote,
     ensureRemoteDocument: mocks.ensureRemoteDocument,
@@ -53,7 +57,7 @@ vi.mock('@/components/ui/toastContext', () => ({
 import { recordRequests } from '@/__tests__/server';
 import { DocumentExportDialog } from './DocumentExportDialog';
 import { ApiError } from '@/api/errors';
-import { renderInWorkspace } from '@/__tests__/renderInWorkspace';
+import { renderWithQueryClient as renderInWorkspace } from '@/__tests__/queryClient';
 import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
 const documentSnapshot = {
@@ -74,7 +78,7 @@ beforeEach(() => {
   mocks.documentToMarkdown.mockReset().mockReturnValue('# Current draft\n');
   mocks.exportDocumentLatex
     .mockReset()
-    .mockResolvedValue({ source: '\\documentclass{article}', filename: 'Current draft.tex' });
+    .mockResolvedValue({ blob: new Blob(['\\documentclass{article}'], { type: 'application/x-tex;charset=utf-8' }), filename: 'Current draft.tex' });
 });
 
 afterEach(() => {
@@ -102,6 +106,7 @@ describe('DocumentExportDialog', () => {
         include_references: true,
       },
       { local_revision: 12, dirty: true },
+      new Map(),
       new Map(),
     );
     expect(mocks.printStandaloneHtml).toHaveBeenCalledWith(
@@ -168,6 +173,7 @@ describe('DocumentExportDialog', () => {
       includeTitle: false,
       includeReferences: true,
       aiBeat: 'omit',
+      imagePaths: new Map(),
     });
     const [blob, filename] = mocks.downloadBlob.mock.calls[0] as [Blob, string];
     expect(blob.type).toBe('text/markdown;charset=utf-8');

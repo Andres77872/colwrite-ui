@@ -17,14 +17,13 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { APP_TAGLINE } from '@/components/common/Brand';
-import { toolMeta } from '@/components/panels/toolsConfig';
+import { panelMeta } from '@/components/panels/sidebarPanels';
 import {
   AiActionMenuMock,
   AskAiResultMock,
-  ArxivResultMock,
+  PaperResultMock,
   ChangeCardMock,
   CitationPill,
-  ColpaliResultMock,
   EditorMock,
   EquationChip,
   LibraryMock,
@@ -340,7 +339,7 @@ export function AiActionsSection() {
           <div className="mt-6">
             <BulletList
               items={[
-                'Built-in actions to edit, explain and research a passage — improve, fix grammar, shorten, lengthen, simplify, change tone, translate, find citations, check claims.',
+                'Built-in actions to edit, explain and research a passage — improve, fix grammar, shorten, lengthen, simplify, change tone, translate, check claims.',
                 'The result streams in under the original. Replace the selection, insert it below, try again, or type a follow-up in the same bar.',
                 'Nothing is written to the page until you choose to keep it.',
               ]}
@@ -411,9 +410,9 @@ export function ReviewSection() {
    ---------------------------------------- */
 
 export function ResearchSection() {
-  const arxiv = toolMeta('arxiv');
-  const colpali = toolMeta('colpali');
-  const library = toolMeta('library');
+  const scholar = panelMeta('papers');
+  const library = panelMeta('library');
+  const sources = panelMeta('sources');
 
   return (
     <Section id="research" labelledBy="research-heading">
@@ -421,7 +420,7 @@ export function ResearchSection() {
         id="research-heading"
         eyebrow="Research tools"
         title="Literature work without leaving the page"
-        lead="The right sidebar keeps the assistant, research, your sources and the page's history one click from the text. Find papers, pull up the exact page of a paper that answers a question, and keep your PDFs at hand."
+        lead="The right sidebar keeps the assistant, research, your sources and the page's history one click from the text. Find papers, check a claim against the literature, and keep your PDFs and sources at hand."
       />
       <SidebarTabsMock className="mt-6" />
 
@@ -441,7 +440,7 @@ export function ResearchSection() {
         <figcaption className="absolute inset-x-4 bottom-4 grid gap-2 sm:inset-x-6 sm:bottom-6 sm:grid-cols-3">
           {[
             ['01', 'Find relevant papers'],
-            ['02', 'Retrieve the exact page'],
+            ['02', 'Check claims against the literature'],
             ['03', 'Write with the evidence in view'],
           ].map(([step, label]) => (
             <span
@@ -456,15 +455,13 @@ export function ResearchSection() {
       </figure>
 
       <div className="mt-8 grid gap-3 lg:grid-cols-3">
-        <FeatureCard icon={arxiv.icon} title={arxiv.label} description={arxiv.description}>
-          <ArxivResultMock />
-        </FeatureCard>
-        <FeatureCard icon={colpali.icon} title={colpali.label} description={colpali.description}>
-          <ColpaliResultMock />
+        <FeatureCard icon={scholar.icon} title={scholar.label} description={scholar.description}>
+          <PaperResultMock />
         </FeatureCard>
         <FeatureCard icon={library.icon} title={library.label} description={library.description}>
           <LibraryMock />
         </FeatureCard>
+        <FeatureCard icon={sources.icon} title={sources.label} description={sources.description} />
       </div>
     </Section>
   );
@@ -475,7 +472,7 @@ export function ResearchSection() {
    ---------------------------------------- */
 
 export function ControlSection() {
-  const json = toolMeta('json');
+  const json = panelMeta('json');
 
   return (
     <Section id="control" labelledBy="control-heading">

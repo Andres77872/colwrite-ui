@@ -34,8 +34,8 @@ import { cn } from '@/lib/utils';
 import { useTheme } from '@/lib/theme';
 import { htmlToText, useDocumentActions, useDocumentId, useEditorActions, useEditorDoc } from '@/editor';
 import { usePanels } from '@/components/panels/panelsContextState';
-import { toolsForEnabledSources } from '@/components/panels/toolsConfig';
-import { useAgentTools } from '@/components/preferences';
+import { availablePanels } from '@/components/panels/sidebarPanels';
+import { useAssistantCatalog } from '@/components/preferences';
 import { SHORTCUTS, modifierLabel, type ShortcutId } from '../Shortcuts/shortcuts';
 import { useView } from '../viewContextState';
 import { useNewPage } from '@/actions/useNewPage';
@@ -229,10 +229,10 @@ function PaletteBody({
   const documentId = useDocumentId();
   const { switchTo } = useDocumentActions();
   const { markRecentlyChanged } = useEditorActions();
-  const { setTool, toggle, setAssistantOpen } = usePanels();
+  const { setPanel, toggle, setAssistantOpen } = usePanels();
   const { setView } = useView();
   const { resolved, setPreference } = useTheme();
-  const { isSourceEnabled } = useAgentTools();
+  const { papers } = useAssistantCatalog();
   const { newPage } = useNewPage();
   const toggleSidebar = useSidebarToggle().toggle;
   // Touch screens have no keys to hint at, and less room for the prompt.
@@ -307,7 +307,7 @@ function PaletteBody({
         keywords: 'pdfs papers upload',
         run: () => {
           setView('editor');
-          setTool('library');
+          setPanel('library');
         },
       },
       {
@@ -322,10 +322,11 @@ function PaletteBody({
       {
         id: 'assistant',
         group: 'Commands',
-        label: 'Ask AI',
+        // "Ask AI" is the inline prompt everywhere else; this opens the chat.
+        label: 'Open assistant',
         shortcut: 'toggle-assistant',
         icon: Sparkles,
-        keywords: 'assistant agent chat help',
+        keywords: 'assistant agent chat help ai sidebar',
         run: () => setAssistantOpen(true),
       },
       {
@@ -435,9 +436,9 @@ function PaletteBody({
         keywords: 'switch workspace',
         run: () => void switchWorkspace(item.id),
       }));
-    // Sources the account has switched off are not offered at all. The
+    // Paper search, where it is off here, is not offered at all. The
     // Library is a command of its own, so it is not listed twice.
-    const panels: Item[] = toolsForEnabledSources(isSourceEnabled)
+    const panels: Item[] = availablePanels(papers.on)
       .filter((tool) => tool.id !== 'library')
       .map((tool) => ({
         id: `tool-${tool.id}`,
@@ -447,7 +448,7 @@ function PaletteBody({
         icon: tool.icon,
         run: () => {
           setView('editor');
-          setTool(tool.id);
+          setPanel(tool.id);
         },
       }));
     // Headings only answer a query; before one is typed they would bury the
@@ -513,7 +514,7 @@ function PaletteBody({
     onOpenDialog,
     onOpenTrash,
     paths,
-    isSourceEnabled,
+    papers.on,
     markRecentlyChanged,
     onShowShortcuts,
     query,
@@ -521,7 +522,7 @@ function PaletteBody({
     searchingText,
     setAssistantOpen,
     setPreference,
-    setTool,
+    setPanel,
     setView,
     toggleSidebar,
     switchTo,

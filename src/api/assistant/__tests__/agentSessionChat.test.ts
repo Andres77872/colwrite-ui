@@ -1,12 +1,12 @@
 import { itemAt } from '@/lib/itemAt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { findActiveAgentRun, streamAgentSession } from '../agentSessionChat';
+import { AgentAdmissionRefused, findActiveAgentRun, streamAgentSession } from '../agentSessionChat';
 import * as session from '@/api/session';
 import { agentWebSocketUrl } from '../agentSocket';
 
 const WORKSPACE_ID = 'wsp-6f1c0f5e-8a8b-4c4d-9e2f-1a2b3c4d5e6f';
 /** The run's request: every command names the workspace, the request does not. */
-const request = { document_id: 'doc-1', message: 'Review my evidence', mode: 'assistant' as const };
+const request = { document_id: 'doc-1', message: 'Review my evidence' };
 const params = { workspace_id: WORKSPACE_ID, ...request };
 type Command = { id: string; method: string; params: Record<string, unknown> };
 let commands: Command[];
@@ -14,6 +14,8 @@ let runStarts: number;
 let onStart: (socket: MockSocket, command: Command) => void;
 let onSubscribe: (socket: MockSocket, command: Command) => void;
 let onList: (socket: MockSocket, command: Command) => void;
+let onGet: (socket: MockSocket, command: Command) => void;
+let onResume: (socket: MockSocket, command: Command) => void;
 
 class MockSocket {
   static OPEN = 1;
@@ -29,7 +31,11 @@ class MockSocket {
     MockSocket.instances.push(this);
     queueMicrotask(() => { this.readyState = 1; this.onopen?.(); });
   }
-  reply(command: Command, result: unknown) { this.message({ id: command.id, method: command.method, result }); }
+  reply(command: Command, result: unknown) {
+    const run = command.method === 'runs.start' || command.method === 'runs.resume';
+    this.message({ id: command.id, method: command.method,
+      result: run && typeof result === 'object' && result !== null ? { after_seq: 0, ...result } : result });
+  }
   message(data: unknown) { this.onmessage?.({ data: JSON.stringify(data) }); }
   event(seq: number, event: string, data: unknown) {
     this.message({ type: 'event', session_id: 's1', run_id: 'r1', seq, event, data });
@@ -47,9 +53,10 @@ class MockSocket {
         case 'sessions.list': onList(this, command); break;
         case 'sessions.delete': this.reply(command, { deleted: true }); break;
         case 'sessions.create': this.reply(command, { id: 's1', last_seq: 0 }); break;
-        case 'sessions.get': this.reply(command, { session: { id: 's1', last_seq: 0 }, run: null }); break;
+        case 'sessions.get': onGet(this, command); break;
         case 'sessions.subscribe': this.reply(command, { subscribed: true }); onSubscribe(this, command); break;
         case 'runs.start': runStarts += 1; onStart(this, command); break;
+        case 'runs.resume': onResume(this, command); break;
         case 'runs.cancel': this.reply(command, { id: 'r1', status: 'cancelling' }); break;
         case 'ping': this.reply(command, {}); break;
       }
@@ -66,6 +73,13 @@ beforeEach(() => {
   commands = []; runStarts = 0; MockSocket.instances = [];
   onSubscribe = () => {};
   onList = (socket, command) => socket.reply(command, []);
+  onGet = (socket, command) => socket.reply(command, { session: { id: 's1', last_seq: 0 }, run: null });
+  onResume = (socket, command) => {
+    socket.reply(command, { id: 'r2', after_seq: 0 });
+    socket.message({ type: 'event', session_id: 's1', run_id: 'r2', seq: 1, event: 'token', data: { content: 'Continued' } });
+    socket.message({ type: 'event', session_id: 's1', run_id: 'r2', seq: 2, event: 'done', data: { chat_id: 'c1', message_id: 3 } });
+    socket.message({ type: 'event', session_id: 's1', run_id: 'r2', seq: 3, event: 'run.status', data: { status: 'completed' } });
+  };
   onStart = (socket, command) => {
     socket.reply(command, { id: 'r1', status: 'running' });
     socket.event(1, 'token', { content: 'Evidence' });
@@ -76,6 +90,135 @@ beforeEach(() => {
 afterEach(() => { MockSocket.instances.forEach((socket) => socket.close()); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('durable agent sessions', () => {
+  it.each(['invalid_request', 'limit_exceeded'])('identifies a fresh %s rejection as not admitted, not an uncertain acknowledgement', async (code) => {
+    onStart = (socket, command) => socket.message({
+      id: command.id, error: { code, message: 'The run was not admitted.', retryable: code === 'limit_exceeded' },
+    });
+    const error = await streamAgentSession(params, {}, { retry: { maxAttempts: 1 } }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AgentAdmissionRefused);
+    expect(error).toMatchObject({ code, locator: { sessionId: 's1', requestId: expect.any(String) } });
+  });
+
+  it('never treats a failed replay after a lost acknowledgement as proof that nothing was admitted', async () => {
+    onStart = (socket, command) => {
+      if (runStarts === 1) socket.close(1006);
+      else socket.message({ id: command.id, error: { code: 'invalid_request', message: 'A later rejection is not proof.', retryable: false } });
+    };
+    const error = await streamAgentSession(params, {}, { retry: { maxAttempts: 2, baseDelayMs: 1 } }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(AgentAdmissionRefused);
+    const starts = commands.filter((command) => command.method === 'runs.start');
+    expect(starts).toHaveLength(2);
+    expect(starts[1]?.params.request_id).toBe(starts[0]?.params.request_id);
+  });
+
+  it('resolves an uncertain action from its session before sending changed engine or model fields', async () => {
+    onGet = (socket, command) => socket.reply(command, {
+      session: { id: 's1', last_seq: 12 },
+      run: { id: 'r1', request_id: 'original-action', after_seq: 9 },
+    });
+    onStart = () => { throw new Error('An already admitted action must only be observed'); };
+    onSubscribe = (socket) => { socket.event(10, 'token', { content: 'Saved review' }); socket.finish(11); };
+    const onRunStarted = vi.fn();
+    const onToken = vi.fn();
+    const result = await streamAgentSession({ ...params, engine: 'codex', model: 'changed-on-this-device' }, { onToken }, {
+      resume: { sessionId: 's1', requestId: 'original-action' }, onRunStarted,
+    });
+    expect(result.terminal).toBe('done');
+    expect(runStarts).toBe(0);
+    expect(onToken).toHaveBeenCalledExactlyOnceWith('Saved review');
+    expect(onRunStarted).toHaveBeenCalledExactlyOnceWith({ sessionId: 's1', runId: 'r1', requestId: 'original-action', afterSeq: 9 });
+    expect(commands.find((command) => command.method === 'sessions.subscribe')?.params.after_seq).toBe(9);
+  });
+
+  it('serializes the review profile and workflow, without chat, Auto, preset or inline context', async () => {
+    await streamAgentSession({
+      ...params, message: '', profile: 'review', review: 'claims', effort: 'standard',
+      chat_id: 'must-not-resume', leaf_id: 4, apply_mode: 'auto', preset: 'shorter', context: { block_id: 'private' },
+    }, {});
+    const start = commands.find((command) => command.method === 'runs.start');
+    expect(start?.params.request).toEqual({ document_id: 'doc-1', message: '', profile: 'review', review: 'claims', effort: 'standard' });
+    expect(commands.find((command) => command.method === 'sessions.create')?.params).toMatchObject({ profile: 'review', chat_id: null });
+    expect(commands.some((command) => command.method === 'sessions.delete')).toBe(false);
+  });
+
+  it('resumes a checkpoint as a new generation without sending replacement request fields', async () => {
+    const onToken = vi.fn();
+    const onRunStarted = vi.fn();
+    const checkpoint = { sessionId: 's1', runId: 'interrupted', requestId: 'resume-action' };
+    await streamAgentSession({ ...params, web: true, engine: 'codex', model: 'not-an-override' }, { onToken }, { checkpoint, onRunStarted });
+    expect(commands.find((command) => command.method === 'runs.resume')?.params).toEqual({
+      workspace_id: WORKSPACE_ID, session_id: 's1', run_id: 'interrupted', request_id: 'resume-action',
+    });
+    expect(runStarts).toBe(0);
+    expect(onToken).toHaveBeenCalledExactlyOnceWith('Continued');
+    expect(onRunStarted).toHaveBeenLastCalledWith({ sessionId: 's1', runId: 'r2', requestId: 'resume-action', afterSeq: 0 });
+  });
+
+  it('reuses the same resume key when its admission acknowledgement is lost', async () => {
+    const normal = onResume;
+    let attempts = 0;
+    onResume = (socket, command) => {
+      attempts += 1;
+      if (attempts === 1) { socket.close(1006); return; }
+      normal(socket, command);
+    };
+    await streamAgentSession(params, {}, {
+      checkpoint: { sessionId: 's1', runId: 'old', requestId: 'stable-resume-key' },
+      retry: { baseDelayMs: 0 },
+    });
+    const resumes = commands.filter((command) => command.method === 'runs.resume');
+    expect(resumes).toHaveLength(2);
+    expect(resumes.map((command) => command.params.request_id)).toEqual(['stable-resume-key', 'stable-resume-key']);
+    expect(runStarts).toBe(0);
+  });
+
+  it('replays a completed resumed run after the user retries an admission whose acknowledgement was lost', async () => {
+    const checkpoint = { sessionId: 's1', runId: 'old', requestId: 'stable-user-retry' };
+    let attempts = 0;
+    onResume = (socket, command) => {
+      attempts += 1;
+      if (attempts === 1) { socket.close(1006); return; }
+      socket.reply(command, { id: 'r2', after_seq: 0 });
+    };
+    // Its generation already ended before the second invocation. Subscribing
+    // at the session's latest seq (3) would never deliver a terminal event.
+    const original = MockSocket.prototype.send;
+    vi.spyOn(MockSocket.prototype, 'send').mockImplementation(function (this: MockSocket, raw) {
+      const command = JSON.parse(raw) as Command;
+      if (command.method === 'sessions.get') {
+        this.reply(command, { session: { id: 's1', last_seq: 3 }, run: { id: 'r2' } });
+      } else original.call(this, raw);
+    });
+    onSubscribe = (socket, command) => {
+      if (command.params.after_seq !== 0) return;
+      socket.message({ type: 'event', session_id: 's1', run_id: 'r2', seq: 1, event: 'token', data: { content: 'Already saved' } });
+      socket.message({ type: 'event', session_id: 's1', run_id: 'r2', seq: 2, event: 'done', data: { chat_id: 'c1', message_id: 3 } });
+      socket.message({ type: 'event', session_id: 's1', run_id: 'r2', seq: 3, event: 'run.status', data: { status: 'completed' } });
+    };
+    await expect(streamAgentSession(params, {}, { checkpoint, retry: { maxAttempts: 1 } })).rejects.toThrow();
+    const onToken = vi.fn();
+    const result = await streamAgentSession(params, { onToken }, { checkpoint });
+    expect(result.terminal).toBe('done');
+    expect(onToken).toHaveBeenCalledExactlyOnceWith('Already saved');
+    expect(commands.filter((command) => command.method === 'runs.resume').map((command) => command.params.request_id))
+      .toEqual(['stable-user-retry', 'stable-user-retry']);
+    expect(runStarts).toBe(0);
+  });
+
+  it('skips events of the interrupted run buffered before the new admission sequence', async () => {
+    onSubscribe = (socket) => socket.event(1, 'token', { content: 'Old answer' });
+    onResume = (socket, command) => {
+      socket.reply(command, { id: 'r2', after_seq: 1 });
+      socket.message({ type: 'event', session_id: 's1', run_id: 'r2', seq: 2, event: 'token', data: { content: 'New answer' } });
+      socket.message({ type: 'event', session_id: 's1', run_id: 'r2', seq: 3, event: 'done', data: { chat_id: 'c1', message_id: 3 } });
+      socket.message({ type: 'event', session_id: 's1', run_id: 'r2', seq: 4, event: 'run.status', data: { status: 'completed' } });
+    };
+    const onToken = vi.fn();
+    await streamAgentSession(params, { onToken }, { checkpoint: { sessionId: 's1', runId: 'r1', requestId: 'resume' } });
+    expect(onToken).toHaveBeenCalledExactlyOnceWith('New answer');
+  });
+
   it('uses cookie-authenticated websocket URL without credentials in query parameters', () => {
     expect(agentWebSocketUrl()).toMatch(/^ws:\/\/.*\/api\/agent\/ws$/);
   });
@@ -83,7 +226,13 @@ describe('durable agent sessions', () => {
     const onToken = vi.fn();
     const result = await streamAgentSession(params, { onToken });
     expect(onToken).toHaveBeenCalledWith('Evidence');
-    expect(result).toEqual({ chatId: 'c1', messageId: 2, usage: { promptTokens: 10, completionTokens: 5 }, terminal: 'done' });
+    expect(result).toEqual({
+      done: {
+        chatId: 'c1', messageId: 2, usage: { promptTokens: 10, completionTokens: 5, cachedTokens: 0 }, models: [], cost: null,
+        budget: null, persistence: null,
+      },
+      terminal: 'done',
+    });
     expect(runStarts).toBe(1);
   });
   it('replays an uncertain start with the same idempotency key and deduplicates events', async () => {
@@ -100,12 +249,28 @@ describe('durable agent sessions', () => {
       }
     };
     const onToken = vi.fn();
-    await streamAgentSession(params, { onToken }, { retry: { baseDelayMs: 0 } });
+    await streamAgentSession({ ...params, web: true }, { onToken }, { retry: { baseDelayMs: 0 } });
     const starts = commands.filter((command) => command.method === 'runs.start');
     expect(starts).toHaveLength(2);
     expect(starts[0]?.params.request_id).toBe(itemAt(starts, 1).params.request_id);
+    expect(starts.map((command) => command.params.request)).toEqual([{ ...request, web: true }, { ...request, web: true }]);
     expect(onToken.mock.calls.flat()).toEqual(['first ', 'second']);
     expect(commands.filter((command) => command.method === 'sessions.create')).toHaveLength(1);
+  });
+  it('sends the exact effort, edited plan and question answers without pasting them into the message', async () => {
+    const plan = {
+      revision: 3, brief: null, open_questions: null,
+      sections: [{ id: 'methods', title: 'Method', goal: 'Describe the supplied method.', sources: ['S1'] }],
+    };
+    const answers = { question_id: 'q1', items: [{ id: 'venue', answer: 'NeurIPS' }] };
+    await streamAgentSession({ ...params, chat_id: 'c1', effort: 'deep', plan_id: 'p1', plan, answers }, {});
+    expect(commands.find((command) => command.method === 'runs.start')?.params.request).toEqual({
+      ...request, chat_id: 'c1', effort: 'deep', plan_id: 'p1', plan, answers,
+    });
+  });
+  it.each([false, true])('serializes the explicit Web choice %s without changing other fields', async (web) => {
+    await streamAgentSession({ ...params, web }, {});
+    expect(commands.find((command) => command.method === 'runs.start')?.params.request).toEqual({ ...request, web });
   });
   it('reconnects after a delivered token using its cursor without another start', async () => {
     onStart = (socket, command) => {
@@ -209,6 +374,20 @@ describe('durable agent sessions', () => {
     expect(runStarts).toBe(0);
     expect(onToken).toHaveBeenCalledWith('restored');
   });
+  it('reattaches after the run’s own sequence, so the session’s earlier runs are not replayed', async () => {
+    onSubscribe = (socket) => { socket.event(42, 'token', { content: 'this run' }); socket.finish(43); };
+    const onToken = vi.fn();
+    await streamAgentSession(params, { onToken }, { resume: { sessionId: 's1', runId: 'r1', afterSeq: 41 } });
+    expect(commands.find((command) => command.method === 'sessions.subscribe')?.params.after_seq).toBe(41);
+    expect(onToken).toHaveBeenCalledWith('this run');
+    expect(runStarts).toBe(0);
+  });
+  it('names the run’s sequence in the locator it reports once the run is admitted', async () => {
+    onStart = (socket, command) => { socket.reply(command, { id: 'r1', after_seq: 7 }); socket.finish(1); };
+    const onRunStarted = vi.fn();
+    await streamAgentSession(params, {}, { onRunStarted });
+    expect(onRunStarted).toHaveBeenLastCalledWith({ sessionId: 's1', runId: 'r1', requestId: expect.any(String), afterSeq: 7 });
+  });
   it('does not turn a terminal error into success when a later done arrives', async () => {
     onStart = (socket, command) => {
       socket.reply(command, { id: 'r1' });
@@ -270,7 +449,7 @@ describe('durable agent sessions', () => {
   });
 
   it('deletes a one-shot session when its run has ended, and never a conversation', async () => {
-    await streamAgentSession({ ...params, mode: 'rewrite', ephemeral: true }, {});
+    await streamAgentSession({ ...params, profile: 'inline' }, {});
     expect(commands.filter((command) => command.method === 'sessions.delete').map((command) => command.params)).toEqual([{ workspace_id: WORKSPACE_ID, session_id: 's1' }]);
     commands = [];
     await streamAgentSession(params, {});
@@ -282,7 +461,7 @@ describe('durable agent sessions', () => {
       controller.abort('cancel');
       socket.reply(command, { id: 'r1', status: 'running' });
     };
-    await streamAgentSession({ ...params, mode: 'rewrite', ephemeral: true }, {}, { signal: controller.signal });
+    await streamAgentSession({ ...params, profile: 'inline' }, {}, { signal: controller.signal });
     // Its run is still stopping, and a session with an active run cannot be deleted.
     expect(commands.some((command) => command.method === 'sessions.delete')).toBe(false);
     expect(commands.some((command) => command.method === 'runs.cancel')).toBe(true);
@@ -327,6 +506,55 @@ describe('durable agent sessions', () => {
     // as the tool call was quiet.
     expect(states.slice(states.indexOf('reconnecting'))).toEqual(['reconnecting', 'reconnected']);
   });
+  it('ignores a frame type it does not know, and the run completes on the same socket', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    onStart = (socket, command) => {
+      socket.reply(command, { id: 'r1', status: 'running' });
+      socket.event(1, 'token', { content: 'Before ' });
+      // A frame a newer server added (a plan prompt, an approval request…).
+      socket.message({ type: 'run.prompt', session_id: 's1', prompt: { kind: 'plan' } });
+      socket.event(2, 'token', { content: 'after' });
+      socket.finish(3);
+    };
+    const onToken = vi.fn();
+    const result = await streamAgentSession(params, { onToken }, { retry: { baseDelayMs: 0 } });
+    expect(result.terminal).toBe('done');
+    expect(onToken.mock.calls.flat()).toEqual(['Before ', 'after']);
+    // Not a broken connection: no reconnect, no second start.
+    expect(MockSocket.instances).toHaveLength(1);
+    expect(runStarts).toBe(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('run.prompt'));
+  });
+  it('ignores an event name it does not know, and the run completes', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    onStart = (socket, command) => {
+      socket.reply(command, { id: 'r1', status: 'running' });
+      socket.event(1, 'artifact.preview', { id: 'a1' });
+      socket.event(2, 'token', { content: 'Answer' });
+      socket.finish(3);
+    };
+    const onToken = vi.fn();
+    const result = await streamAgentSession(params, { onToken });
+    expect(result.terminal).toBe('done');
+    expect(onToken).toHaveBeenCalledWith('Answer');
+    expect(MockSocket.instances).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('artifact.preview'));
+  });
+  it('still treats an event frame it cannot read as a gap, and replays it', async () => {
+    onStart = (socket, command) => {
+      socket.reply(command, { id: 'r1', status: 'running' });
+      // `seq` missing: a gap in the log, not a newer frame type.
+      socket.message({ type: 'event', session_id: 's1', run_id: 'r1', event: 'token', data: { content: 'lost' } });
+    };
+    onSubscribe = (socket) => {
+      if (MockSocket.instances.length === 2) { socket.event(1, 'token', { content: 'replayed' }); socket.finish(2); }
+    };
+    const onToken = vi.fn();
+    const result = await streamAgentSession(params, { onToken }, { retry: { baseDelayMs: 0 } });
+    expect(result.terminal).toBe('done');
+    expect(onToken.mock.calls.flat()).toEqual(['replayed']);
+    expect(MockSocket.instances).toHaveLength(2);
+  });
   it('reports a deleted chat with the code the caller recovers from', async () => {
     onList = (socket, command) => socket.message({ id: command.id, error: { code: 'chat_not_found', message: 'Chat not found for this document', retryable: false } });
     const onError = vi.fn();
@@ -349,13 +577,13 @@ it('preserves attachment references across uncertain websocket starts without re
     else { socket.reply(command, { id: 'r1', status: 'running' }); socket.finish(1); }
   };
   await streamAgentSession({ ...params, message: '', attachments: [
-    { kind: 'image', image_id: 'image-1', filename: 'chart.png', media_type: 'image/png', size_bytes: 80 },
+    { kind: 'image', asset_id: 'ast-00000000-0000-4000-8000-000000000001', filename: 'chart.png', media_type: 'image/png', size_bytes: 80 },
     { kind: 'resource', resource_id: 42, filename: 'paper.pdf' },
   ] }, {}, { retry: { baseDelayMs: 0 } });
   const starts = commands.filter((command) => command.method === 'runs.start');
   expect(starts).toHaveLength(2);
   expect(starts[0]?.params.request).toEqual({ ...request, message: '', attachments: [
-    { kind: 'image', image_id: 'image-1' }, { kind: 'resource', resource_id: 42 },
+    { kind: 'image', asset_id: 'ast-00000000-0000-4000-8000-000000000001' }, { kind: 'resource', resource_id: 42 },
   ] });
   expect(starts[1]?.params.request).toEqual(itemAt(starts, 0).params.request);
   expect(starts[1]?.params.request_id).toBe(itemAt(starts, 0).params.request_id);
@@ -364,32 +592,42 @@ it('preserves attachment references across uncertain websocket starts without re
 describe('the typed commands and Auto (D18)', () => {
   const startRequest = () => itemAt(commands.filter((command) => command.method === 'runs.start'), 0).params.request;
 
-  it('asks for Auto only on an assistant turn', async () => {
+  it('asks for Auto only on a chat run', async () => {
     await streamAgentSession({ ...params, apply_mode: 'auto' }, {});
     expect(startRequest()).toEqual({ ...request, apply_mode: 'auto' });
 
     commands = [];
-    await streamAgentSession({ ...params, mode: 'rewrite', ephemeral: true, apply_mode: 'auto' }, {});
-    // A rewrite applies nothing by itself, and the server refuses Auto there.
+    await streamAgentSession({ ...params, profile: 'inline', apply_mode: 'auto' }, {});
+    // An inline run applies nothing by itself, and the server refuses Auto there.
     expect(startRequest()).not.toHaveProperty('apply_mode');
+  });
+
+  it('sends an inline run its profile and preset, and never a chat to resume', async () => {
+    await streamAgentSession({ ...params, profile: 'inline', preset: 'shorter', message: '', chat_id: 'chat-1', leaf_id: 4 }, {});
+    expect(startRequest()).toEqual({ document_id: 'doc-1', message: '', profile: 'inline', preset: 'shorter' });
+    // Its session is one-shot: no chat, and the profile its runs must share.
+    const create = itemAt(commands.filter((command) => command.method === 'sessions.create'), 0);
+    expect(create.params).toMatchObject({ profile: 'inline', chat_id: null });
+    expect(commands.some((command) => command.method === 'sessions.list')).toBe(false);
   });
 
   it('creates a session with the fields `SessionCreate` has, and nothing else', async () => {
     await streamAgentSession(params, {});
     const create = itemAt(commands.filter((command) => command.method === 'sessions.create'), 0);
-    expect(Object.keys(create.params).sort()).toEqual(['chat_id', 'document_id', 'ephemeral', 'request_id', 'title', 'workspace_id']);
+    expect(Object.keys(create.params).sort()).toEqual(['chat_id', 'document_id', 'profile', 'request_id', 'title', 'workspace_id']);
+    expect(create.params).toMatchObject({ profile: 'chat' });
   });
 
   it('reports the run’s effective apply policy from its status events', async () => {
     onStart = (socket, command) => {
       socket.reply(command, { id: 'r1', status: 'running' });
-      socket.event(1, 'status', { status: 'starting', detail: 'Starting…', apply_policy: 'review', auto_blocked_reason: 'web_research' });
+      socket.event(1, 'status', { status: 'starting', detail: 'Starting…', apply_policy: 'review', auto_blocked_reason: 'policy' });
       socket.finish(2);
     };
     const onApplyPolicy = vi.fn();
     const onStatus = vi.fn();
     await streamAgentSession({ ...params, apply_mode: 'auto' }, { onApplyPolicy, onStatus });
-    expect(onApplyPolicy).toHaveBeenCalledWith('review', 'web_research');
+    expect(onApplyPolicy).toHaveBeenCalledWith('review', 'policy');
     expect(onStatus).toHaveBeenCalledWith('starting', 'Starting…');
   });
 

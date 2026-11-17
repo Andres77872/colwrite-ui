@@ -1,0 +1,1 @@
+export const IMAGE_VENUE_CAUTION = 'Check your venue’s rules before submitting. Science requires editor permission for AI images; Elsevier does not allow general-purpose generators for graphical abstracts. Disclose AI images in the caption or methods. Never use generated images as primary research evidence.';

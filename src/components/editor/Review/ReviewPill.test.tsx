@@ -1,5 +1,5 @@
 import { itemAt } from '@/lib/itemAt';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildChangeSet, markChanges, type ChangeSet } from '@/editor/proposals';
 import type { Block, ToolOperation } from '@/editor/types';
@@ -14,6 +14,9 @@ const reviewState = {
   sets: [] as ChangeSet[],
   pendingCount: 0,
   acceptAll: vi.fn(),
+  acceptWording: vi.fn(),
+  acceptGroup: vi.fn(),
+  rejectGroup: vi.fn(),
   rejectAll: vi.fn(),
   focusChange: vi.fn(),
   focusedChangeId: null,
@@ -24,7 +27,8 @@ vi.mock('@/editor', async () => ({
   useEditorDoc: () => editorState,
 }));
 vi.mock('@/editor/proposalsContextState', () => ({ useProposals: () => reviewState }));
-vi.mock('@/components/ui/confirmContext', () => ({ useConfirm: () => vi.fn() }));
+const confirm = vi.fn(async () => true);
+vi.mock('@/components/ui/confirmContext', () => ({ useConfirm: () => confirm }));
 
 const { ReviewPill } = await import('./ReviewPill');
 
@@ -32,11 +36,12 @@ const para = (id: string): Block => ({ id, type: 'paragraph', html: id, children
 
 function batch(count: number, callId: string): ChangeSet {
   const actions: ToolOperation[] = Array.from({ length: count }, (_, index) => ({
-    op: 'append_block',
-    block: para(`${callId}-${index}`),
+    op: 'write_blocks',
+    position: 'append',
+    blockId: null,
+    blocks: [para(`${callId}-${index}`)],
   }));
   return buildChangeSet({
-    tool: 'doc_edit',
     toolCallId: callId,
     documentId: 'doc-1',
     status: 'proposed',
@@ -53,9 +58,42 @@ function show(sets: ChangeSet[]) {
 const announcer = () => document.querySelector('[data-review-announcer]')?.textContent;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.useFakeTimers();
   editorState.blocks = [para('A')];
   show([]);
+});
+
+describe('group controls', () => {
+  it('offers only stored groups and keeps new information out of bulk acceptance', async () => {
+    const set = batch(3, 'grouped');
+    set.groups = [
+      { kind: 'wording', label: 'Wording', operations: [0, 1] },
+      { kind: 'new_content', label: 'New content', operations: [2] },
+    ];
+    itemAt(set.changes, 1).op.newInformation = true;
+    itemAt(set.changes, 2).op.newInformation = true;
+    show([set]);
+    render(<ReviewPill />);
+    fireEvent.click(screen.getByRole('button', { name: /suggestions/ }));
+    expect(screen.getByText('Wording (2)')).toBeTruthy();
+    expect(screen.getByText('New content (1)')).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Accept new content group' }).disabled).toBe(true);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Accept wording changes' })));
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ confirmLabel: 'Accept wording changes' }));
+    expect(reviewState.acceptWording).toHaveBeenCalledOnce();
+    expect(reviewState.acceptAll).not.toHaveBeenCalled();
+  });
+
+  it('routes a group decision by set identity and the stored kind', async () => {
+    const set = batch(1, 'grouped');
+    set.groups = [{ kind: 'citations', label: 'Citations', operations: [0] }];
+    show([set]);
+    render(<ReviewPill />);
+    fireEvent.click(screen.getByRole('button', { name: /suggestion/ }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Reject citations group' })));
+    expect(reviewState.rejectGroup).toHaveBeenCalledWith(set.id, 'citations');
+  });
 });
 
 afterEach(() => {

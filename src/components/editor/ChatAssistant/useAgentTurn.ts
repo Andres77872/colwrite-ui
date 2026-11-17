@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -9,34 +10,47 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react';
-import type { ChatAttachment } from '@/api/assistant/chatAttachments';
-import { runAgentTurn, type AgentChatContext, type AgentChatResult } from '@/api/assistant/agentChat';
+import { AssistantCatalogContext } from '@/components/preferences/assistantCatalogContextState';
 import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import { useQueryClient } from '@tanstack/react-query';
 import { invalidatePageBranch } from '@/data/documents';
+import { chatPlanQuery } from '@/data/chatPlans';
 import { useAgentEngine } from '@/components/preferences/agentEngineContextState';
 import { engineName } from '@/components/preferences/agentEngineCopy';
-import { AgentSocketError } from '@/api/assistant/agentSocket';
-import type { AssistantSnapshot, ResumeAgentRun } from '@/api/assistant/agentSessionChat';
+import type { AssistantSnapshot } from '@/api/assistant/agentSessionChat';
 import type { AgentEventHandlers } from '@/api/assistant/streamParser';
 import type { ToolAction } from '@/editor/types';
 import type { DocumentActionsValue, DocumentSessionValue } from '@/editor';
 import type { ProposalsContextValue } from '@/editor/proposalsContextState';
-import {
-  advanceProgress,
-  progressForStatus,
-  type AgentProgress,
-} from '@/components/editor/AgentProgress';
-import { toolRunningLabel } from './AgentActivity';
+import type { AgentProgress } from '@/components/editor/AgentProgress';
+import { useAgentRun, type AgentRunSpec, type PreparedRun } from '../AgentRun';
 import type { ChatRefPickerHandle } from './ChatRefPicker';
+import { emptyMessage, type ChatError, type ChatMessage, type ChatTurnOptions, type LastExchange } from './chatUtils';
 import {
-  emptyMessage,
-  friendlyStreamError,
-  toolRunDetail,
-  type ChatError,
-  type ChatMessage,
-  type LastExchange,
-} from './chatUtils';
+  endThinking,
+  finishReply,
+  interruptRuns,
+  withChangeSet,
+  withReasoning,
+  withClaim,
+  withEvidence,
+  withLedger,
+  withPlan,
+  withQuestion,
+  withArtifact,
+  withSkill,
+  withInstructions,
+  withTodos,
+  withToken,
+  withToolArgs,
+  withToolEnd,
+  withToolProgress,
+  withToolStart,
+  withWorker,
+} from './transcript';
+import { checkpointTurn, keepsRunLocator, recoversAsNewChat, resumedTurn } from './turnRecovery';
+import type { AssistantRunSummary } from '@/api/schema';
+import { assistantRunKeys } from '@/data/assistantRuns';
 import type { AutoMode } from './useAutoMode';
 
 type AgentTurnOptions = {
@@ -53,7 +67,7 @@ type AgentTurnOptions = {
   proposals: ProposalsContextValue;
   setInput: Dispatch<SetStateAction<string>>;
   setAtBottom: Dispatch<SetStateAction<boolean>>;
-  pinnedToBottom: MutableRefObject<boolean>;
+  pinnedToBottomRef: MutableRefObject<boolean>;
   refPickerRef: RefObject<ChatRefPickerHandle | null>;
   /**
    * The loader's claim on the conversation on screen (see
@@ -80,37 +94,24 @@ export type AgentTurn = {
   agentStatus: AgentProgress | null;
   activeMessageId: string | null;
   lastExchange: LastExchange | null;
-  send: (text: string, context?: AgentChatContext, attachments?: ChatAttachment[]) => Promise<void>;
+  send: (text: string, options?: ChatTurnOptions) => Promise<void>;
   resumeRun: (snapshot: AssistantSnapshot) => void;
+  resumeCheckpoint: (run: AssistantRunSummary, requestId: string) => Promise<void>;
   onStop: () => void;
   onRetry: () => void;
   resetChatUI: (clearMessages?: boolean) => void;
   /**
-   * Shared with the conversation loader, which stops the stream when it takes
-   * over the transcript.
+   * Stop following the running turn without cancelling it: the conversation
+   * loader calls it when it takes over the transcript.
    */
-  abortRef: MutableRefObject<AbortController | null>;
+  detach: () => void;
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
-  setIsStreaming: Dispatch<SetStateAction<boolean>>;
-  setAgentStatus: Dispatch<SetStateAction<AgentProgress | null>>;
 };
 
-/** Close the stretch of reasoning under way, adding it to the time spent. */
-function endThinking(message: ChatMessage, now: number): ChatMessage {
-  if (message.thinkingSince === undefined) return message;
-  return {
-    ...message,
-    thinkingMs: (message.thinkingMs ?? 0) + Math.max(0, now - message.thinkingSince),
-    thinkingSince: undefined,
-  };
-}
-
-const THINKING = { phase: 'thinking', label: 'Thinking…' } as const;
-
 /**
- * useAgentTurn — one streaming turn of the assistant: send, stream handlers,
- * stop, retry, and the abort lifecycle that keeps a turn scoped to the
- * document it started on.
+ * useAgentTurn — one turn of the chat: the transcript it writes, on the
+ * shared run driver (`useAgentRun`), with the chat's own recovery
+ * (`turnRecovery`). Its updates of the reply are `transcript`'s.
  */
 export function useAgentTurn({
   documentId,
@@ -126,28 +127,23 @@ export function useAgentTurn({
   proposals,
   setInput,
   setAtBottom,
-  pinnedToBottom,
+  pinnedToBottomRef,
   refPickerRef,
   loadedConversationRef,
   onChatCreated,
   autoMode,
 }: AgentTurnOptions): AgentTurn {
   const engines = useAgentEngine();
+  const catalog = useContext(AssistantCatalogContext);
   const workspaceId = useWorkspaceId();
   const queryClient = useQueryClient();
+  const run = useAgentRun({
+    surface: 'chat',
+    document: { documentId, ensureRemoteDocument, hasPendingEdits, saveRemote },
+  });
+  const { detach } = run;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<ChatError | null>(null);
-  const [agentStatus, setAgentStatus] = useState<AgentProgress | null>(null);
-  const moveTo = useCallback((next: Pick<AgentProgress, 'phase' | 'label'>) => {
-    setAgentStatus((current) => advanceProgress(current, next));
-  }, []);
-  /**
-   * Tool calls announced and not yet ended in this turn, by call id, so an
-   * end can tell whether the model has gone back to thinking. Kept outside
-   * the transcript because a state updater has to stay pure.
-   */
-  const runningToolsRef = useRef<Map<string, string>>(new Map());
   const anonymousCallsRef = useRef(0);
 
   /**
@@ -195,8 +191,11 @@ export function useAgentTurn({
   }, [autoMode]);
   const autoApply = useCallback(() => autoRef.current?.on === true, []);
 
-  const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
+  /** Bumped by every send: an older turn's completion must not clean up a newer one. */
+  const turnRef = useRef(0);
+  /** The turn the author pressed Stop on, so its reply reads "Stopped" (a detach is not a Stop). */
+  const stopRequestedRef = useRef<number | null>(null);
   // tool_call_ids already handled, so a redelivered event cannot double-queue.
   const processedToolCallIds = useRef<Set<string>>(new Set());
   // The message currently being written into, so stream callbacks can find it
@@ -212,10 +211,9 @@ export function useAgentTurn({
     // A stream is scoped to the committed document. Stop it before a different
     // body can commit so late tool events cannot mutate or stage work against
     // the wrong document.
-    abortRef.current?.abort();
-    abortRef.current = null;
+    detach();
     refPickerRef.current?.close();
-  }, [loadingDocumentId, refPickerRef]);
+  }, [detach, loadingDocumentId, refPickerRef]);
 
   // A restore keeps the document id but moves it onto another version of its
   // tree. A turn that started against the pre-restore version is answering
@@ -227,20 +225,15 @@ export function useAgentTurn({
   useEffect(() => {
     if (restoreEpochRef.current === restoreEpoch) return;
     restoreEpochRef.current = restoreEpoch;
-    abortRef.current?.abort();
-    abortRef.current = null;
-  }, [restoreEpoch]);
+    detach();
+  }, [detach, restoreEpoch]);
 
-  // The document-keyed assistant intentionally remounts on navigation so its
-  // transcript is scoped to one document. Stop the old network stream as part
-  // of that boundary; mocks and transports may still invoke retained
-  // callbacks, so every callback below also checks that its controller is live.
+  // The document-keyed assistant remounts on navigation so its transcript is
+  // scoped to one document; the driver stops the stream as it unmounts.
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      abortRef.current?.abort();
-      abortRef.current = null;
     };
   }, []);
 
@@ -251,16 +244,13 @@ export function useAgentTurn({
   }, []);
 
   const resetChatUI = useCallback((clearMessages = true) => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setIsStreaming(false);
-    setAgentStatus(null);
+    detach();
     setError(null);
     setInput('');
     activeMessageIdRef.current = null;
     setActiveMessageId(null);
     if (clearMessages) setMessages([]);
-  }, [setInput]);
+  }, [detach, setInput]);
 
   /**
    * Hand a streamed document mutation to the review layer.
@@ -279,12 +269,10 @@ export function useAgentTurn({
       // one in a different active document, even if a transport delivers it
       // after the stream was aborted.
       //
-      // Creating a document is the exception, and the reason this used to look
-      // like the assistant doing nothing at all: `doc_create` names the
-      // document it has just made, which is never the one on screen. Matching
-      // ids here dropped the event before anything could offer it to the
-      // author. The review layer scopes the two halves properly — operations
-      // to this document, invitations to the one that was created.
+      // Creating a document is the exception: `doc_create` names the document
+      // it has just made, which is never the one on screen. The review layer
+      // scopes the two halves — operations to this document, invitations to
+      // the one that was created.
       const announcesNewDocument = action.actions.some(
         (op) => op.op === 'create_document',
       );
@@ -296,11 +284,8 @@ export function useAgentTurn({
 
       // Only a genuine redelivery is a duplicate. The id alone is not enough:
       // providers that number tool calls per request reuse `call_0`, and some
-      // send none at all. The previous fallback keyed on the document version,
-      // which a proposal deliberately leaves unchanged — so two staged batches
-      // in one run collapsed into one and the second edit vanished.
-      // A stored proposal carries no operations (the review layer fetches
-      // them by id), so its change-set id is what tells two of them apart.
+      // send none at all. A stored proposal carries no operations (the review
+      // layer fetches them by id), so its change-set id tells two apart.
       const dedupKey = `${action.toolCallId}:${action.status}:${action.changeSetId ?? ''}:${JSON.stringify(action.actions)}`;
       if (processedToolCallIds.current.has(dedupKey)) return;
       processedToolCallIds.current.add(dedupKey);
@@ -315,42 +300,48 @@ export function useAgentTurn({
       }
 
       const changeSetId = action.status === 'proposed' ? action.changeSetId : null;
-      if (changeSetId) {
-        patchActive((message) => (
-          message.changeSetIds.includes(changeSetId)
-            ? message
-            : { ...message, changeSetIds: [...message.changeSetIds, changeSetId] }
-        ));
-      }
+      if (changeSetId) patchActive((message) => withChangeSet(message, changeSetId));
     },
     [autoApply, patchActive, proposals, queryClient, workspaceId],
   );
 
-  const send = async (text: string, context?: AgentChatContext, attachments?: ChatAttachment[], resume?: ResumeAgentRun) => {
-    if ((!text && !attachments?.length) || abortRef.current || loadingDocumentId) return;
+  /**
+   * Send a turn. With `preset` (a server chat preset's id), `text` is only
+   * what the conversation shows, the preset's label: the server supplies the
+   * instruction, and the message carries no words of the author's.
+   */
+  const send = async (text: string, options: ChatTurnOptions = {}) => {
+    const { context, attachments, resume, checkpoint, preset, effort, web = false, plan_id, plan, answers, displayText } = options;
+    if ((!text && !attachments?.length && !preset && !plan_id && !answers && !checkpoint) || run.isRunning() || loadingDocumentId) return;
 
     setError(null);
     setInput('');
     // Why the server paused Auto was about the previous message.
     autoRef.current?.startTurn();
-    // Something is on screen from the moment the message is sent.
-    setAgentStatus({ ...THINKING, since: Date.now() });
-    pinnedToBottom.current = true;
+    pinnedToBottomRef.current = true;
     setAtBottom(true);
     // Tool-call ids are only unique within a run for some providers.
     processedToolCallIds.current = new Set();
-    runningToolsRef.current = new Map();
+    const turn = (turnRef.current += 1);
+    const current = () => mountedRef.current && turnRef.current === turn;
 
     // A reattached run started before this browser saw it: its timings are
     // not this turn's to measure.
     const sentAt = Date.now();
     const timed = !resume;
-    const userMessage: ChatMessage = { ...emptyMessage('user', text, attachments, resume?.runId), createdAt: sentAt };
+    const promptText = displayText ?? text;
+    const userMessage: ChatMessage = {
+      ...emptyMessage('user', promptText, attachments, resume?.runId), createdAt: sentAt, ...(preset ? { preset } : {}),
+      ...(effort ? { effort } : {}), ...(plan_id ? { planId: plan_id } : {}),
+      web,
+    };
     const assistantMessage = emptyMessage('assistant');
     setLastExchange({
       text,
       context,
       attachments,
+      ...(preset ? { preset } : {}),
+      effort, web, plan_id, plan, answers, displayText, checkpoint,
       userMessageId: userMessage.id,
       assistantMessageId: assistantMessage.id,
       run: resume,
@@ -374,313 +365,78 @@ export function useAgentTurn({
       return [...prev, userMessage, assistantMessage];
     });
 
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setIsStreaming(true);
-    const streamIsLive = () => (
-      mountedRef.current
-      && abortRef.current === controller
-      && !controller.signal.aborted
-    );
+    // Captured for the whole turn. A conversation belongs to the document it
+    // was started on; nothing below may silently move it to another one.
+    let turnDocumentId = documentIdRef.current;
+    let turnChatId = sessionRef.current.selectedChatId;
+    let turnLeafId = sessionRef.current.selectedLeafId;
+    let recovered = false;
+    const resumed = Boolean(resume || checkpoint);
 
-    try {
-      /**
-       * Attach before anything else.
-       *
-       * Everything in a turn is addressed by document id — the agent reads and
-       * edits `document_id`, and the chat session is stored against it — so a
-       * draft that lives only in this browser has nothing for the assistant to
-       * act on. Saving it here is the whole point: the author asked about *this*
-       * document, and from this moment the session belongs to it.
-       */
-      let turnDocumentId = documentIdRef.current;
-      if (!turnDocumentId) {
-        moveTo({
-          phase: 'preparing',
-          label: 'Saving this page so the assistant can work on it…',
-        });
-        turnDocumentId = await ensureRemoteDocument();
-        if (!streamIsLive()) return;
-        if (!turnDocumentId) {
-          setError({
-            message:
-              'This page could not be saved, so there is nothing for the assistant to work on yet.',
-            retryable: true,
-          });
-          return;
-        }
-        moveTo(THINKING);
-      } else if (!resume && hasPendingEdits()) {
-        // The agent reads the *stored* document. Edits sit in this browser for
-        // five seconds before autosave takes them, which is long enough to ask
-        // a question about a paragraph the server has never seen — and to get
-        // back a rewrite of the version the author had already replaced.
-        moveTo({ phase: 'preparing', label: 'Saving your latest edits…' });
-        try {
-          await saveRemote();
-        } catch {
-          if (!streamIsLive()) return;
-          setError({
-            message:
-              'Your latest edits could not be saved, so the assistant would answer about an older version of this page.',
-            retryable: true,
-          });
-          return;
-        }
-        if (!streamIsLive()) return;
-        moveTo(THINKING);
-      }
-
-      // Captured for the whole turn. A conversation belongs to the document it
-      // was started on; nothing below may silently move it to another one.
-      let turnChatId = sessionRef.current.selectedChatId;
-      let turnLeafId = sessionRef.current.selectedLeafId;
-
-      // A chat id can outlive the chat it names — deleted from the chats panel
-      // in another tab, or left behind in this browser after the document it
-      // belonged to was removed. The server answers `CHAT_NOT_FOUND` and the
-      // session used to stay wedged on that dead id for good. Recover once, as
-      // a new conversation on the document that is actually open.
-      let recover = false;
-      let alreadyRecovered = false;
-
-      const handlers: AgentEventHandlers = {
+    const handlers = (prepared: PreparedRun): AgentEventHandlers => {
+      turnDocumentId = prepared.documentId;
+      return {
         onSessionChat: (chatId) => {
-          if (!streamIsLive()) return;
           loadedConversationRef.current = `${turnDocumentId}:${chatId}:${turnLeafId ?? 'latest'}`;
           if (chatId !== turnChatId) {
-            if (!turnChatId) onChatCreated?.(chatId, text);
+            if (!turnChatId) onChatCreated?.(chatId, promptText);
             turnChatId = chatId;
             sessionRef.current.setSelectedChatId(chatId);
           }
         },
-        onTodo: (todos) => {
-          if (streamIsLive()) patchActive((message) => ({ ...message, todos }));
-        },
-        onSubagent: (worker) => {
-          // Updated in place: a worker keeps its position, and so its number,
-          // from "working" to "reported back".
-          if (streamIsLive()) patchActive((message) => {
-            const workers = message.workers ?? [];
-            return { ...message,
-              workers: workers.some((item) => item.id === worker.id)
-                ? workers.map((item) => (item.id === worker.id ? worker : item))
-                : [...workers, worker],
-            };
-          });
-        },
+        onTodo: (todos) => patchActive((message) => withTodos(message, todos)),
+        onSkill: (skill) => patchActive((message) => withSkill(message, skill)),
+        onInstructions: (items) => patchActive((message) => withInstructions(message, items)),
+        onSubagent: (worker) => patchActive((message) => withWorker(message, worker)),
         onToken: (content) => {
-          if (!streamIsLive()) return;
           const now = Date.now();
-          // `since` follows the latest token, so a reply that stops mid-way
-          // can be told apart from one that is still being written.
-          setAgentStatus({ phase: 'writing', label: 'Writing…', since: now });
-          patchActive((message) => ({
-            ...endThinking(message, now),
-            content: message.content + content,
-            ...(timed && message.firstTokenMs === undefined ? { firstTokenMs: now - sentAt } : {}),
-          }));
+          patchActive((message) => withToken(message, content, now, timed ? now - sentAt : null));
         },
         onReasoning: (content) => {
-          if (!streamIsLive()) return;
           const now = Date.now();
-          // While a tool runs (a research worker's, say) its label stays up.
-          if (runningToolsRef.current.size === 0) moveTo(THINKING);
-          patchActive((message) => ({
-            ...message,
-            reasoning: (message.reasoning ?? '') + content,
-            thinkingSince: message.thinkingSince ?? now,
-          }));
-        },
-        onStatus: (status, detail) => {
-          if (!streamIsLive()) return;
-          const next = progressForStatus(status, detail);
-          if (!next) return;
-          // A running tool is the more specific news; only a retry or a
-          // reconnect is worth saying over it.
-          if (next.phase === 'thinking' && runningToolsRef.current.size > 0) {
-            // Back from a reconnect, though, the tool's own label returns:
-            // nothing else would replace "Reconnecting…" until it finished.
-            const running = status === 'reconnected' ? [...runningToolsRef.current.values()].at(-1) : undefined;
-            if (running) moveTo({ phase: 'tool', label: `${toolRunningLabel(running)}…` });
-            return;
-          }
-          moveTo(next);
+          patchActive((message) => withReasoning(message, content, now));
         },
         onApplyPolicy: (policy, reason) => {
-          // The strip says at once when the server refused Auto for this run.
-          if (streamIsLive()) autoRef.current?.notePolicy(policy, reason);
+          // The strip says at once when the server refused Auto for this run,
+          // and the reply keeps why: a run can switch to review partway
+          // through, and its later sets then wait (the server stores them
+          // as `review`, which the review layer reads).
+          autoRef.current?.notePolicy(policy, reason);
+          if (policy === 'review' && reason && autoApply()) {
+            patchActive((message) => (message.autoPaused === reason ? message : { ...message, autoPaused: reason }));
+          }
         },
-        onToolCallStart: (tool, toolCallId, args) => {
-          if (!streamIsLive()) return;
+        onToolCallStart: (tool, toolCallId, display) => {
           const now = Date.now();
           // Providers that send no call id still need a distinct row key.
           const id = toolCallId || `${tool}:anonymous-${(anonymousCallsRef.current += 1)}`;
-          runningToolsRef.current.set(id, tool);
-          moveTo({ phase: 'tool', label: `${toolRunningLabel(tool)}…` });
-          patchActive((message) => ({
-            ...endThinking(message, now),
-            runs: [
-              ...message.runs,
-              {
-                id,
-                tool,
-                state: 'running',
-                detail: toolRunDetail(tool, args),
-                startedAt: now,
-              },
-            ],
-          }));
+          patchActive((message) => withToolStart(endThinking(message, now), { id, tool, display }, now));
         },
-        onToolCallProgress: (event) => {
-          if (!streamIsLive()) return;
-          patchActive((message) => {
-            // Only while the input is still being written: once the call's
-            // arguments are known it is running, and a late count is noise.
-            // (The preview always comes with them; the full object is left
-            // out when it is large, which is exactly a long edit.)
-            const index = message.runs.findIndex((run) =>
-              run.state === 'running'
-              && run.args === undefined
-              && run.argsPreview === undefined
-              && (event.toolCallId ? run.id === event.toolCallId : run.tool === event.tool),
-            );
-            const existing = message.runs[index];
-            if (!existing || existing.argumentsChars === event.argumentsChars) return message;
-            const runs = message.runs.slice();
-            runs[index] = { ...existing, argumentsChars: event.argumentsChars };
-            return { ...message, runs };
-          });
-        },
-        onToolCallArgs: (event) => {
-          if (!streamIsLive()) return;
-          // The start event fires before the model has finished writing its
-          // arguments, so this is usually the first time the input is known.
-          patchActive((message) => {
-            const index = message.runs.findIndex((run) =>
-              run.state === 'running'
-              && (event.toolCallId ? run.id === event.toolCallId : run.tool === event.tool),
-            );
-            const existing = message.runs[index];
-            if (!existing) return message;
-            const runs = message.runs.slice();
-            runs[index] = {
-              ...existing,
-              args: event.arguments ?? existing.args,
-              argsPreview: event.argumentsPreview || existing.argsPreview,
-              // Written in full: the call is running now, not being drafted.
-              argumentsChars: undefined,
-              detail:
-                existing.detail
-                ?? (event.arguments ? toolRunDetail(event.tool, event.arguments) : undefined),
-            };
-            return { ...message, runs };
-          });
-        },
-        onToolCallEnd: (event) => {
-          if (!streamIsLive()) return;
-          // What the turn is doing next. Only an end that closes a call this
-          // turn still had open counts: a duplicate end (a provisional one,
-          // then the tool runtime's) can arrive after the answer has resumed,
-          // and must not put "Thinking…" back over text that is streaming.
-          const running = runningToolsRef.current;
-          let closed = event.toolCallId && running.delete(event.toolCallId);
-          if (!closed && !event.toolCallId) {
-            const match = [...running].find(([, tool]) => tool === event.tool);
-            closed = match ? running.delete(match[0]) : false;
+        onToolCallProgress: (event) => patchActive((message) => withToolProgress(message, event)),
+        onToolCallArgs: (event) => patchActive((message) => withToolArgs(message, event)),
+        onToolCallEnd: (event) => patchActive((message) => withToolEnd(message, event)),
+        onToolAction,
+        onEvidence: (evidence) => patchActive((message) => withEvidence(message, evidence)),
+        onClaim: (claim) => patchActive((message) => withClaim(message, claim)),
+        onPlan: (plan) => patchActive((message) => withPlan(message, plan)),
+        onQuestion: (question) => patchActive((message) => withQuestion(message, question)),
+        onArtifact: (artifact) => patchActive((message) => withArtifact(message, artifact)),
+        onBudget: (ledger) => patchActive((message) => withLedger(message, ledger)),
+        onError: (code) => {
+          if (plan_id && turnDocumentId && turnChatId && (code === 'STALE_PLAN' || code === 'PLAN_NOT_FOUND')) {
+            void queryClient.invalidateQueries({ queryKey: chatPlanQuery({
+              workspaceId, documentId: turnDocumentId, chatId: turnChatId, planId: plan_id,
+            }).queryKey });
           }
-          if (closed) {
-            const still = [...running.values()].at(-1);
-            moveTo(still ? { phase: 'tool', label: `${toolRunningLabel(still)}…` } : THINKING);
+          if (!keepsRunLocator(code)) {
+            setLastExchange((exchange) => exchange ? { ...exchange, run: undefined, checkpoint: undefined } : exchange);
           }
-          patchActive((message) => {
-            // Matched on the call id whenever the provider sends one. Without
-            // it there is nothing to pair on but the name, so two concurrent
-            // calls of the same tool are resolved oldest-first and their
-            // durations can cross. That is a limit of the payload, not a
-            // choice — which is why an unmatched end is left alone below
-            // rather than applied to some other run.
-            let index = message.runs.findIndex((run) =>
-              run.state === 'running'
-              && (event.toolCallId ? run.id === event.toolCallId : run.tool === event.tool),
-            );
-            // The stream can end a call twice: a synthetic zero-duration end
-            // when content resumes, then the authoritative one from the tool
-            // runtime. The correction used to be dropped here, leaving a
-            // failed call rendered as a success — take it when it carries an
-            // outcome the provisional end did not.
-            if (index === -1 && event.toolCallId && (event.isError || event.outputPreview !== null)) {
-              index = message.runs.findIndex((run) => run.id === event.toolCallId);
-            }
-            const existing = message.runs[index];
-            if (!existing) return message;
-            const runs = message.runs.slice();
-            runs[index] = {
-              ...existing,
-              state: event.isError ? 'error' : 'done',
-              durationMs: event.durationMs || existing.durationMs,
-              error: event.error ?? existing.error,
-              errorType: event.errorType ?? existing.errorType,
-              args: event.arguments ?? existing.args,
-              argsPreview: event.argumentsPreview || existing.argsPreview,
-              outputPreview: event.outputPreview ?? existing.outputPreview,
-              outputChars: event.outputChars || existing.outputChars,
-              outputTruncated: event.outputTruncated || existing.outputTruncated,
-              detail:
-                existing.detail
-                ?? (event.arguments ? toolRunDetail(event.tool, event.arguments) : undefined),
-            };
-            return { ...message, runs };
-          });
         },
-        onToolAction: (action) => {
-          if (!streamIsLive()) return;
-          onToolAction(action);
-        },
-        onSources: (sources) => {
-          if (!streamIsLive()) return;
-          // Merged by id: the registry sends each source once, but a retried
-          // stream must not list one twice.
-          patchActive((message) => {
-            const known = new Set((message.sources ?? []).map((source) => source.id));
-            const fresh = sources.filter((source) => !known.has(source.id));
-            return fresh.length ? { ...message, sources: [...(message.sources ?? []), ...fresh] } : message;
-          });
-        },
-        onError: (code, message) => {
-          if (!streamIsLive()) return;
-          // A CLI that lost its login (or was never ready) re-reads its state,
-          // so the composer's engine menu shows why straight away.
-          engines.noteRunError(code);
-          if (code !== 'INCOMPLETE_STREAM') {
-            // The server has reported how this run ended: a failed model
-            // call, a limit, a stop, a PDF that could not be prepared. "Try
-            // again" must start a new run. Reattaching to this one replays
-            // its saved events, so it showed the same error every time.
-            // Only a run whose ending never arrived is worth reattaching to.
-            setLastExchange((exchange) => exchange ? { ...exchange, run: undefined } : exchange);
-          }
-          // Reattaching observes an existing run; its failure must not reset
-          // selection or enter the recovery path that starts a new turn.
-          if (!resume && !alreadyRecovered && code === 'CHAT_NOT_FOUND') {
-            // Reported by the retry below if that fails too, so the author is
-            // never shown an error the app is about to resolve by itself.
-            recover = true;
-            return;
-          }
-          // The stream died around these calls; the tools themselves did not
-          // report failure. 'interrupted', because painting them as errors
-          // sent authors chasing the wrong culprit.
-          patchActive((active) => ({
-            ...active,
-            runs: active.runs.map((run) =>
-              run.state === 'running' ? { ...run, state: 'interrupted' as const } : run,
-            ),
-          }));
-          setError(friendlyStreamError(code, message));
-        },
-        onDone: (chatId, messageId) => {
-          if (!streamIsLive()) return;
+        onDone: ({ chatId, messageId, usage, models, cost, budget, persistence }) => {
+          // What served the reply, what it used and cost, and its cost
+          // ceiling and the limit it reached, as its record keeps them; the
+          // failed writes, which it does not.
+          patchActive((message) => ({ ...message, usage, models, cost, budget, persistence }));
           const id = chatId || turnChatId;
           // This transcript *is* the conversation these ids name, so mark it
           // loaded before the ids land and the loader chases them.
@@ -693,7 +449,7 @@ export function useAgentTurn({
           // these setters around the id the session now has, and the ones this
           // closure captured refuse to write for a document that has moved on.
           if (chatId && chatId !== turnChatId) {
-            if (!turnChatId) onChatCreated?.(chatId, text);
+            if (!turnChatId) onChatCreated?.(chatId, promptText);
             turnChatId = chatId;
             sessionRef.current.setSelectedChatId(chatId);
           }
@@ -704,129 +460,81 @@ export function useAgentTurn({
           }
         },
       };
+    };
 
-      // Chosen once per turn: switching engines mid-reply applies to the next.
-      const engineRequest = engines.requestFor('chat');
-      // Named under the reply only when the author chose it: the server's
-      // default needs no label.
-      const chosenEngine = engineRequest.engine ?? (engineRequest.gateway_models?.main ? 'gateway' : null);
-      if (timed && chosenEngine) {
+    const spec = (): AgentRunSpec => ({
+      request: {
+        message: preset ? '' : text,
+        ...(preset ? { preset } : {}),
+        effort, web, plan_id, plan, answers,
+        chat_id: turnChatId,
+        leaf_id: turnLeafId,
+        context,
+        ...(attachments?.length ? { attachments } : {}),
+        // Asked, not granted: the server decides per run (D18).
+        ...(autoApply() ? { apply_mode: 'auto' as const } : {}),
+      },
+      handlers,
+      resume,
+      checkpoint,
+      onPrepared: ({ engine: engineRequest }) => {
+        // Named under the reply only when the author chose it: the server's
+        // default needs no label.
+        const chosenEngine = engineRequest.engine ?? (engineRequest.gateway_models?.main ? 'gateway' : null);
+        if (!timed || checkpoint || !chosenEngine) return;
         const model = engineRequest.engine ? engineRequest.model : engineRequest.gateway_models?.main;
         const engine = { name: engineName(chosenEngine, engines.statusOf(chosenEngine)), ...(model ? { model } : {}) };
         patchActive((message) => ({ ...message, engine }));
-      }
-      let result: AgentChatResult | null = null;
-      for (;;) {
-        recover = false;
-        result = await runAgentTurn(
-          {
-            workspace_id: workspaceId,
-            message: text,
-            document_id: turnDocumentId,
-            chat_id: turnChatId,
-            leaf_id: turnLeafId,
-            mode: 'assistant',
-            context,
-            ...(attachments?.length ? { attachments } : {}),
-            ...engineRequest,
-            // Asked, not granted: the server decides per run (D18).
-            ...(autoApply() ? { apply_mode: 'auto' as const } : {}),
-          },
-          handlers,
-          {
-            signal: controller.signal,
-            abortBehavior: 'detach',
-            resume,
-            onRunStarted: (run) => {
-              if (!streamIsLive()) return;
-              setLastExchange((exchange) => exchange ? { ...exchange, run } : exchange);
-              if (run.runId) setMessages((current) => current.map((message) =>
-                message.id === userMessage.id ? { ...message, runId: run.runId } : message));
-            },
-            // The recovered pass already carries its own 401 replay; stacking
-            // a fresh pending backoff on top would multiply requests again.
-            retry: alreadyRecovered ? { maxAttempts: 1 } : undefined,
-          },
-        );
+      },
+      onRunStarted: (started) => {
+        setLastExchange((exchange) => exchange ? { ...exchange, run: started } : exchange);
+        if (started.runId) setMessages((rows) => rows.map((message) =>
+          message.id === userMessage.id || message.id === assistantMessage.id ? { ...message, runId: started.runId } : message));
+        void queryClient.invalidateQueries({ queryKey: assistantRunKeys(workspaceId) });
+      },
+      // The recovered pass already carries its own 401 replay; stacking a
+      // fresh pending backoff on top would multiply requests again.
+      retry: recovered ? { maxAttempts: 1 } : undefined,
+    });
 
-        if (!recover || !streamIsLive()) break;
+    let outcome = await run.start(spec());
+    if (current() && !plan_id && recoversAsNewChat(outcome, { resumed, recovered })) {
+      recovered = true;
+      turnChatId = null;
+      sessionRef.current.setSelectedChatId(null);
+      turnLeafId = null;
+      sessionRef.current.setSelectedLeafId(null);
+      loadedConversationRef.current = null;
+      // The failed attempt reached no tools, but a redelivered id from it
+      // must not block the retry's own staging.
+      processedToolCallIds.current = new Set();
+      outcome = await run.start(spec());
+    }
 
-        alreadyRecovered = true;
-        turnChatId = null;
-        sessionRef.current.setSelectedChatId(null);
-        turnLeafId = null;
-        sessionRef.current.setSelectedLeafId(null);
-        loadedConversationRef.current = null;
-        // The failed attempt reached no tools, but a redelivered id from it
-        // must not block the retry's own staging.
-        processedToolCallIds.current = new Set();
-      }
-
-      if (result && streamIsLive()) {
-        if (result.terminal === 'done' && result.usage) {
-          const usage = result.usage;
-          patchActive((message) => ({ ...message, usage }));
-        } else if (result.terminal === null) {
-          // The connection closed without `done` or `error`. This used to
-          // render as a finished reply — with every pending tool stamped as
-          // a success — when the truth is the server was cut off mid-turn.
-          setError({
-            message:
-              'The connection dropped before the assistant finished. The reply above may be incomplete.',
-            retryable: true,
-          });
-        }
-      }
-    } catch (e) {
-      // An aborted stream is a deliberate stop, not a failure to report.
-      if (streamIsLive()) {
-        const raw = e instanceof Error ? e.message : '';
-        const socketActions: Record<string, string> = {
-          unauthorized: 'Sign in again to resume this conversation.',
-          forbidden: 'The assistant cannot access this conversation. Check your access before reconnecting.',
-          not_found: 'This saved conversation or run is no longer available. Open another conversation or start a new one.',
-          conflict: 'This conversation already has a reply in progress. Wait for it to finish, then send again; reopen the conversation to follow it.',
-          // The server's sentence says which limit: replies in progress, or
-          // saved conversations.
-          limit_exceeded: raw || 'The assistant is at a limit for this account. Wait for a reply in progress to finish, then send again.',
-        };
-        const action = e instanceof AgentSocketError && Object.hasOwn(socketActions, e.code)
-          ? socketActions[e.code] : undefined;
-        setError({
-          message: action || 'The assistant connection was interrupted. Reconnect to check the saved run.',
-          detail: raw || undefined,
-          retryable: !action,
-        });
-      }
-    } finally {
-      // A newer send owns the UI now, or this document's assistant has
-      // unmounted. The older completion must not clean up the new stream.
-      if (
-        mountedRef.current
-        && (abortRef.current === null || abortRef.current === controller)
-      ) {
-        setIsStreaming(false);
-        if (abortRef.current === controller) abortRef.current = null;
-        setAgentStatus(null);
-        // A call that never reported completion is unresolved, not done —
-        // stamping it 'done' here painted stopped and dropped turns as
-        // successes.
-        const endedAt = Date.now();
-        patchActive((message) => ({
-          ...endThinking(message, endedAt),
-          createdAt: endedAt,
-          ...(timed ? { durationMs: endedAt - sentAt } : {}),
-          runs: message.runs.map((run) =>
-            run.state === 'running'
-              ? { ...run, state: 'interrupted' as const, argumentsChars: undefined }
-              : run,
-          ),
-        }));
-        runningToolsRef.current = new Map();
-        activeMessageIdRef.current = null;
-        setActiveMessageId(null);
+    // A newer send owns the UI now, or this document's assistant has
+    // unmounted: the older completion must not clean up the new turn.
+    if (!current()) return;
+    // A reply that did not complete says how it ended, as its record will
+    // after a reload: the author's Stop (here or in another tab) is
+    // "Stopped"; anything else failed, and the alert says why.
+    if (outcome.status === 'stopped' && stopRequestedRef.current === turn) {
+      patchActive((message) => ({ ...message, ended: 'stopped' }));
+    }
+    if (outcome.status === 'failed') {
+      patchActive(interruptRuns);
+      patchActive((message) => ({ ...message, ended: outcome.code === 'AGENT_CANCELLED' ? 'stopped' : 'failed' }));
+      setError(plan_id && outcome.code === 'CHAT_NOT_FOUND'
+        ? { message: 'This plan belongs to a conversation that is no longer available. Start a new chat.', retryable: false }
+        : outcome.error);
+      if (outcome.code === 'RUN_NOT_RESUMABLE') {
+        setLastExchange((exchange) => exchange ? { ...exchange, run: undefined, checkpoint: undefined } : exchange);
       }
     }
+    void queryClient.invalidateQueries({ queryKey: assistantRunKeys(workspaceId) });
+    const endedAt = Date.now();
+    patchActive((message) => finishReply(message, endedAt, timed ? endedAt - sentAt : null));
+    activeMessageIdRef.current = null;
+    setActiveMessageId(null);
   };
 
   const onRetry = () => {
@@ -844,34 +552,45 @@ export function useAgentTurn({
     // A resumed row can carry richer canonical metadata than the saved run's
     // request references. Keep those filenames through a reconnect retry.
     const attachments = messages.find((message) => message.id === exchange.userMessageId)?.attachments ?? exchange.attachments;
-    void send(exchange.text, exchange.context, attachments, exchange.run);
-  };
-
-  const onStop = () => {
-    abortRef.current?.abort('cancel');
-    abortRef.current = null;
-    setIsStreaming(false);
-    setAgentStatus(null);
+    void send(exchange.text, {
+      context: exchange.context, attachments, resume: exchange.run?.runId || !exchange.checkpoint ? exchange.run : undefined,
+      checkpoint: exchange.run?.runId ? undefined : exchange.checkpoint, preset: exchange.preset,
+      effort: exchange.effort, web: exchange.web, plan_id: exchange.plan_id, plan: exchange.plan, answers: exchange.answers,
+      displayText: messages.find((message) => message.id === exchange.userMessageId)?.content ?? exchange.displayText,
+    });
   };
 
   return {
     messages,
-    isStreaming,
+    isStreaming: run.running,
     error,
-    agentStatus,
+    agentStatus: run.progress,
     activeMessageId,
     lastExchange,
     send,
     resumeRun: (snapshot) => {
-      if (snapshot.run) void send(snapshot.run.request.message, snapshot.run.request.context ?? undefined, snapshot.run.request.attachments,
-        { sessionId: snapshot.session.id, runId: snapshot.run.id });
+      const preset = snapshot.run?.request.preset;
+      const resumedRun = resumedTurn(snapshot, preset ? catalog?.preset(preset)?.label : undefined);
+      if (resumedRun) {
+        const { text, ...options } = resumedRun;
+        void send(text, options);
+      }
     },
-    onStop,
+    resumeCheckpoint: async (summary, requestId) => {
+      const preset = summary.request?.preset;
+      const next = checkpointTurn(summary, requestId, preset ? catalog?.preset(preset)?.label : undefined);
+      if (next) {
+        const { text, ...options } = next;
+        await send(text, options);
+      }
+    },
+    onStop: () => {
+      stopRequestedRef.current = turnRef.current;
+      run.stop();
+    },
     onRetry,
     resetChatUI,
-    abortRef,
+    detach,
     setMessages,
-    setIsStreaming,
-    setAgentStatus,
   };
 }

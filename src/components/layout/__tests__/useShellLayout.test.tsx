@@ -4,7 +4,7 @@ import { cleanup, renderHook } from '@testing-library/react';
 const panels = {
   isOpen: true,
   isDesktop: true,
-  toolsDocked: true,
+  panelsDocked: true,
   leftWidth: 280,
   rightWidth: 420,
   leftCollapsed: false,
@@ -25,7 +25,7 @@ function width(value: number) {
 }
 
 beforeEach(() => {
-  Object.assign(panels, { isOpen: true, isDesktop: true, toolsDocked: true, leftCollapsed: false });
+  Object.assign(panels, { isOpen: true, isDesktop: true, panelsDocked: true, leftCollapsed: false });
   media.sidebarDocked = true;
   setLeftSidebarOverride(false);
 });
@@ -49,13 +49,13 @@ describe('useLeftSidebarAutoHidden', () => {
     // 900–1023px: the left sidebar docks, and so does the right one, at a
     // fixed share of the window. The two never leave a readable page.
     width(1000);
-    Object.assign(panels, { isDesktop: false, toolsDocked: true });
+    Object.assign(panels, { isDesktop: false, panelsDocked: true });
     expect(renderHook(() => useLeftSidebarAutoHidden()).result.current).toBe(true);
   });
 
   it('leaves the left sidebar alone when the author asked for it back', () => {
     width(1000);
-    Object.assign(panels, { isDesktop: false, toolsDocked: true });
+    Object.assign(panels, { isDesktop: false, panelsDocked: true });
     setLeftSidebarOverride(true);
     expect(renderHook(() => useLeftSidebarAutoHidden()).result.current).toBe(false);
   });
@@ -63,7 +63,7 @@ describe('useLeftSidebarAutoHidden', () => {
   it('has nothing to hide where the left sidebar is a drawer', () => {
     width(800);
     media.sidebarDocked = false;
-    Object.assign(panels, { isDesktop: false, toolsDocked: true });
+    Object.assign(panels, { isDesktop: false, panelsDocked: true });
     expect(renderHook(() => useLeftSidebarAutoHidden()).result.current).toBe(false);
   });
 });

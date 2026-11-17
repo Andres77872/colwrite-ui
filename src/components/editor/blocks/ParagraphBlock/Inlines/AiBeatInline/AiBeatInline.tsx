@@ -1,21 +1,28 @@
-import { useMemo, useRef, useState } from 'react';
-import { usePageReadOnly, type AiBeatChild } from '@/editor';
-import type { AiBeatWidgetProps } from '../types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useDocumentActions,
+  useDocumentId,
+  useEditorDoc,
+  useEditorActions,
+  usePageReadOnly,
+  type AiBeatChild,
+  type Block,
+} from '@/editor';
+import type { InlineWidgetProps } from '../types';
 import { cn } from '@/lib/utils';
+import { modKeyLabel } from '@/components/layout/Shortcuts/shortcuts';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { runAgentTurn } from '@/api/assistant/agentChat';
-import { useAgentEngine } from '@/components/preferences/agentEngineContextState';
-import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
-import {
-  AgentStatusLine,
-  advanceProgress,
-  progressForStatus,
-  type AgentProgress,
-} from '@/components/editor/AgentProgress';
-import { toolRunningLabel } from '@/components/editor/ChatAssistant/AgentActivity/toolMeta';
-import { friendlyStreamError } from '@/components/editor/ChatAssistant/chatUtils';
+import { AgentStatusLine } from '@/components/editor/AgentProgress';
+import { useAgentRun } from '@/components/editor/AgentRun';
+import { buildBeatMessage } from '@/components/editor/AskAi/target';
+import { resolveAssistantOutput } from '@/editor/assistantOutput';
+import { assistantOutputBlocks } from '@/editor/markdown';
+import { buildBibliography } from '@/editor/citations';
+import { useCitationProcessor } from '@/editor/csl/useCitationProcessor';
+import type { AgentSource } from '@/api/assistant/streamParser';
+import { ProposedBlockView } from '@/components/editor/Review/ProposedBlockView';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import { stopEditorEvents, useInlineChild } from '../shared';
 import { AlertCircle, ChevronDown, ChevronRight, Sparkles, Square, Trash2 } from 'lucide-react';
@@ -28,32 +35,56 @@ const MAX_PROMPT_LENGTH = 2000;
  * child whose type changed in place rendered fewer hooks than the previous
  * pass and crashed React.
  */
-export function AiBeatInline({ child, ...rest }: AiBeatWidgetProps) {
+export function AiBeatInline({ child, ...rest }: InlineWidgetProps) {
   if (child.type !== 'aiBeat') return null;
   return <AiBeatInlineContent child={child} {...rest} />;
 }
 
-function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
-  const { blockId, child, updateHtml, refs, documentId, ensureRemoteDocument } = props;
+function AiBeatInlineContent(props: InlineWidgetProps<AiBeatChild>) {
+  const { blockId, child, updateHtml, refs } = props;
   const { patch, remove } = useInlineChild(props);
   const readOnly = usePageReadOnly();
-  const engines = useAgentEngine();
-  const workspaceId = useWorkspaceId();
+  const { doc: { citationStyle } } = useEditorDoc();
+  const documentId = useDocumentId();
+  const { ensureRemoteDocument, hasPendingEdits, saveRemote } = useDocumentActions();
+  const { batch, addParagraphChild, insertBlocksAfter, replaceBlocks, upsertSources } = useEditorActions();
+  const agent = useAgentRun({
+    surface: 'inline',
+    document: { documentId, ensureRemoteDocument, hasPendingEdits, saveRemote },
+  });
+  const { progress, sources, running: generating } = agent;
 
   // Only the streamed output is local: it arrives token by token, and writing
   // every token into the document would put thousands of entries through the
   // autosave path for one generation. It is committed to the child when the
   // stream ends.
   const [streamed, setStreamed] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
-  const [progress, setProgress] = useState<AgentProgress | null>(null);
   const [error, setError] = useState('');
-  const abortRef = useRef<AbortController | null>(null);
+  /** Said once, when a generation ends: never a live region that reads every token. */
+  const [announcement, setAnnouncement] = useState('');
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const message = child.message ?? '';
   const prompt = child.prompt ?? '';
-  const output = streamed ?? child.output ?? '';
+  const storedOutput = useMemo(
+    () => streamed === null ? child.output : resolveAssistantOutput(streamed, sources),
+    [child.output, streamed, sources],
+  );
+  const output = storedOutput?.text ?? '';
   const collapsed = child.collapsed === true;
+  // The reply is markdown, shown and inserted as the blocks it makes.
+  const blocks = useMemo(
+    () => assistantOutputBlocks(storedOutput),
+    [storedOutput],
+  );
+  useCitationProcessor((storedOutput?.sources.length ?? 0) > 0);
+  const bibliography = buildBibliography(blocks, { style: citationStyle });
 
   const messageOverLimit = message.length > MAX_PROMPT_LENGTH;
   const promptOverLimit = prompt.length > MAX_PROMPT_LENGTH;
@@ -61,105 +92,72 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
 
   const onGenerate = async () => {
     if (generating || hasValidationError || !message.trim()) return;
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setGenerating(true);
-    setProgress({ phase: 'thinking', label: 'Thinking…', since: Date.now() });
     setError('');
+    setAnnouncement('');
     setStreamed('');
 
     let text = '';
-    let failed = false;
-    const moveTo = (next: Pick<AgentProgress, 'phase' | 'label'>) => {
-      if (!controller.signal.aborted) setProgress((current) => advanceProgress(current, next));
-    };
-    try {
-      // Shared with the assistant and the selection toolbar, so a draft that
-      // several of them reach for at once is created exactly once.
-      const docId = documentId ?? (await ensureRemoteDocument());
-      if (!docId) {
-        setError('This page could not be saved, so nothing could be generated for it.');
-        return;
-      }
-      const outcome = await runAgentTurn(
-        {
-          workspace_id: workspaceId,
-          message: `Use this prompt: ${prompt}\n\nGenerate response for: ${message}`,
-          document_id: docId,
-          // Without this the agent runs with the document tools and can edit
-          // the paper while the author is still deciding whether to keep the
-          // text this widget is generating. AIBeat produces text; it does not
-          // get to change anything.
-          mode: 'rewrite',
-          // A draft, not a conversation: no chat is created for it.
-          ephemeral: true,
-          ...engines.requestFor('inline'),
+    const found = new Map<string, AgentSource>();
+    const outcome = await agent.start({
+      request: { message: buildBeatMessage(blockId, message, prompt), context: { block_id: blockId } },
+      handlers: {
+        onEvidence: ({ sources }) => { for (const source of sources) found.set(source.handle, source); },
+        onToken: (content) => {
+          text += content;
+          setStreamed(text);
         },
-        {
-          onToken: (content) => {
-            text += content;
-            setStreamed(text);
-            setProgress({ phase: 'writing', label: 'Writing…', since: Date.now() });
-          },
-          onReasoning: () => moveTo({ phase: 'thinking', label: 'Thinking…' }),
-          onStatus: (state, detail) => {
-            const next = progressForStatus(state, detail);
-            if (next) moveTo(next);
-          },
-          onToolCallStart: (tool) => moveTo({ phase: 'tool', label: `${toolRunningLabel(tool)}…` }),
-          onError: (code, detail) => {
-            failed = true;
-            setError(friendlyStreamError(code, detail).message);
-            engines.noteRunError(code);
-          },
-        },
-        { signal: controller.signal },
-      );
-      // A stream that closed without finishing is not a finished draft.
-      if (!failed && outcome.terminal === null && !controller.signal.aborted) {
-        setError('The connection closed before the assistant finished; the text may be incomplete.');
-      }
-      patch({ output: text });
-    } catch (err) {
-      if (!controller.signal.aborted) {
-        setError(err instanceof Error ? err.message : 'Generation failed');
-      }
-      // Whatever arrived before the failure is still the author's to keep.
-      if (text) patch({ output: text });
-    } finally {
-      setGenerating(false);
-      setProgress(null);
-      setStreamed(null);
-      abortRef.current = null;
-    }
-  };
-
-  const onStop = () => {
-    abortRef.current?.abort();
-    abortRef.current = null;
+      },
+    });
+    // The widget is gone, and the run with it: there is nothing to write to.
+    if (!mountedRef.current) return;
+    setStreamed(null);
+    if (outcome.status === 'failed') setError(outcome.error.message);
+    // Whatever arrived is the author's to keep, stopped or failed part-way.
+    if (text || outcome.status === 'done') patch({ output: resolveAssistantOutput(text, [...found.values()]) });
+    setAnnouncement(
+      outcome.status === 'done'
+        ? text.trim() ? 'The AI passage is ready.' : 'The assistant returned nothing.'
+        : outcome.status === 'failed' ? 'The AI passage did not finish.' : 'Stopped.',
+    );
   };
 
   /**
-   * Accept: the generated text replaces the widget.
+   * Accept: the generated text replaces the widget, as the blocks it makes.
    *
-   * It used to insert the text *after* the widget and leave the widget behind,
-   * so accepting produced a paragraph with the text plus the panel that made
-   * it, and the author had to delete the panel by hand every time.
+   * One plain paragraph takes the widget's place in the sentence, widgets and
+   * all; anything else (a list, several paragraphs, a table) goes in after
+   * the paragraph, or in place of it when the widget was all it held. One
+   * undo step either way.
    */
   const onAccept = () => {
     const host = refs.current[blockId];
     // The id arrives from tool payloads, so it is escaped before it goes into
     // a selector.
     const placeholder = host?.querySelector(`[data-child-id="${CSS.escape(child.id)}"]`);
-    if (!host || !placeholder) return;
+    if (!host || !placeholder || blocks.length === 0) return;
+    const [only] = blocks;
+    const single = blocks.length === 1 && only?.type === 'paragraph' && !only.variant ? only : null;
 
-    placeholder.replaceWith(document.createTextNode(output));
-    // Drop the child before reserializing: the placeholder is already gone
-    // from the DOM, and a child with no placeholder fails the paragraph's
-    // html/children invariant.
-    props.removeParagraphChild(blockId, child.id);
-    updateHtml(blockId, serializeEditableHtml(host));
+    batch(() => {
+      if (storedOutput?.sources.length) upsertSources(storedOutput.sources);
+      if (single) {
+        const template = document.createElement('template');
+        template.innerHTML = single.html;
+        for (const added of single.children ?? []) addParagraphChild(blockId, added);
+        placeholder.replaceWith(template.content);
+      } else {
+        placeholder.remove();
+      }
+      // Drop the child before reserializing: the placeholder is already gone
+      // from the DOM, and a child with no placeholder fails the paragraph's
+      // html/children invariant.
+      props.removeParagraphChild(blockId, child.id);
+      updateHtml(blockId, serializeEditableHtml(host));
+      if (single) return;
+      const emptied = !host.textContent?.trim() && !host.querySelector('[data-child-id]');
+      if (emptied) replaceBlocks([blockId], blocks as Block[]);
+      else insertBlocksAfter(blockId, blocks as Block[]);
+    });
   };
 
   const summary = useMemo(() => {
@@ -182,7 +180,9 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
           <Sparkles aria-hidden="true" className="h-3.5 w-3.5 text-ai" />
           AI passage
         </span>
-        <span className="mt-1 block whitespace-pre-wrap text-sm text-muted-foreground">{output.trim() || message.trim() || 'Empty'}</span>
+        <span className="mt-1 block text-sm">
+          {blocks.length ? blocks.map((block) => <ProposedBlockView key={block.id} block={block} bibliography={bibliography} />) : message.trim() || 'Empty'}
+        </span>
       </span>
     );
   }
@@ -283,11 +283,12 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
           </span>
 
           {(output || generating) && (
-            <span
-              className="block max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-background p-2.5 text-sm ring-1 ring-inset ring-border"
-              aria-live="polite"
-            >
-              {output}
+            // Shown as the blocks it will become. Not a live region: read out
+            // on every token it was noise; the end is announced once below.
+            <span className="block max-h-48 space-y-1.5 overflow-auto rounded-md bg-background p-2.5 text-sm ring-1 ring-inset ring-border">
+              {blocks.map((block) => (
+                  <ProposedBlockView key={block.id} block={block} bibliography={bibliography} />
+              ))}
               {generating && (
                 <span
                   aria-hidden="true"
@@ -296,6 +297,9 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
               )}
             </span>
           )}
+          <span aria-live="polite" className="sr-only">
+            {announcement}
+          </span>
 
           {error && (
             <span role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
@@ -306,7 +310,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
 
           <span className="flex flex-wrap items-center gap-1.5">
             {generating ? (
-              <Button type="button" variant="destructive" size="sm" onClick={onStop}>
+              <Button type="button" variant="destructive" size="sm" onClick={agent.stop}>
                 <Square className="h-3.5 w-3.5" />
                 Stop
               </Button>
@@ -336,7 +340,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
               size="sm"
               className="text-muted-foreground"
               disabled={!output.trim() || generating}
-              onClick={() => patch({ output: '' })}
+              onClick={() => patch({ output: null })}
             >
               Clear
             </Button>
@@ -351,7 +355,7 @@ function AiBeatInlineContent(props: AiBeatWidgetProps<AiBeatChild>) {
               </span>
             ) : (
               <span className="ml-auto text-xs text-muted-foreground">
-                Ctrl+Enter to generate · Esc to collapse
+                {modKeyLabel('Enter')} to generate · Esc to collapse
               </span>
             )}
           </span>

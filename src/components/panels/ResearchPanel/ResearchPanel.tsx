@@ -1,93 +1,122 @@
-import { Fragment, useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { ArrowRight, FileSearch, Search, SlidersHorizontal, X } from 'lucide-react';
-import { searchArxiv } from '@/data/arxiv';
-import { searchColpaliArxiv } from '@/data/colpali';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { NativeSelect } from '@/components/ui/select';
-import { Spinner } from '@/components/ui/spinner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useAgentTools } from '@/components/preferences';
+import { useAssistantCatalog } from '@/components/preferences';
+import { useBibliography } from '@/editor';
+import { MAX_CLAIM_SOURCES } from '@/data/claims';
 import { cn } from '@/lib/utils';
 import { usePanels, type ResearchSourceId } from '../panelsContextState';
-import { RESEARCH_SOURCE_IDS, RESEARCH_SOURCES } from '../toolsConfig';
-import {
-  NO_FILTERS,
-  SemanticScholarResults,
-  activeFilterCount,
-  useSemanticScholar,
-  type SemanticScholarFilters,
-} from '../SemanticScholarPanel';
-import { ArxivResults, ColpaliResults } from './PaperResults';
-import { usePaperSearch } from './usePaperSearch';
+import { RESEARCH_SOURCE_IDS, RESEARCH_SOURCES } from '../sidebarPanels';
+import type { PaperSearchParams } from '@/data/papers';
+import { PaperResults } from './PaperResults';
+import { ClaimCheckResults, type ClaimRequest } from './ClaimCheckResults';
+
+/** A key a claim check can name: an identifier with its scheme. */
+const CHECKABLE = /^(doi|arxiv|pmid|pmcid|openalex|s2|corpusid):\S/i;
 
 const RESULT_LIMITS = [10, 20, 30, 40, 50] as const;
 
-const runArxiv = (query: string, limit: number) => searchArxiv({ query, limit, lite_search: true });
-const runColpali = (query: string, limit: number) => searchColpaliArxiv({ query, limit });
+/** The search's filters, as the paper route takes them. */
+type PaperFilters = {
+  yearFrom: string;
+  yearTo: string;
+  kind: NonNullable<PaperSearchParams['kind']>;
+  sort: NonNullable<PaperSearchParams['sort']>;
+  openAccessOnly: boolean;
+};
 
-type S2Mode = 'papers' | 'claim';
+const NO_FILTERS: PaperFilters = { yearFrom: '', yearTo: '', kind: 'any', sort: 'relevance', openAccessOnly: false };
+
+function activeFilterCount(filters: PaperFilters): number {
+  return [filters.yearFrom.trim(), filters.yearTo.trim(), filters.kind !== 'any', filters.sort !== 'relevance', filters.openAccessOnly]
+    .filter(Boolean).length;
+}
+
+function yearOf(value: string): number | null {
+  const year = Number(value.trim());
+  return Number.isInteger(year) && year >= 1000 && year <= 2200 ? year : null;
+}
 
 /**
- * ResearchPanel — one search box over every paper source.
+ * ResearchPanel — one search box over the paper sources.
  *
- * The query is typed once, the source is a switch under it, and every source
- * keeps its own results for as long as the sidebar is open. A source the
- * account has not enabled cannot be picked, so its API is never called.
+ * The query is typed once and the source is a switch under it. Paper search
+ * is the workspace's paper route, which asks every paper source the account
+ * and the workspace allow and merges what they return, so a paper reads the
+ * same here as in the citation picker and the assistant's replies (P2.UI-2).
  *
  * "Inside my PDFs" is not searched here: it hands the query to the Library,
  * which owns the one PDF search and shows its matches where each PDF can be
  * read, moved and used.
  */
 export function ResearchPanel() {
-  const { researchSource, setResearchSource, intent, openSidebar, setTool } = usePanels();
-  const { isSourceEnabled, switchedOffBy } = useAgentTools();
+  const { researchSource, setResearchSource, intent, openSidebar, setPanel } = usePanels();
+  const { papers } = useAssistantCatalog();
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(20);
-  const [filters, setFilters] = useState<SemanticScholarFilters>(NO_FILTERS);
-  const [claimYear, setClaimYear] = useState('');
-  const [s2Mode, setS2Mode] = useState<S2Mode>('papers');
+  const [filters, setFilters] = useState<PaperFilters>(NO_FILTERS);
+  const [submitted, setSubmitted] = useState<Omit<PaperSearchParams, 'cursor'> | null>(null);
+  const [claimRequest, setClaimRequest] = useState<ClaimRequest | null>(null);
+  const claimId = useRef(0);
+  // The page's cited works a claim can be judged against, by identifier.
+  const { entries } = useBibliography();
+  const citedKeys = entries.map((entry) => entry.key).filter((key) => CHECKABLE.test(key)).slice(0, MAX_CLAIM_SOURCES);
+  const [againstPage, setAgainstPage] = useState(false);
 
-  const arxiv = usePaperSearch('arxiv', runArxiv);
-  const colpali = usePaperSearch('colpali', runColpali);
-  const s2 = useSemanticScholar();
-
-  const enabled = (id: ResearchSourceId) => {
-    const gate = RESEARCH_SOURCES[id].sourceId;
-    return !gate || isSourceEnabled(gate);
-  };
-  // A persisted choice can outlive the account setting that allowed it.
+  const enabled = (id: ResearchSourceId) => !RESEARCH_SOURCES[id].needsPapers || papers.on;
+  // A persisted choice can outlive the setting that allowed it.
   const source = enabled(researchSource)
     ? researchSource
     : RESEARCH_SOURCE_IDS.find(enabled) ?? 'pdfs';
-  const claimMode = source === 'semantic-scholar' && s2Mode === 'claim';
-  const loading =
-    source === 'arxiv' ? arxiv.loading
-    : source === 'colpali' ? colpali.loading
-    : source === 'pdfs' ? false
-    : claimMode ? Boolean(s2.assessment?.loading)
-    : s2.loading;
 
-  const run = (text: string) => {
-    if (!text.trim()) return;
-    if (source === 'arxiv') void arxiv.search(text, limit);
-    else if (source === 'colpali') void colpali.search(text, limit);
-    else if (source === 'pdfs') openSidebar('library', { tab: 'library', query: text.trim() });
-    else if (claimMode) void s2.assess(text, limit, claimYear);
-    else void s2.search(text, limit, filters);
+  const checkClaim = (claim: string, sources: string[]) => {
+    claimId.current += 1;
+    setClaimRequest({ id: claimId.current, claim, sources, at: Date.now() });
   };
 
-  // "Find sources for this" from elsewhere in the app: fill the box and run it.
+
+
+  /** Run the box's text on the source shown, or on `claim` (a claim handed over, with its works). */
+  const run = (text: string, claim?: { sources: string[] }) => {
+    if (!text.trim()) return;
+    if (claim) {
+      setResearchSource('claims');
+      checkClaim(text.trim(), claim.sources);
+      return;
+    }
+    if (source === 'claims') {
+      checkClaim(text.trim(), againstPage ? citedKeys : []);
+      return;
+    }
+    if (source === 'pdfs') {
+      openSidebar('library', { tab: 'library', query: text.trim() });
+      return;
+    }
+    setSubmitted({
+      query: text.trim(),
+      limit,
+      yearFrom: yearOf(filters.yearFrom),
+      yearTo: yearOf(filters.yearTo),
+      kind: filters.kind,
+      sort: filters.sort,
+      openAccessOnly: filters.openAccessOnly,
+    });
+  };
+
+  // "Search papers for this" and "Check this claim" from elsewhere in the app: fill the box and run it.
   const handledIntent = useRef<number | null>(null);
   useEffect(() => {
     if (intent?.tab !== 'research' || handledIntent.current === intent.id) return;
     handledIntent.current = intent.id;
-    setQuery(intent.query);
-    run(intent.query);
+    const text = 'claim' in intent ? intent.claim : intent.query;
+    setQuery(text);
+    run(text, 'claim' in intent ? { sources: intent.sources ?? [] } : undefined);
     // Runs once per intent; `run` reads the current source and filters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intent]);
@@ -100,11 +129,8 @@ export function ResearchPanel() {
   const clearQuery = () => setQuery('');
 
   const meta = RESEARCH_SOURCES[source];
-  const filterCount =
-    source !== 'semantic-scholar' ? 0
-    : claimMode ? Number(Boolean(claimYear.trim()))
-    : activeFilterCount(filters);
-  const hasFilters = source !== 'pdfs';
+  const filterCount = source === 'papers' ? activeFilterCount(filters) : 0;
+  const hasFilters = source === 'papers';
 
   return (
     <div className="@container/research flex h-full min-h-0 flex-col">
@@ -117,33 +143,14 @@ export function ResearchPanel() {
             />
             {/* Not disabled while loading: disabling a focused field drops
                 focus and stops the author refining a query already on screen. */}
-            {claimMode ? (
-              // A claim is a sentence: it wraps and grows instead of scrolling
-              // sideways and losing its start. Enter checks it.
-              <Textarea
-                rows={1}
-                className="max-h-32 min-h-9 resize-none py-2 pl-8 pr-8 text-sm leading-5 [field-sizing:content]"
-                placeholder="State one claim to check…"
-                aria-label="Claim to check"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                    event.preventDefault();
-                    run(query);
-                  }
-                }}
-              />
-            ) : (
-              <Input
-                type="search"
-                className="h-9 pl-8 pr-8 text-sm [&::-webkit-search-cancel-button]:appearance-none"
-                placeholder={meta.placeholder}
-                aria-label={meta.placeholder}
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            )}
+            <Input
+              type="search"
+              className="h-9 pl-8 pr-8 text-sm [&::-webkit-search-cancel-button]:appearance-none"
+              placeholder={meta.placeholder}
+              aria-label={meta.placeholder}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
             {query && (
               <button
                 type="button"
@@ -160,15 +167,10 @@ export function ResearchPanel() {
           {hasFilters ? (
             <FiltersPopover
               count={filterCount}
-              source={source}
-              claimMode={claimMode}
               limit={limit}
               onLimitChange={setLimit}
               filters={filters}
               onFiltersChange={setFilters}
-              claimYear={claimYear}
-              onClaimYearChange={setClaimYear}
-              disabled={loading && !claimMode}
             />
           ) : (
             <span aria-hidden="true" className="h-9 w-9 shrink-0" />
@@ -180,15 +182,14 @@ export function ResearchPanel() {
                 variant="secondary"
                 size="sm"
                 className="h-9"
-                // A newer claim may replace one still being checked; searches wait.
-                disabled={(loading && !claimMode) || !query.trim()}
-                aria-label={claimMode ? 'Check claim' : 'Search'}
+                disabled={!query.trim()}
+                aria-label="Search"
               >
-                {loading ? <Spinner /> : <ArrowRight aria-hidden="true" />}
+                <ArrowRight aria-hidden="true" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {claimMode ? 'Check claim' : 'Search'}
+              Search
               <span className="ml-2 text-tooltip-foreground/60">Enter</span>
             </TooltipContent>
           </Tooltip>
@@ -198,26 +199,28 @@ export function ResearchPanel() {
           source={source}
           onChange={setResearchSource}
           enabled={enabled}
-          // The workspace's policy, not the person's setting, took it away here.
-          offHere={(id) => {
-            const gate = RESEARCH_SOURCES[id].sourceId;
-            return Boolean(gate && switchedOffBy('source', gate));
-          }}
+          // Why it is off here, in the catalog's words: the workspace's
+          // policy, the account's switch or the server.
+          reasonOff={(id) => (RESEARCH_SOURCES[id].needsPapers ? papers.reason : null)}
         />
-        {source === 'semantic-scholar' && <S2ModeSwitch mode={s2Mode} onChange={setS2Mode} />}
+        {source === 'claims' && citedKeys.length > 0 && (
+          <label className="flex items-center gap-2 px-0.5 text-xs text-muted-foreground">
+            <Checkbox checked={againstPage} onCheckedChange={(value) => setAgainstPage(value === true)} />
+            Against the works this page cites ({citedKeys.length})
+          </label>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-4">
-        {source === 'arxiv' && <ArxivResults state={arxiv} />}
-        {source === 'colpali' && <ColpaliResults state={colpali} />}
-        {source === 'semantic-scholar' && <SemanticScholarResults state={s2} mode={s2Mode} />}
+        {source === 'papers' && <PaperResults params={submitted} />}
+        {source === 'claims' && <ClaimCheckResults request={claimRequest} />}
         {source === 'pdfs' && (
           <EmptyState
             icon={FileSearch}
             title="Search inside my PDFs"
             description="Every PDF you uploaded, searched word for word. The matches open in the Library, where you can read each one in context."
             action={
-              <Button variant="outline" size="sm" onClick={() => setTool('library')}>
+              <Button variant="outline" size="sm" onClick={() => setPanel('library')}>
                 Open Library
               </Button>
             }
@@ -235,11 +238,10 @@ const PILL_ON = 'bg-active font-medium text-foreground';
 const PILL_OFF = 'text-muted-foreground hover:bg-hover hover:text-foreground';
 
 /**
- * arXiv · Semantic Scholar · Paper pages · Inside my PDFs, as one row of quiet
- * pills.
+ * Papers · Inside my PDFs, as one row of quiet pills.
  *
- * Never scrolls: in a narrow sidebar the labels shorten — arXiv · Scholar ·
- * Pages · PDFs — and the full name stays the accessible name and the tooltip.
+ * Never scrolls: in a narrow sidebar the labels shorten — Scholar · PDFs —
+ * and the full name stays the accessible name and the tooltip.
  * The length follows the sidebar's width only, never the selection, so a
  * label never rewrites itself under the pointer that just picked it.
  */
@@ -247,12 +249,12 @@ function SourceSwitch({
   source,
   onChange,
   enabled,
-  offHere,
+  reasonOff,
 }: {
   source: ResearchSourceId;
   onChange: (source: ResearchSourceId) => void;
   enabled: (source: ResearchSourceId) => boolean;
-  offHere: (source: ResearchSourceId) => boolean;
+  reasonOff: (source: ResearchSourceId) => string | null;
 }) {
   return (
     <div role="radiogroup" aria-label="Search in" className="-mx-1 flex min-w-0 items-center gap-0.5 px-1">
@@ -262,7 +264,7 @@ function SourceSwitch({
           id={id}
           active={id === source}
           available={enabled(id)}
-          offInWorkspace={!enabled(id) && offHere(id)}
+          reasonOff={enabled(id) ? null : reasonOff(id)}
           onSelect={() => onChange(id)}
         />
       ))}
@@ -287,14 +289,14 @@ function SourcePill({
   id,
   active,
   available,
-  offInWorkspace,
+  reasonOff,
   onSelect,
 }: {
   id: ResearchSourceId;
   active: boolean;
   available: boolean;
-  /** The workspace's policy switched outside research off for everyone here. */
-  offInWorkspace: boolean;
+  /** Why it is off here, as the catalog says it. */
+  reasonOff: string | null;
   onSelect: () => void;
 }) {
   const reasonId = useId();
@@ -330,9 +332,7 @@ function SourcePill({
       </Tooltip>
     );
   }
-  const reason = offInWorkspace
-    ? `${label} is switched off in this workspace`
-    : `Enable ${label} in Settings → AI & tools`;
+  const reason = `${label}: ${reasonOff ?? 'Not available here.'}`;
   // A disabled button gets no pointer events, so the tooltip hangs off a
   // wrapper; the same reason is the button's description.
   return (
@@ -350,69 +350,20 @@ function SourcePill({
   );
 }
 
-/**
- * Find papers · Check a claim — Semantic Scholar's two modes, as a quiet
- * second row under the source switch while Semantic Scholar is picked. Text,
- * not icons: "check a claim" has no icon anyone reads correctly, and the
- * source row above keeps its labels and its place.
- */
-function S2ModeSwitch({ mode, onChange }: { mode: S2Mode; onChange: (mode: S2Mode) => void }) {
-  const options = [
-    { value: 'papers', label: 'Find papers' },
-    { value: 'claim', label: 'Check a claim' },
-  ] as const;
-  return (
-    <div role="radiogroup" aria-label="Semantic Scholar mode" className="-mx-1 -mt-1 flex items-center px-1">
-      {options.map(({ value, label }, index) => (
-        <Fragment key={value}>
-          {index > 0 && (
-            <span aria-hidden="true" className="text-xs text-muted-foreground/60">
-              ·
-            </span>
-          )}
-          <button
-            type="button"
-            role="radio"
-            aria-checked={mode === value}
-            aria-label={label}
-            onClick={() => onChange(value)}
-            className={cn(
-              'inline-flex h-6 items-center whitespace-nowrap rounded-sm px-2 text-xs transition-colors duration-120 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              mode === value ? 'font-medium text-foreground' : 'text-muted-foreground hover:bg-hover hover:text-foreground',
-            )}
-          >
-            <StableLabel>{label}</StableLabel>
-          </button>
-        </Fragment>
-      ))}
-    </div>
-  );
-}
-
 function FiltersPopover({
   count,
-  source,
-  claimMode,
   limit,
   onLimitChange,
   filters,
   onFiltersChange,
-  claimYear,
-  onClaimYearChange,
-  disabled,
 }: {
   count: number;
-  source: ResearchSourceId;
-  claimMode: boolean;
   limit: number;
   onLimitChange: (limit: number) => void;
-  filters: SemanticScholarFilters;
-  onFiltersChange: (filters: SemanticScholarFilters) => void;
-  claimYear: string;
-  onClaimYearChange: (year: string) => void;
-  disabled: boolean;
+  filters: PaperFilters;
+  onFiltersChange: (filters: PaperFilters) => void;
 }) {
-  const set = (patch: Partial<SemanticScholarFilters>) => onFiltersChange({ ...filters, ...patch });
+  const set = (patch: Partial<PaperFilters>) => onFiltersChange({ ...filters, ...patch });
   const label = 'text-xs font-medium text-muted-foreground';
   return (
     <Popover>
@@ -432,68 +383,65 @@ function FiltersPopover({
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 space-y-3">
         <p className="text-sm font-medium">Filters</p>
-        {source === 'semantic-scholar' && claimMode && (
+        <div className="grid grid-cols-2 gap-2">
           <label className="block space-y-1">
-            <span className={label}>Limit sources to year</span>
+            <span className={label}>From year</span>
             <Input
-              value={claimYear}
-              onChange={(event) => onClaimYearChange(event.target.value)}
-              placeholder="Any year"
-              maxLength={64}
-              aria-label="Limit claim sources to year"
+              inputMode="numeric"
+              value={filters.yearFrom}
+              onChange={(event) => set({ yearFrom: event.target.value })}
+              placeholder="2020"
+              maxLength={4}
+              aria-label="Published from year"
             />
           </label>
-        )}
-        {source === 'semantic-scholar' && !claimMode && (
-          <>
-            <div className="grid grid-cols-2 gap-2">
-              <label className="block space-y-1">
-                <span className={label}>Year or range</span>
-                <Input
-                  value={filters.year}
-                  onChange={(event) => set({ year: event.target.value })}
-                  placeholder="2020-2026"
-                  maxLength={64}
-                  disabled={disabled}
-                  aria-label="Publication year filter"
-                />
-              </label>
-              <label className="block space-y-1">
-                <span className={label}>Min. citations</span>
-                <Input
-                  type="number"
-                  min={0}
-                  max={100_000_000}
-                  step={1}
-                  value={filters.minCitationCount}
-                  onChange={(event) => set({ minCitationCount: event.target.value })}
-                  placeholder="0"
-                  disabled={disabled}
-                  aria-label="Minimum citation count"
-                />
-              </label>
-            </div>
-            <label className="block space-y-1">
-              <span className={label}>Fields of study</span>
-              <Input
-                value={filters.fieldsOfStudy}
-                onChange={(event) => set({ fieldsOfStudy: event.target.value })}
-                placeholder="Medicine, Computer Science"
-                disabled={disabled}
-                aria-label="Fields of study filter"
-              />
-            </label>
-            <label className="flex cursor-pointer items-center gap-2 text-sm">
-              <Checkbox
-                checked={filters.openAccessOnly}
-                onCheckedChange={(checked) => set({ openAccessOnly: checked === true })}
-                disabled={disabled}
-                aria-label="Open-access papers only"
-              />
-              Open-access papers only
-            </label>
-          </>
-        )}
+          <label className="block space-y-1">
+            <span className={label}>To year</span>
+            <Input
+              inputMode="numeric"
+              value={filters.yearTo}
+              onChange={(event) => set({ yearTo: event.target.value })}
+              placeholder="2026"
+              maxLength={4}
+              aria-label="Published up to year"
+            />
+          </label>
+        </div>
+        <label className="flex items-center justify-between gap-3">
+          <span className={label}>Kind</span>
+          <NativeSelect
+            className="w-32"
+            value={filters.kind}
+            aria-label="Kind of work"
+            onChange={(event) => set({ kind: event.target.value as PaperFilters['kind'] })}
+          >
+            <option value="any">Any</option>
+            <option value="article">Articles</option>
+            <option value="review">Reviews</option>
+            <option value="preprint">Preprints</option>
+          </NativeSelect>
+        </label>
+        <label className="flex items-center justify-between gap-3">
+          <span className={label}>Order</span>
+          <NativeSelect
+            className="w-32"
+            value={filters.sort}
+            aria-label="Order of results"
+            onChange={(event) => set({ sort: event.target.value as PaperFilters['sort'] })}
+          >
+            <option value="relevance">Most relevant</option>
+            <option value="recent">Most recent</option>
+            <option value="cited">Most cited</option>
+          </NativeSelect>
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <Checkbox
+            checked={filters.openAccessOnly}
+            onCheckedChange={(checked) => set({ openAccessOnly: checked === true })}
+            aria-label="Open-access papers only"
+          />
+          Open-access papers only
+        </label>
         <label className="flex items-center justify-between gap-3">
           <span className={label}>Results per search</span>
           <NativeSelect
@@ -501,7 +449,6 @@ function FiltersPopover({
             value={limit}
             aria-label="Number of results to return"
             onChange={(event) => onLimitChange(Number(event.target.value))}
-            disabled={disabled}
           >
             {RESULT_LIMITS.map((n) => (
               <option key={n} value={n}>

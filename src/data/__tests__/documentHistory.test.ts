@@ -17,6 +17,7 @@ import type { ChangeSetResponse, DocumentContentOutput, DocumentStateResponse, R
 import { http, pathOf, recordRequests, server } from '@/__tests__/server';
 import { wireBlock } from '@/dev/msw/fixtures';
 import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
+import { reference } from '@/__tests__/agentSource';
 
 const WS = TEST_WORKSPACE_ID;
 
@@ -254,13 +255,30 @@ describe('agent change sets', () => {
     base_content_hash: 'hash',
     base_etag: ETAG,
     base_revision_id: REV_A,
+    // The stored form (`ColWrite-api/docs/document-history-api.md`), then
+    // what the editor cannot apply as stored.
     operations: [
+      { op: 'replace_text', block_id: 'p1', find: 'Two', replace: 'Both', block: { id: 'p1', type: 'paragraph', html: 'Both', children: [] }, basis: ['author'], new_information: false },
+      { op: 'write_blocks', position: 'replace', block_id: 'p1', blocks: [{ id: 'p1', type: 'paragraph', html: 'rewritten', children: [] }], basis: ['10.1/x'], new_information: false },
+      { op: 'write_blocks', position: 'after', block_id: 'p1', blocks: [{ id: 'n1', type: 'divider' }, { id: 'n2', type: 'divider' }], new_information: true },
+      { op: 'write_blocks', position: 'append', blocks: [{ id: 'n3', type: 'divider' }], new_information: false },
+      // The API sends a basis with every stored operation, empty when it rests on nothing named.
+      { op: 'delete_blocks', block_ids: ['p2', 'p3'], basis: [], new_information: false },
+      { op: 'move_block', block_id: 'p1', position: 'before', target_block_id: 'p4', basis: [], new_information: false },
+      { op: 'set_meta', name: 'Renamed', citation_style: 'apa', new_information: false },
+      { op: 'add_sources', sources: [{ ...reference('doi:10.1234/c', { title: 'Later work', year: 2024 }), checked: null }], new_information: false },
+      // A style the page's CSL list does not have, and an old flat source: not staged.
+      { op: 'set_meta', citation_style: 'author-year', new_information: false },
+      { op: 'add_sources', sources: [{ key: '10.1/c', title: 'Later work', year: 2024 }], new_information: false },
+      { op: 'remove_sources', keys: ['10.1/d'], new_information: false },
+      // A name the API retired, refused rather than read under the new one.
       { op: 'replace_block', block_id: 'p1', block: { html: 'rewritten' } },
-      { op: 'insert_block_after', reference_id: 'p1', block: { id: 'n1', type: 'divider' } },
-      { op: 'reorder_block', block_id: 'p1', to_index: 2 },
-      { op: 'update_meta', meta: { name: 'Renamed' } },
-      { op: 'move_block', block_id: 'p1', to_index: 1 },
+      // A field this app does not know: a newer server's, not to be dropped.
+      { op: 'delete_blocks', block_ids: ['p1'], new_information: false, reason: 'later' },
       { op: 'unknown_future_op', payload: 'ignored' },
+      // Malformed: an append with an anchor, a replace whose first block changed id.
+      { op: 'write_blocks', position: 'append', block_id: 'p1', blocks: [{ id: 'n4', type: 'divider' }] },
+      { op: 'write_blocks', position: 'replace', block_id: 'p1', blocks: [{ id: 'other', type: 'divider' }] },
     ],
     proposer_id: 'usr-1',
     proposer_type: 'agent',
@@ -271,6 +289,7 @@ describe('agent change sets', () => {
     proposed_at: '2026-08-02T12:00:00Z',
     apply_policy: 'review',
     auto_blocked_reason: null,
+    groups: [],
     operation_decisions: [],
     operation_targets: null,
     compared_head_seq: null,
@@ -297,11 +316,27 @@ describe('agent change sets', () => {
     expect(changeSet.status).toBe('pending');
     expect(changeSet.baseEtag).toBe(ETAG);
     expect(changeSet.operations).toEqual([
-      { op: 'replace_block', blockId: 'p1', block: { html: 'rewritten' } },
-      { op: 'insert_block_after', referenceId: 'p1', block: { id: 'n1', type: 'divider' } },
-      { op: 'reorder_block', blockId: 'p1', toIndex: 2 },
-      { op: 'update_meta', meta: { name: 'Renamed' } },
+      { op: 'replace_text', blockId: 'p1', find: 'Two', replace: 'Both', block: { id: 'p1', type: 'paragraph', html: 'Both', children: [] }, basis: ['author'], newInformation: false },
+      { op: 'write_blocks', position: 'replace', blockId: 'p1', blocks: [{ id: 'p1', type: 'paragraph', html: 'rewritten', children: [] }], basis: ['10.1/x'], newInformation: false },
+      { op: 'write_blocks', position: 'after', blockId: 'p1', blocks: [{ id: 'n1', type: 'divider' }, { id: 'n2', type: 'divider' }], newInformation: true },
+      { op: 'write_blocks', position: 'append', blockId: null, blocks: [{ id: 'n3', type: 'divider' }], newInformation: false },
+      { op: 'delete_blocks', blockIds: ['p2', 'p3'], basis: [], newInformation: false },
+      { op: 'move_block', blockId: 'p1', position: 'before', targetBlockId: 'p4', basis: [], newInformation: false },
+      { op: 'set_meta', name: 'Renamed', citationStyle: 'apa', newInformation: false },
+      // A library record as the editor keeps it: absent rather than null.
+      { op: 'add_sources', sources: [reference('doi:10.1234/c', { title: 'Later work', year: 2024 })], newInformation: false },
+      { op: 'remove_sources', keys: ['10.1/d'], newInformation: false },
     ]);
+  });
+
+  it('retains the stored intent groups and their original operation indexes', async () => {
+    const groups: ChangeSetResponse['groups'] = [
+      { kind: 'wording', label: 'Wording', operations: [0, 1] },
+      { kind: 'new_content', label: 'New content', operations: [2, 3] },
+    ];
+    answerChangeSet({ ...changeSetPayload(), groups });
+    const changeSet = await getChangeSet(WS, DOC_ID, CS_ID);
+    expect(changeSet.groups).toEqual(groups);
   });
 
   it('getChangeSet flags operations with no editor mapping instead of dropping them', async () => {
@@ -311,7 +346,7 @@ describe('agent change sets', () => {
 
     // The review flow fails closed on these: staging only the mappable
     // operations and retiring the record would silently lose the rest.
-    expect(changeSet.unmappableOperations).toEqual(['move_block', 'unknown_future_op']);
+    expect(changeSet.unmappableOperations).toEqual(['set_meta', 'add_sources', 'replace_block', 'delete_blocks', 'unknown_future_op', 'write_blocks', 'write_blocks']);
   });
 
   it('rejectChangeSet posts to the reject action', async () => {
@@ -331,14 +366,16 @@ describe('agent change sets', () => {
     const reviewable = (over: Partial<ChangeSetResponse> = {}) =>
       changeSetPayload({
         operations: [
-          { op: 'replace_block', block_id: 'p1', block: { html: 'rewritten' } },
-          { op: 'insert_block_after', reference_id: 'p1', block: { id: 'n1', type: 'divider' } },
+          { op: 'write_blocks', position: 'replace', block_id: 'p1', blocks: [{ id: 'p1', type: 'paragraph', html: 'rewritten', children: [] }], new_information: false },
+          { op: 'write_blocks', position: 'after', block_id: 'p1', blocks: [{ id: 'n1', type: 'divider' }], new_information: false },
+          { op: 'delete_blocks', block_ids: ['p2', 'p3'], new_information: false },
         ],
         proposed_at: '2026-08-02T12:00:00Z',
         depends_on_change_set_id: null,
         operation_targets: [
-          { block_id: 'p1', fingerprint: 'aaa', head_fingerprint: 'bbb' },
-          null,
+          [{ block_id: 'p1', fingerprint: 'aaa', head_fingerprint: 'bbb' }],
+          [],
+          [{ block_id: 'p2', fingerprint: 'ccc', head_fingerprint: 'ccc' }, { block_id: 'p3', fingerprint: 'ddd', head_fingerprint: null }],
         ],
         compared_head_seq: 9,
         operation_decisions: [
@@ -353,9 +390,11 @@ describe('agent change sets', () => {
       const changeSet = await getChangeSet(WS, DOC_ID, CS_ID);
 
       expect(changeSet.operationDecisions).toEqual([{ opIndex: 1, decision: 'rejected' }]);
+      // One list per operation: none for an insert, one per deleted block.
       expect(changeSet.operationTargets).toEqual([
-        { blockId: 'p1', fingerprint: 'aaa', headFingerprint: 'bbb' },
-        null,
+        [{ blockId: 'p1', fingerprint: 'aaa', headFingerprint: 'bbb' }],
+        [],
+        [{ blockId: 'p2', fingerprint: 'ccc', headFingerprint: 'ccc' }, { blockId: 'p3', fingerprint: 'ddd', headFingerprint: null }],
       ]);
       expect(changeSet.dependsOnChangeSetId).toBe('parent-1');
       expect(changeSet.proposedAt).toBe('2026-08-02T12:00:00Z');
@@ -372,19 +411,19 @@ describe('agent change sets', () => {
     });
 
     it('does not trust targets that do not line up with the operations', async () => {
-      answerChangeSet(reviewable({ operation_targets: [{ block_id: 'p1', fingerprint: 'aaa', head_fingerprint: null }] }));
+      answerChangeSet(reviewable({ operation_targets: [[{ block_id: 'p1', fingerprint: 'aaa', head_fingerprint: null }]] }));
       expect((await getChangeSet(WS, DOC_ID, CS_ID)).operationTargets).toBeNull();
     });
 
     it('reads a target whose block is gone from the saved document', async () => {
       answerChangeSet(reviewable({
-        operation_targets: [{ block_id: 'p1', fingerprint: 'aaa', head_fingerprint: null }, null],
+        operation_targets: [[{ block_id: 'p1', fingerprint: 'aaa', head_fingerprint: null }], [], []],
       }));
-      expect((await getChangeSet(WS, DOC_ID, CS_ID)).operationTargets?.[0]).toEqual({
+      expect((await getChangeSet(WS, DOC_ID, CS_ID)).operationTargets?.[0]).toEqual([{
         blockId: 'p1',
         fingerprint: 'aaa',
         headFingerprint: null,
-      });
+      }]);
     });
 
     it('decideChangeSetOperations posts the decisions by operation index, with no precondition', async () => {

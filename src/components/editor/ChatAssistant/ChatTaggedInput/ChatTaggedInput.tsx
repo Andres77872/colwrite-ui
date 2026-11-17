@@ -8,7 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import { cn } from '@/lib/utils';
-import { parseRefParts, type RefPart } from './refParts';
+import { parseRefs, type ChatRefTag } from '../ChatRefTags/refTags';
 import {
   indexOfSelection,
   positionOfIndex,
@@ -40,7 +40,7 @@ type ChatTaggedInputProps = {
   onRemoveRef?: (start: number, refText: string) => void;
   onKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
   /** What a reference chip says. Defaults to its kind and a shortened id. */
-  labelForRef?: (part: RefPart) => string;
+  labelForRef?: (part: ChatRefTag) => string;
   /**
    * Whether the reference picker owns the keyboard right now. Enter belongs to
    * the highlighted option then, not to the message.
@@ -214,7 +214,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
         if (event.key === 'Backspace' && !composing) {
           const caret = getCaretRange();
           if (!caret || caret.start !== caret.end || caret.start === 0) return;
-          const chip = parseRefParts(value).find(
+          const chip = parseRefs(value).parts.find(
             (part) => typeof part !== 'string' && part.end === caret.start,
           );
           if (typeof chip === 'string' || !chip) return;
@@ -246,7 +246,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
       setEmpty(value.length === 0);
       if (renderedRef.current === value || composingRef.current) return;
 
-      const nodes = parseRefParts(value).map((part) => {
+      const nodes = parseRefs(value).parts.map((part) => {
         if (typeof part === 'string') return part;
 
         const chip = document.createElement('span');

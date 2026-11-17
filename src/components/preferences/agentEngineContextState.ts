@@ -61,19 +61,19 @@ export function selectedEngine(prefs: AgentEnginePrefs, surface: AgentEngineSurf
 /**
  * The engine a request on *surface* actually names.
  *
- * A deployed API has no local engines at all, so a choice remembered from a
- * local session is ignored there rather than failing every request. Locally
- * the choice is sent as is, even when that CLI is not signed in: the server
- * then refuses with instructions, and nothing silently switches engines.
+ * Only a server that says it is local (`runtime: "local"`) has local engines.
+ * A deployed one, and one whose catalog has not answered yet, gets the
+ * gateway: a choice remembered from a local session is ignored rather than
+ * failing a request, the first one included. Locally the choice is sent as
+ * is, even when that CLI is not signed in: the server then refuses with
+ * instructions, and nothing silently switches engines.
  */
-export function effectiveEngine(
+function effectiveEngine(
   prefs: AgentEnginePrefs,
   catalog: AgentEngineCatalog | null,
   surface: AgentEngineSurface,
 ): AgentEngineId {
-  const engine = selectedEngine(prefs, surface);
-  if (catalog?.runtime === 'deployed') return 'gateway';
-  return engine;
+  return catalog?.runtime === 'local' ? selectedEngine(prefs, surface) : 'gateway';
 }
 
 export function resolveEngineRequest(
@@ -105,7 +105,6 @@ export type AgentEngineContextValue = {
   /** The server runs locally, so engines can be chosen at all. */
   selectable: boolean;
   statusOf: (engine: AgentEngineId) => AgentEngineStatus | null;
-  engineFor: (surface: AgentEngineSurface) => AgentEngineId;
   requestFor: (surface: AgentEngineSurface) => AgentEngineRequest;
   setChatEngine: (engine: AgentEngineId) => void;
   setInlineEngine: (engine: AgentEngineId | 'chat') => void;
@@ -134,7 +133,6 @@ const DEFAULT_CONTEXT: AgentEngineContextValue = {
   prefs: DEFAULT_ENGINE_PREFS,
   selectable: false,
   statusOf: () => null,
-  engineFor: () => 'gateway',
   requestFor: () => ({}),
   setChatEngine: noop,
   setInlineEngine: noop,

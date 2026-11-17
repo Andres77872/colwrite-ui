@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
     leftCollapsed: false,
     toggleLeftCollapsed: vi.fn(),
     setMobileNavOpen: vi.fn(),
-    setTool: vi.fn(),
+    setPanel: vi.fn(),
     setAssistantOpen: vi.fn(),
   },
 }));
@@ -204,7 +204,7 @@ describe('Sidebar', () => {
     renderSidebar();
 
     fireEvent.click(screen.getByRole('button', { name: 'Library' }));
-    expect(mocks.panels.setTool).toHaveBeenCalledWith('library');
+    expect(mocks.panels.setPanel).toHaveBeenCalledWith('library');
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     expect(mocks.setView).toHaveBeenCalledWith('settings');

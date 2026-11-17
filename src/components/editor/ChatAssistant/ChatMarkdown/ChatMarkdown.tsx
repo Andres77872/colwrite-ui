@@ -1,4 +1,5 @@
 import { Fragment, memo, useMemo, useState, type ReactElement, type ReactNode } from 'react';
+import { markerHandles, SOURCE_MARKER_PATTERN } from '@/lib/sourceHandles';
 import { Code2, Shapes, Workflow } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { renderLatex } from '@/lib/katex';
@@ -66,7 +67,7 @@ const MATH_INLINE = String.raw`(\$\$[^$\n]+?\$\$)|(\\\([^\n]+?\\\))|((?<![\\\w$]
 const INLINE_PATTERN = new RegExp(
   String.raw`(\`[^\`\n]+\`)|` +
     MATH_INLINE +
-    String.raw`|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(\*[^*\n]+\*)|(\[S\d{1,5}(?:\s*[,;]\s*S\d{1,5})*\](?!\())|(\[[^\]\n]+\]\([^)\s]+\))`,
+    String.raw`|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(\*[^*\n]+\*)|(` + SOURCE_MARKER_PATTERN + String.raw`)|(\[[^\]\n]+\]\([^)\s]+\))`,
   'g',
 );
 
@@ -88,7 +89,7 @@ function tokenizeInline(text: string): InlineToken[] {
     } else if (raw.startsWith('$')) {
       tokens.push({ type: 'math', value: raw, latex: raw.slice(1, -1), display: false });
     } else if (/^\[S\d/.test(raw)) {
-      tokens.push({ type: 'sources', value: raw, ids: raw.slice(1, -1).split(/\s*[,;]\s*/) });
+      tokens.push({ type: 'sources', value: raw, ids: markerHandles(raw) });
     } else if (raw.startsWith('**') || raw.startsWith('__')) {
       tokens.push({ type: 'bold', value: raw.slice(2, -2) });
     } else if (raw.startsWith('[')) {

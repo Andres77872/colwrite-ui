@@ -259,6 +259,16 @@ describe('AgentEnginePreferences', () => {
     expect(screen.queryByRole('combobox')).toBeNull();
   });
 
+  it('keeps the general picker when only the lite tier has no models (U-11)', async () => {
+    const full = catalog('deployed', [LEGACY]);
+    api.list.mockResolvedValue({ ...full, gateway_models: { ...full.gateway_models, lite: [] } });
+    renderPreferences();
+    expect(await screen.findByRole('combobox', { name: 'General model' })).toBeTruthy();
+    expect(screen.queryByRole('combobox', { name: 'Lite model' })).toBeNull();
+    expect(screen.getByText('Not configured on this server. The server default is used.')).toBeTruthy();
+    expect(screen.queryByText('Gateway models are not configured on this server.')).toBeNull();
+  });
+
   it('can reload the catalog after a loading failure', async () => {
     api.list.mockRejectedValueOnce(new Error('Models unavailable'));
     renderPreferences();

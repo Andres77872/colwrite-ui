@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { menuItem, menuLabel, menuSurface } from '@/components/ui/menuStyles';
 import { blankBlockOfKind, useDocumentSession, useEditorActions } from '@/editor';
@@ -14,7 +14,9 @@ import { openInlineEditor } from './items/editInline';
 import { serializeEditableHtml } from '../../common/Editable/editableHtml';
 import { isEditableEmpty, restoreCaretOffset } from '../../common/Editable/caret';
 import type { SlashContext, SlashItem } from './types';
-import { Dot } from 'lucide-react';
+import { Dot, ImagePlus } from 'lucide-react';
+import { AssistantCatalogContext } from '@/components/preferences/assistantCatalogContextState';
+import { openImageGeneration } from '../ImageGeneration/imageGenerationEvents';
 import { SLASH_MENU_EVENT, emitSlashMenuVisibility } from './slashMenuEvents';
 
 /** Notion's width; narrower screens get the viewport less its margins. */
@@ -124,15 +126,24 @@ export function SlashMenu() {
   const lastMatchLength = useRef(0);
   const listboxId = useId();
   const ownerDocumentId = useRef(documentId);
+  const catalog = useContext(AssistantCatalogContext);
+  const images = catalog?.tool('image_generate');
+  const items = useMemo<readonly SlashItem[]>(() => [...ITEMS, {
+    id: 'generate-image', label: 'Generate image…', icon: ImagePlus, group: 'ai', ai: true,
+    keywords: ['illustration', 'cover', 'raster', 'picture'],
+    desc: images?.state === 'on' ? 'Prepare an image request for your confirmation' : images?.reason ?? 'Reading image availability…',
+    disabledReason: images?.state === 'on' ? undefined : images?.reason ?? 'Reading image availability…',
+    onSelect: (ctx: SlashContext) => openImageGeneration(ctx.blockId),
+  } satisfies SlashItem], [images]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return ITEMS;
-    return ITEMS.map((item) => ({ item, rank: score(item, q) }))
+    if (!q) return items;
+    return items.map((item) => ({ item, rank: score(item, q) }))
       .filter((entry) => entry.rank > 0)
       .sort((a, b) => b.rank - a.rank)
       .map((entry) => entry.item);
-  }, [query]);
+  }, [query, items]);
 
   // With a query the list is one ranked run; without one it reads by group.
   const ordered = useMemo(() => {
@@ -322,6 +333,7 @@ export function SlashMenu() {
 
   const handleSelect = useCallback(
     (item: SlashItem) => {
+      if (item.disabledReason) return;
       const trigger = triggerRef.current;
       if (!trigger) return;
       const selection = document.getSelection();
@@ -455,6 +467,8 @@ export function SlashMenu() {
                     id={`${listboxId}-${item.id}`}
                     role="option"
                     aria-selected={isActive}
+                    aria-disabled={!!item.disabledReason}
+                    title={item.disabledReason}
                     data-active={isActive}
                     data-highlighted={isActive ? '' : undefined}
                     // The pointer moves the highlight, so hover itself paints nothing:

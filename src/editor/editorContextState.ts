@@ -1,6 +1,6 @@
 import { createContext, useContext, type MutableRefObject } from 'react';
 import type { ApplyPatchResult } from './docOps';
-import type { Block, CitationSource, Doc, ParagraphChild, ToolOperation } from './types';
+import type { Block, Doc, ImageBlock, ParagraphChild, ReferenceRecord, ToolOperation } from './types';
 import type { BlockKindId } from './blockKinds';
 
 /**
@@ -32,6 +32,7 @@ export type BlockActions = {
   updateParagraphChild: (blockId: string, childId: string, next: Partial<ParagraphChild>) => void;
   removeParagraphChild: (blockId: string, childId: string) => void;
   setHeadingLevel: (id: string, level: 1 | 2 | 3) => void;
+  setHeadingInstructions: (id: string, instructions: string | undefined) => void;
   /**
    * Turn a block into another kind in place, keeping its id and text. `html`
    * replaces the text in the same undo step.
@@ -46,9 +47,9 @@ export type BlockActions = {
    */
   getBlockIds: () => string[];
   /** Add sources to the library, or refresh entries with the same key. */
-  upsertSources: (sources: readonly CitationSource[]) => void;
+  upsertSources: (sources: readonly ReferenceRecord[]) => void;
   /** Edit a library entry's metadata. */
-  updateSource: (key: string, patch: Partial<CitationSource>) => void;
+  updateSource: (key: string, record: ReferenceRecord) => void;
   /** Remove a library entry; citations keep their own copies. */
   removeSource: (key: string) => void;
   /** Set (or clear, with null) the document's citation style. */
@@ -59,6 +60,7 @@ export type BlockActions = {
   indentBlock: (id: string, delta: 1 | -1) => boolean;
   updateCodeText: (id: string, text: string) => void;
   setCodeLanguage: (id: string, language: string | null) => void;
+  updateImageDetails: (id: string, details: Pick<ImageBlock, 'alt' | 'caption' | 'width' | 'label'>) => void;
   /** Copy a block (and its widgets) below itself; returns the copy's id. */
   duplicateBlock: (id: string) => string | null;
   /**
@@ -104,10 +106,11 @@ export type EditorActionsContextValue = BlockActions & {
     localRevision: number;
     dirty: boolean;
   };
+  /** The page after the operations: blocks, name, citation style and library. */
   applyPatch: (
     ops: ToolOperation[],
     options?: { persist?: boolean; base?: Block[] },
-  ) => ApplyPatchResult;
+  ) => ApplyPatchResult & { doc: Doc };
   markRecentlyChanged: (ids: string[]) => void;
   /** Select whole blocks (replaces the current block selection). */
   selectBlocks: (ids: readonly string[]) => void;

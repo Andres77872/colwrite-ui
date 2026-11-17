@@ -5,6 +5,7 @@ import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useImperativeHandle } from 'react';
 import type { Doc } from '@/editor/types';
 import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
+import { reference } from '@/__tests__/agentSource';
 
 vi.mock('@/data/documents', async () => ({
   ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
@@ -39,8 +40,8 @@ function Probe() {
 const DOC: Doc = {
   name: 'Findings',
   sources: [
-    { key: '10.1/cited', title: 'A cited paper', provider: 'crossref' },
-    { key: '10.1/saved', title: 'A saved paper', provider: 'crossref' },
+    reference('doi:10.1/cited', { title: 'A cited paper', provider: 'crossref', state: 'verified' }),
+    reference('doi:10.1/saved', { title: 'A saved paper', provider: 'crossref', state: 'verified' }),
   ],
   blocks: [
     {
@@ -48,8 +49,8 @@ const DOC: Doc = {
       type: 'paragraph',
       html: 'Claim <span data-child-id="c1" contenteditable="false"></span> and again <span data-child-id="c2" contenteditable="false"></span>.',
       children: [
-        { id: 'c1', type: 'citation', keys: ['10.1/cited'], style: 'numeric' },
-        { id: 'c2', type: 'citation', keys: ['10.1/cited'], style: 'numeric' },
+        { id: 'c1', type: 'citation', keys: ['doi:10.1/cited'], style: 'nlm-citation-sequence-brackets' },
+        { id: 'c2', type: 'citation', keys: ['doi:10.1/cited'], style: 'nlm-citation-sequence-brackets' },
       ],
       columns: 1,
     },
@@ -88,7 +89,7 @@ describe('SourcesPanel', () => {
 
     expect(await screen.findByText('Still cited 2 times: remove the citations first.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Show where' })).toBeTruthy();
-    expect(editorRef.current!.doc.sources?.map((source) => source.key)).toContain('10.1/cited');
+    expect(editorRef.current!.doc.sources?.map((source) => source.key)).toContain('doi:10.1/cited');
   });
 
   it('removes a source that nothing cites', async () => {
@@ -96,6 +97,6 @@ describe('SourcesPanel', () => {
     chooseRemove('A saved paper');
 
     await waitFor(() => expect(screen.queryByText('A saved paper')).toBeNull());
-    expect(editorRef.current!.doc.sources?.map((source) => source.key)).toEqual(['10.1/cited']);
+    expect(editorRef.current!.doc.sources?.map((source) => source.key)).toEqual(['doi:10.1/cited']);
   });
 });

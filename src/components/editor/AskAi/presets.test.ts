@@ -1,19 +1,84 @@
 import { describe, expect, it } from 'vitest';
 import { compileFigure } from '@/lib/figure/compile';
 import { createHeuristicMeasurer } from '@/lib/figure/measure';
-import { FIGURE_SPEC_PROMPT, figureRepairInstruction } from '@/lib/figure/prompt';
-import { ASK_AI_PRESETS, buildAskAiMessage, customPreset, figureProblems, presetsFor } from './presets';
+import { askAiPresets, customPreset, figureProblems, presetsFor } from './presets';
+import { askAiRequest, type AskAiTarget } from './target';
+import { PERSONAL_WORKSPACE_ID, VIEWER_WORKSPACE_ID, catalogOf } from '@/dev/msw/fixtures';
+
+/** Ask AI's menu from the mock API's catalog, as the app builds it. */
+const CATALOG = catalogOf(PERSONAL_WORKSPACE_ID).presets;
+const ASK_AI_PRESETS = askAiPresets(CATALOG);
+
+/** A block target on block `b1`, as `useAskAiTarget` captures one. */
+const BLOCK: AskAiTarget = {
+  key: 't', kind: 'block', blockIds: ['b1'], anchorId: 'b1', text: '', locked: false, hidden: false, citations: new Map(),
+};
+
+describe('the server’s presets', () => {
+  const leaves = ASK_AI_PRESETS.flatMap((preset) => preset.children ?? [preset]);
+
+  it('asks for every action that is not a figure by its server preset id, with no words of its own', () => {
+    for (const preset of leaves.filter((candidate) => !candidate.drawsFigure && !candidate.forFigure)) {
+      expect(preset.ask, preset.id).toEqual({ preset: preset.id });
+      // The server has the preset, in the profile Ask AI runs in.
+      expect(CATALOG.find((row) => row.id === preset.id)?.profile, preset.id).toBe('inline');
+    }
+  });
+
+  it('offers every inline preset of the catalog, with its label and group, and none of the chat ones', () => {
+    const inline = CATALOG.filter((row) => row.profile === 'inline');
+    expect(leaves.filter((preset) => preset.ask && 'preset' in preset.ask).map((preset) => [preset.id, preset.label, preset.group]))
+      .toEqual(inline.map((row) => [row.id, row.label, row.group]));
+    expect(leaves.some((preset) => preset.id === 'review-page' || preset.id === 'tighten-page')).toBe(false);
+    // The tones and languages share their submenus, under the catalog's group.
+    const tone = ASK_AI_PRESETS.find((preset) => preset.id === 'tone');
+    expect(tone?.children?.map((child) => child.label)).toEqual(['Academic', 'Professional', 'Confident', 'Neutral', 'Friendly']);
+  });
+
+  it('offers a preset the server would not run here disabled, with its reason, and one this client has never heard of', () => {
+    const presets = askAiPresets([
+      { id: 'shorter', label: 'Make shorter', group: 'edit', profile: 'inline', state: 'blocked', reason: 'Needs the editor role.', skill: null, skill_reference: null },
+      { id: 'cite-check', label: 'Check citations', group: 'research', profile: 'inline', state: 'on', reason: null, skill: null, skill_reference: null },
+    ]);
+    expect(presets.find((preset) => preset.id === 'shorter')).toMatchObject({ unavailable: 'Needs the editor role.', use: 'replace' });
+    expect(presets.find((preset) => preset.id === 'cite-check')).toMatchObject({ label: 'Check citations', group: 'research', use: 'note', ask: { preset: 'cite-check' } });
+    expect(catalogOf(VIEWER_WORKSPACE_ID).presets.find((row) => row.id === 'tighten-page')).toMatchObject({ state: 'blocked', reason: 'Needs the editor role.' });
+  });
+
+  it('keeps no server instruction text in any preset, including figures', () => {
+    const worded = leaves.filter((preset) => preset.ask !== null && 'instruction' in preset.ask);
+    expect(worded).toEqual([]);
+  });
+
+  it('sends a preset as its id, with an empty message: the server supplies the instruction', () => {
+    const shorter = leaves.find((preset) => preset.id === 'shorter')!;
+    expect(askAiRequest({ preset: shorter, target: BLOCK })).toMatchObject({ message: '', preset: 'shorter' });
+    const spanish = leaves.find((preset) => preset.id === 'translate-es')!;
+    expect(askAiRequest({ preset: spanish, target: BLOCK })).toMatchObject({ message: '', preset: 'translate-es' });
+  });
+
+  it('sends the author’s own prompt as the message, with no preset', () => {
+    const request = askAiRequest({ preset: customPreset('make it punchier', 'block'), target: BLOCK });
+    expect(request.preset).toBeUndefined();
+    expect(request.message).toContain('Task: make it punchier');
+  });
+
+  it('runs nothing for a submenu', () => {
+    const tone = ASK_AI_PRESETS.find((preset) => preset.id === 'tone')!;
+    expect(() => askAiRequest({ preset: tone, target: BLOCK })).toThrow(/submenu/);
+  });
+});
 
 describe('figure presets', () => {
   it('offers only figure actions on a figure block, and none of them elsewhere', () => {
-    const onFigure = presetsFor('block', '', true);
+    const onFigure = presetsFor(ASK_AI_PRESETS, 'block', '', true);
     expect(onFigure.length).toBeGreaterThan(0);
     expect(onFigure.every((preset) => preset.forFigure)).toBe(true);
     expect(onFigure.map((preset) => preset.id)).toEqual(
       expect.arrayContaining(['figure-improve', 'figure-fix', 'figure-print']),
     );
 
-    const onText = presetsFor('block', '', false);
+    const onText = presetsFor(ASK_AI_PRESETS, 'block', '', false);
     expect(onText.some((preset) => preset.forFigure)).toBe(false);
     // Rewriting JSON as prose would destroy the figure.
     expect(onFigure.some((preset) => preset.id === 'improve' || preset.id === 'translate')).toBe(false);
@@ -22,69 +87,28 @@ describe('figure presets', () => {
   it('can draw any passage as a figure', () => {
     const draw = ASK_AI_PRESETS.find((preset) => preset.id === 'figure');
     expect(draw).toMatchObject({ drawsFigure: true, use: 'insert' });
-    expect(presetsFor('selection', 'diagram', false).map((preset) => preset.id)).toContain('figure');
+    expect(presetsFor(ASK_AI_PRESETS, 'selection', 'diagram', false).map((preset) => preset.id)).toContain('figure');
   });
 
-  it('asks for exactly one figure fence and carries the spec language', () => {
+  it('asks for the server figure preset whose reference is preloaded before the model call', () => {
     const draw = ASK_AI_PRESETS.find((preset) => preset.id === 'figure')!;
-    const message = buildAskAiMessage({ preset: draw, target: 'block', markdown: 'MLA compresses keys and values.' });
-    expect(message).toContain('exactly one ```figure fenced block');
-    expect(message).toContain(FIGURE_SPEC_PROMPT);
-    expect(message).not.toContain('pipe tables');
+    const message = askAiRequest({ preset: draw, target: BLOCK }).message;
+    expect(message).toBe('');
+    expect(CATALOG.find((preset) => preset.id === draw.id)).toMatchObject({
+      skill: 'editor', skill_reference: 'references/figures.md',
+    });
   });
 
   it('frames a figure target as a figure, and a free-form prompt on it returns a figure', () => {
     const custom = customPreset('add a legend', 'block', true);
     expect(custom).toMatchObject({ forFigure: true, drawsFigure: true, use: 'replace' });
-    const message = buildAskAiMessage({ preset: custom, target: 'block', markdown: '```figure\n{}\n```' });
-    expect(message).toContain('structured figure in the document');
-    expect(message).toContain('Task: add a legend');
+    const message = askAiRequest({ preset: custom, target: { ...BLOCK, figure: true } }).message;
+    expect(message).toBe('add a legend');
+    expect(askAiRequest({ preset: custom, target: BLOCK }).preset).toBe('figure-custom');
 
     const explain = ASK_AI_PRESETS.find((preset) => preset.id === 'figure-explain')!;
-    const prose = buildAskAiMessage({ preset: explain, target: 'block', markdown: '```figure\n{}\n```' });
-    expect(prose).not.toContain(FIGURE_SPEC_PROMPT);
-    expect(prose).toContain('as Markdown');
-  });
-
-  it('keeps LaTeX backslashes doubled in the spec prompt, as valid JSON needs', () => {
-    expect(FIGURE_SPEC_PROMPT).toContain('"$\\\\mathbf{c}_t^{KV}$"');
-    expect(FIGURE_SPEC_PROMPT).toContain('```figure');
-    expect(FIGURE_SPEC_PROMPT).not.toContain('\\`');
-  });
-
-  it('teaches the layouts models get wrong: panels in a row, short right-flowing chains, images', () => {
-    // Unconnected panels stack across "direction", so side by side needs a row.
-    expect(FIGURE_SPEC_PROMPT).toContain('"layout": "row" for side-by-side panels');
-    // A long "right" chain prints below the minimum text size.
-    expect(FIGURE_SPEC_PROMPT).toMatch(/"right" fits ~6 boxes/);
-    expect(FIGURE_SPEC_PROMPT).toContain('print-size warning');
-    // A model has no image to give: without a data URL, it draws a box.
-    expect(FIGURE_SPEC_PROMPT).toContain('needs "src" as a data:image URL (remote URLs are not loaded)');
-    // Every figure-drawing message carries the prompt; it has to stay compact.
-    expect(FIGURE_SPEC_PROMPT.length).toBeLessThan(4700);
-  });
-
-  it('draws a figure even for a simple flow: the task has already chosen one', () => {
-    expect(FIGURE_SPEC_PROMPT).toContain('The task asks for a figure, so draw one even for a simple flow.');
-    expect(FIGURE_SPEC_PROMPT).not.toContain('stay Mermaid');
-  });
-
-  it('teaches what models get wrong: mask words, U shapes, the data role and numbered captions', () => {
-    // Four mask words exist; any other pattern is spelled out cell by cell.
-    expect(FIGURE_SPEC_PROMPT).toContain('"mask" is only full|causal|upper|diagonal');
-    expect(FIGURE_SPEC_PROMPT).toContain('(sliding window, block-sparse) is a 0/1 "values" matrix, one list per row');
-    // sameRank moves the node carrying it; a U-Net climbs back beside its encoder.
-    expect(FIGURE_SPEC_PROMPT).toContain(`"sameRank": "<sibling id>" puts a node on that sibling's layer (only the node carrying it moves)`);
-    expect(FIGURE_SPEC_PROMPT).toContain('"rank": "first"|"last" pins its layer');
-    expect(FIGURE_SPEC_PROMPT).toContain(
-      'A U shape (U-Net): give each decoder level "sameRank" naming its encoder level and make the decoder\'s upward edges "kind": "feedback".',
-    );
-    // "data" draws a database cylinder, so a vector is not data.
-    // Cylinders are for stores; a cached vector is a hatched latent or tensor.
-    expect(FIGURE_SPEC_PROMPT).toContain('"data" and "cache" draw as cylinders');
-    expect(FIGURE_SPEC_PROMPT).toContain('a vector or activation, even a cached one, is "latent" or a tensor, hatched if cached');
-    // The editor numbers captioned figures itself.
-    expect(FIGURE_SPEC_PROMPT).toContain('the editor prints "Figure N." before it, so never start it with "Figure 1:"');
+    const prose = askAiRequest({ preset: explain, target: { ...BLOCK, figure: true } }).message;
+    expect(prose).toBe('');
   });
 });
 
@@ -179,11 +203,11 @@ describe('Fix problems on a figure', () => {
 
   it('hands the findings to the model as the repair list', () => {
     const problems = ['line 3:13 — Edge "a -> bb": No node or group "bb". Did you mean "b"? The edge is dropped.'];
-    const message = buildAskAiMessage({ preset: fix, target: 'block', markdown: '```figure\n{}\n```', problems });
-    expect(message).toContain(figureRepairInstruction(problems));
-    expect(message.indexOf(figureRepairInstruction(problems))).toBeLessThan(message.indexOf('Passage:'));
+    const request = askAiRequest({ preset: fix, target: { ...BLOCK, figure: true }, problems });
+    expect(request.context.figure_problems).toEqual(problems);
+    expect(request.message).toBe('');
 
-    const clean = buildAskAiMessage({ preset: fix, target: 'block', markdown: '```figure\n{}\n```', problems: [] });
+    const clean = askAiRequest({ preset: fix, target: { ...BLOCK, figure: true }, problems: [] }).message;
     expect(clean).not.toContain('Fix these problems');
   });
 });

@@ -4,16 +4,17 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { ChatMarkdown } from '../ChatMarkdown';
 import { citedOrder } from '../answerSourceMarkers';
 import { answerForClipboard } from '../answerClipboard';
-import { replyToBlocks } from '../replyToBlocks';
-import type { AgentSource } from '@/api/assistant/streamParser';
+import { resolveAssistantOutput } from '@/editor/assistantOutput';
+import { assistantOutputBlocks } from '@/editor/markdown';
+import { agentSource } from '@/__tests__/agentSource';
 import type { ParagraphBlock } from '@/editor/types';
 
 afterEach(cleanup);
 
-const SOURCES: AgentSource[] = [
-  { id: 'S1', key: '10.1234/a', title: 'Paper A', authors: 'Ada', year: '2020', provider: 'crossref' },
-  { id: 'S2', key: 'https://example.org', title: 'Page B', provider: 'web' },
-  { id: 'S3', key: '2101.00001', title: 'Preprint C', provider: 'arxiv' },
+const SOURCES = [
+  agentSource('S1', { key: 'doi:10.1234/a', title: 'Paper A', authors: 'Ada Lovelace', year: 2020, provider: 'crossref', doi: '10.1234/a' }),
+  agentSource('S2', { key: 'url:https://example.org', title: 'Page B', provider: 'web', kind: 'web', csl: { type: 'webpage', URL: 'https://example.org' } }),
+  agentSource('S3', { key: 'arxiv:2101.00001', title: 'Preprint C', provider: 'semantic_scholar', kind: 'preprint', flags: ['preprint'] }),
 ];
 
 describe('answer source markers', () => {
@@ -28,7 +29,7 @@ describe('answer source markers', () => {
         text="Transformers scale [S3]. Also [S1; S3]. Made up [S9]."
         sources={{
           numberOf: (id) => numbers.get(id),
-          describe: (id) => SOURCES.find((source) => source.id === id)?.title,
+          describe: (handle) => SOURCES.find((source) => source.handle === handle)?.title,
         }}
       />,
     );
@@ -63,16 +64,21 @@ describe('copying a reply', () => {
   it('uses the numbers the answer shows and lists what they point to', () => {
     const { plain, html } = answerForClipboard('**Scaling** works [S3]. Also [S1; S3]. Made up [S9].', [
       ...SOURCES,
-      { id: 'S4', key: 'x', title: 'Unused' },
+      agentSource('S4', { key: 'x', title: 'Unused' }),
     ].map((source) =>
-      source.id === 'S3' ? { ...source, authors: 'William Fedus, Barret Zoph, Noam Shazeer', year: '2021', venue: 'JMLR', url: 'https://example.org/switch' } : source,
+      source.handle === 'S3'
+        ? agentSource('S3', {
+          key: 'arxiv:2101.00001', title: 'Preprint C', authors: 'William Fedus, Barret Zoph, Noam Shazeer', year: 2021, venue: 'JMLR', url: 'https://example.org/switch',
+        })
+        : source,
     ));
     expect(plain).toContain('**Scaling** works [1]. Also [2, 1]. Made up [S9].');
     expect(plain).not.toMatch(/\[S[13]\]/);
-    expect(plain).toContain('Sources\n[1] Fedus, Zoph, Shazeer. Preprint C. JMLR 2021. https://example.org/switch\n[2] Ada. Paper A. 2020.');
+    // Each as the reference list prints it, from its record.
+    expect(plain).toContain('Sources\n[1] Fedus W, Zoph B, Shazeer N. Preprint C. JMLR [Internet]. 2021. Available from: https://example.org/switch\n[2] Lovelace A. Paper A. 2020. doi:10.1234/a');
     expect(plain).not.toContain('Unused');
     expect(html).toContain('<strong>Scaling</strong>');
-    expect(html).toContain('<a href="https://example.org/switch">');
+    expect(html).toContain('<a href="https://example.org/switch" rel="noopener noreferrer">');
   });
 
   it('copies an answer without sources as written', () => {
@@ -81,20 +87,21 @@ describe('copying a reply', () => {
 });
 
 describe('inserting a reply', () => {
-  it('turns markers for received sources into citations carrying their records', () => {
-    const blocks = replyToBlocks('## Findings\n\n- Scaling works [S1, S3].\n- Invented [S7].', SOURCES);
+  it('turns markers for received sources into citations carrying their records, and nothing else of the source', () => {
+    const blocks = assistantOutputBlocks(resolveAssistantOutput('## Findings\n\n- Scaling works [S1, S3].\n- Invented [S7].', SOURCES));
     expect(blocks[0]).toMatchObject({ type: 'heading', level: 2, html: 'Findings' });
     const [first, second] = takeItems(blocks.slice(1) as ParagraphBlock[], 2);
     expect(first.variant).toBe('bullet');
     const [citation] = takeItems(first.children ?? [], 1);
-    expect(citation).toMatchObject({ type: 'citation', keys: ['10.1234/a', '2101.00001'] });
-    expect(citation.type === 'citation' && citation.sources?.map((source) => source.title)).toEqual([
+    expect(citation).toMatchObject({ type: 'citation', keys: ['doi:10.1234/a', 'arxiv:2101.00001'] });
+    expect(citation.type === 'citation' && citation.sources?.map((source) => source.csl.title)).toEqual([
       'Paper A',
       'Preprint C',
     ]);
-    // Registry bookkeeping never reaches the document.
-    expect(JSON.stringify(citation)).not.toContain('"id":"S1"');
-    // An id the reply never received stays text.
+    // The citation is the record: the handle never reaches the document.
+    expect(citation.type === 'citation' && citation.sources).toEqual([SOURCES[0]?.record, SOURCES[2]?.record]);
+    expect(JSON.stringify(citation)).not.toMatch(/"handle"/);
+    // A handle the reply never received stays text.
     expect(second.children ?? []).toHaveLength(0);
     expect(second.html).toContain('[S7]');
   });

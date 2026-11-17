@@ -18,15 +18,15 @@ import type { WorkspaceUsage } from '@/data/workspaces';
 const getMe = vi.fn<() => Promise<UserMe>>();
 const getUsage = vi.fn<(query: Record<string, string>) => Promise<WorkspaceUsage>>();
 const updateProfile = vi.fn<(body: UpdateUserProfileRequest) => Promise<UserMe>>();
-const setTool = vi.fn();
+const setPanel = vi.fn();
 
 // Settings no longer opens pages, so it never reads the editor. The module
 // is stubbed only because the navigation provider imports it for its URL
 // sync, which this test does not mount.
 vi.mock('@/editor', () => ({}));
-vi.mock('@/components/panels/panelsContextState', () => ({ usePanels: () => ({ setTool }) }));
+vi.mock('@/components/panels/panelsContextState', () => ({ usePanels: () => ({ setPanel }) }));
 vi.mock('@/components/preferences', () => ({
-  AgentToolsPreferences: ({ leading }: { leading?: React.ReactNode }) => (
+  AssistantPreferences: ({ leading }: { leading?: React.ReactNode }) => (
     <section aria-label="Agent preferences">
       {leading}
       Agent capability controls
@@ -67,12 +67,14 @@ const USAGE: WorkspaceUsage = {
     document_saves: 128,
     chats_total: 6,
     chat_messages_total: 42,
-    agent_runs_total: 17,
-    agent_runs_completed: 15,
-    agent_runs_failed: 2,
-    last_agent_run_at: '2026-07-19T18:00:00Z',
+    assistant_runs_total: 17,
+    assistant_runs_completed: 15,
+    assistant_runs_failed: 2,
+    last_assistant_run_at: '2026-07-19T18:00:00Z',
     tokens_input: 120_000,
     tokens_output: 34_000,
+    tokens_cached: 80_000,
+    cost: 0.4213,
     llm_calls_total: 51,
     tool_calls_total: 88,
     tool_calls_failed: 3,
@@ -125,7 +127,7 @@ function renderProfile() {
 
 beforeEach(() => {
   window.history.replaceState(null, '', '/?view=settings');
-  setTool.mockReset();
+  setPanel.mockReset();
   getMe.mockReset().mockResolvedValue(ME);
   getUsage.mockReset().mockResolvedValue(USAGE);
   updateProfile.mockReset();
@@ -276,8 +278,15 @@ describe('ProfileView', () => {
     expect(tiles.getByText('Tokens')).toBeTruthy();
     // 120,000 in + 34,000 out, compacted.
     expect(tiles.getByText('154K')).toBeTruthy();
-    expect(tiles.getByText('120K in · 34K out')).toBeTruthy();
-    // The PDF count is Storage's, not a sixth tile.
+    expect(tiles.getByText('120K in · 34K out · 80K cached')).toBeTruthy();
+    // The runs, with how many did not finish.
+    expect(tiles.getByText('Assistant runs')).toBeTruthy();
+    expect(tiles.getByText('2 did not finish')).toBeTruthy();
+    // What the providers reported the assistant's model calls cost.
+    expect(tiles.getByText('Cost')).toBeTruthy();
+    expect(tiles.getByText('$0.42')).toBeTruthy();
+    expect(tiles.getByText('Over 51 model calls')).toBeTruthy();
+    // The PDF count is Storage's, not a tile.
     expect(tiles.queryByText('PDFs')).toBeNull();
   });
 
@@ -309,7 +318,7 @@ describe('ProfileView', () => {
     expect(screen.queryByText('reference.pdf')).toBeNull();
 
     fireEvent.click(storage.getByRole('button', { name: 'Open Library' }));
-    expect(setTool).toHaveBeenCalledWith('library');
+    expect(setPanel).toHaveBeenCalledWith('library');
     // Settings closes: the Library is a tab beside the page, behind the dialog.
     expect(new URLSearchParams(window.location.search).get('view')).toBeNull();
   });
@@ -390,6 +399,12 @@ describe('ProfileView', () => {
 
     expect(await screen.findByRole('heading', { name: 'By workspace' })).toBeTruthy();
     expect(screen.getByText('Counting every workspace you are in.')).toBeTruthy();
+    // Each workspace's runs and cost, from the mock's account usage.
+    const byWorkspace = within(screen.getByRole('heading', { name: 'By workspace' }).closest('section') as HTMLElement).getByRole('table');
+    expect(within(byWorkspace).getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual(
+      ['Workspace', 'Pages', 'Assistant runs', 'Cost', 'PDFs', 'Storage'],
+    );
+    expect(within(byWorkspace).getAllByRole('row')[1]?.textContent).toContain('$1.68');
     // The pages table is one workspace's; the account-wide view has none.
     expect(screen.queryByRole('heading', { name: /Activity by page/ })).toBeNull();
   });

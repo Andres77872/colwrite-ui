@@ -55,6 +55,13 @@ describe('mayReplay', () => {
     expect(mayReplay(read, problem({ code: 'unavailable', retryable: true }))).toBe(true);
   });
 
+  it('replays an asset store problem only for reads or keyed writes, never an unkeyed publication', () => {
+    const unavailable = problem({ code: 'asset_storage_unavailable', retryable: true, retry_after: 1 });
+    expect(mayReplay(read, unavailable)).toBe(true);
+    expect(mayReplay(keyed, unavailable)).toBe(true);
+    expect(mayReplay(unkeyed, unavailable)).toBe(false);
+  });
+
   it('replays an unkeyed write only on a problem refused before any work', () => {
     expect(mayReplay(unkeyed, timedOut)).toBe(false);
     expect(mayReplay(unkeyed, rateLimited)).toBe(true);

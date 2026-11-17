@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import {
-  canonicalCitationKey,
   htmlToText,
   useBibliography,
   useEditorActions,
   type Block,
   type CitationChild,
-  type CitationSource,
+  type ReferenceRecord,
   type ParagraphBlock,
 } from '@/editor';
 import { uid } from '@/lib/uid';
@@ -114,6 +113,19 @@ export function proseOffset(root: HTMLElement, container: Node, offset: number):
   holder.appendChild(pre.cloneContents());
   holder.querySelectorAll('[data-child-id]').forEach((widget) => widget.remove());
   return (holder.textContent ?? '').length;
+}
+
+/** A block's prose: its text without the widgets' labels, as the offsets count it. */
+export function proseText(root: HTMLElement): string {
+  const holder = root.cloneNode(true) as HTMLElement;
+  holder.querySelectorAll('[data-child-id]').forEach((widget) => widget.remove());
+  return holder.textContent ?? '';
+}
+
+/** The id of the widget right before prose offset `offset` of `root`, with only spaces between, or `null`. */
+export function widgetIdBefore(root: HTMLElement, offset: number): string | null {
+  const at = prosePosition(root, offset);
+  return widgetBefore(root, at.node, at.offset, SPACE_GAP)?.getAttribute('data-child-id') ?? null;
 }
 
 /** The DOM position `offset` prose characters into `root`, skipping widgets. */
@@ -247,12 +259,6 @@ export function rememberedBlockId(): string | null {
   return liveRemembered()?.blockId ?? null;
 }
 
-/** For tests: forget the remembered caret. */
-export function forgetCaret(): void {
-  remembered = null;
-  publishFocus();
-}
-
 /** The API's cap on keys in one citation (`MAX_CITATION_KEYS`). */
 const MAX_CITATION_KEYS = 100;
 
@@ -316,7 +322,7 @@ function scrollToBlock(blockId: string): void {
  *
  * Returns where it went, or null when there was nothing to cite.
  */
-export function useCiteAtCursor(): (sources: readonly CitationSource[]) => CitePlacement | null {
+export function useCiteAtCursor(): (sources: readonly ReferenceRecord[]) => CitePlacement | null {
   const {
     refs,
     getBlock,
@@ -339,7 +345,7 @@ export function useCiteAtCursor(): (sources: readonly CitationSource[]) => CiteP
         type: 'citation',
         keys: sources.map((source) => source.key),
         sources: [...sources],
-        style: bibliography.documentStyle ?? bibliography.style ?? 'numeric',
+        style: bibliography.documentStyle ?? bibliography.style,
       };
 
       const usable = (block: ReturnType<typeof getBlock>): block is ParagraphBlock =>
@@ -379,9 +385,9 @@ export function useCiteAtCursor(): (sources: readonly CitationSource[]) => CiteP
           ? target.children?.find((candidate) => candidate.id === neighbourId)
           : undefined;
         if (existing?.type === 'citation') {
-          const known = new Set(existing.keys.map((key) => canonicalCitationKey(key)));
+          const known = new Set(existing.keys);
           const fresh = sources.filter((source) => {
-            const key = canonicalCitationKey(source.key);
+            const key = source.key;
             if (known.has(key)) return false;
             known.add(key);
             return true;
@@ -530,9 +536,9 @@ export function useCiteAtCursor(): (sources: readonly CitationSource[]) => CiteP
 }
 
 /** What to tell the author after a cite: where it went, in their terms. */
-export function citeNotice(placement: CitePlacement, sources: readonly CitationSource[]): ToastOptions {
+export function citeNotice(placement: CitePlacement, sources: readonly ReferenceRecord[]): ToastOptions {
   const [only] = sources;
-  const named = only && sources.length === 1 ? only.title || only.key : `${sources.length} sources`;
+  const named = only && sources.length === 1 ? only.csl.title || only.key : `${sources.length} sources`;
   switch (placement.where) {
     case 'caret':
       return { title: 'Citation inserted', description: named };
@@ -566,7 +572,7 @@ export function citeNotice(placement: CitePlacement, sources: readonly CitationS
  * went. Every "Cite" button should use this, so a citation that could not go
  * at the caret is never announced as if it had.
  */
-export function useCiteAndAnnounce(): (sources: readonly CitationSource[]) => CitePlacement | null {
+export function useCiteAndAnnounce(): (sources: readonly ReferenceRecord[]) => CitePlacement | null {
   const cite = useCiteAtCursor();
   const { toast } = useToast();
   return useCallback(

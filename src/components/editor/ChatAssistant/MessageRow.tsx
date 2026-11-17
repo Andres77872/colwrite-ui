@@ -1,5 +1,5 @@
 import { MessageAttachments } from './ChatAttachments';
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEditorActions, type Block } from '@/editor';
@@ -19,9 +19,14 @@ import { CopyButton, REVEAL_ON_HOVER } from './MessageActions';
 import { replyMetaOf } from './replyMeta';
 import { AnswerSources, SourceHoverCard } from './AnswerSources';
 import { ReasoningBlock } from './ReasoningBlock';
+import { ReplyClaims } from './ReplyClaims';
+import { budgetNote } from './replyMeta';
 import { TaskList } from './TaskList';
+import { QuestionCard, type AnswerQuestion } from './QuestionCard';
+import { ImageGenerationCard } from '../ImageGeneration/ImageGenerationCard';
 import { useSourceMarkers } from './answerSourceMarkers';
 import type { ChatMessage } from './chatUtils';
+import type { AgentSource } from '@/api/assistant/streamParser';
 
 /** Below the answer, a step shorter than this never shows, so quick hand-offs do not flash. */
 const STEP_DEBOUNCE_MS = 300;
@@ -32,6 +37,7 @@ const STEP_DEBOUNCE_MS = 300;
 
 export function MessageRow({
   message,
+  knownSources,
   live,
   progress,
   latest,
@@ -39,8 +45,15 @@ export function MessageRow({
   onFocusChange,
   onRetry,
   autoApplied,
+  onAnswerQuestion,
+  planCard,
 }: {
   message: ChatMessage;
+  /**
+   * The conversation's sources (`conversationSources`): a handle lasts for
+   * the conversation, so this reply's markers are read against them all.
+   */
+  knownSources: readonly AgentSource[];
   live: boolean;
   /** What the running turn is doing, and since when (set only while live). */
   progress?: AgentProgress | null;
@@ -49,6 +62,10 @@ export function MessageRow({
   openChangeIds: string[];
   onFocusChange: (changeId: string) => void;
   onRetry?: () => void;
+  /** Only the branch's latest unanswered card is actionable. */
+  onAnswerQuestion?: AnswerQuestion;
+  /** The current plan, supplied once per id rather than a historical snapshot. */
+  planCard?: ReactNode;
   /** The change sets the editor applied from this reply, with Auto on. */
   autoApplied?: {
     sets: readonly AutoAppliedSet[];
@@ -57,29 +74,26 @@ export function MessageRow({
   };
 }) {
   const isUser = message.role === 'user';
-  const { markers } = useSourceMarkers(message.id, message.content, message.sources);
+  const { markers } = useSourceMarkers(message.id, message.content, knownSources);
 
   // Each marker opens a preview of its source on hover or focus.
-  const previewMarkers = useMemo<SourceMarkers>(() => {
-    const sources = message.sources ?? [];
-    return {
-      ...markers,
-      wrap: (id, marker) => {
-        const source = sources.find((candidate) => candidate.id === id);
-        const number = markers.numberOf(id);
-        if (!source || number === undefined) return marker;
-        return (
-          <SourceHoverCard source={source} number={number}>
-            {marker}
-          </SourceHoverCard>
-        );
-      },
-    };
-  }, [markers, message.sources]);
+  const previewMarkers = useMemo<SourceMarkers>(() => ({
+    ...markers,
+    wrap: (handle, marker) => {
+      const source = knownSources.find((candidate) => candidate.handle === handle);
+      const number = markers.numberOf(handle);
+      if (!source || number === undefined) return marker;
+      return (
+        <SourceHoverCard source={source} number={number}>
+          {marker}
+        </SourceHoverCard>
+      );
+    },
+  }), [markers, knownSources]);
 
   if (isUser) {
     return (
-      <div className="group/message relative mb-1.5 flex justify-end">
+      <div className="group/message relative mb-1.5 flex justify-end" data-run-id={message.runId} tabIndex={-1}>
         <div className="min-w-0 max-w-[85%] whitespace-pre-wrap break-words rounded-xl bg-subtle px-3 py-2 text-[14.5px] leading-[1.6] text-foreground">
           <MessageAttachments attachments={message.attachments} />
           <ChatRefTags text={message.content} />
@@ -135,6 +149,21 @@ export function MessageRow({
         ))}
 
       {message.content && <ChatMarkdown text={message.content} sources={previewMarkers} />}
+      {planCard}
+      {message.question && <QuestionCard question={message.question} onAnswer={onAnswerQuestion} />}
+      {message.artifacts?.map((artifact) => <ImageGenerationCard key={artifact.generation_id} generationId={artifact.generation_id} />)}
+
+      {/* How a reply that did not complete ended, as its record keeps it: a
+          stopped one used to look finished, and one stopped before its
+          first word showed nothing at all. */}
+      {!live && message.ended === 'failed' && message.failure && (
+        <p className="text-[13px] text-destructive">
+          This reply did not finish: {message.failure.message || message.failure.code}
+        </p>
+      )}
+      {!live && message.ended === 'stopped' && !message.content && (
+        <p className="text-[13px] text-muted-foreground">Stopped before it wrote an answer.</p>
+      )}
 
       {/* At the foot of a reply that is still running, where the reader's eye
           already is. The steps above can be scrolled away by a long answer,
@@ -143,21 +172,36 @@ export function MessageRow({
       {live && message.content && progress && (
         <AgentStatusLine progress={progress} debounceMs={STEP_DEBOUNCE_MS} />
       )}
+      {/* How far into its limits the run is, once a counter crossed two thirds (`budget`). */}
+      {live && message.ledger && budgetNote(message.ledger) && (
+        <p className="text-xs text-muted-foreground">{budgetNote(message.ledger)}</p>
+      )}
+
+      {/* Each claim check, with the passages it was judged against. */}
+      {!!message.claims?.length && <ReplyClaims claims={message.claims} sources={knownSources} />}
 
       {/* With Auto on, the editor applies the reply's edits as they arrive.
           Without this line the only evidence was a highlight that faded. */}
       {autoApplied && (
-        <AutoAppliedNote sets={autoApplied.sets} onUndo={autoApplied.onUndo} onReview={autoApplied.onReview} />
+        <AutoAppliedNote
+          sets={autoApplied.sets}
+          // Said only when the reply proposed something that then waited.
+          paused={message.changeSetIds.length > 0 ? message.autoPaused : null}
+          onUndo={autoApplied.onUndo}
+          onReview={autoApplied.onReview}
+        />
       )}
 
-      {message.content && message.sources && message.sources.length > 0 && (
-        <AnswerSources messageId={message.id} text={message.content} sources={message.sources} />
+      {/* What it cites, whichever turn found it, and what it consulted. */}
+      {message.content && (
+        <AnswerSources messageId={message.id} text={message.content} sources={message.sources ?? []} known={knownSources} />
       )}
 
-      {!live && (message.content || openChangeIds.length > 0) && (
+      {!live && (message.content || openChangeIds.length > 0 || message.ended) && (
         <AnswerActions
           text={message.content}
-          sources={message.sources ?? []}
+          // Copy and Insert turn its markers into the sources they name.
+          sources={knownSources}
           openChangeCount={openChangeIds.length}
           onReviewChanges={() => {
             const [first] = openChangeIds;

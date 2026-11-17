@@ -8,8 +8,10 @@ import { useEditorDoc, usePageReadOnly } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
 import {
   describeChange,
+  groupChanges,
   isStale,
   pendingInDocumentOrder,
+  wordingChanges,
   type ChangeSet,
   type ProposedChange,
 } from '@/editor/proposals';
@@ -25,14 +27,16 @@ import {
   TextCursorInput,
   Trash2,
   X,
+  BookMarked,
 } from 'lucide-react';
 
 const KIND_ICON: Record<ProposedChange['kind'], typeof Plus> = {
   insert: Plus,
   replace: Pencil,
   delete: Trash2,
-  reorder: ArrowDownUp,
-  rename: TextCursorInput,
+  move: ArrowDownUp,
+  meta: TextCursorInput,
+  sources: BookMarked,
 };
 
 /** How long an arrival announcement stays in the live region. */
@@ -105,7 +109,7 @@ function useArrivalAnnouncement(sets: readonly ChangeSet[]): string {
  */
 export function ReviewPill() {
   const { blocks } = useEditorDoc();
-  const { sets, pendingCount, acceptAll, rejectAll, focusChange, focusedChangeId } = useProposals();
+  const { sets, pendingCount, acceptAll, acceptWording, acceptGroup, rejectGroup, rejectAll, focusChange, focusedChangeId } = useProposals();
   // A viewer steps through the suggestions and decides none of them.
   const readOnly = usePageReadOnly();
   const confirm = useConfirm();
@@ -148,9 +152,12 @@ export function ReviewPill() {
     // Suggestions written against text the author has changed since are
     // left out of Accept all (see `acceptAll`), so the question says so.
     const stale = pending.filter((change) => isStale(change, blocks)).length;
+    const flagged = pending.filter((change) => change.op.newInformation).length;
     const ok = await confirm({
       title: `Accept all ${plural}?`,
-      description: stale === 0
+      description: flagged > 0
+        ? `Changes with new information (${flagged}) stay pending for individual review. Only unflagged, current changes whose earlier decisions are settled can be applied.`
+        : stale === 0
         ? 'Every pending suggestion will be applied to the page.'
         : stale === 1
           ? 'Every pending suggestion will be applied to the page, except 1 whose text changed after it was suggested.'
@@ -158,6 +165,29 @@ export function ReviewPill() {
       confirmLabel: 'Accept all',
     });
     if (ok) acceptAll();
+  };
+
+  const onAcceptWording = async () => {
+    setOpen(false);
+    if (await confirm({
+      title: 'Accept wording changes?',
+      description: 'Only unflagged operations in the stored Wording groups are applied. New information, changed or locked targets, and changes waiting on another decision stay pending.',
+      confirmLabel: 'Accept wording changes',
+    })) acceptWording();
+  };
+
+  const onGroup = async (set: ChangeSet, group: ChangeSet['groups'][number], decision: 'accept' | 'reject') => {
+    setOpen(false);
+    if (await confirm({
+      title: `${decision === 'accept' ? 'Accept' : 'Reject'} ${group.label.toLowerCase()} changes?`,
+      description: decision === 'accept'
+        ? 'New information stays for individual review. Changed or locked targets and changes waiting on another decision also stay pending.'
+        : 'This decides every pending operation in this group. Suggestions that depend on a rejected insertion may also be rejected.',
+      confirmLabel: decision === 'accept' ? 'Accept group' : 'Reject group',
+    })) {
+      if (decision === 'accept') acceptGroup(set.id, group.kind);
+      else rejectGroup(set.id, group.kind);
+    }
   };
 
   const onRejectAll = async () => {
@@ -221,6 +251,27 @@ export function ReviewPill() {
 
           <div role="separator" className={menuSeparator} />
 
+          {sets.some((set) => set.groups.length > 0) && (
+            <div className="max-h-52 space-y-2 overflow-y-auto px-1 py-1" aria-label="Suggestion groups">
+              {sets.map((set) => (
+                <div key={set.id}>
+                  {set.message && <p className="px-1 text-xs text-muted-foreground">{set.message}</p>}
+                  {set.groups.map((group) => {
+                    const changes = groupChanges(set, group.kind);
+                    if (!changes.length) return null;
+                    return <div key={group.kind} className="flex items-center gap-1">
+                      <span className="min-w-0 flex-1 text-xs">{group.label} ({changes.length})</span>
+                      <Button size="sm" variant="ghost" aria-label={`Accept ${group.label.toLowerCase()} group`}
+                        disabled={readOnly || changes.every((change) => change.op.newInformation)}
+                        onClick={() => void onGroup(set, group, 'accept')}>Accept</Button>
+                      <Button size="sm" variant="ghost" aria-label={`Reject ${group.label.toLowerCase()} group`}
+                        disabled={readOnly} onClick={() => void onGroup(set, group, 'reject')}>Reject</Button>
+                    </div>;
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
           <ul aria-label="All suggestions" className="max-h-64 overflow-y-auto">
             {pending.map((change, index) => {
               const Icon = KIND_ICON[change.kind] ?? Pencil;
@@ -246,12 +297,21 @@ export function ReviewPill() {
           {readOnly && (
             <p className="px-2 py-1 text-xs text-muted-foreground">Viewers can’t accept or reject changes. An editor decides them.</p>
           )}
+          {pending.some((change) => change.op.newInformation) && (
+            <p className="px-2 py-1 text-xs text-muted-foreground">New information stays for individual review.</p>
+          )}
+          {wordingChanges(sets).length > 0 && (
+            <Button size="sm" variant="ghost" className="w-full justify-start" disabled={readOnly}
+              onClick={() => void onAcceptWording()}>
+              <Check />Accept wording changes
+            </Button>
+          )}
           <div className="flex items-center gap-1">
             <Button
               size="sm"
               variant="ghost"
               className="flex-1 text-diff-add-fg hover:bg-diff-add hover:text-diff-add-fg"
-              disabled={readOnly}
+              disabled={readOnly || pending.every((change) => change.op.newInformation)}
               onClick={() => void onAcceptAll()}
             >
               <Check />

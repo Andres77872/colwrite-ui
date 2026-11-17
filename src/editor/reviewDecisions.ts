@@ -2,22 +2,14 @@ import type { ReviewDecision } from './proposals';
 import { keysWithPrefix, readItem, removeItem, reviewKey, reviewPrefix, writeJson } from '@/lib/storageKeys';
 
 /**
- * Decisions made on a durable change set, remembered in this browser under
- * the workspace the page is in.
+ * Decisions made on a durable change set that could not be sent, remembered
+ * in this browser under the workspace the page is in.
  *
  * The API records a decision per operation and says whether each target
  * block is still the one the operation was written for
- * (`operation_decisions`, `operation_targets`). This record is what is left
- * for when it does not:
- *
- * - **An API without those fields.** The decisions are kept here, in the
- *   order they were made, with the fingerprints of the blocks the batch was
- *   staged against. Without them a review left half-done came back whole on
- *   the next load.
- * - **A change set stored before targets were recorded.** Its decisions are
- *   on the server; only the staging fingerprints are kept here.
- * - **A decision that could not be sent.** It waits here and is sent again
- *   when the change set is next staged.
+ * (`operation_decisions`, `operation_targets`). What is left for this record
+ * is a decision the request could not deliver: it waits here, in the order
+ * it was made, and is sent again when the change set is next staged.
  *
  * Nothing here is authoritative. A record that is missing, unreadable or
  * blocked by the browser only means the batch is staged as the server has
@@ -38,8 +30,6 @@ export type StoredReview = {
   /** Last write, ms since the epoch. */
   at: number;
   decisions: ReviewDecision[];
-  /** Staging fingerprint per operation index (see `ProposedChange.base`). */
-  bases: Record<string, string>;
 };
 
 function isDecision(value: unknown): value is ReviewDecision {
@@ -57,18 +47,11 @@ function parse(raw: string | null): StoredReview | null {
     const value = JSON.parse(raw) as Partial<StoredReview> | null;
     if (!value || typeof value !== 'object') return null;
     if (typeof value.documentId !== 'string' || typeof value.changeSetId !== 'string') return null;
-    const bases: Record<string, string> = {};
-    if (value.bases && typeof value.bases === 'object') {
-      for (const [key, base] of Object.entries(value.bases)) {
-        if (typeof base === 'string') bases[key] = base;
-      }
-    }
     return {
       documentId: value.documentId,
       changeSetId: value.changeSetId,
       at: typeof value.at === 'number' ? value.at : 0,
       decisions: Array.isArray(value.decisions) ? value.decisions.filter(isDecision) : [],
-      bases,
     };
   } catch {
     return null;
@@ -90,36 +73,30 @@ export function loadReview(workspaceId: string, documentId: string, changeSetId:
 }
 
 /**
- * Add to a change set's record.
- *
- * Decisions are appended, and the first decision on an operation wins: a
- * change is decided once. Fingerprints overwrite the ones for the same
- * operation, because accepting a change moves the baseline of the changes
- * after it (see `rebaseAfterAccept`).
+ * Add to a change set's record. Decisions are appended, and the first
+ * decision on an operation wins: a change is decided once.
  */
 export function saveReview(
   workspaceId: string,
   documentId: string,
   changeSetId: string,
-  update: { decisions?: readonly ReviewDecision[]; bases?: Readonly<Record<string, string>> },
+  update: { decisions: readonly ReviewDecision[] },
   now: number = Date.now(),
 ): void {
-  const decisions = update.decisions ?? [];
-  const bases = update.bases ?? {};
-  if (decisions.length === 0 && Object.keys(bases).length === 0) return;
+  const decisions = update.decisions;
+  if (decisions.length === 0) return;
   try {
     const key = reviewKey(workspaceId, documentId, changeSetId);
     const current = parse(readItem(key));
     const record: StoredReview = current && current.documentId === documentId && current.changeSetId === changeSetId
       ? current
-      : { documentId, changeSetId, at: now, decisions: [], bases: {} };
+      : { documentId, changeSetId, at: now, decisions: [] };
     const decided = new Set(record.decisions.map(([opIndex]) => opIndex));
     for (const decision of decisions) {
       if (decided.has(decision[0])) continue;
       decided.add(decision[0]);
       record.decisions.push([decision[0], decision[1]]);
     }
-    record.bases = { ...record.bases, ...bases };
     record.at = now;
     writeJson(key, record);
   } catch {
@@ -130,8 +107,7 @@ export function saveReview(
 
 /**
  * Take decisions back out of a change set's record: the server has them now,
- * or has refused them for good. The staging fingerprints stay; a record left
- * with neither is removed.
+ * or has refused them for good. A record left with none is removed.
  */
 export function forgetDecisions(
   workspaceId: string,
@@ -147,7 +123,7 @@ export function forgetDecisions(
     const sent = new Set(opIndexes);
     const decisions = record.decisions.filter(([opIndex]) => !sent.has(opIndex));
     if (decisions.length === record.decisions.length) return;
-    if (decisions.length === 0 && Object.keys(record.bases).length === 0) {
+    if (decisions.length === 0) {
       removeItem(key);
       return;
     }

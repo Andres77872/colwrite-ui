@@ -22,11 +22,20 @@ import {
   Trash2,
   Underline,
   X,
+  Wand2,
+  CheckCircle,
+  Minimize2,
+  Mic2,
+  Languages,
+  FileSearch,
+  HelpCircle,
+  SearchCheck,
+  type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { ASK_AI_PRESETS, presetGroupsFor } from '@/components/editor/AskAi/presets';
+import { presetGroupsFor, type AskAiPreset } from '@/components/editor/AskAi/presets';
 import { Badge } from '@/components/ui/badge';
-import { toolMeta, type ToolMeta } from '@/components/panels/toolsConfig';
+import { panelMeta, type PanelMeta } from '@/components/panels/sidebarPanels';
 import {
   menuItem,
   menuItemDestructive,
@@ -308,8 +317,21 @@ function AskAiBarMock({ placeholder }: { placeholder: string }) {
   );
 }
 
-/** The top-level presets Ask AI offers on a selection, in its own groups. */
-const SELECTION_PRESETS = ASK_AI_PRESETS.filter((preset) => preset.applies.includes('selection'));
+/**
+ * A picture of Ask AI's menu on a selection, in its own groups. The landing
+ * page is shown signed out, with no catalog to read: the real menu's entries
+ * are the server's presets.
+ */
+const SELECTION_PRESETS: ReadonlyArray<{ id: string; label: string; icon: LucideIcon; group: AskAiPreset['group']; children?: true }> = [
+  { id: 'improve', label: 'Improve writing', icon: Wand2, group: 'edit' },
+  { id: 'grammar', label: 'Fix spelling & grammar', icon: CheckCircle, group: 'edit' },
+  { id: 'shorter', label: 'Make shorter', icon: Minimize2, group: 'edit' },
+  { id: 'tone', label: 'Change tone', icon: Mic2, group: 'edit', children: true },
+  { id: 'translate', label: 'Translate', icon: Languages, group: 'edit', children: true },
+  { id: 'summarize', label: 'Summarize', icon: FileSearch, group: 'understand' },
+  { id: 'explain', label: 'Explain this', icon: HelpCircle, group: 'understand' },
+  { id: 'check', label: 'Check the claims', icon: SearchCheck, group: 'research' },
+];
 
 /** Ask AI opened on a selection: the bar, then every preset it offers. */
 export function AiActionMenuMock() {
@@ -388,7 +410,7 @@ const SIDEBAR_TABS = [
   { id: 'research', active: true },
   { id: 'sources', count: 3 },
   { id: 'history' },
-] as const satisfies ReadonlyArray<{ id: ToolMeta['id']; active?: boolean; count?: number }>;
+] as const satisfies ReadonlyArray<{ id: PanelMeta['id']; active?: boolean; count?: number }>;
 
 /** The right sidebar's tabs: one place for the assistant and every research tool. */
 export function SidebarTabsMock({ className }: { className?: string }) {
@@ -400,7 +422,7 @@ export function SidebarTabsMock({ className }: { className?: string }) {
       )}
     >
       {SIDEBAR_TABS.map((tab) => {
-        const meta = toolMeta(tab.id);
+        const meta = panelMeta(tab.id);
         const active = 'active' in tab && tab.active;
         return (
           <span
@@ -430,17 +452,17 @@ export function SidebarTabsMock({ className }: { className?: string }) {
 const PAPERS = [
   {
     title: 'Mixture-of-Experts Meets Long Context: A Study',
-    meta: 'Kaplan, Smith, +4 · arXiv:2401.12013',
-    score: '96% match',
+    meta: 'Kaplan, Smith, +4 · 2024 · ICML',
+    score: '412 citations',
   },
   {
     title: 'Sparse Routing Without Load Imbalance',
-    meta: 'Duarte, Wei · arXiv:2311.08872',
-    score: '91% match',
+    meta: 'Duarte, Wei · 2023 · NeurIPS',
+    score: '96 citations',
   },
 ];
 
-export function ArxivResultMock() {
+export function PaperResultMock() {
   return (
     <div className="mt-3 space-y-2">
       {PAPERS.map((paper) => (
@@ -452,31 +474,6 @@ export function ArxivResultMock() {
             </Badge>
           </div>
           <p className="mt-1 text-2xs text-muted-foreground">{paper.meta}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export function ColpaliResultMock() {
-  return (
-    <div className="mt-3 grid grid-cols-2 gap-2">
-      {[7, 12].map((page) => (
-        <div
-          key={page}
-          className="relative rounded-md border border-border bg-background/60 p-2.5"
-        >
-          <Badge variant="secondary" className="absolute right-1.5 top-1.5 px-1.5 text-2xs">
-            p. {page}
-          </Badge>
-          <div aria-hidden="true" className="space-y-1.5 pt-1">
-            <div className="h-1 w-2/3 rounded-sm bg-border" />
-            <div className="h-1 w-full rounded-sm bg-border/70" />
-            <div className="h-1 w-5/6 rounded-sm bg-border/70" />
-            <div className="h-6 w-full rounded-sm border border-border bg-subtle" />
-            <div className="h-1 w-full rounded-sm bg-border/70" />
-            <div className="h-1 w-3/4 rounded-sm bg-border/70" />
-          </div>
         </div>
       ))}
     </div>

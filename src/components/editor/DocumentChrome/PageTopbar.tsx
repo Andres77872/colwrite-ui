@@ -18,7 +18,7 @@ import { collectionDetailQuery } from '@/data/resources';
 import { workspaceQuery } from '@/data/workspaces';
 import { ReviewPill } from '../Review/ReviewPill';
 import { PageMenu } from './PageMenu';
-import { PAGE_TOOLS } from './pageTools';
+import { PAGE_PANELS } from './pagePanels';
 import { SaveRecoveryBar } from './SaveRecoveryBar';
 import { TrashedPageBar } from './TrashedPageBar';
 import { ViewOnlyBadge, ViewOnlyBar } from './ViewOnlyBar';
@@ -49,10 +49,10 @@ import {
 export function PageTopbar() {
   const toggle = useSidebarToggle();
   const { title, isUntitled, focusPageTitle } = useDocumentTitle();
-  const { activeTool, isOpen, toolsDocked, setTool, close, assistantOpen, toggleAssistant } = usePanels();
+  const { activePanel, isOpen, panelsDocked, setPanel, close, assistantOpen, toggleAssistant } = usePanels();
   // Docked, the right sidebar's own tab strip is the control for its tabs;
   // repeating them here only squeezed the breadcrumb.
-  const showToolButtons = !(isOpen && toolsDocked);
+  const showToolButtons = !(isOpen && panelsDocked);
   const modifier = modifierLabel();
   const readOnly = usePageReadOnly();
 
@@ -120,8 +120,8 @@ export function PageTopbar() {
             <span className="ml-2 text-tooltip-foreground/60">{modifier}+Shift+J</span>
           </TooltipContent>
         </Tooltip>
-        {showToolButtons && PAGE_TOOLS.map(({ id, label, icon: Icon }) => {
-          const active = isOpen && activeTool === id;
+        {showToolButtons && PAGE_PANELS.map(({ id, label, icon: Icon }) => {
+          const active = isOpen && activePanel === id;
           return (
             <Tooltip key={id}>
               <TooltipTrigger asChild>
@@ -134,11 +134,11 @@ export function PageTopbar() {
                       close();
                       return;
                     }
-                    setTool(id);
+                    setPanel(id);
                     // Docked, the sidebar hides these buttons, so the one
                     // just pressed unmounts and focus would fall to <body>.
                     // A keyboard user is taken into the panel instead.
-                    if (toolsDocked && !lastInputWasPointer()) focusOpenedTool();
+                    if (panelsDocked && !lastInputWasPointer()) focusOpenedTool();
                   }}
                   aria-label={label}
                   aria-pressed={active}

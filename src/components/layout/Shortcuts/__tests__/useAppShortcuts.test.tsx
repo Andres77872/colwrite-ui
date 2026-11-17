@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   newPage: vi.fn(async () => 'page-2'),
   newPageDisabled: false,
-  setTool: vi.fn(),
+  setPanel: vi.fn(),
 }));
 
 vi.mock('@/editor', () => ({
@@ -15,7 +15,7 @@ vi.mock('@/actions/useNewPage', () => ({
   useNewPage: () => ({ newPage: mocks.newPage, creating: false, disabled: mocks.newPageDisabled }),
 }));
 vi.mock('@/components/panels/panelsContextState', () => ({
-  usePanels: () => ({ toggle: vi.fn(), toggleAssistant: vi.fn(), activeTool: 'assistant', setTool: mocks.setTool }),
+  usePanels: () => ({ toggle: vi.fn(), toggleAssistant: vi.fn(), activePanel: 'assistant', setPanel: mocks.setPanel }),
 }));
 vi.mock('@/components/layout/useShellLayout', () => ({
   useSidebarToggle: () => ({ toggle: vi.fn() }),
@@ -74,7 +74,7 @@ function press(init: KeyboardEventInit): KeyboardEvent {
 describe('the app shortcuts', () => {
   beforeEach(() => {
     mocks.newPage.mockClear();
-    mocks.setTool.mockClear();
+    mocks.setPanel.mockClear();
     mocks.newPageDisabled = false;
   });
 
@@ -99,7 +99,7 @@ describe('the app shortcuts', () => {
     render(<Shortcuts />);
 
     press({ key: 'L', ctrlKey: true, shiftKey: true });
-    expect(mocks.setTool).toHaveBeenCalledWith('library');
+    expect(mocks.setPanel).toHaveBeenCalledWith('library');
   });
 
   it('stands down behind a dialog', () => {
@@ -112,6 +112,6 @@ describe('the app shortcuts', () => {
     press({ key: 'n', code: 'KeyN', ctrlKey: true, altKey: true });
     press({ key: 'l', ctrlKey: true, shiftKey: true });
     expect(mocks.newPage).not.toHaveBeenCalled();
-    expect(mocks.setTool).not.toHaveBeenCalled();
+    expect(mocks.setPanel).not.toHaveBeenCalled();
   });
 });

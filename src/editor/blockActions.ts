@@ -1,6 +1,6 @@
-import type { Block, CitationSource, Doc, ParagraphChild } from './types';
+import type { Block, Doc, ParagraphChild, ReferenceRecord } from './types';
 import { clampIndent, continuationOf, convertBlock, isListItem } from './blockKinds';
-import { canonicalCitationKey } from './citations';
+import { libraryEntry } from './referenceRecords';
 import { placeholderIds, withoutOrphanChildren } from './docOps';
 import { uid } from '../lib/uid';
 import type { BlockActions } from './editorContextState';
@@ -30,6 +30,7 @@ function blankBlock(id: string, type: Block['type']): Block {
 function duplicateOf(block: Block, id: string): Block {
   const copy = structuredClone(block) as Block;
   copy.id = id;
+  if (copy.type === 'image') delete copy.label;
   if (copy.type !== 'paragraph' || !copy.children?.length) return copy;
   let html = copy.html;
   copy.children = copy.children.map((child) => {
@@ -173,7 +174,7 @@ export function createBlockActions(
       if (current.type !== 'paragraph' && current.type !== 'heading') return null;
       // A locked block above is protected from being merged into, and a code
       // block holds plain text that inline html cannot be folded into.
-      if (prev.locked || prev.type === 'code') return null;
+      if (prev.locked || prev.type === 'code' || prev.type === 'image') return null;
       if (prev.type === 'divider') {
         // The block after a divider backspaces the divider away rather than
         // into it — a divider has no text to merge with.
@@ -285,6 +286,9 @@ export function createBlockActions(
     setHeadingLevel: (id, level) => setBlocks(prev => prev.map(b => (
       b.id === id && b.type === 'heading' ? ({ ...b, level }) : b
     ))),
+    setHeadingInstructions: (id, instructions) => setBlocks(prev => prev.map(b => (
+      b.id === id && b.type === 'heading' && !b.locked ? { ...b, instructions } : b
+    ))),
 
     /**
      * Turn a block into another kind in place ("Turn into", markdown shortcuts).
@@ -314,61 +318,53 @@ export function createBlockActions(
     getBlockIds: () => readDoc().blocks.map(b => b.id),
 
     /**
-     * Add sources to the document's library, or refresh ones already there.
-     *
-     * Matched by canonical key, so a DOI written two ways is one entry. An
-     * incoming record's non-empty fields replace the stored ones — this is
-     * how "Add to library" upgrades an entry typed by hand — while fields it
-     * lacks are kept.
+     * Add references to the document's library, or refresh ones already
+     * there, by key. A record is whole, so the incoming one replaces the
+     * stored one — this is how "Add to sources" upgrades an entry typed by
+     * hand — except that a record nobody checked never replaces one the
+     * registries checked.
      */
-    upsertSources: (incoming: readonly CitationSource[]) => {
+    upsertSources: (incoming: readonly ReferenceRecord[]) => {
       if (incoming.length === 0) return;
       editDoc(prev => {
         const library = [...(prev.sources ?? [])];
-        const index = new Map(library.map((source, i) => [canonicalCitationKey(source.key), i]));
+        const index = new Map(library.map((source, i) => [source.key, i]));
+        let changed = false;
         for (const source of incoming) {
-          const key = canonicalCitationKey(source.key);
-          if (!key) continue;
-          const clean = Object.fromEntries(
-            Object.entries(source).filter(([, value]) => value !== undefined && value !== null && value !== ''),
-          ) as CitationSource;
-          const at = index.get(key);
+          if (!source.key) continue;
+          const record = libraryEntry(source);
+          const at = index.get(record.key);
           const existing = at === undefined ? undefined : library[at];
           if (at === undefined || !existing) {
-            index.set(key, library.length);
-            library.push({ ...clean, key: source.key });
-          } else {
-            library[at] = { ...existing, ...clean, key: existing.key };
+            index.set(record.key, library.length);
+            library.push(record);
+            changed = true;
+          } else if (!(record.state === 'unchecked' && existing.state !== 'unchecked') && JSON.stringify(existing) !== JSON.stringify(record)) {
+            library[at] = record;
+            changed = true;
           }
         }
-        return { ...prev, sources: library };
+        return changed ? { ...prev, sources: library } : prev;
       });
     },
 
-    /** Edit one library entry; an emptied field is removed. */
-    updateSource: (key, patch) => {
-      const target = canonicalCitationKey(key);
+    /** Replace one library entry with the author's edit of it. */
+    updateSource: (key, record) => {
       editDoc(prev => {
         const library = prev.sources ?? [];
-        const at = library.findIndex(source => canonicalCitationKey(source.key) === target);
-        const existing = library[at];
-        if (!existing) return prev;
-        const next = { ...existing, ...patch, key: existing.key } as Record<string, unknown>;
-        for (const [field, value] of Object.entries(next)) {
-          if (value === undefined || value === null || value === '') delete next[field];
-        }
+        const at = library.findIndex(source => source.key === key);
+        if (at < 0) return prev;
         const out = library.slice();
-        out[at] = next as CitationSource;
+        out[at] = libraryEntry({ ...record, key });
         return { ...prev, sources: out };
       });
     },
 
     /** Drop an entry from the library. Citations keep their own copy of it. */
     removeSource: (key) => {
-      const target = canonicalCitationKey(key);
       editDoc(prev => {
         const library = prev.sources ?? [];
-        const out = library.filter(source => canonicalCitationKey(source.key) !== target);
+        const out = library.filter(source => source.key !== key);
         if (out.length === library.length) return prev;
         const { sources: _sources, ...rest } = prev;
         return out.length ? { ...prev, sources: out } : rest;
@@ -428,6 +424,15 @@ export function createBlockActions(
       if (b.id !== id || b.type !== 'code') return b;
       const { language: _language, ...rest } = b;
       return language ? { ...rest, language } : rest;
+    })),
+
+    updateImageDetails: (id, details) => setBlocks(prev => prev.map(block => {
+      if (block.id !== id || block.type !== 'image' || block.locked || !details.alt.trim()
+        || (details.width !== undefined && !Number.isFinite(details.width))) return block;
+      return {
+        ...block, alt: details.alt, caption: details.caption, label: details.label,
+        width: Math.min(1, Math.max(0.2, details.width ?? 1)),
+      };
     })),
 
     duplicateBlock: (id) => {

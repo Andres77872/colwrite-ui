@@ -30,6 +30,9 @@ import { DividerBlock } from '../blocks/DividerBlock';
 import { CodeBlock } from '../blocks/CodeBlock';
 import { DiagramBlock } from '../blocks/DiagramBlock';
 import { FigureBlock } from '../blocks/FigureBlock';
+import { ImageBlock } from '../blocks/ImageBlock/ImageBlock';
+import { ImageUploadHost } from '../blocks/ImageBlock/ImageUploadHost';
+import { ImageGenerationHost } from '../ImageGeneration/ImageGenerationHost';
 import { figureMeta } from '@/lib/figure/compile';
 import { useBlockSelection } from './useBlockSelection';
 import { useBlockDrag } from './useBlockDrag';
@@ -50,6 +53,7 @@ import { CollectionEditorDialog } from '@/components/panels/Library/CollectionDi
 import { revealInTree } from '@/components/layout/Sidebar/PagesTree/treeReveal';
 import { useCollectionMutations } from '@/data/resources';
 import { noteOwnTreeChange } from '@/data/workspaces';
+import { CommentMarker } from '../ReviewComments/CommentMarker';
 
 /** A figure's caption; a starter has none to number, but its draft still says what it is. */
 function figurePreview(source: string): string {
@@ -60,7 +64,7 @@ function figurePreview(source: string): string {
 /** Plain-text preview of a collapsed block's content. */
 function previewText(block: Block, maxChars = 60): string {
   const raw =
-    block.type === 'code'
+    block.type === 'image' ? block.caption ?? block.alt : block.type === 'code'
       ? isFigureBlock(block)
         ? figurePreview(block.text)
         : block.text
@@ -418,6 +422,8 @@ export function Canvas() {
             : `${selected.size} ${selected.size === 1 ? 'block' : 'blocks'} selected. Esc to deselect.`}
         </p>
         <PageTitle onContinue={continueFromTitle} pageKey={documentId} blank={isBlank} />
+        <ImageUploadHost />
+        <ImageGenerationHost />
         {isBlank && !readOnly && <BlankPageActions blankId={blocks[0]?.id ?? null} />}
         {isBlank && readOnly && <p className="mb-2 text-sm text-muted-foreground">Nothing is written on this page yet.</p>}
 
@@ -442,7 +448,9 @@ export function Canvas() {
                 // Rewrites, deletions and moves are about this block, so they
                 // read below it, next to the text they would change.
                 const onBlock = row.changes;
-                const pendingDelete = onBlock.some((change) => change.kind === 'delete');
+                // A deletion of several blocks has its card on the first; the
+                // others are struck through where they stand.
+                const pendingDelete = onBlock.some((change) => change.kind === 'delete') || row.struck.length > 0;
                 const pendingRewrite = onBlock.some((change) => change.kind === 'replace');
 
                 return (
@@ -506,6 +514,7 @@ export function Canvas() {
                         isLast={index === blocks.length - 1}
                         menuOpen={openMenuBlockId === block.id && openMenuType === 'options'}
                       />
+                      <CommentMarker blockId={block.id} />
 
                       <div className="block-content w-full">
                         {isCollapsed ? (
@@ -528,12 +537,12 @@ export function Canvas() {
                             {block.type === 'paragraph' && (
                               <ParagraphBlock
                                 block={block}
-                                documentId={documentId}
                                 listNumber={numbers.get(block.id)}
                               />
                             )}
                             {block.type === 'heading' && <HeadingBlock block={block} />}
                             {block.type === 'divider' && <DividerBlock />}
+                            {block.type === 'image' && <ImageBlock block={block} number={figures.get(block.id)} />}
                             {block.type === 'code' &&
                               (isDiagramBlock(block) ? (
                                 <DiagramBlock block={block} />

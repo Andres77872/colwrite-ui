@@ -1,549 +1,225 @@
-import { itemAt, takeItems } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
-import type { Block, CitationChild, CitationSource } from '../types';
+import { itemAt } from '@/lib/itemAt';
+import { reference } from '@/__tests__/agentSource';
+import { toEditorDoc } from '@/api/content';
+import type { DocumentContentOutput } from '@/api/schema';
+import { fixtureDocument } from '@/dev/fixtureDocument';
 import {
+  EMPTY_BIBLIOGRAPHY,
   buildBibliography,
-  canonicalArxivId,
-  canonicalCitationKey,
-  canonicalDoi,
   citationAnchorId,
+  citationFingerprint,
+  citationLabelText,
   entryForKey,
-  citationLabel,
-  citationYear,
-  firstAuthorSurname,
-  formatReference,
+  formatReferences,
+  isParenthetical,
   referenceAnchorId,
-  referenceMarker,
-  yearOf,
 } from '../citations';
+import { CITATION_STYLES } from '../csl/styles';
+import { markupHtml, markupText } from '../csl/markup';
+import type { Block, CitationChild, CitationStyle, ParagraphBlock } from '../types';
 
-// ── Fixtures ──
+const ph = (id: string) => `<span data-child-id="${id}" contenteditable="false"></span>`;
 
-const cite = (id: string, over: Partial<CitationChild> = {}): CitationChild => ({
-  id,
-  type: 'citation',
-  keys: ['k1'],
-  style: 'numeric',
-  ...over,
+const VASWANI = reference('arxiv:1706.03762', { title: 'Attention is all you need', authors: 'Ashish Vaswani, Noam Shazeer', year: 2017, venue: 'NeurIPS' });
+const FEDUS = reference('arxiv:2101.03961', { title: 'Switch transformers', authors: 'William Fedus, Barret Zoph', year: 2021, venue: 'JMLR' });
+const LEPIKHIN = reference('arxiv:2006.16668', { title: 'GShard', authors: 'Dmitry Lepikhin', year: 2020, venue: 'ICLR' });
+
+const cite = (id: string, keys: string[], extra: Partial<CitationChild> = {}): CitationChild => ({
+  id, type: 'citation', keys, sources: [VASWANI, FEDUS, LEPIKHIN].filter((record) => keys.includes(record.key)), ...extra,
 });
 
-const para = (id: string, children: CitationChild[]): Block => ({
-  id,
-  type: 'paragraph',
-  html: children.map((child) => `<span data-child-id="${child.id}"></span>`).join(''),
-  children,
-});
+function paragraph(id: string, children: CitationChild[]): ParagraphBlock {
+  return { id, type: 'paragraph', html: `Text ${children.map((child) => ph(child.id)).join(' and ')}.`, children };
+}
 
-const source = (key: string, over: Partial<CitationSource> = {}): CitationSource => ({
-  key,
-  title: `Title ${key}`,
-  authors: 'J. Smith',
-  year: '2020',
-  ...over,
-});
+const labels = (blocks: Block[], style: CitationStyle | null = null) => {
+  const bibliography = buildBibliography(blocks, { style });
+  return blocks.flatMap((block) => (block.type === 'paragraph' ? block.children ?? [] : []))
+    .filter((child): child is CitationChild => child.type === 'citation')
+    .map((child) => citationLabelText(child, bibliography));
+};
 
-describe('firstAuthorSurname', () => {
-  it.each([
-    ['Smith, John', 'Smith'],
-    ['J. Smith, A. Doe', 'Smith'],
-    ['John Smith', 'Smith'],
-    ['John Smith and Jane Doe', 'Smith'],
-    ['Doe, Jane; Roe, Richard', 'Doe'],
-    ['Hoffmann, J., Borgeaud, S., Mensch, A.', 'Hoffmann'],
-    ['van der Berg, Jan', 'van der Berg'],
-    ['Jan van der Berg', 'van der Berg'],
-    ['Vaswani, A. & Shazeer, N.', 'Vaswani'],
-  ])('reads %s as %s', (authors, expected) => {
-    expect(firstAuthorSurname(authors)).toBe(expected);
-  });
-
-  it('has nothing to report for an empty author list', () => {
-    expect(firstAuthorSurname(undefined)).toBeUndefined();
-    expect(firstAuthorSurname('  ')).toBeUndefined();
-  });
-});
-
-describe('canonicalDoi / canonicalArxivId', () => {
-  it.each([
-    'https://doi.org/10.1000/Example',
-    'https://dx.doi.org/10.1000/Example',
-    'doi: 10.1000/Example',
-    '10.1000/Example.',
-  ])('reduces %s to its bare lower-cased form', (raw) => {
-    expect(canonicalDoi(raw)).toBe('10.1000/example');
-  });
-
-  it('rejects anything that is not a DOI', () => {
-    expect(canonicalDoi('2103.00020')).toBeUndefined();
-    expect(canonicalDoi('')).toBeUndefined();
-  });
-
-  it('strips host, version and extension from an arXiv id', () => {
-    expect(canonicalArxivId('https://arxiv.org/abs/2103.00020v3')).toBe('2103.00020');
-    expect(canonicalArxivId('https://arxiv.org/pdf/2103.00020.pdf')).toBe('2103.00020');
-    expect(canonicalArxivId('arXiv: 2103.00020')).toBe('2103.00020');
-  });
-});
-
-describe('buildBibliography', () => {
-  it('numbers sources, not citations', () => {
-    const blocks = [
-      para('p1', [cite('c1'), cite('c2', { keys: ['k2'] })]),
-      para('p2', [cite('c3'), cite('c4', { keys: ['k2'] })]),
-    ];
+describe('the bibliography, rendered by the CSL processor', () => {
+  it('numbers works, not citations, in the order the text first cites them', () => {
+    const blocks = [paragraph('p', [cite('b', [FEDUS.key]), cite('a', [VASWANI.key]), cite('c', [FEDUS.key])])];
     const bibliography = buildBibliography(blocks);
-
-    expect(bibliography.entries.map((entry) => [entry.key, entry.number])).toEqual([
-      ['k1', 1],
-      ['k2', 2],
+    expect(bibliography.style).toBe('nlm-citation-sequence-brackets');
+    expect(bibliography.entries.map((entry) => [entry.key, entry.number, entry.marker])).toEqual([
+      [FEDUS.key, 1, '1.'],
+      [VASWANI.key, 2, '2.'],
     ]);
-    // Citing k1 twice is one entry with two usages, not two entries.
-    expect(bibliography.byKey.get('k1')?.usages).toEqual([
-      { blockId: 'p1', childId: 'c1', ordinal: 1 },
-      { blockId: 'p2', childId: 'c3', ordinal: 2 },
-    ]);
+    expect(labels(blocks)).toEqual(['[1]', '[2]', '[1]']);
+    expect(itemAt(bibliography.entries, 0).usages.map((usage) => usage.ordinal)).toEqual([1, 2]);
   });
 
-  it('counts one citation listing the same key twice as a single usage', () => {
-    const bibliography = buildBibliography([para('p1', [cite('c1', { keys: ['k1', 'k1'] })])]);
-    expect(bibliography.byKey.get('k1')?.usages).toHaveLength(1);
+  it('reads the placeholders’ order, not the order children were added', () => {
+    const block: ParagraphBlock = {
+      id: 'p', type: 'paragraph', html: `First ${ph('b')} then ${ph('a')}.`,
+      children: [cite('a', [VASWANI.key]), cite('b', [FEDUS.key])],
+    };
+    expect(buildBibliography([block]).entries.map((entry) => entry.key)).toEqual([FEDUS.key, VASWANI.key]);
   });
 
-  it('ignores blank keys and trims the rest', () => {
-    const bibliography = buildBibliography([
-      para('p1', [cite('c1', { keys: ['  ', ' k1 '] })]),
-    ]);
-    expect(bibliography.entries.map((entry) => entry.key)).toEqual(['k1']);
+  it('collapses a run of works into a range, as the style does', () => {
+    const blocks = [paragraph('p', [cite('a', [VASWANI.key, FEDUS.key, LEPIKHIN.key])])];
+    expect(labels(blocks)).toEqual(['[1–3]']);
+    expect(labels(blocks, 'ieee')).toEqual(['[1], [2], [3]']);
+    expect(labels(blocks, 'apa')).toEqual(['(Fedus & Zoph, 2021; Lepikhin, 2020; Vaswani & Shazeer, 2017)']);
   });
 
-  it('fills a bare key from a richer copy of the same source elsewhere', () => {
-    const blocks = [
-      para('p1', [cite('c1', { sources: [{ key: 'k1', provider: 'manual' }] })]),
-      para('p2', [cite('c2', { sources: [source('k1', { venue: 'NeurIPS' })] })]),
-    ];
-    const entry = buildBibliography(blocks).byKey.get('k1');
-
-    expect(entry?.source).toMatchObject({
-      key: 'k1',
-      provider: 'manual',
-      title: 'Title k1',
-      venue: 'NeurIPS',
-    });
-    expect(entry?.unresolved).toBe(false);
+  it('takes the library’s record over the copy a citation carries', () => {
+    const corrected = reference(VASWANI.key, { title: 'Attention Is All You Need', authors: 'Ashish Vaswani', year: 2017, state: 'verified' });
+    const bibliography = buildBibliography([paragraph('p', [cite('a', [VASWANI.key])])], { library: [corrected] });
+    expect(itemAt(bibliography.entries, 0).record).toBe(corrected);
+    expect(markupText(itemAt(bibliography.entries, 0).formatted)).toContain('Attention Is All You Need');
   });
 
-  it('flags an entry that never got more than a key', () => {
-    const entry = buildBibliography([para('p1', [cite('c1')])]).byKey.get('k1');
-    expect(entry?.unresolved).toBe(true);
+  it('prints a key nothing describes as itself, as typed, and keeps its number', () => {
+    const blocks = [paragraph('p', [cite('a', ['smith2020']), cite('b', [FEDUS.key])])];
+    const bibliography = buildBibliography(blocks, { style: 'apa' });
+    const entry = entryForKey(bibliography, 'smith2020');
+    expect(entry?.record).toBeNull();
+    expect(markupText(entry?.formatted ?? [])).toContain('smith2020');
+    expect(labels(blocks)).toEqual(['[1]', '[2]']);
   });
 
-  it('sorts an author–year document alphabetically and keeps numeric in citation order', () => {
-    const children = [
-      cite('c1', { keys: ['zed'], sources: [source('zed', { authors: 'Z. Zed' })] }),
-      cite('c2', { keys: ['abel'], sources: [source('abel', { authors: 'A. Abel' })] }),
-    ];
-    expect(buildBibliography([para('p1', children)]).entries.map((e) => e.key)).toEqual([
-      'zed',
-      'abel',
-    ]);
-
-    const byAuthor = children.map((child) => ({ ...child, style: 'author-year' as const }));
-    expect(buildBibliography([para('p1', byAuthor)]).entries.map((e) => e.key)).toEqual([
-      'abel',
-      'zed',
-    ]);
+  it('applies the prefix, then the locator and suffix', () => {
+    const blocks = [paragraph('p', [cite('a', [FEDUS.key], { prefix: 'see', locator: 'p. 12', suffix: 'ch. 2' })])];
+    expect(labels(blocks)).toEqual(['[see 1, p. 12, ch. 2]']);
+    expect(labels(blocks, 'apa')).toEqual(['(see Fedus & Zoph, 2021, p. 12, ch. 2)']);
   });
 
-  it('sorts entries with no author after the ones that have one', () => {
-    const children = [
-      cite('c1', {
-        style: 'author-year',
-        keys: ['anon'],
-        sources: [{ key: 'anon', title: 'Anonymous' }],
-      }),
-      cite('c2', {
-        style: 'author-year',
-        keys: ['named'],
-        sources: [source('named', { authors: 'Z. Zed' })],
-      }),
-    ];
-    expect(buildBibliography([para('p1', children)]).entries.map((e) => e.key)).toEqual([
-      'named',
-      'anon',
-    ]);
+  it('tells apart two works with one author and year, as an author-date style does', () => {
+    const a = reference('k:a', { title: 'First', authors: 'Jane Smith', year: 2020 });
+    const b = reference('k:b', { title: 'Second', authors: 'Jane Smith', year: 2020 });
+    const blocks: Block[] = [{
+      id: 'p', type: 'paragraph', html: `${ph('x')} ${ph('y')}`,
+      children: [{ id: 'x', type: 'citation', keys: [a.key], sources: [a] }, { id: 'y', type: 'citation', keys: [b.key], sources: [b] }],
+    }];
+    expect(labels(blocks, 'apa')).toEqual(['(Smith, 2020a)', '(Smith, 2020b)']);
   });
 
-  it('takes the document style from the majority, breaking ties with the first', () => {
-    const majority = [
-      cite('c1', { style: 'numeric' }),
-      cite('c2', { style: 'author-year', keys: ['k2'] }),
-      cite('c3', { style: 'author-year', keys: ['k3'] }),
-    ];
-    expect(buildBibliography([para('p1', majority)]).style).toBe('author-year');
-
-    const tied = [cite('c1', { style: 'ieee' }), cite('c2', { style: 'numeric', keys: ['k2'] })];
-    expect(buildBibliography([para('p1', tied)]).style).toBe('ieee');
+  it('takes the page’s style from the document, else the citations’ majority, else the default', () => {
+    const blocks = [paragraph('p', [cite('a', [FEDUS.key], { style: 'apa' }), cite('b', [VASWANI.key], { style: 'apa' }), cite('c', [LEPIKHIN.key], { style: 'ieee' })])];
+    expect(buildBibliography(blocks).style).toBe('apa');
+    expect(buildBibliography(blocks, { style: 'nature' })).toMatchObject({ style: 'nature', documentStyle: 'nature' });
+    expect(buildBibliography([])).toEqual({ ...EMPTY_BIBLIOGRAPHY, style: 'nlm-citation-sequence-brackets', documentStyle: null });
   });
 
-  it('defaults to numeric for a document with no citations', () => {
-    expect(buildBibliography([]).style).toBe('numeric');
-    expect(buildBibliography([]).entries).toEqual([]);
-  });
-});
-
-describe('citationLabel', () => {
-  const bibliographyFor = (children: CitationChild[]) =>
-    buildBibliography([para('p1', children)]);
-
-  it('collapses a run of three into a range and leaves a pair alone', () => {
-    const three = cite('c1', { keys: ['k1', 'k2', 'k3'] });
-    const two = cite('c2', { keys: ['k1', 'k2'] });
-    const bibliography = bibliographyFor([three, two]);
-
-    expect(citationLabel(three, bibliography)).toBe('[1–3]');
-    expect(citationLabel(two, bibliography)).toBe('[1, 2]');
+  it('prints [?] for a citation it does not hold, rather than a borrowed number', () => {
+    const bibliography = buildBibliography([paragraph('p', [cite('a', [FEDUS.key])])]);
+    expect(citationLabelText(cite('elsewhere', [VASWANI.key]), bibliography)).toBe('[?]');
+    expect(citationLabelText({ id: 'empty', type: 'citation', keys: [] }, bibliography)).toBe('[?]');
   });
 
-  it('splits a non-contiguous set at the gap', () => {
-    const child = cite('c4', { keys: ['k1', 'k3'] });
-    const bibliography = bibliographyFor([
-      cite('c1', { keys: ['k1'] }),
-      cite('c2', { keys: ['k2'] }),
-      cite('c3', { keys: ['k3'] }),
-      child,
-    ]);
-    expect(citationLabel(child, bibliography)).toBe('[1, 3]');
-    expect(citationLabel({ ...child, style: 'ieee' }, bibliography)).toBe('[1], [3]');
+  it('sees a change to a citation’s prefix, locator or suffix in its fingerprint', () => {
+    const before = [paragraph('p', [cite('a', [FEDUS.key])])];
+    const after = [paragraph('p', [cite('a', [FEDUS.key], { locator: 'p. 3' })])];
+    expect(citationFingerprint(before)).not.toBe(citationFingerprint(after));
+    expect(citationFingerprint(before)).toBe(citationFingerprint([paragraph('p', [cite('a', [FEDUS.key])])]));
   });
 
-  it('brackets every number separately in IEEE style', () => {
-    const child = cite('c1', { style: 'ieee', keys: ['k1', 'k2', 'k3'] });
-    const bibliography = bibliographyFor([child]);
-    expect(citationLabel(child, bibliography)).toBe('[1]–[3]');
+  it('says which labels are parenthetical, for the gap before them', () => {
+    const blocks = [paragraph('p', [cite('a', [FEDUS.key])])];
+    const apa = buildBibliography(blocks, { style: 'apa' });
+    const numbered = buildBibliography(blocks);
+    expect(isParenthetical(apa.labels.get('a') ?? [])).toBe(true);
+    expect(isParenthetical(numbered.labels.get('a') ?? [])).toBe(false);
   });
 
-  it('sorts the numbers a citation prints regardless of key order', () => {
-    const child = cite('c1', { keys: ['k3', 'k1'] });
-    const bibliography = bibliographyFor([cite('c0', { keys: ['k1'] }), cite('c9', { keys: ['k3'] }), child]);
-    expect(citationLabel(child, bibliography)).toBe('[1, 2]');
+  it('formats a list of references as a style prints them, each once', () => {
+    const formatted = formatReferences([FEDUS, VASWANI]);
+    expect(markupText(formatted.get(FEDUS.key) ?? [])).toBe('Fedus W, Zoph B. Switch transformers. JMLR. 2021.');
+    expect(markupText(formatted.get(VASWANI.key) ?? [])).toBe('Vaswani A, Shazeer N. Attention is all you need. NeurIPS. 2017.');
   });
 
-  it('applies prefix, locator and suffix', () => {
-    const child = cite('c1', { prefix: 'see', locator: 'p. 12', suffix: 'ch. 2' });
-    expect(citationLabel(child, bibliographyFor([child]))).toBe('see [1], p. 12, ch. 2');
-  });
-
-  it('puts an author–year signal phrase inside the parentheses', () => {
-    const child = cite('c1', {
-      style: 'author-year',
-      prefix: 'see',
-      locator: 'p. 12',
-      sources: [source('k1')],
-    });
-    expect(citationLabel(child, bibliographyFor([child]))).toBe('(see Smith, 2020, p. 12)');
-  });
-
-  it('disambiguates two sources sharing an author and year', () => {
-    const first = cite('c1', {
-      style: 'author-year',
-      keys: ['a'],
-      sources: [source('a', { title: 'Alpha' })],
-    });
-    const second = cite('c2', {
-      style: 'author-year',
-      keys: ['b'],
-      sources: [source('b', { title: 'Beta' })],
-    });
-    const bibliography = bibliographyFor([first, second]);
-
-    expect(citationLabel(first, bibliography)).toBe('(Smith, 2020a)');
-    expect(citationLabel(second, bibliography)).toBe('(Smith, 2020b)');
-  });
-
-  it('falls back to the raw key when the source has no author or year', () => {
-    const child = cite('c1', { style: 'author-year', keys: ['k1', 'k2'], sources: [source('k1')] });
-    expect(citationLabel(child, bibliographyFor([child]))).toBe('(Smith, 2020; k2)');
-  });
-
-  it('marks a citation with no keys rather than claiming an entry', () => {
-    const child = cite('c1', { keys: [] });
-    expect(citationLabel(child, bibliographyFor([child]))).toBe('[?]');
-    expect(citationLabel({ ...child, style: 'author-year' }, bibliographyFor([child]))).toBe(
-      '(citation)',
-    );
-  });
-
-  it('does not borrow a number for a key the document does not contain', () => {
-    const child = cite('c1', { keys: ['unknown'] });
-    // Rendered against a bibliography built from a different document.
-    expect(citationLabel(child, bibliographyFor([cite('c2', { keys: ['k1'] })]))).toBe('[?]');
-  });
-});
-
-describe('formatReference', () => {
-  const entryFor = (over: Partial<CitationSource>, style: CitationChild['style'] = 'numeric') =>
-    buildBibliography([
-      para('p1', [cite('c1', { style, sources: [{ key: 'k1', ...over }] })]),
-    ]).byKey.get('k1')!;
-
-  it('formats IEEE with the title quoted', () => {
-    const entry = entryFor({ title: 'Attention', authors: 'A. Vaswani', venue: 'NeurIPS', year: '2017' }, 'ieee');
-    expect(formatReference(entry, 'ieee').text).toBe('A. Vaswani, “Attention”, NeurIPS, 2017.');
-  });
-
-  it('formats numeric as sentence-separated fields', () => {
-    const entry = entryFor({ title: 'Attention', authors: 'A. Vaswani', venue: 'NeurIPS', year: '2017' });
-    expect(formatReference(entry, 'numeric').text).toBe('A. Vaswani. Attention. NeurIPS. 2017.');
-  });
-
-  it('formats author–year with the year beside the author', () => {
-    const entry = entryFor(
-      { title: 'Attention', authors: 'A. Vaswani', venue: 'NeurIPS', year: '2017' },
-      'author-year',
-    );
-    expect(formatReference(entry, 'author-year').text).toBe(
-      'A. Vaswani (2017). Attention. NeurIPS.',
-    );
-  });
-
-  it('does not repeat the title as its own author', () => {
-    const entry = entryFor({ title: 'Anonymous report', year: '2017' }, 'author-year');
-    expect(formatReference(entry, 'author-year').text).toBe('Anonymous report (2017).');
-  });
-
-  it('names the key when nothing was ever attached', () => {
-    const entry = entryFor({});
-    expect(formatReference(entry, 'numeric').text).toBe('k1');
-  });
-
-  it('prefers a DOI link, then a URL', () => {
-    expect(formatReference(entryFor({ doi: '10.1000/example', url: 'https://example.test/a' }), 'numeric'))
-      .toMatchObject({ href: 'https://doi.org/10.1000/example', linkLabel: 'doi.org/10.1000/example' });
-    expect(formatReference(entryFor({ url: 'https://example.test/a' }), 'numeric'))
-      .toMatchObject({ href: 'https://example.test/a' });
-  });
-
-  it('never turns a non-http url into a link', () => {
-    expect(formatReference(entryFor({ url: 'javascript:alert(1)' }), 'numeric').href).toBeUndefined();
-  });
-
-  it('reconstructs an arXiv link from provider provenance alone', () => {
-    const entry = entryFor({ provider: 'arxiv', providerId: '2103.00020v2' });
-    expect(formatReference(entry, 'numeric')).toMatchObject({
-      href: 'https://arxiv.org/abs/2103.00020',
-      linkLabel: 'arXiv:2103.00020',
-    });
-  });
-});
-
-describe('markers and anchors', () => {
-  const entry = { number: 3 } as never;
-
-  it('numbers a numbered style and leaves author–year unmarked', () => {
-    expect(referenceMarker(entry, 'numeric')).toBe('[3]');
-    expect(referenceMarker(entry, 'ieee')).toBe('[3]');
-    expect(referenceMarker(entry, 'author-year')).toBe('');
+  it('never lets a record’s text become markup', () => {
+    const hostile = reference('k:x', { title: '<img src=x onerror=alert(1)> & co', authors: 'Eve Mallory', year: 2020, url: 'javascript:alert(1)' });
+    const bibliography = buildBibliography([{ id: 'p', type: 'paragraph', html: ph('c'), children: [{ id: 'c', type: 'citation', keys: ['k:x'], sources: [hostile] }] }], { style: 'apa' });
+    const html = markupHtml(itemAt(bibliography.entries, 0).formatted);
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt; &amp; co');
+    expect(html).not.toContain('<img');
+    // A link is to http(s) only.
+    expect(html).not.toMatch(/href="(?!https?:)/);
   });
 
   it('builds fragment ids that are valid in a url', () => {
     expect(referenceAnchorId({ number: 3 })).toBe('ref-3');
-    expect(citationAnchorId('a b/c')).toBe('cite-a-b-c');
+    expect(citationAnchorId('c 1/x')).toBe('cite-c-1-x');
   });
 });
 
-describe('canonicalCitationKey', () => {
-  it.each([
-    '10.1234/abc',
-    '10.1234/ABC',
-    '  10.1234/AbC  ',
-    'doi:10.1234/ABC',
-    'DOI: 10.1234/abc',
-    'https://doi.org/10.1234/ABC',
-    'https://dx.doi.org/10.1234/abc',
-    'https://doi.org/10.1234/abc/',
-  ])('reduces the DOI %s to one key', (value) => {
-    expect(canonicalCitationKey(value)).toBe('10.1234/abc');
+/** The preview's fixture page, as the editor loads it. */
+const page = toEditorDoc(structuredClone(fixtureDocument()) as unknown as DocumentContentOutput);
+const pageCitations = page.blocks.flatMap((block) => (block.type === 'paragraph' ? block.children ?? [] : []))
+  .filter((child): child is CitationChild => child.type === 'citation');
+
+/**
+ * What each listed style prints for the fixture page: its four citations
+ * (the last cites the Transformer paper again under its arXiv DOI, a
+ * duplicate an author-date style tells apart as 2017a and 2017b), and its
+ * first and its retracted reference.
+ */
+const FIXTURE_PAGE: Record<CitationStyle, { labels: string[]; first: string; retracted: string }> = {
+  'nlm-citation-sequence-brackets': {
+    labels: ["[1,2]", "[3]", "[4]", "[5]"],
+    first: "Fedus W, Zoph B, Shazeer N. Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity. Journal of Machine Learning Research [Internet]. 2022;23(120):1–39. Available from: https://jmlr.org/papers/v23/21-0998.html",
+    retracted: "Okafor C, Brandt L. Learned Routing Eliminates Expert Collapse. Journal of Sparse Models. 2019 Jun;4(2):115–31. doi:10.5555/jsm.2019.042",
+  },
+  'nlm-citation-sequence': {
+    labels: ["(1,2)", "(3)", "(4)", "(5)"],
+    first: "Fedus W, Zoph B, Shazeer N. Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity. Journal of Machine Learning Research [Internet]. 2022;23(120):1–39. Available from: https://jmlr.org/papers/v23/21-0998.html",
+    retracted: "Okafor C, Brandt L. Learned Routing Eliminates Expert Collapse. Journal of Sparse Models. 2019 Jun;4(2):115–31. doi:10.5555/jsm.2019.042",
+  },
+  ieee: {
+    labels: ["[1], [2]", "[3]", "[4]", "[5]"],
+    first: "W. Fedus, B. Zoph, and N. Shazeer, “Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity,” Journal of Machine Learning Research, vol. 23, no. 120, pp. 1–39, 2022, [Online]. Available: https://jmlr.org/papers/v23/21-0998.html",
+    retracted: "C. Okafor and L. Brandt, “Learned Routing Eliminates Expert Collapse,” Journal of Sparse Models, vol. 4, no. 2, pp. 115–131, Jun. 2019, doi: 10.5555/jsm.2019.042.",
+  },
+  apa: {
+    labels: ["(Fedus et al., 2022; Lepikhin et al., 2021)", "(Vaswani et al., 2017a)", "(Okafor & Brandt, 2019)", "(Vaswani et al., 2017b)"],
+    first: "Fedus, W., Zoph, B., & Shazeer, N. (2022). Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity. Journal of Machine Learning Research, 23(120), 1–39. https://jmlr.org/papers/v23/21-0998.html",
+    retracted: "Okafor, C., & Brandt, L. (2019). Learned Routing Eliminates Expert Collapse. Journal of Sparse Models, 4(2), 115–131. https://doi.org/10.5555/jsm.2019.042",
+  },
+  'chicago-author-date': {
+    labels: ["(Fedus et al. 2022; Lepikhin et al. 2021)", "(Vaswani et al. 2017a)", "(Okafor and Brandt 2019)", "(Vaswani et al. 2017b)"],
+    first: "Fedus, William, Barret Zoph, and Noam Shazeer. 2022. “Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity.” Journal of Machine Learning Research 23 (120): 1–39. https://jmlr.org/papers/v23/21-0998.html.",
+    retracted: "Okafor, Chidi, and Lena Brandt. 2019. “Learned Routing Eliminates Expert Collapse.” Journal of Sparse Models 4 (2): 115–31. https://doi.org/10.5555/jsm.2019.042.",
+  },
+  'american-medical-association': {
+    labels: ["1,2", "3", "4", "5"],
+    first: "Fedus W, Zoph B, Shazeer N. Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity. Journal of Machine Learning Research. 2022;23(120):1-39. https://jmlr.org/papers/v23/21-0998.html",
+    retracted: "Okafor C, Brandt L. Learned Routing Eliminates Expert Collapse. Journal of Sparse Models. 2019;4(2):115-131. doi:10.5555/jsm.2019.042",
+  },
+  nature: {
+    labels: ["1,2", "3", "4", "5"],
+    first: "Fedus, W., Zoph, B. & Shazeer, N. Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity. Journal of Machine Learning Research 23, 1–39 (2022).",
+    retracted: "Okafor, C. & Brandt, L. Learned Routing Eliminates Expert Collapse. Journal of Sparse Models 4, 115–131 (2019).",
+  },
+  'association-for-computing-machinery': {
+    labels: ["[1, 2]", "[4]", "[3]", "[5]"],
+    first: "William Fedus, Barret Zoph, and Noam Shazeer. 2022. Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity. Journal of Machine Learning Research 23, 120 (2022), 1–39. Retrieved from https://jmlr.org/papers/v23/21-0998.html",
+    retracted: "Chidi Okafor and Lena Brandt. 2019. Learned Routing Eliminates Expert Collapse. Journal of Sparse Models 4, 2 (June 2019), 115–131. https://doi.org/10.5555/jsm.2019.042",
+  },
+};
+
+describe('the fixture page in each listed style', () => {
+  it('lists exactly the API’s style ids', () => {
+    expect(CITATION_STYLES.map((style) => style.id).sort()).toEqual(Object.keys(FIXTURE_PAGE).sort());
   });
 
-  it.each([
-    '2101.00001',
-    '2101.00001v3',
-    'arXiv:2101.00001',
-    'ARXIV:2101.00001V2',
-    'https://arxiv.org/abs/2101.00001',
-    'https://arxiv.org/abs/2101.00001v7',
-    'https://arxiv.org/pdf/2101.00001v2.pdf',
-  ])('reduces the arXiv id %s to one key', (value) => {
-    expect(canonicalCitationKey(value)).toBe('2101.00001');
-  });
-
-  it('handles the pre-2007 arXiv scheme', () => {
-    expect(canonicalCitationKey('hep-th/9901001v2')).toBe('hep-th/9901001');
-    expect(canonicalCitationKey('arXiv:math.GT/0309136')).toBe('math.gt/0309136');
-  });
-
-  it.each(['S2:abc123', 'S2:AbC123', 'Smith2020', 'Smith2020v2', 'my-notes'])(
-    'returns the opaque key %s as written',
-    (value) => {
-      // Lower-casing a key the author typed silently edits their document, and
-      // `Smith2020v2` is why the arXiv version strip has to be gated on the
-      // whole value looking like an arXiv id.
-      expect(canonicalCitationKey(value)).toBe(value);
-    },
-  );
-
-  it('has nothing to say about an empty key', () => {
-    expect(canonicalCitationKey('')).toBe('');
-    expect(canonicalCitationKey('   ')).toBe('');
-    expect(canonicalCitationKey(undefined)).toBe('');
-  });
-
-  it('is idempotent', () => {
-    for (const value of ['https://doi.org/10.1234/ABC', 'arXiv:2101.00001v3', 'S2:AbC']) {
-      const once = canonicalCitationKey(value);
-      expect(canonicalCitationKey(once)).toBe(once);
-    }
-  });
-});
-
-describe('one work cited under two spellings', () => {
-  // Citing the same paper from two search results is the ordinary way to get
-  // here, and it used to print the paper twice with two numbers.
-  const spellings = ['10.1234/ABC', 'https://doi.org/10.1234/abc', '10.1234/abc'];
-
-  it('collapses to a single numbered entry', () => {
-    const bibliography = buildBibliography([
-      para(
-        'b1',
-        spellings.map((key, index) =>
-          cite(`c${index}`, { keys: [key], sources: [source(key, { title: 'One paper' })] }),
-        ),
-      ),
-    ]);
-
-    expect(bibliography.entries).toHaveLength(1);
-    expect(bibliography.entries[0]?.key).toBe('10.1234/abc');
-    expect(bibliography.entries[0]?.usages).toHaveLength(3);
-  });
-
-  it('keeps the first spelling for anything the reader sees', () => {
-    const bibliography = buildBibliography([
-      para('b1', [
-        cite('c1', { keys: ['10.1234/ABC'] }),
-        cite('c2', { keys: ['10.1234/abc'] }),
-      ]),
-    ]);
-
-    const [entry] = takeItems(bibliography.entries, 1);
-    expect(entry.displayKey).toBe('10.1234/ABC');
-    // Nothing was attached, so the row prints the key — as written.
-    expect(formatReference(entry, 'numeric').text).toBe('10.1234/ABC');
-  });
-
-  it('resolves every spelling through byKey', () => {
-    const bibliography = buildBibliography([
-      para('b1', [cite('c1', { keys: ['arXiv:2101.00001v3'] })]),
-    ]);
-
-    for (const alias of ['arXiv:2101.00001v3', '2101.00001', 'https://arxiv.org/abs/2101.00001']) {
-      expect(entryForKey(bibliography, alias)?.number).toBe(1);
-    }
-  });
-
-  it('gives both citations the same number', () => {
-    const first = cite('c1', { keys: ['10.1234/ABC'] });
-    const second = cite('c2', { keys: ['https://doi.org/10.1234/abc'] });
-    const bibliography = buildBibliography([para('b1', [first, second])]);
-
-    expect(citationLabel(first, bibliography)).toBe('[1]');
-    expect(citationLabel(second, bibliography)).toBe('[1]');
-  });
-
-  it('matches a source record whose key is spelled differently again', () => {
-    const bibliography = buildBibliography([
-      para('b1', [
-        cite('c1', {
-          keys: ['10.1234/ABC'],
-          sources: [source('https://doi.org/10.1234/abc', { title: 'Found anyway' })],
-        }),
-      ]),
-    ]);
-
-    expect(bibliography.entries[0]?.source.title).toBe('Found anyway');
-    expect(bibliography.entries[0]?.unresolved).toBe(false);
-  });
-
-  it('does not merge two genuinely different keys', () => {
-    const bibliography = buildBibliography([
-      para('b1', [cite('c1', { keys: ['Smith2020', 'Smith2020v2', 'S2:a', 'S2:A'] })]),
-    ]);
-    expect(bibliography.entries).toHaveLength(4);
-  });
-});
-
-describe('citationYear', () => {
-  it.each([
-    [2020, '2020'],
-    ['2020', '2020'],
-    ['  2020 ', '2020'],
-    ['', undefined],
-    ['   ', undefined],
-    [undefined, undefined],
-    [null, undefined],
-    [true, undefined],
-    [Number.NaN, undefined],
-    [Number.POSITIVE_INFINITY, undefined],
-  ])('reads %o as %o', (value, expected) => {
-    expect(citationYear(value)).toBe(expected);
-  });
-
-  it('reads a four-digit year out of a date, whatever type it arrived as', () => {
-    expect(yearOf('2021-03-04')).toBe('2021');
-    expect(yearOf(2021)).toBe('2021');
-    expect(yearOf(undefined)).toBeUndefined();
-  });
-});
-
-describe('a provider-style integer year', () => {
-  // `doc_edit` accepts `year` as an integer, and nothing between the agent and
-  // the canvas used to turn it back into the string the type promises. Every
-  // reader below called a string method on it and took the document down.
-  const numericYear = source('k1', { year: 2020 as unknown as string });
-
-  it.each(['numeric', 'author-year', 'ieee'] as const)(
-    'formats a reference in %s style instead of throwing',
-    (style) => {
-      const bibliography = buildBibliography([
-        para('b1', [cite('c1', { style, sources: [numericYear] })]),
-      ]);
-      expect(formatReference(itemAt(bibliography.entries, 0), style).text).toContain('2020');
-    },
-  );
-
-  it('labels an author–year citation with the coerced year', () => {
-    const child = cite('c1', { style: 'author-year', sources: [numericYear] });
-    const bibliography = buildBibliography([para('b1', [child])]);
-    expect(citationLabel(child, bibliography)).toBe('(Smith, 2020)');
-  });
-
-  it('normalises the year on the merged entry, so readers see the declared type', () => {
-    const bibliography = buildBibliography([
-      para('b1', [cite('c1', { sources: [numericYear] })]),
-    ]);
-    expect(bibliography.entries[0]?.source.year).toBe('2020');
-  });
-
-  it('still disambiguates two sources sharing an author and year', () => {
-    const bibliography = buildBibliography([
-      para('b1', [
-        cite('c1', { style: 'author-year', keys: ['k1'], sources: [numericYear] }),
-        cite('c2', {
-          style: 'author-year',
-          keys: ['k2'],
-          sources: [source('k2', { year: 2020 as unknown as string })],
-        }),
-      ]),
-    ]);
-    expect(bibliography.entries.map((entry) => entry.yearSuffix)).toEqual(['a', 'b']);
-  });
+  for (const { id, name } of CITATION_STYLES) {
+    it(`renders in ${name}`, () => {
+      const bibliography = buildBibliography(page.blocks, { library: page.sources, style: id });
+      const expected = FIXTURE_PAGE[id];
+      expect(pageCitations.map((child) => citationLabelText(child, bibliography))).toEqual(expected.labels);
+      // Five cited entries; the one kept for later is not in the list.
+      expect(bibliography.entries).toHaveLength(5);
+      expect(markupText(itemAt(bibliography.entries, 0).formatted)).toBe(expected.first);
+      const retracted = bibliography.entries.find((entry) => entry.key === 'doi:10.5555/jsm.2019.042');
+      expect(markupText(retracted?.formatted ?? [])).toBe(expected.retracted);
+      expect(retracted?.record?.flags).toContain('retracted');
+    });
+  }
 });

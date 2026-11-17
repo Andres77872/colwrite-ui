@@ -62,10 +62,29 @@ function unwrapFigureGaps(root: HTMLElement): void {
   });
 }
 
+/**
+ * Block markup the browser put inside the paragraph (`div`, `p`, `h1`–`h6`),
+ * written as the API stores it: `<span class="legacy-block">` with the same
+ * content and no attributes (`_LEGACY_BLOCK_TAGS` in
+ * `ColWrite-api/src/documents/domain/validation.py`). The sanitizer does
+ * the same on load and paste (`sanitizeEditableHtml`), so the page holds
+ * what the server stores.
+ */
+function flattenLegacyBlocks(root: HTMLElement): void {
+  root.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6').forEach((element) => {
+    const span = document.createElement('span');
+    span.className = 'legacy-block';
+    span.append(...Array.from(element.childNodes));
+    element.replaceWith(span);
+  });
+}
+
 export function serializeEditableHtml(root: HTMLDivElement): string {
   const clone = root.cloneNode(true) as HTMLDivElement;
+  // Widget insides first: they are React's markup, not the page's.
   clearChildPlaceholders(clone);
   unwrapFigureGaps(clone);
+  flattenLegacyBlocks(clone);
   clone.normalize();
   return clone.innerHTML;
 }

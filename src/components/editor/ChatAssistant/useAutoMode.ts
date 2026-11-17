@@ -1,28 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { ApplyPolicy, AutoBlockedReason } from '@/editor/types';
-
-/**
- * What Auto is scoped to (D18): the workspace, the open page's session and
- * the chat on screen. A change of any part turns Auto off, and nothing here
- * is ever stored, so a reload starts with it off too.
- */
-export type AutoModeScope = {
-  /** The workspace being shown. */
-  workspace: string;
-  /** The open page's session (`documentSessionId`), not its id. */
-  page: string;
-  /** The chat on screen; `null` for a new one. */
-  chat: string | null;
-  /**
-   * Bumped whenever the author starts or picks a chat, so choosing one always
-   * resets Auto, even "New chat" from a new chat.
-   */
-  chatEpoch: number;
-};
-
-export function autoModeScopeKey(scope: AutoModeScope): string {
-  return JSON.stringify([scope.workspace, scope.page, scope.chatEpoch, scope.chat]);
-}
+import { conversationScopeKey, type ConversationScope } from './conversationScope';
 
 type AutoState = {
   /** The scope Auto was turned on in. */
@@ -61,8 +39,8 @@ const OFF = { next: null, on: false, blocked: null } as const;
  * The composer's Auto switch: off by default, on only for the workspace,
  * page session and chat it was turned on in.
  */
-export function useAutoMode(scope: AutoModeScope): AutoMode {
-  const key = autoModeScopeKey(scope);
+export function useAutoMode(scope: ConversationScope): AutoMode {
+  const key = conversationScopeKey(scope);
   const [stored, setStored] = useState<AutoState>(() => ({ scope: key, ...OFF }));
   // A new scope turns Auto off before anything renders with it on: the
   // previous page's or chat's Auto never reaches this one. The chat a new
@@ -101,7 +79,7 @@ export function useAutoMode(scope: AutoModeScope): AutoMode {
     (chatId: string) => inScope((current) => (
       // Only from a new chat: a chat the author picked is a different chat.
       scope.chat === null
-        ? { ...current, next: autoModeScopeKey({ workspace, page, chatEpoch, chat: chatId }) }
+        ? { ...current, next: conversationScopeKey({ workspace, page, chatEpoch, chat: chatId }) }
         : current
     )),
     [chatEpoch, inScope, page, scope.chat, workspace],
@@ -113,18 +91,35 @@ export function useAutoMode(scope: AutoModeScope): AutoMode {
   );
 }
 
-/** What the strip above the composer says while Auto is on. */
+/**
+ * What the strip above the composer says while Auto is on. The server can
+ * pause Auto partway through a reply (`policy`, `untrusted_content`); its
+ * next `status` says so, and the strip changes with it.
+ */
 export function autoStripMessage(blocked: AutoBlockedReason | null): string {
   switch (blocked) {
     case null:
       return 'Auto is on: edits apply without asking';
-    case 'web_research':
-      return 'Auto is paused: web research is on for this message';
     case 'policy':
       return 'Auto isn\'t available in this workspace';
     case 'role':
       return 'Viewers can\'t use Auto';
-    default:
-      return 'Auto is paused for this message';
+    case 'untrusted_content':
+      return 'Auto paused: this reply read outside material, so its changes wait for your review';
+  }
+}
+
+/**
+ * Under a reply whose changes waited although Auto was on: why. Kept with
+ * the reply, since the strip speaks only for the message under way.
+ */
+export function autoPausedNote(reason: AutoBlockedReason): string {
+  switch (reason) {
+    case 'policy':
+      return 'Auto paused: this workspace switched Auto off, so this reply\'s changes wait for your review';
+    case 'role':
+      return 'Auto paused: your role in this workspace doesn\'t allow it, so this reply\'s changes wait for review';
+    case 'untrusted_content':
+      return 'Auto paused: this reply read outside material, so its changes wait for your review';
   }
 }

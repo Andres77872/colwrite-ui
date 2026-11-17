@@ -22,7 +22,7 @@ vi.mock('@/data/documentHistory', async () => ({
     changeSetId,
     documentId,
     status: 'pending',
-    operations: [{ op: 'append_block', block: { id: `${documentId}-block`, type: 'divider' } }],
+    operations: [{ op: 'write_blocks', position: 'append', blockId: null, blocks: [{ id: `${documentId}-block`, type: 'divider' }] }],
     unmappableOperations: [],
     baseEtag: 'cw:1',
     toolCallId: `call-${documentId}`,
@@ -46,7 +46,7 @@ const captureRef = createRef<{
   chats: ChatSessionsValue;
 }>();
 
-const applyPatch = vi.fn(() => ({ blocks: [], desynced: [], touched: [] }));
+const applyPatch = vi.fn(() => ({ blocks: [], doc: { blocks: [] }, desynced: [], touched: [] }));
 const markRecentlyChanged = vi.fn();
 
 function editorValue(documentId: string): EditorProbe {
@@ -97,7 +97,7 @@ function failedProposal(documentId: string): ToolAction {
     changeSetId: null,
     message: 'Review failed',
     actions: [
-      { op: 'append_block', block: { id: `${documentId}-failed`, type: 'divider' } },
+      { op: 'write_blocks', position: 'append', blockId: null, blocks: [{ id: `${documentId}-failed`, type: 'divider' }] },
     ],
   };
 }

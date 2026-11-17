@@ -11,8 +11,10 @@ import { useAgentEngine } from './agentEngineContextState';
 export function GatewayModelPreferences() {
   const { catalog, loading, error, refresh } = useAgentEngine();
   const titleId = useId();
-  const hasModels = gatewayModelsFor(catalog, 'main').length > 0
-    && gatewayModelsFor(catalog, 'lite').length > 0;
+  // Each tier on its own: a server with no lite chain still has a general
+  // model to choose, and the picker for it is not hidden.
+  const hasMain = gatewayModelsFor(catalog, 'main').length > 0;
+  const hasLite = gatewayModelsFor(catalog, 'lite').length > 0;
 
   return (
     <section aria-labelledby={titleId}>
@@ -26,7 +28,7 @@ export function GatewayModelPreferences() {
         <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
           <Spinner /> Loading configured models…
         </p>
-      ) : !hasModels ? (
+      ) : !hasMain && !hasLite ? (
         <Alert variant="warning" className="mt-3">
           <div className="flex flex-wrap items-center gap-2">
             <span>
@@ -39,15 +41,33 @@ export function GatewayModelPreferences() {
         </Alert>
       ) : (
         <div className="mt-2 divide-y divide-border border-y border-border">
-          <GatewayModelField tier="main" label="General model">
-            Gateway chat and inline AI, writing tools and claim assessment.
-          </GatewayModelField>
-          <GatewayModelField tier="lite" label="Lite model">
-            Citation queries, citation markup and gateway research workers. Inline AI is not lite work.
-          </GatewayModelField>
+          {hasMain ? (
+            <GatewayModelField tier="main" label="General model">
+              Gateway chat and inline AI, and claim assessment.
+            </GatewayModelField>
+          ) : (
+            <TierUnavailable label="General model" />
+          )}
+          {hasLite ? (
+            <GatewayModelField tier="lite" label="Lite model">
+              Helper calls and gateway research workers. Inline AI is not lite work.
+            </GatewayModelField>
+          ) : (
+            <TierUnavailable label="Lite model" />
+          )}
         </div>
       )}
     </section>
+  );
+}
+
+/** A tier this server has no models for: said in its row, the other tier's picker stays. */
+function TierUnavailable({ label }: { label: string }) {
+  return (
+    <div className="py-3">
+      <p className="text-sm font-medium text-foreground">{label}</p>
+      <p className="mt-0.5 text-xs text-muted-foreground">Not configured on this server. The server default is used.</p>
+    </div>
   );
 }
 

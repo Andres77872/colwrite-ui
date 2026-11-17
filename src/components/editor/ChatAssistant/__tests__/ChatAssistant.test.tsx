@@ -1,3 +1,4 @@
+import { agentDone } from '@/__tests__/agentDone';
 import { itemAt, takeItems } from '@/lib/itemAt';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -5,11 +6,15 @@ import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, StrictMode, useImperativeHandle } from 'react';
 import * as agentSessions from '@/api/assistant/agentSessionChat';
 import * as chatAttachments from '@/api/assistant/chatAttachments';
+import * as assets from '@/data/assets';
 import { http, multipartFields, server } from '@/__tests__/server';
 import { documentListBody, type DocumentListAnswer } from '@/data/__tests__/documentFixtures';
-import type { ChatSummary, ResourceItem, ResourceListResponse } from '@/api/schema';
+import type { ChatMessage as WireChatMessage, ChatSummary, ResourceItem, ResourceListResponse } from '@/api/schema';
+import { fixtures } from '@/dev/msw/fixtures';
+import { TurnRecord } from '@/dev/msw/turnRecord';
+import { planEtag, planEvent, proposePlan } from '@/dev/msw/plans';
 import { inCollection, makeResource } from '@/data/__tests__/resourceFixtures';
-import type { AgentEventHandlers } from '@/api/assistant/streamParser';
+import type { AgentEventHandlers, AgentQuestion } from '@/api/assistant/streamParser';
 import type { ToolAction } from '@/editor/types';
 import { PanelsContext, type PanelsContextValue } from '@/components/panels/panelsContextState';
 import { assistantSnapshot } from './assistantSnapshot';
@@ -32,8 +37,8 @@ import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 const serverDoc = () => ({
   name: 'Doc',
   blocks: [
-    { id: 'a', type: 'paragraph', html: '<p>a</p>', children: [] },
-    { id: 'b', type: 'paragraph', html: '<p>b</p>', children: [] },
+    { id: 'a', type: 'paragraph', html: 'a', children: [] },
+    { id: 'b', type: 'paragraph', html: 'b', children: [] },
   ],
 });
 
@@ -61,6 +66,7 @@ type StoredMessage = {
   attachments: chatAttachments.ChatAttachment[];
   run_id: string | null;
   created_at: string;
+  record?: WireChatMessage['record'];
 };
 let nextMessageId = 1;
 function stored(role: StoredMessage['role'], content: string, extra: Partial<StoredMessage> = {}): StoredMessage {
@@ -140,7 +146,8 @@ const { ChatAssistant } = await import('../ChatAssistant');
 const { TooltipProvider } = await import('@/components/ui/tooltip');
 const { ConfirmContext } = await import('@/components/ui/confirmContext');
 const { ToastContext } = await import('@/components/ui/toastContext');
-const { forgetCaret, useRememberCaret } = await import('../../References');
+const { useRememberCaret } = await import('../../References');
+const { resetModuleState } = await import('@/lib/moduleState');
 const { AgentEngineContext } = await import('@/components/preferences/agentEngineContextState');
 type EngineContext = import('@/components/preferences/agentEngineContextState').AgentEngineContextValue;
 
@@ -252,7 +259,7 @@ const confirm = vi.fn(async () => true);
 async function compose(text: string) {
   // The composer is a contenteditable that rebuilds its model from the DOM on
   // `input`, so set the text and fire the event the component listens for.
-  const host = screen.getByRole('textbox');
+  const host = screen.getByRole('textbox', { name: 'Ask AI anything… # to reference a block' });
   await act(async () => {
     host.textContent = text;
     host.dispatchEvent(new Event('input', { bubbles: true }));
@@ -265,7 +272,7 @@ function answerWith(actions: ToolAction[]) {
   runAgentTurn.mockImplementation(
     async (_params: unknown, handlers: AgentEventHandlers) => {
       for (const action of actions) handlers.onToolAction?.(action);
-      handlers.onDone?.('chat-1', 1, { promptTokens: 0, completionTokens: 0 });
+      handlers.onDone?.(agentDone('chat-1', 1, { promptTokens: 0, completionTokens: 0 }));
       return { chatId: 'chat-1', messageId: 1, usage: null };
     },
   );
@@ -359,20 +366,20 @@ describe('proposed changes await the author', () => {
     await mount();
     await sendWith([
       proposal({
-        actions: [{ op: 'replace_block', blockId: 'a', block: { html: '<p>edited</p>' } }],
+        actions: [{ op: 'write_blocks', position: 'replace', blockId: 'a', blocks: [{ id: 'a', type: 'paragraph', html: 'edited', children: [] }] }],
       }),
     ]);
 
     await waitFor(() => expect(harness.review.pendingCount).toBe(1));
     // The whole point: the block still holds what the author wrote.
-    expect(harness.editor.blocks[0]).toMatchObject({ id: 'a', html: '<p>a</p>' });
+    expect(harness.editor.blocks[0]).toMatchObject({ id: 'a', html: 'a' });
   });
 
   it('applies the change once accepted', async () => {
     await mount();
     await sendWith([
       proposal({
-        actions: [{ op: 'replace_block', blockId: 'a', block: { html: '<p>edited</p>' } }],
+        actions: [{ op: 'write_blocks', position: 'replace', blockId: 'a', blocks: [{ id: 'a', type: 'paragraph', html: 'edited', children: [] }] }],
       }),
     ]);
     await waitFor(() => expect(harness.review.pendingCount).toBe(1));
@@ -381,7 +388,7 @@ describe('proposed changes await the author', () => {
       harness.review.accept(itemAt(harness.review.pending, 0).id);
     });
 
-    expect(harness.editor.blocks[0]).toMatchObject({ id: 'a', html: '<p>edited</p>' });
+    expect(harness.editor.blocks[0]).toMatchObject({ id: 'a', html: 'edited' });
     expect(harness.review.pendingCount).toBe(0);
     // An accept from the review bar can land far off screen, so the block it
     // changed is highlighted. That list is what `applyPatch` reports back, and
@@ -391,7 +398,7 @@ describe('proposed changes await the author', () => {
 
   it('discards the change on reject', async () => {
     await mount();
-    await sendWith([proposal({ actions: [{ op: 'delete_block', blockId: 'b' }] })]);
+    await sendWith([proposal({ actions: [{ op: 'delete_blocks', blockIds: ['b'] }] })]);
     await waitFor(() => expect(harness.review.pendingCount).toBe(1));
 
     await act(async () => {
@@ -404,7 +411,7 @@ describe('proposed changes await the author', () => {
 
   it('accepting is a local edit, so it has to be saved', async () => {
     await mount();
-    await sendWith([proposal({ actions: [{ op: 'delete_block', blockId: 'b' }] })]);
+    await sendWith([proposal({ actions: [{ op: 'delete_blocks', blockIds: ['b'] }] })]);
     await waitFor(() => expect(harness.review.pendingCount).toBe(1));
 
     await acceptAll();
@@ -417,7 +424,7 @@ describe('proposed changes await the author', () => {
 
   it('saves an accepted change over the head the page was read at', async () => {
     await mount();
-    await sendWith([proposal({ actions: [{ op: 'delete_block', blockId: 'b' }] })]);
+    await sendWith([proposal({ actions: [{ op: 'delete_blocks', blockIds: ['b'] }] })]);
     await waitFor(() => expect(harness.review.pendingCount).toBe(1));
     saveDocument.mockClear();
 
@@ -434,8 +441,8 @@ describe('proposed changes await the author', () => {
   it('queues every batch from one run, in order', async () => {
     await mount();
     await sendWith([
-      proposal({ toolCallId: 'call_1', actions: [{ op: 'delete_block', blockId: 'a' }] }),
-      proposal({ toolCallId: 'call_2', actions: [{ op: 'delete_block', blockId: 'b' }] }),
+      proposal({ toolCallId: 'call_1', actions: [{ op: 'delete_blocks', blockIds: ['a'] }] }),
+      proposal({ toolCallId: 'call_2', actions: [{ op: 'delete_blocks', blockIds: ['b'] }] }),
     ]);
 
     await waitFor(() => expect(harness.review.pendingCount).toBe(2));
@@ -446,8 +453,8 @@ describe('proposed changes await the author', () => {
   it('ignores a redelivered tool action', async () => {
     await mount();
     await sendWith([
-      proposal({ actions: [{ op: 'append_block', block: { id: 'z', type: 'divider' } }] }),
-      proposal({ actions: [{ op: 'append_block', block: { id: 'z', type: 'divider' } }] }),
+      proposal({ actions: [{ op: 'write_blocks', position: 'append', blockId: null, blocks: [{ id: 'z', type: 'divider' }] }] }),
+      proposal({ actions: [{ op: 'write_blocks', position: 'append', blockId: null, blocks: [{ id: 'z', type: 'divider' }] }] }),
     ]);
 
     await waitFor(() => expect(harness.review.pendingCount).toBe(1));
@@ -460,8 +467,8 @@ describe('proposed changes await the author', () => {
     // matching on the id alone dropped the next message's first edit.
     await mount();
     await sendWith([
-      proposal({ toolCallId: 'call_0', actions: [{ op: 'delete_block', blockId: 'a' }] }),
-      proposal({ toolCallId: 'call_0', actions: [{ op: 'delete_block', blockId: 'b' }] }),
+      proposal({ toolCallId: 'call_0', actions: [{ op: 'delete_blocks', blockIds: ['a'] }] }),
+      proposal({ toolCallId: 'call_0', actions: [{ op: 'delete_blocks', blockIds: ['b'] }] }),
     ]);
 
     await waitFor(() => expect(harness.review.pendingCount).toBe(2));
@@ -472,8 +479,8 @@ describe('proposed changes await the author', () => {
     // operations.
     await mount();
     await sendWith([
-      proposal({ toolCallId: '', actions: [{ op: 'delete_block', blockId: 'a' }] }),
-      proposal({ toolCallId: '', actions: [{ op: 'delete_block', blockId: 'b' }] }),
+      proposal({ toolCallId: '', actions: [{ op: 'delete_blocks', blockIds: ['a'] }] }),
+      proposal({ toolCallId: '', actions: [{ op: 'delete_blocks', blockIds: ['b'] }] }),
     ]);
 
     await waitFor(() => expect(harness.review.pendingCount).toBe(2));
@@ -483,7 +490,7 @@ describe('proposed changes await the author', () => {
 
   it('renames the document only on accept', async () => {
     await mount();
-    await sendWith([proposal({ actions: [{ op: 'update_meta', meta: { name: 'Renamed' } }] })]);
+    await sendWith([proposal({ actions: [{ op: 'set_meta', name: 'Renamed' }] })]);
 
     await waitFor(() => expect(harness.review.pendingCount).toBe(1));
     expect(harness.editor.doc.name).toBe('Doc');
@@ -497,8 +504,8 @@ describe('proposed changes await the author', () => {
     await sendWith([
       proposal({
         actions: [
-          { op: 'append_block', block: { id: 'new', type: 'paragraph', html: 'x' } },
-          { op: 'replace_block', blockId: 'new', block: { html: 'y' } },
+          { op: 'write_blocks', position: 'append', blockId: null, blocks: [{ id: 'new', type: 'paragraph', html: 'x' }] },
+          { op: 'write_blocks', position: 'replace', blockId: 'new', blocks: [{ id: 'new', type: 'paragraph', html: 'y', children: [] }] },
         ],
       }),
     ]);
@@ -520,8 +527,8 @@ describe('proposed changes await the author', () => {
     await sendWith([
       proposal({
         actions: [
-          { op: 'append_block', block: { id: 'new', type: 'paragraph', html: 'x' } },
-          { op: 'replace_block', blockId: 'new', block: { html: 'y' } },
+          { op: 'write_blocks', position: 'append', blockId: null, blocks: [{ id: 'new', type: 'paragraph', html: 'x' }] },
+          { op: 'write_blocks', position: 'replace', blockId: 'new', blocks: [{ id: 'new', type: 'paragraph', html: 'y', children: [] }] },
         ],
       }),
     ]);
@@ -540,7 +547,7 @@ describe('proposed changes await the author', () => {
     await sendWith([
       proposal({
         actions: [
-          { op: 'insert_block_after', referenceId: 'ghost', block: { id: 'n', type: 'divider' } },
+          { op: 'write_blocks', position: 'after', blockId: 'ghost', blocks: [{ id: 'n', type: 'divider' }] },
         ],
       }),
     ]);
@@ -634,7 +641,8 @@ describe('where the author is working', () => {
     });
   }
 
-  afterEach(() => forgetCaret());
+  // The remembered caret is module state, forgotten with the rest.
+  afterEach(() => resetModuleState());
 
   it('sends the selection and the referenced blocks along with the message', async () => {
     await mount();
@@ -797,7 +805,7 @@ describe('where the author is working', () => {
 describe('the transcript after a turn', () => {
   it('keeps the reply it just streamed instead of refetching it', async () => {
     await mount();
-    await sendWith([proposal({ actions: [{ op: 'delete_block', blockId: 'b' }] })]);
+    await sendWith([proposal({ actions: [{ op: 'delete_blocks', blockIds: ['b'] }] })]);
     await waitFor(() => expect(harness.review.pendingCount).toBe(1));
 
     // `done` hands back the chat and thread ids this transcript already is.
@@ -880,7 +888,7 @@ describe('document-scoped streams', () => {
       handlers.onToolAction?.(
         proposal({
           documentId: 'another-document',
-          actions: [{ op: 'delete_block', blockId: 'a' }],
+          actions: [{ op: 'delete_blocks', blockIds: ['a'] }],
         }),
       );
     });
@@ -896,9 +904,9 @@ describe('document-scoped streams', () => {
     // Neither proposals nor the new document's chat selection may change.
     await act(async () => {
       handlers.onToolAction?.(
-        proposal({ actions: [{ op: 'delete_block', blockId: 'a' }] }),
+        proposal({ actions: [{ op: 'delete_blocks', blockIds: ['a'] }] }),
       );
-      handlers.onDone?.('stale-chat', 99, { promptTokens: 0, completionTokens: 0 });
+      handlers.onDone?.(agentDone('stale-chat', 99, { promptTokens: 0, completionTokens: 0 }));
       finish();
       await Promise.resolve();
     });
@@ -919,7 +927,7 @@ describe('live feedback while the assistant works', () => {
       (_params: unknown, nextHandlers: AgentEventHandlers) => {
         handlers = nextHandlers;
         return new Promise((resolve) => {
-          finish = () => resolve({ chatId: 'chat-1', messageId: 1, usage: null, terminal: 'done' });
+          finish = () => resolve({ done: null, terminal: 'done' });
         });
       },
     );
@@ -933,7 +941,7 @@ describe('live feedback while the assistant works', () => {
       emit: (fn: (h: AgentEventHandlers) => void) => act(() => fn(handlers)),
       finish: async () => {
         await act(async () => {
-          handlers.onDone?.('chat-1', 1, { promptTokens: 0, completionTokens: 0 });
+          handlers.onDone?.(agentDone('chat-1', 1, { promptTokens: 0, completionTokens: 0 }));
           finish();
           await Promise.resolve();
         });
@@ -987,28 +995,29 @@ describe('live feedback while the assistant works', () => {
 
   it('counts a long edit as it is drafted, then runs it', async () => {
     const turn = await holdStream();
-    turn.emit((h) => h.onToolCallStart?.('doc_edit', 'call_e', {}));
+    turn.emit((h) => h.onToolCallStart?.('doc_edit', 'call_e', null));
     turn.emit((h) =>
       h.onToolCallProgress?.({ tool: 'doc_edit', toolCallId: 'call_e', argumentsChars: 2410 }),
     );
-    expect(screen.getByText(new RegExp(`${(2410).toLocaleString()} characters`))).toBeTruthy();
+    // Shown, and said in the row's name for a screen reader.
+    expect(screen.getAllByText(new RegExp(`${(2410).toLocaleString()} characters`))).toHaveLength(2);
 
     // Large arguments arrive as a preview only, without the full object.
     turn.emit((h) =>
       h.onToolCallArgs?.({ tool: 'doc_edit', toolCallId: 'call_e', argumentsPreview: '{"content_redacted": true}', argumentsTruncated: true }),
     );
-    expect(screen.queryByText(/characters/)).toBeNull();
+    expect(screen.queryAllByText(/characters/)).toHaveLength(0);
     // A count that trails the call's arguments is ignored.
     turn.emit((h) =>
       h.onToolCallProgress?.({ tool: 'doc_edit', toolCallId: 'call_e', argumentsChars: 2500 }),
     );
-    expect(screen.queryByText(/characters/)).toBeNull();
+    expect(screen.queryAllByText(/characters/)).toHaveLength(0);
     await turn.finish();
   });
 
   it('says the model went back to thinking once its tools finish', async () => {
     const turn = await holdStream();
-    turn.emit((h) => h.onToolCallStart?.('web_search', 'call_1', {}));
+    turn.emit((h) => h.onToolCallStart?.('web_search', 'call_1', null));
     // The running step itself is the indicator; no second line competes.
     expect(statusWith('Thinking…')).toBeNull();
 
@@ -1029,7 +1038,7 @@ describe('live feedback while the assistant works', () => {
     // Words are arriving: the text is the progress.
     expect(statusWith('Working…')).toBeNull();
 
-    turn.emit((h) => h.onToolCallStart?.('web_search', 'call_2', {}));
+    turn.emit((h) => h.onToolCallStart?.('web_search', 'call_2', null));
     // After a short debounce, under the answer (the activity list sits above it).
     await waitFor(() => expect(statusWith('Searching the web…')).toBeTruthy());
     const answer = screen.getByText('Let me check the literature.');
@@ -1054,7 +1063,7 @@ function answerText(text: string, usage = { promptTokens: 0, completionTokens: 0
   runAgentTurn.mockImplementation(
     async (_params: unknown, handlers: AgentEventHandlers) => {
       handlers.onToken?.(text);
-      handlers.onDone?.('chat-1', 1, usage);
+      handlers.onDone?.(agentDone('chat-1', 1, usage));
       return { chatId: 'chat-1', messageId: 1, usage, terminal: 'done' };
     },
   );
@@ -1091,7 +1100,7 @@ describe('the docked panel', () => {
     await mount({ panels: { isDesktop: false, setAssistantOpen } });
     await sendWith([
       proposal({
-        actions: [{ op: 'replace_block', blockId: 'a', block: { html: '<p>edited</p>' } }],
+        actions: [{ op: 'write_blocks', position: 'replace', blockId: 'a', blocks: [{ id: 'a', type: 'paragraph', html: 'edited', children: [] }] }],
       }),
     ]);
     await waitFor(() => expect(harness.review.pendingCount).toBe(1));
@@ -1296,7 +1305,7 @@ describe('a document the assistant created', () => {
           { op: 'create_document', documentId: 'created-doc' },
           // Operations addressed to the new document. They are about blocks
           // this document has never heard of, so they belong there, not here.
-          { op: 'delete_block', blockId: 'a' },
+          { op: 'delete_blocks', blockIds: ['a'] },
         ],
       }),
     ]);
@@ -1407,6 +1416,37 @@ describe('the document a session is attached to', () => {
   });
 });
 
+describe('what a screen reader hears when a reply ends (U-14)', () => {
+  it('announces "Reply finished", never the raw reply', async () => {
+    await mount();
+    runAgentTurn.mockImplementation(async (_params: unknown, handlers: AgentEventHandlers) => {
+      handlers.onToken?.('It **scales** sublinearly [S1], see $x^2$.');
+      handlers.onDone?.(agentDone('chat-1', 1, { promptTokens: 0, completionTokens: 0 }));
+      return { chatId: 'chat-1', messageId: 1, usage: null };
+    });
+    await compose('does it scale?');
+    await act(async () => {
+      screen.getByRole('button', { name: /send message/i }).click();
+    });
+
+    await waitFor(() =>
+      expect(screen.queryAllByRole('status').some((element) => element.textContent === 'Reply finished.')).toBe(true),
+    );
+    expect(screen.queryAllByRole('status').some((element) => /\*\*|\[S1\]|\$x\^2\$/.test(element.textContent ?? ''))).toBe(false);
+  });
+
+  it('announces nothing when a stored conversation opens', async () => {
+    listMessages.mockResolvedValue(branch([stored('user', 'Earlier question'), stored('assistant', 'An **earlier** answer.')]));
+    await mount();
+    await act(async () => {
+      harness.chats.setSelectedChatId('chat-1');
+    });
+    await waitFor(() => expect(screen.getAllByText('Earlier question').length).toBeGreaterThan(0));
+    expect(screen.queryAllByRole('status').some((element) => element.textContent === 'Reply finished.')).toBe(false);
+    expect(screen.queryAllByRole('status').some((element) => element.textContent?.includes('earlier'))).toBe(false);
+  });
+});
+
 describe('what the agent reads', () => {
   it('flushes unsaved edits before asking, so it is the document on screen', async () => {
     await mount();
@@ -1464,7 +1504,7 @@ describe('a chat id the server no longer has', () => {
           handlers.onError?.('CHAT_NOT_FOUND', 'Chat not found for this document.');
           return { chatId: null, messageId: null, usage: null };
         }
-        handlers.onDone?.('fresh-chat', 4, { promptTokens: 0, completionTokens: 0 });
+        handlers.onDone?.(agentDone('fresh-chat', 4, { promptTokens: 0, completionTokens: 0 }));
         return { chatId: 'fresh-chat', messageId: 4, usage: null };
       },
     );
@@ -1516,7 +1556,6 @@ describe('agent engine', () => {
       prefs: { chat: 'claude', inline: 'chat', models: { claude: 'sonnet' } },
       selectable: false,
       statusOf: () => null,
-      engineFor: () => 'claude',
       requestFor: (surface) => (surface === 'chat' ? { engine: 'claude', model: 'sonnet' } : {}),
       setChatEngine: () => {},
       setInlineEngine: () => {},
@@ -1539,7 +1578,7 @@ describe('agent engine', () => {
     const [params] = itemAt(runAgentTurn.mock.calls, 0);
     expect(params.engine).toBe('claude');
     expect(params.model).toBe('sonnet');
-    expect(params.mode).toBe('assistant');
+    expect(params.profile).toBe('chat');
   });
 
   it('sends no engine at all on the default', async () => {
@@ -1558,7 +1597,7 @@ describe('agent engine', () => {
         'ENGINE_AUTH_REQUIRED',
         'Claude Code is not signed in. Run `claude auth login` in your terminal, sign in with your own account, then check the engine again.',
       );
-      return { chatId: null, messageId: null, usage: null, terminal: 'error' };
+      return { done: null, terminal: 'error' };
     });
     await mount({ engines });
     await compose('hello');
@@ -1619,7 +1658,7 @@ describe('assistant file attachments', () => {
     const upload = vi.spyOn(chatAttachments, 'uploadChatImage');
     let finish!: () => void;
     runAgentTurn.mockImplementation(() => new Promise((resolve) => {
-      finish = () => resolve({ chatId: null, messageId: null, usage: null, terminal: 'done' });
+      finish = () => resolve({ done: null, terminal: 'done' });
     }));
     await mount();
     await compose('Start replying');
@@ -1644,7 +1683,7 @@ describe('assistant file attachments', () => {
   it.each(['upload', 'paste', 'drop'])('blocks sends during %s, then sends an image-only message and retains it on retry', async (method) => {
     let finish!: (attachment: chatAttachments.ChatAttachment) => void;
     vi.spyOn(chatAttachments, 'uploadChatImage').mockReturnValue(new Promise((resolve) => { finish = resolve; }));
-    vi.spyOn(chatAttachments, 'loadChatImageBlob').mockRejectedValue(new Error('No preview in test'));
+    vi.spyOn(assets, 'loadAssetBlob').mockRejectedValue(new Error('No preview in test'));
     await mount();
     answerText('The chart shows a rising trend.');
     const file = new File(['png'], 'chart.png', { type: 'image/png' });
@@ -1662,12 +1701,12 @@ describe('assistant file attachments', () => {
     expect((screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
     expect(runAgentTurn).not.toHaveBeenCalled();
-    const attachment: chatAttachments.ChatAttachment = { kind: 'image', image_id: 'image-1', filename: 'chart.png', media_type: 'image/png', size_bytes: 3 };
+    const attachment: chatAttachments.ChatAttachment = { kind: 'image', asset_id: 'asset-1', filename: 'chart.png', media_type: 'image/png', size_bytes: 3 };
     await act(async () => finish(attachment));
     expect((screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(false);
     await act(async () => screen.getByRole('button', { name: 'Send message' }).click());
     expect(runAgentTurn.mock.calls[0]?.[0]).toMatchObject({ message: '', attachments: [attachment] });
-    expect(screen.getByRole('link', { name: /chart.png/ }).getAttribute('href')).toContain('/chat-images/image-1/content');
+    expect(screen.getByRole('link', { name: /chart.png/ }).getAttribute('href')).toContain('/assets/asset-1/content');
     expect(screen.queryByRole('list', { name: 'Files to send' })).toBeNull();
     await act(async () => screen.getByRole('button', { name: 'Retry' }).click());
     expect(runAgentTurn.mock.calls[1]?.[0]).toMatchObject({ message: '', attachments: [attachment] });
@@ -1720,29 +1759,29 @@ describe('assistant file attachments', () => {
 
 
 it('keeps an earlier image-only exchange when a different image-only run resumes before persistence', async () => {
-  vi.spyOn(chatAttachments, 'loadChatImageBlob').mockRejectedValue(new Error('No preview in test'));
+  vi.spyOn(assets, 'loadAssetBlob').mockRejectedValue(new Error('No preview in test'));
   listMessages.mockResolvedValue(branch([
-    stored('user', '', { attachments: [{ kind: 'image', image_id: 'image-a', filename: 'first-chart.png' }] }),
+    stored('user', '', { attachments: [{ kind: 'image', asset_id: 'asset-a', filename: 'first-chart.png' }] }),
     stored('assistant', 'Earlier chart explanation.'),
   ]));
   vi.spyOn(agentSessions, 'findActiveAgentRun').mockResolvedValue(assistantSnapshot({
-    session: { id: 'session-b', document_id: DOC_ID, chat_id: 'image-chat', title: 'Images', ephemeral: false, last_seq: 1, active_run_id: 'run-b' },
+    session: { id: 'session-b', document_id: DOC_ID, chat_id: 'image-chat', title: 'Images', profile: 'chat', last_seq: 1, active_run_id: 'run-b' },
     run: { id: 'run-b', session_id: 'session-b', request_id: 'request-b', status: 'running', request: {
-      document_id: DOC_ID, chat_id: 'image-chat', message: '', attachments: [{ kind: 'image', image_id: 'image-b' }],
+      document_id: DOC_ID, chat_id: 'image-chat', message: '', attachments: [{ kind: 'image', asset_id: 'asset-b' }],
     } },
   }));
   runAgentTurn.mockImplementation(async (_params: unknown, handlers: AgentEventHandlers) => {
     handlers.onToken?.('Current chart explanation.');
-    handlers.onDone?.('image-chat', 6, { promptTokens: 0, completionTokens: 0 });
-    return { chatId: 'image-chat', messageId: 6, usage: null, terminal: 'done' };
+    handlers.onDone?.(agentDone('image-chat', 6, { promptTokens: 0, completionTokens: 0 }));
+    return { done: null, terminal: 'done' };
   });
   await mount();
   await act(async () => harness.chats.setSelectedChatId('image-chat'));
   await screen.findAllByText('Current chart explanation.');
   expect(screen.getByText('Earlier chart explanation.')).toBeTruthy();
-  expect(screen.getByRole('link', { name: /first-chart.png/ }).getAttribute('href')).toContain('/image-a/content');
-  expect(screen.getByRole('link', { name: /Image attachment/ }).getAttribute('href')).toContain('/image-b/content');
-  expect(runAgentTurn.mock.calls[0]?.[2].resume).toEqual({ sessionId: 'session-b', runId: 'run-b' });
+  expect(screen.getByRole('link', { name: /first-chart.png/ }).getAttribute('href')).toContain('/assets/asset-a/content');
+  expect(screen.getByRole('link', { name: /Image attachment/ }).getAttribute('href')).toContain('/assets/asset-b/content');
+  expect(runAgentTurn.mock.calls[0]?.[2].resume).toEqual({ sessionId: 'session-b', runId: 'run-b', afterSeq: 0 });
   vi.restoreAllMocks();
 });
 
@@ -1757,7 +1796,7 @@ it('starts a fresh run after a confirmed PDF extraction timeout while retaining 
   runAgentTurn.mockImplementationOnce(async (_params: unknown, handlers: AgentEventHandlers, options: { onRunStarted: (run: agentSessions.ResumeAgentRun) => void }) => {
     options.onRunStarted({ sessionId: 'session-1', runId: 'failed-run' });
     handlers.onError?.('ATTACHMENT_EXTRACTION_TIMEOUT', 'The PDF is still processing. Retry shortly.');
-    return { chatId: null, messageId: null, usage: null, terminal: 'error' };
+    return { done: null, terminal: 'error' };
   });
   await act(async () => screen.getByRole('button', { name: 'Send message' }).click());
   await screen.findByRole('button', { name: 'Try again' });
@@ -1771,21 +1810,21 @@ it('starts a fresh run after a confirmed PDF extraction timeout while retaining 
 
 
 it.each(['run-a', undefined])('preserves a completed identical upload when run identity is %s', async (oldRunId) => {
-  vi.spyOn(chatAttachments, 'loadChatImageBlob').mockRejectedValue(new Error('No preview in test'));
+  vi.spyOn(assets, 'loadAssetBlob').mockRejectedValue(new Error('No preview in test'));
   listMessages.mockResolvedValue(branch([
     stored('user', '', { run_id: oldRunId ?? null, attachments: [{ kind: 'resource', resource_id: 7, filename: 'same-paper.pdf' }] }),
     stored('assistant', 'Earlier paper explanation.'),
   ]));
   vi.spyOn(agentSessions, 'findActiveAgentRun').mockResolvedValue(assistantSnapshot({
-    session: { id: 'session-b', document_id: DOC_ID, chat_id: 'same-file-chat', title: 'PDFs', ephemeral: false, last_seq: 1, active_run_id: 'run-b' },
+    session: { id: 'session-b', document_id: DOC_ID, chat_id: 'same-file-chat', title: 'PDFs', profile: 'chat', last_seq: 1, active_run_id: 'run-b' },
     run: { id: 'run-b', session_id: 'session-b', request_id: 'request-b', status: 'queued', request: {
       document_id: DOC_ID, chat_id: 'same-file-chat', message: '', attachments: [{ kind: 'resource', resource_id: 7 }],
     } },
   }));
   runAgentTurn.mockImplementation(async (_params: unknown, handlers: AgentEventHandlers) => {
     handlers.onToken?.('Current paper explanation.');
-    handlers.onDone?.('same-file-chat', 6, { promptTokens: 0, completionTokens: 0 });
-    return { chatId: 'same-file-chat', messageId: 6, usage: null, terminal: 'done' };
+    handlers.onDone?.(agentDone('same-file-chat', 6, { promptTokens: 0, completionTokens: 0 }));
+    return { done: null, terminal: 'done' };
   });
   await mount();
   await act(async () => harness.chats.setSelectedChatId('same-file-chat'));
@@ -1803,12 +1842,12 @@ it('reconciles the exact saved run and retains canonical PDF metadata across a r
     stored('assistant', 'An incomplete saved answer.'),
   ]));
   vi.spyOn(agentSessions, 'findActiveAgentRun').mockResolvedValue(assistantSnapshot({
-    session: { id: 'session-b', document_id: DOC_ID, chat_id: 'same-file-chat', title: 'PDFs', ephemeral: false, last_seq: 1, active_run_id: 'run-b' },
+    session: { id: 'session-b', document_id: DOC_ID, chat_id: 'same-file-chat', title: 'PDFs', profile: 'chat', last_seq: 1, active_run_id: 'run-b' },
     run: { id: 'run-b', session_id: 'session-b', request_id: 'request-b', status: 'running', request: {
       document_id: DOC_ID, chat_id: 'same-file-chat', message: '', attachments: [{ kind: 'resource', resource_id: 7 }],
     } },
   }));
-  runAgentTurn.mockImplementationOnce(async () => ({ chatId: 'same-file-chat', messageId: null, usage: null, terminal: null }));
+  runAgentTurn.mockImplementationOnce(async () => ({ done: null, terminal: null }));
   await mount();
   await act(async () => harness.chats.setSelectedChatId('same-file-chat'));
   await screen.findByRole('button', { name: 'Try again' });
@@ -1816,7 +1855,7 @@ it('reconciles the exact saved run and retains canonical PDF metadata across a r
   expect(screen.getAllByRole('list', { name: 'Message attachments' })).toHaveLength(1);
   answerText('The restored answer.');
   await act(async () => screen.getByRole('button', { name: 'Try again' }).click());
-  expect(runAgentTurn.mock.calls[1]?.[2].resume).toEqual({ sessionId: 'session-b', runId: 'run-b' });
+  expect(runAgentTurn.mock.calls[1]?.[2].resume).toEqual({ sessionId: 'session-b', runId: 'run-b', afterSeq: 0 });
   expect(runAgentTurn.mock.calls[1]?.[0].attachments).toEqual([attachment]);
   expect(screen.getAllByRole('link', { name: 'same-paper.pdf' })).toHaveLength(1);
   vi.restoreAllMocks();
@@ -1833,7 +1872,7 @@ describe('a run the server reported as ended', () => {
       options.onRunStarted({ sessionId: 'session-1', runId: 'failed-run', requestId: 'request-1' });
       handlers.onToken?.('Half an answer');
       handlers.onError?.(code, message);
-      return { chatId: null, messageId: null, usage: null, terminal: 'error' };
+      return { done: null, terminal: 'error' };
     });
     await mount();
     await compose('explain attention');
@@ -1859,7 +1898,7 @@ describe('a run the server reported as ended', () => {
   ])('shows %s as something Try again cannot fix', async (code, message) => {
     runAgentTurn.mockImplementationOnce(async (_params: unknown, handlers: AgentEventHandlers) => {
       handlers.onError?.(code, message);
-      return { chatId: null, messageId: null, usage: null, terminal: 'error' };
+      return { done: null, terminal: 'error' };
     });
     await mount();
     await compose('hello');
@@ -1884,8 +1923,8 @@ describe('the task list of a multi-step request', () => {
       handlers.onTodo?.(tasks);
       handlers.onToken?.('Working through it.');
       finish = () => {
-        handlers.onDone?.('chat-1', 1, { promptTokens: 0, completionTokens: 0 });
-        resolve({ chatId: 'chat-1', messageId: 1, usage: null, terminal: 'done' });
+        handlers.onDone?.(agentDone('chat-1', 1, { promptTokens: 0, completionTokens: 0 }));
+        resolve({ done: null, terminal: 'done' });
       };
     }));
     await mount();
@@ -1906,5 +1945,218 @@ describe('the task list of a multi-step request', () => {
     expect(screen.getByText(/Tasks · 1 of 3 done/)).toBeTruthy();
     // Started and never finished is not the same as never started.
     expect(screen.getByText('Not finished:')).toBeTruthy();
+  });
+});
+
+describe('the composer’s effort choice', () => {
+  async function choose(label: string) {
+    await act(async () => fireEvent.keyDown(screen.getByRole('button', { name: /^Assistant effort:/ }), { key: 'ArrowDown' }));
+    const option = await screen.findByRole('menuitemradio', { name: new RegExp(`^${label}`) });
+    await act(async () => fireEvent.click(option));
+  }
+
+  it('sends the chosen tier, adopts its new chat, and Retry repeats that tier rather than the current choice', async () => {
+    await mount();
+    expect(screen.getByRole('button', { name: 'Assistant effort: Standard' })).toBeTruthy();
+    await choose('Quick');
+    answerText('A short answer.');
+    await compose('Explain routing');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send message' })));
+    await screen.findByRole('button', { name: 'Retry' });
+    expect(runAgentTurn.mock.calls[0]?.[0]).toMatchObject({ effort: 'quick' });
+    expect(screen.getByRole('button', { name: 'Assistant effort: Quick' })).toBeTruthy();
+    await choose('Standard');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
+    expect(runAgentTurn.mock.calls[1]?.[0]).toMatchObject({ message: 'Explain routing', effort: 'quick' });
+    expect(screen.getByRole('button', { name: 'Assistant effort: Standard' })).toBeTruthy();
+  });
+
+  it('resets to the catalog default when New chat is selected', async () => {
+    await mount();
+    await choose('Deep');
+    expect(screen.getByRole('button', { name: 'Assistant effort: Deep' })).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Start a new chat' })));
+    expect(screen.getByRole('button', { name: 'Assistant effort: Standard' })).toBeTruthy();
+  });
+});
+
+describe('the composer’s Web choice', () => {
+  it('offers Web only where the catalog permits it and sends false by default', async () => {
+    await mount();
+    expect(screen.queryByRole('switch', { name: 'Web search' })).toBeNull();
+    answerText('A short answer.');
+    await compose('Explain routing');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send message' })));
+    expect(runAgentTurn.mock.calls[0]?.[0]).toMatchObject({ web: false });
+  });
+
+  it('adopts its first chat, repeats the original choice on Retry, and resets on New chat', async () => {
+    fixtures.assistant = { switches: { web: true }, sources: {} };
+    await mount();
+    expect(screen.getByRole('switch', { name: 'Web search' }).getAttribute('aria-checked')).toBe('false');
+    await act(async () => fireEvent.click(screen.getByRole('switch', { name: 'Web search' })));
+    answerText('A short answer.');
+    await compose('Explain routing');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send message' })));
+    await screen.findByRole('button', { name: 'Retry' });
+    expect(runAgentTurn.mock.calls[0]?.[0]).toMatchObject({ web: true });
+    expect(screen.getByRole('switch', { name: 'Web search' }).getAttribute('aria-checked')).toBe('true');
+    await act(async () => fireEvent.click(screen.getByRole('switch', { name: 'Web search' })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
+    expect(runAgentTurn.mock.calls[1]?.[0]).toMatchObject({ web: true });
+    expect(screen.getByRole('switch', { name: 'Web search' }).getAttribute('aria-checked')).toBe('false');
+    await act(async () => fireEvent.click(screen.getByRole('switch', { name: 'Web search' })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Start a new chat' })));
+    expect(screen.getByRole('switch', { name: 'Web search' }).getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('repeats a stored turn’s choice after reload, without enabling the current catalog', async () => {
+    listChats.mockResolvedValue({ items: [chatSummary({ id: 'saved', title: 'Saved conversation', last_message_id: 2 })], next_cursor: null });
+    listMessages.mockResolvedValue(branch([
+      stored('user', 'Find routing sources', { record: { kind: 'request', preset: null, effort: 'quick', web: true, plan_id: null } }),
+      stored('assistant', 'Earlier answer.'),
+    ]));
+    await mount();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /^Chats:/ })));
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Saved conversation/ })));
+    await screen.findByText('Earlier answer.');
+    expect(screen.queryByRole('switch', { name: 'Web search' })).toBeNull();
+    answerText('A new answer.');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
+    expect(runAgentTurn.mock.calls[0]?.[0]).toMatchObject({ effort: 'quick', web: true });
+    expect(screen.queryByRole('switch', { name: 'Web search' })).toBeNull();
+  });
+});
+
+describe('the author’s question card in the conversation', () => {
+  const question: AgentQuestion = {
+    question_id: 'question-one',
+    questions: [
+      { id: 'venue', text: 'Which venue?', options: ['ICLR', 'NeurIPS'], allow_free_text: false },
+      { id: 'scope', text: 'Which period?', options: [], allow_free_text: true },
+    ],
+  };
+  function ask() {
+    runAgentTurn.mockImplementationOnce(async (_params: unknown, handlers: AgentEventHandlers) => {
+      handlers.onQuestion?.(question);
+      handlers.onToken?.('These choices will help.');
+      handlers.onDone?.(agentDone('chat-1', 101, { promptTokens: 0, completionTokens: 0 }));
+      return { done: null, terminal: 'done' };
+    });
+  }
+
+  it.each([false, true])('sends only structured answers with an empty wire message (skip %s), leaving the composer usable', async (skip) => {
+    ask();
+    await mount();
+    await compose('Ask me about scope');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send message' })));
+    await screen.findByRole('button', { name: 'Send answers' });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'ICLR' })));
+    const items = skip ? [] : [{ id: 'venue', answer: 'ICLR' }];
+    answerText('I will follow that scope.');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: skip ? 'Go with your best guess' : 'Send answers' })));
+    const request = runAgentTurn.mock.calls[1]?.[0];
+    expect(request).toMatchObject({ message: '', answers: { question_id: 'question-one', items }, web: false, effort: 'standard' });
+    expect(request).not.toHaveProperty('displayText');
+    expect(screen.getByText(skip
+      ? 'I skip your questions: go with your best judgement, and say what you assumed.'
+      : 'My answers to your questions: - Which venue? ICLR')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Send answers' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'ICLR' }).closest('fieldset')?.disabled).toBe(true);
+    expect(screen.getByRole('textbox', { name: 'Ask AI anything… # to reference a block' }).getAttribute('contenteditable')).toBe('true');
+  });
+
+  it('retries the captured answers-only request without serializing or duplicating its readable prompt', async () => {
+    ask();
+    await mount();
+    await compose('Ask me about scope');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send message' })));
+    runAgentTurn.mockImplementationOnce(async (_params: unknown, handlers: AgentEventHandlers) => {
+      handlers.onError?.('MODEL_GATEWAY_TRANSIENT', 'The model is not available.');
+      return { done: null, terminal: 'error' };
+    });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Go with your best guess' })));
+    await screen.findByRole('button', { name: 'Try again' });
+    answerText('I’ll state my assumptions.');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Try again' })));
+    const requests = runAgentTurn.mock.calls.slice(1).map(([request]) => request);
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.message === '' && !('displayText' in request))).toBe(true);
+    expect(requests.map((request) => request.answers)).toEqual([
+      { question_id: 'question-one', items: [] }, { question_id: 'question-one', items: [] },
+    ]);
+    expect(screen.getAllByText('I skip your questions: go with your best judgement, and say what you assumed.')).toHaveLength(1);
+  });
+
+  it('restores the latest question as actionable, but an ordinary message makes older cards historical', async () => {
+    const record = new TurnRecord();
+    record.observe({ event: 'question', data: question });
+    const reply = record.snapshot('completed', { cost_limit: 5, limit_reached: null });
+    listMessages.mockResolvedValue(branch([
+      stored('user', 'An earlier question.'),
+      stored('assistant', 'Earlier choices.', { record: { ...reply, question: { ...question, question_id: 'older' } } }),
+      stored('user', 'Ask me again.'),
+      stored('assistant', 'These choices will help.', { record: reply }),
+    ]));
+    await mount();
+    await act(async () => harness.chats.setSelectedChatId('saved-questions'));
+    await screen.findByText('These choices will help.');
+    expect(screen.getAllByRole('region', { name: 'A few questions' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Send answers' })).toHaveLength(1);
+    answerText('A normal answer.');
+    await compose('Continue without a card answer');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send message' })));
+    expect(runAgentTurn.mock.calls[0]?.[0]).toMatchObject({ message: 'Continue without a card answer' });
+    expect(runAgentTurn.mock.calls[0]?.[0].answers).toBeUndefined();
+    expect(screen.queryByRole('button', { name: 'Send answers' })).toBeNull();
+  });
+});
+
+describe('a proposed plan in the conversation', () => {
+  it('starts the edited plan as a Deep run, keeps its first card, and pins proposal progress', async () => {
+    const proposed = proposePlan(TEST_WORKSPACE_ID, DOC_ID, 'chat-1');
+    let current = proposed;
+    server.use(http.get('/workspaces/{workspace_id}/documents/{document_id}/chats/{chat_id}/plans/{plan_id}',
+      ({ response }) => response(200).json(current, { headers: { ETag: planEtag(current) } })));
+    runAgentTurn.mockImplementationOnce(async (_params: unknown, handlers: AgentEventHandlers) => {
+      handlers.onPlan?.(planEvent(proposed));
+      handlers.onToken?.('Here is a plan.');
+      handlers.onDone?.(agentDone('chat-1', 101, { promptTokens: 0, completionTokens: 0 }));
+      return { done: null, terminal: 'done' };
+    });
+    await mount();
+    await compose('Plan a review');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send message' })));
+    const field = await screen.findByRole('textbox', { name: 'Section 1 title' }) as HTMLInputElement;
+    await waitFor(() => expect(field.readOnly).toBe(false));
+    fireEvent.change(field, { target: { value: 'A precise mechanism section' } });
+    let finish: (() => void) | undefined;
+    runAgentTurn.mockImplementationOnce((_params: unknown, handlers: AgentEventHandlers) => new Promise((resolve) => {
+      current = { ...proposed, revision: 3, state: 'running', sections: proposed.sections.map((section, index) => ({
+        ...section, title: index === 0 ? 'A precise mechanism section' : section.title, state: index === 0 ? 'working' : 'pending',
+      })) };
+      handlers.onPlan?.(planEvent(current));
+      finish = () => {
+        handlers.onToken?.('Sections proposed for review.');
+        handlers.onDone?.(agentDone('chat-1', 103, { promptTokens: 0, completionTokens: 0 }));
+        resolve({ done: null, terminal: 'done' });
+      };
+    }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Start writing' })));
+    const request = runAgentTurn.mock.calls[1]?.[0];
+    expect(request).toMatchObject({
+      message: '', effort: 'deep', plan_id: proposed.plan_id, web: false,
+      plan: { revision: 1, sections: expect.arrayContaining([expect.objectContaining({ id: 'mechanism', title: 'A precise mechanism section' })]) },
+    });
+    expect(request).not.toHaveProperty('displayText');
+    expect(screen.getByText('Write the approved plan, section by section.')).toBeTruthy();
+    expect(screen.getAllByRole('region', { name: 'Plan' })).toHaveLength(1);
+    expect(screen.getByRole('textbox', { name: 'Section 1 title' })).toBe(field);
+    expect(screen.getByRole('region', { name: 'Plan progress' }).textContent).toContain('0/3 sections proposed for review');
+    const pending = screen.getByRole('textbox', { name: 'Section 2 title' }) as HTMLInputElement;
+    await waitFor(() => expect(pending.readOnly).toBe(false));
+    expect(screen.queryByRole('button', { name: 'Use current plan' })).toBeNull();
+    expect(field.readOnly).toBe(true);
+    await act(async () => finish?.());
   });
 });

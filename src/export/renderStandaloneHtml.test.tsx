@@ -11,6 +11,7 @@ import {
 } from './renderStandaloneHtml';
 import { sanitizeInlineFragment } from './sanitize';
 import type { DocumentExportOptions } from './types';
+import { reference } from '@/__tests__/agentSource';
 
 const options: DocumentExportOptions = {
   profile: 'paper',
@@ -21,6 +22,25 @@ const options: DocumentExportOptions = {
   include_references: true,
 };
 const snapshot = { local_revision: 12, dirty: true };
+
+it('renders a self-contained AI draft with citations and draft references, or omits it completely', () => {
+  const record = reference('doi:10.1000/draft', { title: 'Durable draft evidence', year: 2026 });
+  const doc: Doc = { blocks: [{
+    id: 'p', type: 'paragraph', html: '<span data-child-id="draft"></span>',
+    children: [{ id: 'draft', type: 'aiBeat', message: 'Write', prompt: 'Private',
+      output: { text: 'Supported [@doi:10.1000/draft]. Unknown [S9].', sources: [record] } }],
+  }] };
+  const html = renderStandaloneHtml(doc, { ...options, ai_beat: 'draft-card' }, snapshot);
+  expect(html).toContain('class="citation">[1]</span>');
+  expect(html).toContain('Durable draft evidence');
+  expect(html).toContain('Unknown [S9]');
+  expect(html).not.toContain('[@doi:');
+  expect(html).not.toContain('Private');
+  expect(html.match(/<main\b/g)).toHaveLength(1);
+  const omitted = renderStandaloneHtml(doc, options, snapshot);
+  expect(omitted).not.toContain('Durable draft evidence');
+  expect(omitted).not.toContain('Supported');
+});
 
 const canonicalFixtures = [
   kitchenSinkFixture,
@@ -50,15 +70,13 @@ function kitchenSink(): Doc {
           {
             id: 'citation',
             type: 'citation',
-            keys: ['10.1000/example'],
-            style: 'author-year',
+            keys: ['doi:10.1000/example'],
+            style: 'apa',
             locator: 'p. 4',
-            sources: [{
-              key: '10.1000/example',
-              authors: 'Doe, Jane',
-              year: '2025',
-              url: 'https://example.test/paper',
-            }],
+            sources: [reference('doi:10.1000/example', {
+              title: 'Example paper', authors: 'Jane Doe', year: 2025, url: 'https://example.test/paper', doi: '10.1000/example',
+              state: 'verified', flags: ['retracted'], notices: [{ type: 'retraction', date: '2026-01-02' }],
+            })],
           },
           { id: 'inline-equation', type: 'equation', latex: 'E=mc^2' },
           {
@@ -98,7 +116,7 @@ function kitchenSink(): Doc {
             type: 'aiBeat',
             message: 'Try another transition',
             prompt: 'private style prompt',
-            output: 'Draft output',
+            output: { text: 'Draft output', sources: [] },
           },
         ],
       },
@@ -172,14 +190,13 @@ describe('renderStandaloneHtml', () => {
     paragraph.children?.push({
       id: 'citation-again',
       type: 'citation',
-      keys: ['10.1000/example'],
-      style: 'author-year',
-      sources: [{ key: '10.1000/example' }],
+      keys: ['doi:10.1000/example'],
+      style: 'apa',
     });
 
     const html = renderStandaloneHtml(doc, options, snapshot);
 
-    expect(html).toContain('<section class="references"');
+    expect(html).toContain('<section class="references hanging-indent"');
     expect(html).toContain('id="ref-1"');
     expect(html).toContain('href="#ref-1"');
     expect(html).toContain('id="cite-citation"');
@@ -189,20 +206,24 @@ describe('renderStandaloneHtml', () => {
     expect(html).toContain('https://doi.org/10.1000/example');
     // One paper cited twice is one row.
     expect(html.match(/class="reference-item"/g)).toHaveLength(1);
+    // Printed in the page's CSL style, the retraction said in the entry itself.
+    expect(html).toContain('Doe, J. (2025). <i>Example paper</i>.');
+    expect(html).toContain('[Retracted: Retraction published on 2026-01-02.]');
+    expect(html).toContain('(Doe, 2025, p. 4)');
   });
 
-  it('sets an author–year citation off from the word before it, as the page does', () => {
+  it('sets a parenthetical citation off from the word before it, as the page does', () => {
     const doc: Doc = {
       name: 'Spacing',
-      citationStyle: 'author-year',
+      citationStyle: 'apa',
       blocks: [
         {
           id: 'p',
           type: 'paragraph',
           html: 'lengths<span data-child-id="c1"></span> and (<span data-child-id="c2"></span>)',
           children: [
-            { id: 'c1', type: 'citation', keys: ['k1'], sources: [{ key: 'k1', authors: 'Ashish Vaswani', year: '2017' }] },
-            { id: 'c2', type: 'citation', keys: ['k1'], sources: [{ key: 'k1', authors: 'Ashish Vaswani', year: '2017' }] },
+            { id: 'c1', type: 'citation', keys: ['k1'], sources: [reference('k1', { title: 'Attention', authors: 'Ashish Vaswani', year: 2017 })] },
+            { id: 'c2', type: 'citation', keys: ['k1'], sources: [reference('k1', { title: 'Attention', authors: 'Ashish Vaswani', year: 2017 })] },
           ],
         },
       ],

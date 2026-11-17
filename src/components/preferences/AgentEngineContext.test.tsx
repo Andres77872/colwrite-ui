@@ -67,6 +67,14 @@ describe('resolveEngineRequest', () => {
     expect(resolveEngineRequest(prefs, catalog('deployed'), 'inline')).toEqual({});
   });
 
+  it('names the gateway until the server has said it is local (U-37)', () => {
+    const prefs = { chat: 'claude' as const, inline: 'codex' as const, models: { claude: 'sonnet' } };
+    // The catalog has not answered: the runtime is unknown, so no local engine.
+    expect(resolveEngineRequest(prefs, null, 'chat')).toEqual({});
+    expect(resolveEngineRequest(prefs, null, 'inline')).toEqual({});
+    expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({ engine: 'claude', model: 'sonnet' });
+  });
+
   it('keeps an engine that is not signed in, so the server says why', () => {
     const prefs = { chat: 'codex' as const, inline: 'chat' as const, models: {} };
     expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({ engine: 'codex' });
@@ -117,7 +125,7 @@ describe('AgentEngineProvider', () => {
 
   function Probe() {
     latest = useAgentEngine();
-    return <span data-testid="engine">{latest.engineFor('chat')}</span>;
+    return <span data-testid="engine">{latest.requestFor('chat').engine ?? 'gateway'}</span>;
   }
 
   beforeEach(() => {
@@ -233,6 +241,9 @@ describe('AgentEngineProvider', () => {
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
     act(() => latest?.noteRunError('MODEL_NOT_CONFIGURED'));
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(3));
+    // A CLI failure that is not a sign-in: the probe says whether the login still holds.
+    act(() => latest?.noteRunError('ENGINE_FAILED'));
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(4));
   });
 
   it('validates each gateway tier against its own catalog and keeps existing preferences intact', async () => {

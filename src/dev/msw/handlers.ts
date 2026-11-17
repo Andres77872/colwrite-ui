@@ -19,6 +19,9 @@ import { HttpResponse, http as untypedHttp } from 'msw';
 import { createOpenApiHttp } from 'openapi-msw';
 import { API_BASE } from '@/api/url';
 import { uid } from '@/lib/uid';
+import { MockAssetError, detachChatAssets, linkPageAssets, prepareImageBlocks, readableAsset, storeAsset, validAssetId } from './assets';
+import { storedZip } from '@/export/zip';
+import { confirmGeneration, generationQuota, generationQuote, generationState, proposeGeneration } from './imageGenerations';
 import type {
   AuthSessionResponse,
   ChangeSetDecisionsRequest,
@@ -27,12 +30,11 @@ import type {
   ErrorCode,
   paths,
   ProblemDetails,
+  ReferenceRecordOutput,
+  ImageGenerationInfo,
 } from '@/api/schema';
 import {
   GATEWAY_MODELS,
-  IMAGE_TYPES,
-  PAPERS,
-  arxivSearch,
   blockChanges,
   bumpTree,
   byKey,
@@ -53,13 +55,11 @@ import {
   changeSetsOf,
   chatSummary,
   chatsOf,
-  claimAssessment,
   collectionChildren,
   collectionDetail,
   collectionPath,
   collectionSubtree,
   collectionSummary,
-  colpaliSearch,
   contentOf,
   documentsIn,
   etagOf,
@@ -81,6 +81,9 @@ import {
   restorePage,
   restorePdf,
   startJob,
+  startReferenceAudit,
+  aiUseEntries,
+  jobResult,
   jobState,
   liveCollections,
   collectionTrashPreview,
@@ -91,11 +94,15 @@ import {
   trashRootCounts,
   PREVIEW_USER_ID,
   resetFixtures,
-  s2Paper,
   seededChanges,
-  semanticScholarGraph,
+  paperByKey,
+  paperDetail,
+  paperGraph,
+  paperPassages,
+  paperSearch,
+  type MockPaper,
   summaryOf,
-  updateAgentSettings,
+  catalogOf,
   usageOf,
   accountUsageOf,
   copyPage,
@@ -106,6 +113,7 @@ import {
   workspaceCollection,
   workspaceDetail,
   workspaceDocument,
+  workspacePolicyOf,
   workspaceSummary,
   type StoredWorkspace,
   type StoredChangeSet,
@@ -125,7 +133,15 @@ import {
   type StoredInvitation,
   type WorkspaceRole,
 } from './fixtures';
-import { assistantSocket, resetAssistantSockets } from './socket';
+import { mockAnchorText } from './reviews';
+import { assistantSocket, previewRuns, resetAssistantSockets } from './socket';
+import { assistantSettingsOf, updateAccountSwitches, MOCK_DEPLOYMENT, REGISTRY as ASSISTANT_REGISTRY } from './assistantCatalog';
+import { FEDUS, LEPIKHIN, OKAFOR, SHAZEER, VASWANI } from '../fixtureReferences';
+import { MOCK_VENUES, claimCheckResult, renderStatement } from './references';
+import { MockPlanRefusal, planEtag, planOf, updatePlan } from './plans';
+
+/** The works the mock's registries resolve besides what its paper sources hold: the fixture page's. */
+const KNOWN_WORKS = [VASWANI, FEDUS, LEPIKHIN, SHAZEER, OKAFOR];
 
 type Json = Record<string, unknown>;
 
@@ -165,18 +181,24 @@ const REGISTRY: Record<ErrorCode, readonly [status: number, retryable?: true]> =
   change_set_conflict: [409], history_export_too_large: [413], document_validation_failed: [422],
   document_rate_limit_exceeded: [429, true], document_integrity_error: [500], export_failed: [422],
   export_unavailable: [503], export_timeout: [504], chat_not_found: [404], message_not_found: [404],
-  image_not_found: [404], image_too_large: [413], image_unsupported: [415], image_storage_unavailable: [503, true],
+  asset_not_found: [404], asset_too_large: [413], asset_type_unsupported: [415], asset_storage_unavailable: [503, true],
   resource_not_found: [404], collection_not_found: [404], upload_empty: [400], cycle: [409], depth_limit: [409],
   preview_changed: [409], not_in_trash: [409], document_in_trash: [409], job_not_found: [404], resource_conflict: [409], upload_too_large: [413], upload_not_pdf: [415],
   collection_write_failed: [500], resource_write_failed: [500], retrieval_unavailable: [503, true],
-  unrecognized_identifier: [400], paper_source_disabled: [403], source_not_found: [404], research_not_found: [404],
-  research_invalid_input: [422], research_rate_limited: [429, true], research_provider_failed: [502],
-  claim_assessment_failed: [502], research_unavailable: [503, true], paper_source_unavailable: [503],
-  resolver_unavailable: [503, true], method_not_found: [404], session_not_found: [404], run_not_found: [404],
-  run_stopped: [409], incomplete_stream: [502], limit_exceeded: [429, true], no_workspace_context: [404],
-  no_document_context: [404], skill_disabled: [403], skill_resource_unknown: [404], skill_too_large: [413],
-  invalid_todos: [422], skill_unavailable: [503], workspace_policy: [403], tool_budget_exhausted: [429],
-  subagent_failed: [502], subagent_budget_exceeded: [504],
+  unrecognized_identifier: [400], paper_source_disabled: [403], source_not_found: [404], paper_not_found: [404],
+  source_mismatch: [409], source_retracted: [409],
+  provider_invalid_input: [422], provider_rate_limited: [429, true], provider_failed: [502],
+  provider_unavailable: [503, true], paper_source_unavailable: [503],
+  resolver_unavailable: [503, true], claim_check_failed: [502, true], web_focus_failed: [502, true],
+  reference_audit_not_found: [404], comment_not_found: [404], method_not_found: [404], session_not_found: [404], run_not_found: [404],
+  run_stopped: [409], run_not_resumable: [409], incomplete_stream: [502], limit_exceeded: [429, true],
+  plan_not_found: [404], plan_required: [409], stale_plan: [412], repeated_call: [409], tool_cancelled: [409],
+  no_workspace_context: [404], no_document_context: [404], skill_disabled: [403], skill_resource_unknown: [404],
+  invalid_todos: [422], workspace_policy: [403], untrusted_content: [403], outbound_refused: [403],
+  budget_exhausted: [429], worker_failed: [502],
+  generation_not_pending: [409], generation_request_changed: [412], image_budget_exhausted: [402],
+  image_generation_failed: [502], image_generation_not_found: [404], image_generation_unavailable: [503],
+  image_generation_unknown: [409], image_quota_exceeded: [429], image_refused: [422],
 };
 
 /**
@@ -197,7 +219,8 @@ export function problem(
     errors: null, expected_head: null, current_head: null, change_set_id: null, change_set_status: null, conflict_reason: null,
     dependency_change_set_id: null, operation_index: null, retry_after: null, provider: null, operation: null, source: null,
     maximum_bytes: null, actual_bytes: null, required_role: null, limit: null, trash_root: null, purge_after: null,
-    workspace_ids: null, policy: null, worker_id: null, findings: null,
+    workspace_ids: null, policy: null, worker_id: null, counter: null, claimed_title: null, found_title: null,
+    destination: null, rule: null, field: null, scope: null, resets_at: null,
     ...extra,
   };
   return HttpResponse.json(body, {
@@ -861,6 +884,9 @@ const pageHandlers = [
     const sortKey = keyAt(pagesHomedIn(workspace, collectionId), position as Position, (doc) => doc._id);
     if (sortKey === null) return problem('invalid_position', 'The position names no page there');
     const id = `66f0c0ffee0000000000${String(fixtures.nextDocumentNumber++).padStart(4, '0')}`;
+    let blocks: WireBlock[];
+    try { blocks = prepareImageBlocks(workspace, (content.blocks ?? []) as WireBlock[]); }
+    catch (error) { if (error instanceof MockAssetError) return problem(error.code, error.message); throw error; }
     const now = new Date().toISOString();
     const doc: StoredDocument = {
       _id: id,
@@ -871,14 +897,17 @@ const pageHandlers = [
       name: content.name || 'Untitled page',
       head_seq: 1,
       tags: content.tags ?? [],
-      blocks: (content.blocks ?? []) as WireBlock[],
+      blocks,
       sources: content.sources ?? null,
       citationStyle: content.citationStyle ?? null,
+      instructions: content.instructions ?? null,
+      documentType: content.documentType ?? null,
       created_at: now,
       updated_at: now,
       deleted_at: null,
     };
     fixtures.documents.set(id, doc);
+    linkPageAssets(workspace, id, blocks);
     syncSettingGrant(doc);
     bumpTree(workspace);
     const head = headOf(doc);
@@ -906,18 +935,24 @@ const pageHandlers = [
     // The history is seeded from what was there before this write.
     historyOf(previous);
     const { content } = body;
+    let blocks: WireBlock[];
+    try { blocks = prepareImageBlocks(previous.workspace_id, (content.blocks ?? previous.blocks) as WireBlock[]); }
+    catch (error) { if (error instanceof MockAssetError) return problem(error.code, error.message); throw error; }
     const saved: StoredDocument = {
       ...previous,
       name: content.name || previous.name,
       tags: content.tags ?? previous.tags,
-      blocks: (content.blocks ?? previous.blocks) as WireBlock[],
+      blocks,
       sources: 'sources' in content ? (content.sources ?? null) : previous.sources,
       citationStyle: 'citationStyle' in content ? (content.citationStyle ?? null) : previous.citationStyle,
+      instructions: 'instructions' in content ? (content.instructions ?? null) : previous.instructions,
+      documentType: 'documentType' in content ? (content.documentType ?? null) : previous.documentType,
       head_seq: previous.head_seq + 1,
       updated_at: new Date().toISOString(),
     };
     fixtures.documents.set(saved._id, saved);
     recordRevision(saved, body.summary ?? null);
+    linkPageAssets(saved.workspace_id, saved._id, blocks);
     const head = headOf(saved);
     fixtures.idempotency.set(checked.key, { request: fingerprint, head, etag: etagOf(saved) });
     return response(200).json(head, { headers: { ETag: etagOf(saved) } });
@@ -1018,6 +1053,8 @@ const pageHandlers = [
     if (!roleAllows(target.id, 'editor')) return roleRequired('editor');
     const collectionId = body.target_collection_id ?? null;
     if (collectionId !== null && !workspaceCollection(target.id, collectionId)) return collectionNotFound();
+    try { prepareImageBlocks(doc.workspace_id, doc.blocks); }
+    catch (error) { if (error instanceof MockAssetError) return problem(error.code, error.message); throw error; }
     const job = copyPage(doc, target, collectionId, body.include_pdfs ?? 'none');
     fixtures.copies.set(key, { request: fingerprint, jobId: job.id });
     return response(202).json({ target_workspace_id: target.id, job: jobState(job) });
@@ -1026,14 +1063,38 @@ const pageHandlers = [
   // `?format=tex|pdf` renders the *saved* page server-side. The mock has no
   // LaTeX renderer, so it answers a minimal source in the same shape; PDF
   // reports a missing compiler, as an API without one does.
-  http.get('/workspaces/{workspace_id}/documents/{document_id}/export', ({ params, query, response }) => {
+  http.get('/workspaces/{workspace_id}/documents/{document_id}/export', async ({ params, query, response }) => {
     const doc = pageOr(params.workspace_id, params.document_id);
     if (isProblem(doc)) return doc;
     const format = query.get('format');
     if (format === 'pdf') return problem('export_unavailable', 'PDF export is unavailable');
     if (format !== 'tex') return invalidRequest(['query', 'format'], "Input should be 'tex' or 'pdf'");
     const escaped = doc.name.replace(/[\\{}$&#^_%~]/g, (character) => `\\${character}`);
-    const source = `\\documentclass{article}\n\\title{${escaped}}\n\\begin{document}\n\\maketitle\n% Dev preview: ColWrite-api renders the full document here.\n\\end{document}\n`;
+    const files: { name: string; bytes: Uint8Array<ArrayBuffer> }[] = [];
+    const records: object[] = [];
+    const graphics: string[] = [];
+    const encoder = new TextEncoder();
+    const ids = new Set<string>();
+    for (const block of doc.blocks) {
+      if (block.type !== 'image' || ids.has(block.assetId)) continue;
+      ids.add(block.assetId);
+      const stored = readableAsset(doc.workspace_id, block.assetId);
+      if (!stored?.file) return problem('asset_not_found', 'An image is unavailable.');
+      const extension = stored.asset.media_type === 'image/png' ? 'png' : stored.asset.media_type === 'image/jpeg' ? 'jpg' : null;
+      if (!extension) return problem('export_unavailable', 'The preview does not convert GIF/WebP for LaTeX. Export HTML or Markdown instead.');
+      const path = `assets/${block.assetId}.${extension}`;
+      files.push({ name: path, bytes: new Uint8Array(await stored.file.arrayBuffer()) });
+      records.push({ ...stored.asset, file: path, latex_file: path });
+      graphics.push(`\\includegraphics[width=${block.width ?? 1}\\linewidth]{${path}}`);
+    }
+    const source = `\\documentclass{article}\n${graphics.length ? '\\usepackage{graphicx}\n' : ''}\\title{${escaped}}\n\\begin{document}\n\\maketitle\n% Dev preview: ColWrite-api renders the full document here.\n${graphics.join('\n')}\n\\end{document}\n`;
+    if (files.length) {
+      const bundle = storedZip([{ name: 'document.tex', bytes: encoder.encode(source) }, { name: 'assets.json', bytes: encoder.encode(JSON.stringify(records)) }, ...files]);
+      return response.untyped(new HttpResponse(bundle, { headers: {
+        'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="document.zip"; filename*=UTF-8''${encodeURIComponent(`${doc.name}.zip`)}`,
+        'Cache-Control': 'private, no-store',
+      } }));
+    }
     return response.untyped(new HttpResponse(source, {
       headers: {
         'Content-Type': 'application/x-tex',
@@ -1162,6 +1223,60 @@ const historyHandlers = [
     return response(200).json({ revisions: page.rows, next_cursor: page.next });
   }),
 
+  http.get('/workspaces/{workspace_id}/documents/{document_id}/comments', ({ params, query, response }) => {
+    const doc = pageOr(params.workspace_id, params.document_id);
+    if (isProblem(doc)) return doc;
+    const status = query.get('status');
+    const runId = query.get('run_id');
+    if (status !== null && !['open', 'resolved', 'dismissed'].includes(status)) return problem('invalid_request', 'Invalid comment status.');
+    const limit = bounded(query.get('limit'), 'limit', 100, 1, 200);
+    if (typeof limit !== 'number') return limit;
+    const rows = (fixtures.comments.get(doc._id) ?? []).filter((comment) =>
+      (!status || comment.status === status) && (!runId || comment.run_id === runId))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.comment_id.localeCompare(a.comment_id));
+    const page = pageOf(rows, limit, query.get('cursor'), `comments:${params.workspace_id}:${doc._id}:${status}:${runId}`);
+    if (!page) return problem('invalid_cursor', 'Invalid comment cursor.');
+    return response(200).json({
+      items: page.rows.map((comment) => {
+        const block = doc.blocks.find((item) => item.id === comment.block_id);
+        return { ...comment, outdated: !block || !mockAnchorText(block).includes(comment.quote) };
+      }),
+      next_cursor: page.next,
+    });
+  }),
+
+  http.patch('/workspaces/{workspace_id}/documents/{document_id}/comments/{comment_id}', async ({ params, request, response }) => {
+    const doc = pageOr(params.workspace_id, params.document_id);
+    if (isProblem(doc)) return doc;
+    const body = await request.json();
+    if (!['open', 'resolved', 'dismissed'].includes(body.status)) return problem('invalid_request', 'Invalid comment status.');
+    const comment = fixtures.comments.get(doc._id)?.find((item) => item.comment_id === params.comment_id);
+    if (!comment) return problem('comment_not_found', 'No such comment on this page.');
+    if (comment.status !== body.status) {
+      comment.status = body.status;
+      comment.decided_by = body.status === 'open' ? null : 'u-preview';
+      comment.decided_at = body.status === 'open' ? null : new Date().toISOString();
+    }
+    const block = doc.blocks.find((item) => item.id === comment.block_id);
+    return response(200).json({ ...comment, outdated: !block || !mockAnchorText(block).includes(comment.quote) });
+  }),
+
+  http.get('/workspaces/{workspace_id}/documents/{document_id}/reviews', ({ params, query, response }) => {
+    const doc = pageOr(params.workspace_id, params.document_id);
+    if (isProblem(doc)) return doc;
+    const limit = bounded(query.get('limit'), 'limit', 50, 1, 100);
+    if (typeof limit !== 'number') return limit;
+    const rows = [...(fixtures.reviewRuns.get(doc._id) ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.run_id.localeCompare(a.run_id));
+    const page = pageOf(rows, limit, query.get('cursor'), `reviews:${params.workspace_id}:${doc._id}`);
+    if (!page) return problem('invalid_cursor', 'Invalid review cursor.');
+    return response(200).json({
+      items: page.rows.map((run) => ({
+        ...run, session_id: run.created_by === 'u-preview' ? run.session_id : null,
+        after_seq: run.created_by === 'u-preview' ? run.after_seq : null,
+      })), next_cursor: page.next,
+    });
+  }),
+
   http.get('/workspaces/{workspace_id}/documents/{document_id}/revisions/{revision_id}', ({ params, response }) => {
     const doc = pageOr(params.workspace_id, params.document_id);
     if (isProblem(doc)) return doc;
@@ -1224,6 +1339,8 @@ const historyHandlers = [
       blocks: structuredClone(content.blocks ?? []),
       sources: content.sources,
       citationStyle: content.citationStyle,
+      instructions: content.instructions,
+      documentType: content.documentType,
       head_seq: doc.head_seq + 1,
       updated_at: new Date().toISOString(),
     };
@@ -1271,6 +1388,10 @@ const chatHandlers = [
     const list = chatsOf(doc._id);
     if (!list.some((chat) => chat.id === params.chat_id)) return chatNotFound();
     fixtures.chats.set(doc._id, list.filter((chat) => chat.id !== params.chat_id));
+    detachChatAssets(params.workspace_id, params.chat_id);
+    for (const [id, stored] of fixtures.plans) {
+      if (stored.workspaceId === params.workspace_id && stored.chatId === params.chat_id) fixtures.plans.delete(id);
+    }
     return response(204).empty();
   }),
 
@@ -1287,26 +1408,100 @@ const chatHandlers = [
     return response(200).json({ items: leaf === null ? [] : messageChain(chat, leaf), leaf_id: leaf });
   }),
 
-  http.post('/workspaces/{workspace_id}/chat-images', async ({ params, request, response }) => {
-    const workspace = workspaceOr(params.workspace_id);
-    if (isProblem(workspace)) return workspace;
-    if (!request.headers.get('Idempotency-Key')) return invalidRequest(['header', 'Idempotency-Key'], 'Field required');
-    const form = await formOf(request);
-    const file = form?.get('file');
-    if (!(file instanceof Blob)) return invalidRequest(['body', 'file'], 'Field required');
-    const mediaType = IMAGE_TYPES.find((type) => type === file.type);
-    if (!mediaType) return problem('image_unsupported', 'Choose a PNG, JPEG, WebP or GIF image');
-    const image = { id: uid(), filename: file instanceof File ? file.name : 'image', media_type: mediaType, size_bytes: file.size };
-    fixtures.images.set(image.id, { workspaceId: workspace, image, file });
-    return response(201).json(image);
+  http.get('/workspaces/{workspace_id}/documents/{document_id}/chats/{chat_id}/sources/{handle}', ({ params, query, response }) => {
+    const doc = pageOr(params.workspace_id, params.document_id);
+    if (isProblem(doc)) return doc;
+    const chat = chatsOf(doc._id).find((item) => item.id === params.chat_id);
+    if (!chat) return chatNotFound();
+    if (!/^S[1-9]\d*$/.test(params.handle)) return problem('invalid_request', 'Invalid source handle.');
+    const source = chat.evidence.sources.find((item) => item.handle === params.handle);
+    const passage = query.get('passage');
+    if (passage !== null && !/^S[1-9]\d*\.[1-9]\d*$/.test(passage)) return problem('invalid_request', 'Invalid passage id.');
+    if (!source || (passage !== null && !passage.startsWith(params.handle + '.'))) {
+      return problem('source_not_found', 'That source or passage is not in this chat.');
+    }
+    const rows = chat.evidence.passages.filter((item) => item.id.startsWith(params.handle + '.')
+      && (passage === null || item.id === passage));
+    if (passage !== null && !rows.length) return problem('source_not_found', 'That source or passage is not in this chat.');
+    const limit = bounded(query.get('limit'), 'limit', 20, 1, 50);
+    if (typeof limit !== 'number') return limit;
+    const page = pageOf(rows, limit, query.get('cursor'), `chat-source:${doc._id}:${chat.id}:${params.handle}:${passage ?? ''}`);
+    if (!page) return problem('invalid_cursor', 'Invalid source cursor');
+    const { aliases: _aliases, ...publicSource } = source;
+    return response(200).json({
+      source: publicSource,
+      passages: page.rows.map((item) => ({ ...item, locator: {} })),
+      next_cursor: page.next,
+    });
   }),
 
-  http.get('/workspaces/{workspace_id}/chat-images/{image_id}/content', ({ params, response }) => {
+  http.get('/workspaces/{workspace_id}/documents/{document_id}/chats/{chat_id}/plans/{plan_id}', ({ params, response }) => {
+    const doc = pageOr(params.workspace_id, params.document_id);
+    if (isProblem(doc)) return doc;
+    if (!chatsOf(doc._id).some((chat) => chat.id === params.chat_id)) return chatNotFound();
+    const plan = planOf(params.workspace_id, doc._id, params.chat_id, params.plan_id);
+    if (!plan) return problem('plan_not_found', 'Plan not found');
+    return response(200).json(plan, { headers: { ETag: planEtag(plan) } });
+  }),
+
+  http.patch('/workspaces/{workspace_id}/documents/{document_id}/chats/{chat_id}/plans/{plan_id}', async ({ params, request, response }) => {
+    const doc = pageOr(params.workspace_id, params.document_id);
+    if (isProblem(doc)) return doc;
+    if (!chatsOf(doc._id).some((chat) => chat.id === params.chat_id)) return chatNotFound();
+    const plan = planOf(params.workspace_id, doc._id, params.chat_id, params.plan_id);
+    if (!plan) return problem('plan_not_found', 'Plan not found');
+    const match = /^\s*(?:W\/)?"cwplan:(\d+)"\s*$/.exec(request.headers.get('If-Match') ?? '');
+    if (!match) return problem('precondition_required', 'If-Match must be the plan’s ETag.');
+    try {
+      const updated = updatePlan(plan, Number(match[1]), await request.json());
+      return response(200).json(updated, { headers: { ETag: planEtag(updated) } });
+    } catch (error) {
+      if (!(error instanceof MockPlanRefusal)) throw error;
+      return problem(error.code, error.message, { expected_head: error.expected_head, current_head: error.current_head });
+    }
+  }),
+
+  http.post('/workspaces/{workspace_id}/assets', async ({ params, request, response }) => {
     const workspace = workspaceOr(params.workspace_id);
     if (isProblem(workspace)) return workspace;
-    const stored = fixtures.images.get(params.image_id);
-    if (!stored || stored.workspaceId !== workspace) return problem('image_not_found', 'Image not found');
-    return response.untyped(new HttpResponse(stored.file, { headers: { 'Content-Type': stored.image.media_type } }));
+    const key = request.headers.get('Idempotency-Key')?.trim();
+    if (!key || key.length > 200 || /[^\x20-\x7e]/.test(key)) return problem('invalid_idempotency_key', 'A valid Idempotency-Key is required');
+    const form = await formOf(request);
+    const file = form?.get('file');
+    // Request.formData() may return a File from another realm (Node/MSW).
+    if (!file || typeof file === 'string') return invalidRequest(['body', 'file'], 'Field required');
+    try {
+      const stored = await storeAsset(workspace, key, file, file.name);
+      return response(201).json(stored.asset);
+    } catch (error) {
+      if (error instanceof MockAssetError) return problem(error.code, error.message);
+      throw error;
+    }
+  }),
+
+  http.get('/workspaces/{workspace_id}/assets/{asset_id}', ({ params, response }) => {
+    const workspace = workspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    if (!validAssetId(params.asset_id)) return invalidRequest(['path', 'asset_id'], 'Invalid asset id');
+    const stored = readableAsset(workspace, params.asset_id);
+    return stored ? response(200).json(stored.asset) : problem('asset_not_found', 'Asset not found');
+  }),
+
+  http.get('/workspaces/{workspace_id}/assets/{asset_id}/content', ({ params, query, response }) => {
+    const workspace = workspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    if (!validAssetId(params.asset_id)) return invalidRequest(['path', 'asset_id'], 'Invalid asset id');
+    const rendition = query.get('rendition') ?? 'original';
+    if (!['original', 'display', 'thumbnail'].includes(rendition)) return invalidRequest(['query', 'rendition'], 'Unknown rendition');
+    const stored = readableAsset(workspace, params.asset_id);
+    if (!stored) return problem('asset_not_found', 'Asset not found');
+    // The mock serves the uploaded bytes for every rendition. Full decoding,
+    // all-frame validation and separate PNG derivatives are API tests.
+    return response.untyped(new HttpResponse(stored.file, { headers: {
+      'Content-Type': stored.asset.media_type, 'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, max-age=31536000, immutable', Vary: 'Cookie, Authorization',
+      ETag: `"${params.asset_id}:${rendition}:${stored.asset.sha256}"`,
+    } }));
   }),
 ];
 
@@ -1328,8 +1523,15 @@ const accountHandlers = [
     return response(200).json(me());
   }),
 
-  http.get('/users/me/agent-tools', ({ response }) => response(200).json(fixtures.agentSettings)),
-  http.put('/users/me/agent-tools', async ({ request, response }) => response(200).json(updateAgentSettings(await request.json()))),
+  http.get('/users/me/assistant', ({ response }) => response(200).json(assistantSettingsOf(fixtures.assistant))),
+  http.put('/users/me/assistant', async ({ request, response }) => {
+    const body: unknown = await request.json();
+    // `UpdateAssistantSettingsRequest` forbids anything else, strictly typed.
+    const refusal = assistantUpdateRefusal(body);
+    if (refusal) return invalidRequest(refusal.loc, refusal.msg);
+    fixtures.assistant = updateAccountSwitches(fixtures.assistant, body as Parameters<typeof updateAccountSwitches>[1]);
+    return response(200).json(assistantSettingsOf(fixtures.assistant));
+  }),
 
   agentHttp.get('/api/agent/engines', ({ response }) => response(200).json({
     runtime: 'local',
@@ -1353,38 +1555,231 @@ const accountHandlers = [
   }),
 ];
 
+/**
+ * Why `PUT /users/me/assistant` refuses a body, as its strict request model
+ * does: a field it does not have, a switch that is not a boolean, an unknown
+ * paper source (422).
+ */
+function assistantUpdateRefusal(body: unknown): { loc: string[]; msg: string } | null {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return { loc: ['body'], msg: 'Input should be a valid dictionary' };
+  const switches = new Set<string>(ASSISTANT_REGISTRY.switches.map((item) => item.id));
+  const sources = new Set<string>(ASSISTANT_REGISTRY.sources.map((item) => item.id));
+  for (const [field, value] of Object.entries(body)) {
+    if (field === 'sources') {
+      if (value === null) continue;
+      if (typeof value !== 'object' || Array.isArray(value)) return { loc: ['body', 'sources'], msg: 'Input should be a valid dictionary' };
+      for (const [source, chosen] of Object.entries(value as Json)) {
+        if (!sources.has(source)) return { loc: ['body', 'sources', source], msg: "Input should be 'semantic_scholar'" };
+        if (typeof chosen !== 'boolean') return { loc: ['body', 'sources', source], msg: 'Input should be a valid boolean' };
+      }
+    } else if (!switches.has(field)) {
+      return { loc: ['body', field], msg: 'Extra inputs are not permitted' };
+    } else if (value !== null && typeof value !== 'boolean') {
+      return { loc: ['body', field], msg: 'Input should be a valid boolean' };
+    }
+  }
+  return null;
+}
+
+/**
+ * `GET /workspaces/{w}/assistant/catalog?engine=`: every member reads it, a
+ * viewer included; computed for the account, the workspace's policy, the
+ * account's role there and the engine (`./assistantCatalog`).
+ */
+const catalogHandlers = [
+  http.get('/workspaces/{workspace_id}/assistant/runs', ({ params, query, response }) => {
+    const workspace = workspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const limit = Math.max(1, Math.min(50, Number(query.get('limit') ?? 20)));
+    const page = pageOf(previewRuns(workspace), limit, query.get('cursor'), `assistant-runs:${workspace}`);
+    if (!page) return problem('invalid_cursor', 'Invalid runs cursor');
+    return response(200).json({ items: page.rows, next_cursor: page.next });
+  }),
+
+  http.get('/workspaces/{workspace_id}/assistant/catalog', ({ params, query, response }) => {
+    const workspace = workspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const engine = query.get('engine') ?? 'gateway';
+    if (engine !== 'gateway' && engine !== 'claude' && engine !== 'codex') {
+      return invalidRequest(['query', 'engine'], "Input should be 'gateway', 'claude' or 'codex'");
+    }
+    return response(200).json(catalogOf(workspace, engine));
+  }),
+];
+
 /* ----------------------------------------
    Research and sources
    ---------------------------------------- */
 
-const researchHandlers = [
-  http.get('/research/semantic-scholar/search', ({ query, response }) => {
-    const limit = bounded(query.get('limit'), 'limit', 20, 1, 100);
-    const offset = bounded(query.get('offset'), 'offset', 0, 0, 999);
+/** The policy refusal of a route that sends the caller's input to a scholarly service (`workspace_destination`). */
+const OUTSIDE_RESEARCH_OFF = () => problem('workspace_policy', "This workspace's policy turned off outside research.", { policy: 'outside_research' });
+
+/** The workspace, where its policy allows outside research, or the refusal. */
+function scholarlyWorkspaceOr(id: string): string | HttpResponse<ProblemDetails> {
+  const workspace = workspaceOr(id);
+  if (isProblem(workspace)) return workspace;
+  return workspacePolicyOf(workspace).outside_research ? workspace : OUTSIDE_RESEARCH_OFF();
+}
+
+/** The paper sources the account may use here: Papers on, each source on, and configured on the mock's server. */
+function accountPaperSources(): string[] {
+  const papers = fixtures.assistant.switches.papers ?? ASSISTANT_REGISTRY.switches.find((item) => item.id === 'papers')?.default ?? false;
+  if (!papers) return [];
+  return ASSISTANT_REGISTRY.sources
+    .filter((source) => (fixtures.assistant.sources[source.id] ?? source.default) && MOCK_DEPLOYMENT.paperSources.has(source.id))
+    .map((source) => source.id);
+}
+
+const sourceDisabled = (source = 'papers') => problem(
+  'paper_source_disabled',
+  'Paper search is switched off for this account. Turn on Papers and a paper source in Settings → AI & tools.',
+  { source },
+);
+
+/** The workspace a paper route may search from, or why not: the policy, then the account (`account_paper_sources`). */
+function paperWorkspaceOr(id: string): string | HttpResponse<ProblemDetails> {
+  const workspace = scholarlyWorkspaceOr(id);
+  if (isProblem(workspace)) return workspace;
+  return accountPaperSources().length ? workspace : sourceDisabled();
+}
+
+/** A work by its key with its scheme, as `/papers/{key}` names it. */
+function paperOr(raw: string): MockPaper | HttpResponse<ProblemDetails> {
+  const key = decodeURIComponent(raw);
+  if (!/^(doi|arxiv|pmid|pmcid|openalex|s2|corpusid):\S/i.test(key)) {
+    return problem('unrecognized_identifier', 'Name the paper by an identifier with its scheme: doi:10.…, arxiv:2101.00001, pmid:…, openalex:W…');
+  }
+  return paperByKey(key) ?? problem('paper_not_found', 'No paper source knows that work.');
+}
+
+/** An identifier as the resolver reads it (`parse_work_id`): its key, with its scheme. */
+function identifierKeyOf(raw: string): string | null {
+  const value = raw.trim();
+  const doi = value.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '');
+  if (/^10\.\d{4,9}\/\S+$/.test(doi)) return `doi:${doi.toLowerCase()}`;
+  const arxiv = value.replace(/^https?:\/\/arxiv\.org\/(?:abs|pdf)\//i, '').replace(/^arxiv:\s*/i, '').replace(/v\d+$/, '');
+  if (/^\d{4}\.\d{4,5}$/.test(arxiv)) return `arxiv:${arxiv}`;
+  if (/^(pmid|pmcid|openalex|s2|corpusid):\S/i.test(value)) return value.replace(/^[a-z]+:/i, (scheme) => scheme.toLowerCase());
+  return null;
+}
+
+/** Titles as the identity match compares them: case, accents, punctuation and spacing folded. */
+const foldTitle = (title: string) => title.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** The venue a statement is asked for, as the contract lists them. */
+const VENUE_IDS = new Set(MOCK_VENUES.map((venue) => venue.id));
+
+const referenceHandlers = [
+  // A claim check reads and advises: every member may ask (P2.API-5).
+  http.post('/workspaces/{workspace_id}/claims/check', async ({ params, request, response }) => {
+    const workspace = paperWorkspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const body = await request.json();
+    const claim = typeof body.claim === 'string' ? body.claim.split(/\s+/).join(' ').trim() : '';
+    if (!claim || claim.length > 2_000) return problem('invalid_request', 'claim is one assertion in words', { errors: [{ loc: ['body', 'claim'], msg: 'claim is one assertion in words', type: 'value_error' }] });
+    const sources = [...new Set((body.sources ?? []).map((item) => item.trim()).filter(Boolean))];
+    if (sources.length > 10) return problem('invalid_request', 'At most ten sources', { errors: [{ loc: ['body', 'sources'], msg: 'at most 10 items', type: 'too_long' }] });
+    if (sources.some((key) => !/^(doi|arxiv|pmid|pmcid|openalex|s2|corpusid):\S/i.test(key))) {
+      return problem('unrecognized_identifier', 'Name each paper by an identifier with its scheme: doi:10.…, arxiv:2101.00001, pmid:…, openalex:W…');
+    }
+    const job = startJob(workspace, 'claim_check', 1, jobResult({ claim: claimCheckResult(claim, sources) }));
+    return response(202).json({ job: jobState(job) });
+  }),
+  // The audit is an editor's (the role guard says so before it runs).
+  http.post('/workspaces/{workspace_id}/documents/{document_id}/references/check', ({ params, response }) => {
+    const doc = pageOr(params.workspace_id, params.document_id);
+    if (isProblem(doc)) return doc;
+    return response(202).json({ job: jobState(startReferenceAudit(params.workspace_id, doc)) });
+  }),
+  http.get('/workspaces/{workspace_id}/documents/{document_id}/references/status', ({ params, response }) => {
+    const doc = pageOr(params.workspace_id, params.document_id);
+    if (isProblem(doc)) return doc;
+    const report = fixtures.referenceAudits.get(doc._id);
+    return report ? response(200).json(structuredClone(report)) : problem('reference_audit_not_found', 'This page’s references have not been checked yet.');
+  }),
+  http.get('/workspaces/{workspace_id}/documents/{document_id}/ai-use', ({ params, query, response }) => {
+    const doc = pageOr(params.workspace_id, params.document_id);
+    if (isProblem(doc)) return doc;
+    const limit = bounded(query.get('limit'), 'limit', 100, 1, 200);
     if (typeof limit !== 'number') return limit;
-    if (typeof offset !== 'number') return offset;
-    const data = PAPERS.slice(offset, offset + limit).map(s2Paper);
-    return response(200).json({
-      provider: 'semantic_scholar', total: PAPERS.length, offset, data,
-      next_offset: offset + limit < PAPERS.length ? offset + limit : null,
-    });
+    const page = pageOf(aiUseEntries(doc._id), limit, query.get('cursor'), `ai-use:${doc._id}`);
+    if (!page) return problem('invalid_cursor', 'The cursor is not one this list returned');
+    return response(200).json({ entries: page.rows, next_cursor: page.next });
   }),
-  http.get('/research/semantic-scholar/graph', ({ query, response }) => {
-    const direction = query.get('direction') === 'references' ? 'references' : 'citations';
-    return response(200).json(semanticScholarGraph(query.get('paper_id') ?? '', direction));
+  http.get('/workspaces/{workspace_id}/documents/{document_id}/ai-use/statement', ({ params, query, response }) => {
+    const doc = pageOr(params.workspace_id, params.document_id);
+    if (isProblem(doc)) return doc;
+    const venue = MOCK_VENUES.find((item) => item.id === query.get('venue'));
+    if (!venue || !VENUE_IDS.has(venue.id)) return problem('invalid_request', `Unknown venue: one of ${[...VENUE_IDS].join(', ')}`);
+    return response(200).json(renderStatement(venue, aiUseEntries(doc._id)));
   }),
-  http.get('/research/semantic-scholar/recommendations', ({ query, response }) => {
-    const paperId = query.get('paper_id') ?? '';
-    return response(200).json({ provider: 'semantic_scholar', paper_id: paperId, seed_paper_ids: [paperId], data: PAPERS.slice(1, 4).map(s2Paper) });
+];
+
+const researchHandlers = [
+  http.get('/workspaces/{workspace_id}/papers/search', ({ params, query, response }) => {
+    const workspace = paperWorkspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const limit = bounded(query.get('limit'), 'limit', 20, 1, 50);
+    if (typeof limit !== 'number') return limit;
+    const year = (name: 'year_from' | 'year_to') => Number(query.get(name)) || undefined;
+    return response(200).json(paperSearch(query.get('query') ?? '', {
+      yearFrom: year('year_from'), yearTo: year('year_to'), limit, cursor: query.get('cursor'),
+    }));
   }),
-  http.post('/research/semantic-scholar/claim-assessment', async ({ request, response }) =>
-    response(200).json(claimAssessment((await request.json()).claim))),
-  http.get('/sources/resolve', ({ query, response }) => {
-    const identifier = query.get('identifier')?.trim() ?? '';
-    if (!identifier) return problem('unrecognized_identifier', 'Enter a DOI or an arXiv id');
-    return response(200).json({
-      source: { key: identifier.toLowerCase(), title: 'A resolved paper', authors: 'A. Author', year: '2024', provider: 'crossref' },
-    });
+  http.get('/workspaces/{workspace_id}/papers/passages', ({ params, query, response }) => {
+    const workspace = paperWorkspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const limit = bounded(query.get('limit'), 'limit', 8, 1, 20);
+    if (typeof limit !== 'number') return limit;
+    return response(200).json(paperPassages(query.get('query') ?? '', query.getAll('papers'), limit));
+  }),
+  http.get('/workspaces/{workspace_id}/papers/{key}/graph', ({ params, query, response }) => {
+    const workspace = paperWorkspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const seed = paperOr(params.key);
+    if (isProblem(seed)) return seed;
+    const relation = query.get('relation');
+    if (relation !== 'references' && relation !== 'citations' && relation !== 'related') {
+      return problem('invalid_request', 'relation must be references, citations or related');
+    }
+    return response(200).json(paperGraph(seed, relation));
+  }),
+  http.get('/workspaces/{workspace_id}/papers/{key}', ({ params, response }) => {
+    const workspace = paperWorkspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const paper = paperOr(params.key);
+    if (isProblem(paper)) return paper;
+    return response(200).json(paperDetail(paper));
+  }),
+  // The pipeline: resolve at the registry, match the claimed work, corroborate, read the status.
+  http.get('/workspaces/{workspace_id}/sources/resolve', ({ params, query, response }) => {
+    const workspace = scholarlyWorkspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const key = identifierKeyOf(query.get('identifier') ?? '');
+    if (!key) return problem('unrecognized_identifier', 'Enter a DOI, an arXiv id, a PMID or a paper source’s id.');
+    if (/^(s2|corpusid|openalex):/.test(key)) {
+      const source = key.startsWith('openalex:') ? 'openalex' : 'semantic_scholar';
+      if (!accountPaperSources().includes(source)) return sourceDisabled(source);
+    }
+    const known = KNOWN_WORKS.find((work) => work.key === key) ?? paperByKey(key)?.record;
+    let record: ReferenceRecordOutput;
+    if (known) {
+      record = { ...structuredClone(known), state: known.state === 'unchecked' ? 'verified' : known.state, checked: '2026-09-20' };
+    } else if (key.startsWith('doi:')) {
+      // Any other DOI: one registry has it, so it is to be reviewed.
+      record = {
+        key, kind: 'paper', provider: 'crossref', state: 'needs_review', flags: [], checked: '2026-09-20',
+        csl: { id: key, type: 'article-journal', title: 'A resolved paper', author: [{ family: 'Author', given: 'A.' }], issued: { 'date-parts': [[2024]] }, DOI: key.slice(4) },
+      };
+    } else {
+      return problem('source_not_found', 'No registry has a record for that identifier.');
+    }
+    const claimed = query.get('title')?.trim();
+    if (claimed && foldTitle(claimed) !== foldTitle(record.csl.title)) {
+      return problem('source_mismatch', 'That identifier names a different work.', { claimed_title: claimed, found_title: record.csl.title });
+    }
+    const aliases = paperByKey(key)?.aliases ?? [];
+    return response(200).json({ source: record, aliases, notes: [] });
   }),
 ];
 
@@ -1919,14 +2314,141 @@ const trashHandlers = [
   }),
 ];
 
-/* ----------------------------------------
-   Services that are not ColWrite-api
-   ---------------------------------------- */
+function imageAllowed(workspaceId: string) {
+  if (!workspacePolicyOf(workspaceId).images) return problem('workspace_policy', 'Images are switched off in this workspace.', { policy: 'images' });
+  if (!fixtures.imageGenerationEnabled || !fixtures.assistant.switches.images) return problem('image_generation_unavailable', 'Image generation is not configured or is switched off.');
+  return null;
+}
 
-/** The public arXiv and ColPali searches, wherever `VITE_ARZ_API` and `VITE_COLPALI_BASE` point. */
-const externalHandlers = [
-  untypedHttp.post('*/rag/source/arxiv', () => HttpResponse.json(arxivSearch())),
-  untypedHttp.post('*/rag/colpali/arxiv', () => HttpResponse.json(colpaliSearch())),
+function imageGenerationOr(workspaceId: string, generationId: string) {
+  const info = fixtures.imageGenerations.get(generationId);
+  if (!info || info.workspace_id !== workspaceId) return problem('image_generation_not_found', 'Image request not found.');
+  if (info.created_by !== PREVIEW_USER_ID && (!info.asset_id || !readableAsset(workspaceId, info.asset_id))) {
+    return problem('image_generation_not_found', 'Image request not found.');
+  }
+  return info;
+}
+
+function publicGeneration(info: ImageGenerationInfo): ImageGenerationInfo {
+  return { ...info, can_decide: info.created_by === PREVIEW_USER_ID && roleAllows(info.workspace_id, 'editor') };
+}
+
+const imageGenerationHandlers = [
+  http.post('/workspaces/{workspace_id}/image-generations', async ({ params, request, response }) => {
+    const workspace = workspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const blocked = imageAllowed(workspace);
+    if (blocked) return blocked;
+    const body = await request.json();
+    const page = pageOr(workspace, body.document_id);
+    if (isProblem(page)) return page;
+    if (body.engine === 'claude') return problem('image_generation_unavailable', "Images aren't available with Claude Code.");
+    const key = request.headers.get('Idempotency-Key')?.trim();
+    if (!key) return problem('invalid_idempotency_key', 'An action key is required.');
+    if (Object.keys(body).some((name) => !['document_id', 'engine', 'purpose', 'description', 'style', 'exact_text', 'aspect_ratio'].includes(name))
+      || !body.description?.trim() || body.description.length > 2000) return invalidRequest(['body'], 'Describe one illustration.');
+    const action = `${workspace}:${key}`;
+    const hash = JSON.stringify(body);
+    const replay = fixtures.imageGenerationActions.get(action);
+    if (replay) {
+      if (replay.hash !== hash) return problem('idempotency_key_reused', 'This key named a different request.');
+      const info = imageGenerationOr(workspace, replay.generationId);
+      return isProblem(info) ? info : response(201).json(publicGeneration(info));
+    }
+    const quota = generationQuota(workspace);
+    if (!quota.available) return problem('image_quota_exceeded', quota.reason!, { scope: quota.scope, resets_at: quota.resets_at });
+    const info = proposeGeneration(workspace, body.document_id, {
+      purpose: body.purpose, description: body.description, style: body.style ?? '',
+      exact_text: body.exact_text ?? '', aspect_ratio: body.aspect_ratio ?? '3:2',
+    }, body.engine ?? 'gateway');
+    fixtures.imageGenerationActions.set(action, { hash, generationId: info.generation_id });
+    return response(201).json(publicGeneration(info));
+  }),
+  http.get('/workspaces/{workspace_id}/image-generations', async ({ params, query, response }) => {
+    const workspace = workspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const page = pageOr(workspace, query.get('document_id') ?? '');
+    if (isProblem(page)) return page;
+    const limit = Math.min(100, Math.max(1, Number(query.get('limit') ?? 50)));
+    const cursor = query.get('cursor');
+    const rows = [...fixtures.imageGenerations.values()].filter((info) => info.workspace_id === workspace
+      && info.document_id === page._id && (!cursor || info.generation_id > cursor)).sort((a, b) => a.generation_id.localeCompare(b.generation_id));
+    const items = [];
+    for (const row of rows.slice(0, limit)) {
+      const authorized = imageGenerationOr(workspace, row.generation_id);
+      if (!isProblem(authorized)) items.push(publicGeneration(await generationState(authorized)));
+    }
+    return response(200).json({ items, next_cursor: rows.length > limit ? rows[limit - 1]!.generation_id : null });
+  }),
+  http.get('/workspaces/{workspace_id}/image-generations/availability', ({ params, query, response }) => {
+    const workspace = workspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const reason = !roleAllows(workspace, 'editor') ? 'Viewers cannot generate images.'
+      : !workspacePolicyOf(workspace).images ? 'Images are switched off in this workspace.'
+      : !fixtures.imageGenerationEnabled ? 'Image generation is not configured on this server.'
+      : !fixtures.assistant.switches.images ? 'Images are switched off in your settings.'
+      : query.get('engine') === 'claude' ? "Images aren't available with Claude Code." : null;
+    return response(200).json(reason ? { available: false, reason, scope: null, resets_at: null } : generationQuota(workspace));
+  }),
+  http.get('/workspaces/{workspace_id}/image-generations/{generation_id}', async ({ params, response }) => {
+    const workspace = workspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const info = imageGenerationOr(workspace, params.generation_id);
+    return isProblem(info) ? info : response(200).json(publicGeneration(await generationState(info)));
+  }),
+  http.patch('/workspaces/{workspace_id}/image-generations/{generation_id}', async ({ params, request, response }) => {
+    const workspace = workspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const blocked = imageAllowed(workspace);
+    if (blocked) return blocked;
+    const info = imageGenerationOr(workspace, params.generation_id);
+    if (isProblem(info)) return info;
+    const body = await request.json();
+    if (info.status !== 'proposed' || info.created_by !== PREVIEW_USER_ID) return problem('generation_not_pending', 'This request was already decided.');
+    if (body.confirmation_token !== info.confirmation_token) return problem('generation_request_changed', 'Read the latest request before changing it.');
+    if (!body.prompt.trim() || body.prompt.length > 4000 || Object.keys(body).some((key) => !['prompt', 'aspect_ratio', 'confirmation_token'].includes(key))) return invalidRequest(['body'], 'Invalid image request edit.');
+    Object.assign(info, { prompt: body.prompt, aspect_ratio: body.aspect_ratio });
+    Object.assign(info, generationQuote(info));
+    return response(200).json(publicGeneration(info));
+  }),
+  http.post('/workspaces/{workspace_id}/image-generations/{generation_id}/confirm', async ({ params, request, response }) => {
+    const workspace = workspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const blocked = imageAllowed(workspace);
+    if (blocked) return blocked;
+    const info = imageGenerationOr(workspace, params.generation_id);
+    if (isProblem(info)) return info;
+    const body = await request.json();
+    const key = request.headers.get('Idempotency-Key')?.trim();
+    if (!key) return problem('invalid_idempotency_key', 'A confirmation action key is required.');
+    if (Object.keys(body).some((name) => name !== 'confirmation_token')) return invalidRequest(['body'], 'Confirm the exact displayed request only.');
+    const receipt = fixtures.imageConfirmations.get(info.generation_id);
+    if (receipt?.key === key) {
+      if (receipt.token !== body.confirmation_token) return problem('idempotency_key_reused', 'This confirmation named a different request.');
+      const job = fixtures.jobs.get(info.job_id!);
+      return job ? response(202).json({ job: jobState(job) }) : problem('job_not_found', 'Generation job not found.');
+    }
+    if (info.status !== 'proposed' || info.created_by !== PREVIEW_USER_ID) return problem('generation_not_pending', 'This request was already decided.');
+    if (body.confirmation_token !== info.confirmation_token) return problem('generation_request_changed', 'Read the exact request again before generating.');
+    const now = new Date().toISOString();
+    const confirmed = [...fixtures.imageGenerations.values()].filter((row) => row.confirmed_at !== null);
+    if (confirmed.filter((row) => row.created_by === PREVIEW_USER_ID && row.confirmed_at!.slice(0, 10) === now.slice(0, 10)).length >= 20) return problem('image_quota_exceeded', 'Daily confirmation quota reached.', { scope: 'person', resets_at: null });
+    if (confirmed.filter((row) => row.workspace_id === workspace && row.confirmed_at!.slice(0, 7) === now.slice(0, 7)).length >= 200) return problem('image_quota_exceeded', 'Monthly workspace confirmation quota reached.', { scope: 'workspace', resets_at: null });
+    const job = confirmGeneration(info);
+    fixtures.imageConfirmations.set(info.generation_id, { key, token: body.confirmation_token });
+    return response(202).json({ job: jobState(job) });
+  }),
+  http.post('/workspaces/{workspace_id}/image-generations/{generation_id}/discard', ({ params, response }) => {
+    const workspace = workspaceOr(params.workspace_id);
+    if (isProblem(workspace)) return workspace;
+    const info = imageGenerationOr(workspace, params.generation_id);
+    if (isProblem(info)) return info;
+    if (info.created_by !== PREVIEW_USER_ID || !['proposed', 'confirmed', 'running', 'succeeded'].includes(info.status)) return problem('generation_not_pending', 'This request was already decided.');
+    if (info.status === 'running') { info.status = 'unknown'; info.error_code = 'image_generation_unknown'; }
+    else info.status = 'discarded';
+    info.completed_at = new Date().toISOString();
+    return response(200).json(publicGeneration(info));
+  }),
 ];
 
 /** Every route the mock answers, and the assistant socket. */
@@ -1938,13 +2460,15 @@ export const handlers = [
   ...pageHandlers,
   ...historyHandlers,
   ...chatHandlers,
+  ...imageGenerationHandlers,
   ...accountHandlers,
+  ...catalogHandlers,
   ...researchHandlers,
+  ...referenceHandlers,
   ...resourceHandlers,
   ...collectionHandlers,
   ...trashHandlers,
-  ...externalHandlers,
-  assistantSocket(),
+  assistantSocket({ previewFixtures: true }),
 ];
 
 /**
@@ -1964,4 +2488,3 @@ export function resetMockApi(): void {
   resetAssistantSockets();
   resetFixtures();
 }
-

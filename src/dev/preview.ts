@@ -18,6 +18,10 @@ import {
   type WorkspaceRole,
 } from './msw/fixtures';
 import { handlers, unmockedApi } from './msw/handlers';
+import { seedPreviewRuns } from './msw/socket';
+import { seedReviewFixture } from './msw/reviews';
+import { enableImageFixture } from './msw/imageGenerations';
+import { VIEWER_WORKSPACE_ID } from './msw/fixtures';
 
 // Every other request (Vite's modules, fonts, the HMR socket) goes out as usual.
 await setupWorker(...handlers, unmockedApi).start({ onUnhandledRequest: 'bypass', quiet: true });
@@ -28,6 +32,10 @@ const openPage = () => new URLSearchParams(window.location.search).get('doc') ??
 // `?fixture=size` measures the tree against a full workspace: 300 collections
 // up to eight deep, 2,000 pages and 1,500 PDFs. Without it the preview is light.
 if (params.get('fixture') === 'size') seedSizeFixture();
+if (params.get('fixture') === 'runs') seedPreviewRuns();
+if (params.get('fixture') === 'review') seedReviewFixture();
+if (params.get('fixture') === 'review-viewer') seedReviewFixture(VIEWER_WORKSPACE_ID);
+if (params.get('fixture') === 'images') enableImageFixture();
 
 // For trying the conflict flows by hand from the console. `editElsewhere()`
 // changes the open page the way another tab would: the next autosave is

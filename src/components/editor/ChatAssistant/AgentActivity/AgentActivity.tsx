@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
-import { Check, ChevronRight, CircleSlash, Network, TriangleAlert } from 'lucide-react';
+import { Check, ChevronRight, CircleSlash, Clock, Network, TriangleAlert } from 'lucide-react';
 import { formatDraftSize, formatElapsed, useNow } from '@/components/editor/AgentProgress';
 import type { AgentWorker } from '@/api/assistant/streamParser';
-import { failureLead, formatDuration, metaFor } from './toolMeta';
+import { failureLead, formatDuration, isFailurePreview, toolDetail } from './toolMeta';
 import type { ToolRun } from './toolMeta';
+import { useToolNamer } from './useToolNamer';
+import { useAssistantCatalog } from '@/components/preferences/assistantCatalogContextState';
 
 /** A running step shows its clock only once it has taken a noticeable while. */
 const SHOW_RUNNING_TIME_AFTER_MS = 2000;
@@ -20,12 +22,30 @@ function RunningMeta({ run }: { run: ToolRun }) {
   const elapsed = run.startedAt === undefined ? 0 : now - run.startedAt;
   const drafted = run.argumentsChars ? formatDraftSize(run.argumentsChars) : null;
   if (!drafted && elapsed < SHOW_RUNNING_TIME_AFTER_MS) return null;
+  const spoken = [
+    drafted && `${drafted} written`,
+    elapsed >= SHOW_RUNNING_TIME_AFTER_MS && `for ${spokenElapsed(elapsed)}`,
+  ].filter(Boolean).join(', ');
   return (
-    <span aria-hidden="true" className="shrink-0 tabular-nums">
-      {drafted && `· ${drafted} `}
-      {elapsed >= SHOW_RUNNING_TIME_AFTER_MS && `· ${formatElapsed(elapsed)}`}
+    <span className="shrink-0 tabular-nums">
+      <span aria-hidden="true">
+        {drafted && `· ${drafted} `}
+        {elapsed >= SHOW_RUNNING_TIME_AFTER_MS && `· ${formatElapsed(elapsed)}`}
+      </span>
+      {/* The ticking counter, for a screen reader in coarse steps: part of
+          the row's name, never a live region that reads every second. */}
+      <span className="sr-only">, {spoken}</span>
     </span>
   );
+}
+
+/** How long, as a sentence reads it, in steps of ten seconds and then minutes. */
+function spokenElapsed(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 10) return 'a few seconds';
+  if (seconds < 60) return `${Math.floor(seconds / 10) * 10} seconds`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes === 1 ? '1 minute' : `${minutes} minutes`;
 }
 
 /** Past this many steps a finished turn folds them under one summary line. */
@@ -33,7 +53,7 @@ const FOLD_AFTER = 3;
 
 type Entry =
   | { kind: 'run'; run: ToolRun }
-  | { kind: 'worker'; worker: AgentWorker; number: number; runs: ToolRun[] };
+  | { kind: 'worker'; worker: AgentWorker; runs: ToolRun[] };
 
 /**
  * The turn's steps in order, with each research worker's own steps gathered
@@ -48,7 +68,7 @@ function entriesFor(runs: ToolRun[], workers: AgentWorker[]): Entry[] {
     if (!owned) {
       owned = [];
       groups.set(worker.id, owned);
-      entries.push({ kind: 'worker', worker, number: workers.indexOf(worker) + 1, runs: owned });
+      entries.push({ kind: 'worker', worker, runs: owned });
     }
     return owned;
   };
@@ -130,10 +150,16 @@ export function AgentActivity({
 }
 
 /** How a worker ended, or that it has not: the words after its name. */
-function workerOutcome(status: string, live: boolean): { text: string; tone: 'working' | 'done' | 'stopped' | 'failed' } {
+function workerOutcome(status: string, live: boolean): { text: string; tone: 'waiting' | 'working' | 'done' | 'stopped' | 'failed' } {
   switch (status) {
+    case 'queued':
+      // Waiting for one of the run's worker slots; it always ends with one
+      // of the statuses below, so a turn over with it queued ended around it.
+      return live ? { text: 'waiting to start', tone: 'waiting' } : { text: 'interrupted', tone: 'stopped' };
     case 'completed':
       return { text: 'reported back', tone: 'done' };
+    case 'partial':
+      return { text: 'reported back with partial findings', tone: 'done' };
     case 'failed':
       return { text: 'could not finish', tone: 'failed' };
     case 'budget_exceeded':
@@ -152,6 +178,9 @@ function workerOutcome(status: string, live: boolean): { text: string; tone: 'wo
  * from it, and the workers were a sentence of counts under the reply.
  */
 function WorkerGroup({ entry, live }: { entry: Extract<Entry, { kind: 'worker' }>; live: boolean }) {
+  const { catalog } = useAssistantCatalog();
+  const profile = catalog?.workers.find((row) => row.id === entry.worker.profile)?.label ?? entry.worker.profile;
+  const name = `${profile} · ${entry.worker.title}`;
   const outcome = workerOutcome(entry.worker.status, live);
   // Open while it works; a finished worker folds to its line.
   const [expanded, setExpanded] = useState<boolean | null>(null);
@@ -163,6 +192,8 @@ function WorkerGroup({ entry, live }: { entry: Extract<Entry, { kind: 'worker' }
       <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
         {outcome.tone === 'working' ? (
           <Spinner className="h-3 w-3" />
+        ) : outcome.tone === 'waiting' ? (
+          <Clock aria-hidden="true" className="h-3.5 w-3.5" />
         ) : outcome.tone === 'failed' ? (
           <TriangleAlert aria-hidden="true" className="h-3.5 w-3.5 text-destructive" />
         ) : outcome.tone === 'stopped' ? (
@@ -172,11 +203,11 @@ function WorkerGroup({ entry, live }: { entry: Extract<Entry, { kind: 'worker' }
         )}
       </span>
       <span className={cn('min-w-0 truncate', outcome.tone === 'working' && 'animate-shimmer text-foreground')}>
-        Research worker {entry.number}
+        {name}
         <span className="sr-only">: </span>
         <span aria-hidden="true"> · </span>
         {outcome.text}
-        {outcome.tone === 'working' && '…'}
+        {(outcome.tone === 'working' || outcome.tone === 'waiting') && '…'}
       </span>
       {steps > 0 && (
         <span className="shrink-0 tabular-nums">
@@ -196,7 +227,7 @@ function WorkerGroup({ entry, live }: { entry: Extract<Entry, { kind: 'worker' }
     'group/line -mx-1 flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[13px] text-muted-foreground';
 
   return (
-    <li>
+    <li title={entry.worker.objective}>
       {steps > 0 ? (
         <button
           type="button"
@@ -210,7 +241,7 @@ function WorkerGroup({ entry, live }: { entry: Extract<Entry, { kind: 'worker' }
         <div className={lineClass}>{line}</div>
       )}
       {open && steps > 0 && (
-        <ol className="ml-[7px] flex flex-col border-l border-border pl-3" aria-label={`Research worker ${entry.number}'s steps`}>
+        <ol className="ml-[7px] flex flex-col border-l border-border pl-3" aria-label={`${name}'s steps`}>
           {entry.runs.map((run) => (
             <ActivityRun key={run.id} run={run} />
           ))}
@@ -225,10 +256,15 @@ function WorkerGroup({ entry, live }: { entry: Extract<Entry, { kind: 'worker' }
 function ActivityRun({ run }: { run: ToolRun }) {
   const [open, setOpen] = useState(false);
 
-  const meta = metaFor(run.tool);
+  const naming = useToolNamer()(run.tool, run.display);
+  const Icon = naming.icon;
+  // The detail names only closed-set arguments (TD34), once they are known.
+  const detail = toolDetail(naming, run.args);
   const duration = formatDuration(run.durationMs);
+  // A failure's preview carries only its code, which the error line names.
+  const output = isFailurePreview(run.outputPreview) ? undefined : run.outputPreview;
   const hasDetails = Boolean(
-    run.detail || run.argsPreview || run.args || run.outputPreview || run.errorType || run.outputTruncated,
+    detail || run.argsPreview || run.args || output || run.errorType || run.outputTruncated,
   );
 
   const stateText =
@@ -242,10 +278,10 @@ function ActivityRun({ run }: { run: ToolRun }) {
 
   const label =
     run.state === 'running'
-      ? `${meta.running}…`
+      ? `${naming.runningLabel}…`
       : run.state === 'interrupted'
-        ? `${meta.running} — interrupted`
-        : meta.label;
+        ? `${naming.runningLabel} — interrupted`
+        : naming.label;
 
   const line = (
     <>
@@ -264,6 +300,7 @@ function ActivityRun({ run }: { run: ToolRun }) {
         <span className="sr-only">{stateText}</span>
         <span className="sr-only">: </span>
       </span>
+      <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
       <span
         className={cn(
           'min-w-0 truncate',
@@ -283,7 +320,8 @@ function ActivityRun({ run }: { run: ToolRun }) {
         <ChevronRight
           aria-hidden="true"
           className={cn(
-            'h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover/line:opacity-100 group-focus-visible/line:opacity-100',
+            // Always shown where there is no hover (touch), so a row that opens says so.
+            'h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover/line:opacity-100 group-focus-visible/line:opacity-100 [@media(hover:none)]:opacity-100',
             open && 'rotate-90 opacity-100',
           )}
         />
@@ -320,9 +358,10 @@ function ActivityRun({ run }: { run: ToolRun }) {
 
       {open && hasDetails && (
         <div className="mb-1.5 ml-5 mt-1 space-y-1.5 border-l border-border pl-3 text-xs text-muted-foreground">
-          {run.detail && <p>{run.detail}</p>}
+          {detail && <p>{detail}</p>}
+          {/* Fitted under the tool's limit: a success, said quietly. */}
           {run.outputTruncated && run.state !== 'error' && (
-            <p>The reply was cut at the size limit; the assistant saw only part of it.</p>
+            <p>Trimmed to fit: the assistant read a shortened result.</p>
           )}
           {(run.args || run.argsPreview) && (
             <RunPayload
@@ -331,15 +370,12 @@ function ActivityRun({ run }: { run: ToolRun }) {
               note={run.args ? undefined : 'shortened'}
             />
           )}
-          {run.outputPreview && (
+          {/* A projection of the result (counts, flags, labels), not its first characters. */}
+          {output && (
             <RunPayload
               label="Output"
-              text={run.outputPreview}
-              note={
-                run.outputChars && run.outputChars > run.outputPreview.length
-                  ? `first ${run.outputPreview.length.toLocaleString()} of ${run.outputChars.toLocaleString()} characters`
-                  : undefined
-              }
+              text={output}
+              note={run.outputChars ? `summary of ${run.outputChars.toLocaleString()} characters` : undefined}
             />
           )}
           {run.errorType && (

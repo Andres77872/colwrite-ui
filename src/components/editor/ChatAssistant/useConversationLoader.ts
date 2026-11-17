@@ -12,7 +12,6 @@ import { listMessages } from '@/data/chats';
 import { isRetryableProblem } from '@/api/retry';
 import { ApiError, describeApiError } from '@/api/errors';
 import type { DocumentSessionValue } from '@/editor';
-import type { AgentProgress } from '@/components/editor/AgentProgress';
 import { historyMessages, type ChatMessage } from './chatUtils';
 
 /**
@@ -23,6 +22,9 @@ export type ConversationNotice = { message: string; preparing: boolean };
 
 type ConversationLoaderOptions = {
   onResumeRun?: (snapshot: AssistantSnapshot) => void;
+  /** Return true when an explicit checkpoint action takes over the loaded
+   * transcript, rather than observational active-run reattachment. */
+  onLoaded?: () => boolean;
   /**
    * The selected chat does not exist on this page (the server answered 404):
    * it was deleted, here or on another device. The caller drops the selection.
@@ -33,13 +35,11 @@ type ConversationLoaderOptions = {
   selectedChatId: string | null;
   selectedLeafId: number | null;
   setSelectedLeafId: (id: number | null) => void;
-  /** The turn's stream controller, aborted when a load takes over the transcript. */
-  abortRef: MutableRefObject<AbortController | null>;
+  /** Stop following the running turn, without cancelling it: a load takes over the transcript. */
+  detachRun: () => void;
   /** The claim key below, shared with the turn so a finished stream can pre-claim it. */
   loadedConversationRef: MutableRefObject<string | null>;
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
-  setIsStreaming: Dispatch<SetStateAction<boolean>>;
-  setAgentStatus: Dispatch<SetStateAction<AgentProgress | null>>;
 };
 
 export type ConversationLoader = {
@@ -54,19 +54,19 @@ export type ConversationLoader = {
  */
 export function useConversationLoader({
   onResumeRun,
+  onLoaded,
   onChatGone,
   workspaceId,
   documentId,
   selectedChatId,
   selectedLeafId,
   setSelectedLeafId,
-  abortRef,
+  detachRun,
   loadedConversationRef,
   setMessages,
-  setIsStreaming,
-  setAgentStatus,
 }: ConversationLoaderOptions): ConversationLoader {
   const resumeRun = useEffectEvent((snapshot: AssistantSnapshot) => onResumeRun?.(snapshot));
+  const loaded = useEffectEvent(() => onLoaded?.() ?? false);
   const chatGone = useEffectEvent(() => onChatGone?.());
 
   /** Bumped by the notice's Retry button. There is no automatic ladder. */
@@ -107,10 +107,7 @@ export function useConversationLoader({
     let settled = false;
 
     (async () => {
-      abortRef.current?.abort();
-      abortRef.current = null;
-      setIsStreaming(false);
-      setAgentStatus(null);
+      detachRun();
 
       try {
         const transport = { signal: controller.signal };
@@ -130,12 +127,13 @@ export function useConversationLoader({
         // A conversation the server has nothing for does not overwrite one the
         // author can see: that reads as the transcript being thrown away.
         setMessages((prev) => (history.length === 0 && prev.length > 0 ? prev : history));
+        if (typeof resolvedLeaf === 'number') setSelectedLeafId(resolvedLeaf);
+        if (loaded()) return;
         // Restoring is observational: never creates another model turn.
         let active: AssistantSnapshot | null = null;
         try { active = await findActiveAgentRun(workspaceId, documentId, selectedChatId, controller.signal); }
         catch { /* Stored chat remains useful while the socket is unavailable. */ }
         if (controller.signal.aborted) return;
-        if (typeof resolvedLeaf === 'number') setSelectedLeafId(resolvedLeaf);
         if (active?.run) resumeRun(active);
       } catch (e) {
         if (controller.signal.aborted) return;
@@ -165,11 +163,9 @@ export function useConversationLoader({
     selectedLeafId,
     setSelectedLeafId,
     conversationReloadTick,
-    abortRef,
+    detachRun,
     loadedConversationRef,
     setMessages,
-    setIsStreaming,
-    setAgentStatus,
   ]);
 
   return { conversationNotice, reloadConversation };

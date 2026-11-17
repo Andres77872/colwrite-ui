@@ -2,6 +2,7 @@ import { itemAt, takeItems } from '@/lib/itemAt';
 import { describe, it, expect } from 'vitest';
 import type { Block, ToolAction, ToolOperation } from '../types';
 import { applyPatchToBlocks } from '../docOps';
+import { append, deleteBlocks, moveBlock, rewrite, writeAfter, writeBefore } from './operations';
 import {
   buildChangeSet,
   isReady,
@@ -101,59 +102,66 @@ const CASES: Array<{ name: string; ops: ToolOperation[] }> = [
   {
     name: 'three paragraphs appended to the end',
     ops: [
-      { op: 'append_block', block: para('X') },
-      { op: 'append_block', block: para('Y') },
-      { op: 'append_block', block: para('Z') },
+      append(para('X')),
+      append(para('Y')),
+      append(para('Z')),
     ],
   },
   {
-    name: 'three paragraphs inserted at the start',
+    name: 'two writes of two paragraphs each after the same block',
     ops: [
-      { op: 'insert_block_at_start', block: para('X') },
-      { op: 'insert_block_at_start', block: para('Y') },
-      { op: 'insert_block_at_start', block: para('Z') },
+      writeAfter('A', para('X1'), para('X2')),
+      writeAfter('A', para('Y1'), para('Y2')),
+    ],
+  },
+  {
+    name: 'three paragraphs written before the first block',
+    ops: [
+      writeBefore('A', para('X')),
+      writeBefore('A', para('Y')),
+      writeBefore('A', para('Z')),
     ],
   },
   {
     name: 'three paragraphs after the same block',
     ops: [
-      { op: 'insert_block_after', referenceId: 'A', block: para('X') },
-      { op: 'insert_block_after', referenceId: 'A', block: para('Y') },
-      { op: 'insert_block_after', referenceId: 'A', block: para('Z') },
+      writeAfter('A', para('X')),
+      writeAfter('A', para('Y')),
+      writeAfter('A', para('Z')),
     ],
   },
   {
     name: 'three paragraphs before the same block',
     ops: [
-      { op: 'insert_block_before', referenceId: 'B', block: para('X') },
-      { op: 'insert_block_before', referenceId: 'B', block: para('Y') },
-      { op: 'insert_block_before', referenceId: 'B', block: para('Z') },
+      writeBefore('B', para('X')),
+      writeBefore('B', para('Y')),
+      writeBefore('B', para('Z')),
     ],
   },
   {
     name: 'inserts spread across four different slots',
     ops: [
-      { op: 'insert_block_after', referenceId: 'A', block: para('W') },
-      { op: 'insert_block_before', referenceId: 'C', block: para('X') },
-      { op: 'append_block', block: para('Y') },
-      { op: 'insert_block_at_start', block: para('Z') },
+      writeAfter('A', para('W')),
+      writeBefore('C', para('X')),
+      append(para('Y')),
+      writeBefore('A', para('Z')),
     ],
   },
   {
     name: 'both sides of one anchor, interleaved',
     ops: [
-      { op: 'insert_block_after', referenceId: 'A', block: para('W') },
-      { op: 'insert_block_before', referenceId: 'A', block: para('X') },
-      { op: 'insert_block_after', referenceId: 'A', block: para('Y') },
-      { op: 'insert_block_before', referenceId: 'A', block: para('Z') },
+      writeAfter('A', para('W')),
+      writeBefore('A', para('X')),
+      writeAfter('A', para('Y')),
+      writeBefore('A', para('Z')),
     ],
   },
   {
     name: 'an append and a trailing insert competing for the tail',
     ops: [
-      { op: 'append_block', block: para('X') },
-      { op: 'insert_block_after', referenceId: 'C', block: para('Y') },
-      { op: 'append_block', block: para('Z') },
+      append(para('X')),
+      writeAfter('C', para('Y')),
+      append(para('Z')),
     ],
   },
 ];
@@ -170,7 +178,7 @@ describe('accepting changes is order-independent', () => {
         for (const order of permutations(chosen)) {
           expect(
             acceptOneByOne(doc, set, order),
-            `accepting ${order.map((c) => c.producesBlockId ?? c.id).join(' then ')}`,
+            `accepting ${order.map((c) => c.producesBlockIds[0] ?? c.id).join(' then ')}`,
           ).toBe(expected);
         }
       }
@@ -181,9 +189,9 @@ describe('accepting changes is order-independent', () => {
     // The regression this suite locks down: applying the raw operation against
     // the live document, which is what `settle` used to do.
     const set = batch([
-      { op: 'append_block', block: para('X') },
-      { op: 'append_block', block: para('Y') },
-      { op: 'append_block', block: para('Z') },
+      append(para('X')),
+      append(para('Y')),
+      append(para('Z')),
     ]);
     const [x, y, z] = takeItems(set.changes, 3);
 
@@ -207,7 +215,7 @@ describe('the preview is the outcome', () => {
       expect(orphans).toEqual([]);
 
       const previewed = rows.map((row) =>
-        row.kind === 'block' ? row.block.id : row.change.producesBlockId,
+        row.kind === 'block' ? row.block.id : row.change.producesBlockIds.join(','),
       );
       expect(previewed.join(',')).toBe(acceptAll(doc, set, set.changes));
     });
@@ -217,9 +225,9 @@ describe('the preview is the outcome', () => {
 describe('chained inserts', () => {
   const chained = () =>
     batch([
-      { op: 'insert_block_after', referenceId: 'A', block: para('X') },
-      { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
-      { op: 'insert_block_after', referenceId: 'Y', block: para('Z') },
+      writeAfter('A', para('X')),
+      writeAfter('X', para('Y')),
+      writeAfter('Y', para('Z')),
     ]);
 
   it('render in place rather than as orphans at the end of the document', () => {
@@ -229,7 +237,7 @@ describe('chained inserts', () => {
     // document yet, so the two changes anchored to it and to `Y` had no row.
     expect(orphans).toEqual([]);
     expect(
-      rows.map((row) => (row.kind === 'block' ? row.block.id : row.change.producesBlockId)).join(','),
+      rows.map((row) => (row.kind === 'block' ? row.block.id : row.change.producesBlockIds.join(','))).join(','),
     ).toBe('A,X,Y,Z,B,C');
   });
 
@@ -243,8 +251,8 @@ describe('changes spread across several batches', () => {
   // One operation per batch is the ordinary shape of a conversation: the
   // author asks for one thing, then another, and both are still open.
   const twoBatches = () => [
-    batch([{ op: 'append_block', block: para('X') }], { toolCallId: 'call_1' }),
-    batch([{ op: 'append_block', block: para('Y') }], { toolCallId: 'call_2' }),
+    batch([append(para('X'))], { toolCallId: 'call_1' }),
+    batch([append(para('Y'))], { toolCallId: 'call_2' }),
   ];
 
   function acceptAcross(sets: ChangeSet[], order: Array<[number, number]>): string {
@@ -281,9 +289,9 @@ describe('changes spread across several batches', () => {
 
 /**
  * Inserts are made to commute by re-anchoring them. Deletions and moves cannot
- * be — a delete removes the anchor others are addressed to, and a reorder's
- * index means different things in two different documents — so they are
- * serialised instead, and the review refuses to offer the out-of-order accept.
+ * be — a delete removes the anchor others are addressed to, and a move changes
+ * what stands next to what — so they are serialised instead, and the review
+ * refuses to offer the out-of-order accept.
  */
 describe('changes that cannot be commuted are gated instead', () => {
   /** Every order the review would actually permit, accepting everything. */
@@ -333,29 +341,36 @@ describe('changes that cannot be commuted are gated instead', () => {
     {
       name: 'an insert anchored to a block the same batch deletes',
       ops: [
-        { op: 'insert_block_after', referenceId: 'A', block: para('X') },
-        { op: 'delete_block', blockId: 'A' },
+        writeAfter('A', para('X')),
+        deleteBlocks('A'),
       ],
     },
     {
       name: 'a delete followed by an insert against the same block',
       ops: [
-        { op: 'delete_block', blockId: 'B' },
-        { op: 'insert_block_after', referenceId: 'B', block: para('X') },
+        deleteBlocks('B'),
+        writeAfter('B', para('X')),
       ],
     },
     {
-      name: 'an insert and a move competing over absolute indexes',
+      name: 'an insert and a move next to the same block',
       ops: [
-        { op: 'insert_block_at_start', block: para('X') },
-        { op: 'reorder_block', blockId: 'A', toIndex: 2 },
+        writeBefore('A', para('X')),
+        moveBlock('C', 'before', 'A'),
       ],
     },
     {
       name: 'a move followed by an insert against the moved block',
       ops: [
-        { op: 'reorder_block', blockId: 'C', toIndex: 0 },
-        { op: 'insert_block_after', referenceId: 'C', block: para('X') },
+        moveBlock('C', 'before', 'A'),
+        writeAfter('C', para('X')),
+      ],
+    },
+    {
+      name: 'an insert anchored to one of the blocks a deletion of two removes',
+      ops: [
+        writeAfter('B', para('X')),
+        deleteBlocks('A', 'B'),
       ],
     },
   ];
@@ -374,8 +389,8 @@ describe('changes that cannot be commuted are gated instead', () => {
 describe('a change whose block really is gone', () => {
   it('is still reported as an orphan', () => {
     const set = batch([
-      { op: 'replace_block', blockId: 'deleted', block: { html: 'new' } },
-      { op: 'insert_block_after', referenceId: 'deleted', block: para('X') },
+      rewrite('deleted', para('deleted', 'new')),
+      writeAfter('deleted', para('X')),
     ]);
     const { orphans } = projectDocument(doc, [set]);
     // Both of them: the rewrite of the missing block as well as the insert
@@ -386,7 +401,7 @@ describe('a change whose block really is gone', () => {
   });
 
   it('cannot be accepted, and says so rather than guessing', () => {
-    const set = batch([{ op: 'insert_block_after', referenceId: 'deleted', block: para('X') }]);
+    const set = batch([writeAfter('deleted', para('X'))]);
     expect(resolveAcceptOp(itemAt(set.changes, 0), [set], doc)).toBeNull();
   });
 });
@@ -400,59 +415,59 @@ describe('a change whose block really is gone', () => {
 describe('rejecting an insert that others continue from', () => {
   const projected = (sets: ChangeSet[]) =>
     projectDocument(doc, sets)
-      .rows.map((row) => (row.kind === 'block' ? row.block.id : row.change.producesBlockId))
+      .rows.map((row) => (row.kind === 'block' ? row.block.id : row.change.producesBlockIds.join(',')))
       .join(',');
 
   const CHAINS: Array<{ name: string; ops: ToolOperation[] }> = [
     {
       name: 'a heading and three paragraphs, each after the one before',
       ops: [
-        { op: 'insert_block_after', referenceId: 'A', block: para('H') },
-        { op: 'insert_block_after', referenceId: 'H', block: para('P1') },
-        { op: 'insert_block_after', referenceId: 'P1', block: para('P2') },
-        { op: 'insert_block_after', referenceId: 'P2', block: para('P3') },
+        writeAfter('A', para('H')),
+        writeAfter('H', para('P1')),
+        writeAfter('P1', para('P2')),
+        writeAfter('P2', para('P3')),
       ],
     },
     {
       name: 'a continuation whose anchor shares a slot with a later sibling',
       ops: [
-        { op: 'insert_block_after', referenceId: 'A', block: para('X') },
-        { op: 'insert_block_after', referenceId: 'A', block: para('V') },
-        { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
+        writeAfter('A', para('X')),
+        writeAfter('A', para('V')),
+        writeAfter('X', para('Y')),
       ],
     },
     {
       name: 'continuations on both sides of the rejected block',
       ops: [
-        { op: 'insert_block_after', referenceId: 'A', block: para('X') },
-        { op: 'insert_block_before', referenceId: 'X', block: para('Q1') },
-        { op: 'insert_block_before', referenceId: 'X', block: para('Q2') },
-        { op: 'insert_block_after', referenceId: 'X', block: para('Y1') },
-        { op: 'insert_block_after', referenceId: 'X', block: para('Y2') },
+        writeAfter('A', para('X')),
+        writeBefore('X', para('Q1')),
+        writeBefore('X', para('Q2')),
+        writeAfter('X', para('Y1')),
+        writeAfter('X', para('Y2')),
       ],
     },
     {
       name: 'a chain that starts before an existing block',
       ops: [
-        { op: 'insert_block_before', referenceId: 'B', block: para('X') },
-        { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
-        { op: 'insert_block_after', referenceId: 'Y', block: para('Z') },
+        writeBefore('B', para('X')),
+        writeAfter('X', para('Y')),
+        writeAfter('Y', para('Z')),
       ],
     },
     {
-      name: 'a chain at the start of the document, with a later start insert',
+      name: 'a chain before the first block, with a later write before it',
       ops: [
-        { op: 'insert_block_at_start', block: para('X') },
-        { op: 'insert_block_at_start', block: para('W') },
-        { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
+        writeBefore('A', para('X')),
+        writeBefore('A', para('W')),
+        writeAfter('X', para('Y')),
       ],
     },
     {
       name: 'a chain appended to the end',
       ops: [
-        { op: 'append_block', block: para('X') },
-        { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
-        { op: 'append_block', block: para('Z') },
+        append(para('X')),
+        writeAfter('X', para('Y')),
+        append(para('Z')),
       ],
     },
   ];
@@ -464,7 +479,7 @@ describe('rejecting an insert that others continue from', () => {
 
       for (const rejectedChange of set.changes) {
         const { sets, rejected } = rejectChange([set], rejectedChange.id);
-        const label = `rejecting ${rejectedChange.producesBlockId}`;
+        const label = `rejecting ${rejectedChange.producesBlockIds.join(',')}`;
         // Only the rejected block goes; nothing else is taken with it.
         expect(rejected, label).toEqual([rejectedChange.id]);
 
@@ -473,7 +488,7 @@ describe('rejecting an insert that others continue from', () => {
 
         const expected = before
           .split(',')
-          .filter((id) => id !== rejectedChange.producesBlockId)
+          .filter((id) => !rejectedChange.producesBlockIds.includes(id))
           .join(',');
         // The preview shows the section without the rejected paragraph…
         expect(projected(sets), label).toBe(expected);
@@ -503,7 +518,7 @@ describe('rejecting an insert that others continue from', () => {
     const moved = itemAt(sets, 0).changes.find((change) => change.id === second.id)!;
     // Now addressed to the heading, which is still to be decided.
     expect(moved).toMatchObject({ anchorBlockId: 'H', placement: 'after', dependsOn: [heading.id] });
-    expect(moved.op).toMatchObject({ op: 'insert_block_after', referenceId: 'H' });
+    expect(moved.op).toMatchObject({ op: 'write_blocks', position: 'after', blockId: 'H' });
 
     const { sets: afterHeading } = rejectChange(sets, heading.id);
     const top = itemAt(afterHeading, 0).changes.find((change) => change.id === second.id)!;
@@ -523,19 +538,19 @@ describe('rejecting an insert that others continue from', () => {
 
   it('still rejects a change to the block that will never exist, and says so', () => {
     const set = batch([
-      { op: 'insert_block_after', referenceId: 'A', block: para('X') },
-      { op: 'insert_block_after', referenceId: 'X', block: para('Y') },
-      { op: 'replace_block', blockId: 'X', block: { html: 'X, rewritten' } },
+      writeAfter('A', para('X')),
+      writeAfter('X', para('Y')),
+      rewrite('X', para('X', 'X, rewritten')),
     ]);
-    const [insert, continuation, rewrite] = takeItems(set.changes, 3);
+    const [insert, continuation, rewritten] = takeItems(set.changes, 3);
 
     // What the card asks about before rejecting.
     const plan = planRejection(insert.id, [set]);
     expect(plan.reanchored.map((change) => change.id)).toEqual([continuation.id]);
-    expect(plan.cascaded.map((change) => change.id)).toEqual([rewrite.id]);
+    expect(plan.cascaded.map((change) => change.id)).toEqual([rewritten.id]);
 
     const { sets, rejected, reanchored } = rejectChange([set], insert.id);
-    expect(rejected).toEqual([insert.id, rewrite.id]);
+    expect(rejected).toEqual([insert.id, rewritten.id]);
     expect(reanchored).toEqual([continuation.id]);
     expect(sets[0]?.changes.find((change) => change.id === continuation.id)?.status).toBe('pending');
   });

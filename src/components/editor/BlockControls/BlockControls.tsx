@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ElementType, type KeyboardEvent } from 'react';
 import { cn } from '@/lib/utils';
+import { openImageUpload } from '../blocks/ImageBlock/imageUpload';
 import { lastInputWasPointer } from '@/lib/inputModality';
 import { focusQuietly } from '@/components/ui/quietFocus';
 import {
@@ -37,6 +38,7 @@ import { useToast } from '@/components/ui/toastContext';
 import { openAskAi } from '../AskAi/askAiEvents';
 import { openSlashMenu } from '../SlashMenu/slashMenuEvents';
 import { blockLink } from './blockLink';
+import { InstructionsDialog } from '../AssistantInstructions/InstructionsDialog';
 import {
   ArrowDown,
   ArrowUp,
@@ -222,6 +224,7 @@ export const BlockControls = memo(function BlockControls({
   const locked = block.locked === true;
   const draggedRef = useRef(false);
   const handleRef = useRef<HTMLButtonElement | null>(null);
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
   // Set when the menu closes because of a click or focus elsewhere: that
   // target keeps focus instead of the handle.
   const closedOutsideRef = useRef(false);
@@ -265,6 +268,7 @@ export const BlockControls = memo(function BlockControls({
 
   const insert = useCallback(
     (where: 'before' | 'after', kind: BlockKindId, withMenu = false) => {
+      if (kind === 'image') { openImageUpload(id, where, false); return; }
       const fresh = blankBlockOfKind(uid(), kind);
       if (where === 'after') insertBlocksAfter(id, [fresh]);
       else insertBlockBeforeExact(id, fresh);
@@ -360,7 +364,9 @@ export const BlockControls = memo(function BlockControls({
       { id: 'link', group: 'edit', label: 'Copy link to block', icon: Link2, onSelect: () => void copyText(blockLink(id), 'Link to block') },
       { id: 'up', group: 'move', label: 'Move up', icon: ArrowUp, shortcut: `${MOD}⇧↑`, disabled: isFirst || locked, onSelect: () => moveTargets(-1) },
       { id: 'down', group: 'move', label: 'Move down', icon: ArrowDown, shortcut: `${MOD}⇧↓`, disabled: isLast || locked, onSelect: () => moveTargets(1) },
-      { id: 'ai', group: 'ai', label: 'Ask AI', icon: Sparkles, shortcut: `${MOD}J`, disabled: locked, className: 'text-ai [&>svg]:text-ai', onSelect: () => openAskAi({ blockId: id }) },
+      // As Mod+J: a locked block can be asked about, and its result goes in
+      // below or as a note, never over it (the prompt says so).
+      { id: 'ai', group: 'ai', label: 'Ask AI', icon: Sparkles, shortcut: `${MOD}J`, className: 'text-ai [&>svg]:text-ai', onSelect: () => openAskAi({ blockId: id }) },
       { id: 'hide', group: 'flags', label: block.aiHidden ? 'Show to assistant' : 'Hide from assistant', icon: block.aiHidden ? Eye : EyeOff, keywords: 'ai private', onSelect: () => toggleTargets('aiHidden') },
       { id: 'lock', group: 'flags', label: block.locked ? 'Unlock block' : 'Lock block', icon: block.locked ? Unlock : Lock, keywords: 'protect', onSelect: () => toggleTargets('locked') },
       { id: 'markdown', group: 'more', label: 'Copy as Markdown', icon: ClipboardCopy, keywords: 'md', onSelect: () => void copyText(blocksToMarkdown(targetIds().map((target) => getBlock(target)).filter((found): found is Block => Boolean(found))), 'Markdown') },
@@ -716,6 +722,10 @@ export const BlockControls = memo(function BlockControls({
                         {block.type === 'heading' && (
                           <>
                             <DropdownMenuSeparator />
+                            <DropdownMenuItem disabled={locked} onSelect={() => setInstructionsOpen(true)}>
+                              <Sparkles aria-hidden="true" />
+                              Assistant instructions…
+                            </DropdownMenuItem>
                             <SegmentedChoice
                               label="Level"
                               options={HEADING_LEVELS}
@@ -740,6 +750,8 @@ export const BlockControls = memo(function BlockControls({
         </DropdownMenu>
       </div>
       </TooltipProvider>
+      {block.type === 'heading' && <InstructionsDialog open={instructionsOpen} onOpenChange={setInstructionsOpen}
+        blockId={id} returnFocus={() => handleRef.current} />}
     </>
   );
 });

@@ -63,8 +63,11 @@ beforeEach(() => {
   setView.mockReset();
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // The menu's Radix focus scope schedules its unmount event on the next
+  // turn. Do not let it dispatch into an element from a retired jsdom realm.
+  await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
   vi.restoreAllMocks();
 });
 

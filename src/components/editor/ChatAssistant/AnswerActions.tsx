@@ -1,11 +1,12 @@
 import { useContext, useEffect, useState } from 'react';
 import { Check, FileInput, RotateCcw, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useEditorActions, usePageReadOnly, type Block } from '@/editor';
+import { useCitationProcessor, useEditorActions, usePageReadOnly, type Block } from '@/editor';
 import type { AgentSource } from '@/api/assistant/streamParser';
 import { rememberedBlockId, useEditorFocus } from '@/components/editor/References';
 import { ToastContext } from '@/components/ui/toastContext';
-import { replyToBlocks } from './replyToBlocks';
+import { resolveAssistantOutput } from '@/editor/assistantOutput';
+import { assistantOutputBlocks } from '@/editor/markdown';
 import { answerForClipboard } from './answerClipboard';
 import { ActionButton, CopyButton, REVEAL_ON_HOVER } from './MessageActions';
 import { ReplyDetails } from './ReplyDetails';
@@ -56,6 +57,8 @@ export function AnswerActions({
   pinned: boolean;
 }) {
   const { insertBlocksAfter, getBlockIds, getBlock, markRecentlyChanged, upsertSources } = useEditorActions();
+  // Copy writes the answer's sources as a reference list, in a CSL style.
+  useCitationProcessor(sources.length > 0);
   // A viewer copies an answer; nothing puts it into the page.
   const readOnly = usePageReadOnly();
   const focus = useEditorFocus();
@@ -66,7 +69,7 @@ export function AnswerActions({
 
   // Below where the author was writing, or at the end of the page.
   const insert = () => {
-    const blocks = replyToBlocks(text, sources);
+    const blocks = assistantOutputBlocks(resolveAssistantOutput(text, sources));
     if (blocks.length === 0) return;
     const ids = getBlockIds();
     const remembered = rememberedBlockId();
@@ -89,11 +92,7 @@ export function AnswerActions({
           : [],
       ),
     );
-    upsertSources(
-      sources
-        .filter((source) => citedKeys.has(source.key))
-        .map(({ id: _id, origin: _origin, ...record }) => record),
-    );
+    upsertSources(sources.map((source) => source.record).filter((record) => citedKeys.has(record.key)));
     markRecentlyChanged(added);
     setPlaced(where);
     flagInserted();

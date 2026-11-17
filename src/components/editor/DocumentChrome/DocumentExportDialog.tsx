@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import { RefreshCw } from 'lucide-react';
-import { useDocumentActions, useDocumentId, useEditorActions } from '@/editor';
+import { loadCitationProcessor, useBibliography, useDocumentActions, useDocumentId, useEditorActions, useEditorDoc } from '@/editor';
+import { auditCounts, useReferenceHealth, type ReferenceCounts } from '@/components/editor/References/referenceHealth';
+import { shortDateTime } from '@/components/layout/editedLabel';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -20,8 +22,10 @@ import { useToast } from '@/components/ui/toastContext';
 import { useReturnFocus } from '@/hooks/useReturnFocus';
 import { downloadBlob, exportFilename } from '@/export/download';
 import { documentToMarkdown } from '@/export/markdown';
+import { markdownImageBundle, prepareExportImages } from '@/export/images';
 import { printStandaloneHtml } from '@/export/print';
 import { ApiError } from '@/api/errors';
+import { ImageExportNote } from './ImageExportNote';
 import { describeLatexExportError, exportDocumentLatex } from '@/data/documentExport';
 import type {
   AiBeatExportMode,
@@ -47,7 +51,7 @@ const FORMAT_NOTES: Record<ExportFormat, string> = {
   pdf: 'Opens your browser’s print dialog; choose Save as PDF there.',
   html: 'One file with its styles and maths inside, readable offline.',
   markdown:
-    'Citations are written as Pandoc keys, such as [@10.1145/3290605]. Export the .bib from Sources to go with them.',
+    'Citations use Pandoc keys. Pages with images export as a ZIP with an assets/ folder and their original files.',
   latex:
     'The server renders the saved page, so edits waiting for autosave are saved first. It always includes the title and the reference list.',
 };
@@ -65,6 +69,46 @@ const DONE_TITLES: Record<ExportFormat, string> = {
   markdown: 'Markdown exported',
   latex: 'LaTeX exported',
 };
+
+/**
+ * What the page's references come to before a file is made (09 §7): the
+ * retracted works, those not verified, and citations with no entry in the
+ * page's sources. From the last reference check when there is one, else
+ * from the records the page holds. It reports, and stops no export.
+ */
+function ReferenceCountsNote() {
+  const { entries } = useBibliography();
+  const { doc } = useEditorDoc();
+  const { report, check, checking } = useReferenceHealth();
+  if (entries.length === 0) return null;
+  const held = new Set((doc.sources ?? []).map((source) => source.key));
+  const counts: ReferenceCounts = report
+    ? auditCounts(report)
+    : {
+        retracted: entries.filter((entry) => entry.record?.flags.includes('retracted')).length,
+        unverified: entries.filter((entry) => entry.record?.state !== 'verified').length,
+        orphans: entries.filter((entry) => !held.has(entry.key)).length,
+      };
+  const parts = [
+    `${counts.retracted} retracted`,
+    `${counts.unverified} not verified`,
+    `${counts.orphans} cited with no entry in the sources`,
+  ];
+  const attention = counts.retracted + counts.unverified + counts.orphans > 0;
+  return (
+    <div data-reference-counts className="mt-5 rounded-md bg-subtle px-3 py-2 text-xs text-muted-foreground" aria-live="polite">
+      <p>
+        <span className={attention ? 'font-medium text-foreground' : undefined}>References: {parts.join(' · ')}.</span>{' '}
+        {report ? `From the reference check of ${shortDateTime(Date.parse(report.checked_at))}.` : 'From the page’s own records; not checked yet.'}
+      </p>
+      {check && (
+        <Button type="button" variant="link" size="xs" className="-ml-1 h-auto px-1" onClick={() => void check()} disabled={checking}>
+          {checking ? 'Checking references…' : report ? 'Check again' : 'Check references'}
+        </Button>
+      )}
+    </div>
+  );
+}
 
 /** Thrown when the edits could not be saved before a server-side export. */
 class UnsavedEditsError extends Error {}
@@ -110,10 +154,10 @@ export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props)
     }
     const id = await ensureRemoteDocument();
     if (!id) throw new UnsavedEditsError('Check your connection and try again.');
-    const { source, filename } = await exportDocumentLatex(workspaceId, id);
+    const { blob, filename } = await exportDocumentLatex(workspaceId, id);
     downloadBlob(
-      new Blob([source], { type: 'application/x-tex;charset=utf-8' }),
-      filename ?? exportFilename(name, 'tex'),
+      blob,
+      filename ?? exportFilename(name, blob.type === 'application/zip' ? 'zip' : 'tex'),
     );
   };
 
@@ -127,15 +171,19 @@ export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props)
         finish();
         return;
       }
+      // The citations and the reference list in the page's style, never the neutral form.
+      await loadCitationProcessor();
+      const images = await prepareExportImages(workspaceId, snapshot.document, format !== 'markdown');
       if (format === 'markdown') {
         const markdown = documentToMarkdown(snapshot.document, {
           includeTitle,
           includeReferences,
           aiBeat,
+          imagePaths: new Map([...images].map(([id, image]) => [id, image.path])),
         });
         downloadBlob(
-          new Blob([markdown], { type: 'text/markdown;charset=utf-8' }),
-          exportFilename(snapshot.document.name, 'md'),
+          images.size ? markdownImageBundle(markdown, images) : new Blob([markdown], { type: 'text/markdown;charset=utf-8' }),
+          exportFilename(snapshot.document.name, images.size ? 'zip' : 'md'),
         );
         finish();
         return;
@@ -157,7 +205,7 @@ export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props)
         import('@/export/diagrams'),
       ]);
       const diagrams = await renderDocumentDiagrams(snapshot.document.blocks);
-      const html = renderStandaloneHtml(snapshot.document, options, exportSnapshot, diagrams);
+      const html = renderStandaloneHtml(snapshot.document, options, exportSnapshot, diagrams, images);
 
       if (format === 'html') {
         downloadBlob(
@@ -237,6 +285,7 @@ export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props)
           )}
           <div id="export-format-note" className="grid gap-1 text-xs text-muted-foreground sm:col-span-2">
             <p>{FORMAT_NOTES[format]}</p>
+            {open && <ImageExportNote page={pageSize} orientation={orientation} />}
             {format === 'latex' && (
               <p>
                 Structured figures are printed as their JSON source and diagrams as Mermaid code. To get a figure as
@@ -312,6 +361,8 @@ export function DocumentExportDialog({ open, onOpenChange, returnFocus }: Props)
             </>
           )}
         </div>
+
+        <ReferenceCountsNote />
 
         {failure && (
           <Alert className="mt-5">

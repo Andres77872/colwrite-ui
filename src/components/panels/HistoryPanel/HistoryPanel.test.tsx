@@ -108,7 +108,7 @@ function panelTree(documentId: string | null, options: PanelOptions = {}): React
   }
   if (options.tab) {
     tree = (
-      <PanelsContext.Provider value={{ isOpen: true, activeTool: options.tab } as PanelsContextValue}>
+      <PanelsContext.Provider value={{ isOpen: true, activePanel: options.tab } as PanelsContextValue}>
         {tree}
       </PanelsContext.Provider>
     );

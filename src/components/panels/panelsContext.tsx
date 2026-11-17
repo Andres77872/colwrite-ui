@@ -2,16 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isBoolean, isNumber, usePersistentState } from '@/hooks/usePersistentState';
 import { useIsDesktop, useMediaQuery } from '@/hooks/useMediaQuery';
 import { PANEL_CONFIG } from './panelConfig';
-import { isPersistedTab, isResearchSource, tabForTool } from './toolsConfig';
+import { isPersistedTab, isResearchSource, tabForPanel } from './sidebarPanels';
 import { panelKey } from '@/lib/storageKeys';
 import {
   PanelsContext,
   type ResearchSourceId,
   type SidebarIntent,
   type SidebarTab,
-  type ToolId,
+  type PanelId,
 } from './panelsContextState';
-export type { ToolId } from './panelsContextState';
+export type { PanelId } from './panelsContextState';
 
 /* ============================================
    PANEL DIMENSIONS
@@ -33,7 +33,7 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   // From a tablet up, the right sidebar is a column beside the page (narrower
   // and fixed below the desktop width; see AppShell), not a sheet over it.
   const tabletUp = useMediaQuery(TOOLS_DOCK_QUERY);
-  const toolsDocked = isDesktop || tabletUp;
+  const panelsDocked = isDesktop || tabletUp;
 
   // Layout choices survive a reload — re-dragging panels every session was
   // the single most repeated interaction in the app.
@@ -46,12 +46,12 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
   );
   const [researchSource, setResearchSource] = usePersistentState<ResearchSourceId>(
     panelKey('researchSource'),
-    'arxiv',
+    'papers',
     isResearchSource,
   );
   // Transient, never persisted: the JSON view is a developer detour.
   const [jsonOpen, setJsonOpen] = useState(false);
-  const activeTool: SidebarTab = jsonOpen ? 'json' : storedTab;
+  const activePanel: SidebarTab = jsonOpen ? 'json' : storedTab;
   const [intent, setIntent] = useState<(SidebarIntent & { id: number }) | null>(null);
   const intentId = useRef(0);
 
@@ -102,19 +102,19 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
     };
   }, [isDesktop]);
 
-  const setTool = useCallback(
-    (tool: ToolId | null) => {
-      if (tool === null) {
+  const setPanel = useCallback(
+    (panel: PanelId | null) => {
+      if (panel === null) {
         setIsOpen(false);
         return;
       }
-      if (tool === 'json') {
+      if (panel === 'json') {
         setJsonOpen(true);
       } else {
         setJsonOpen(false);
         // Research sources open Research; JSON (handled above) is never stored.
-        setStoredTab(tabForTool(tool) as Exclude<SidebarTab, 'json'>);
-        if (isResearchSource(tool)) setResearchSource(tool);
+        setStoredTab(tabForPanel(panel) as Exclude<SidebarTab, 'json'>);
+        if (isResearchSource(panel)) setResearchSource(panel);
       }
       setIsOpen(true);
     },
@@ -123,10 +123,10 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
 
   const openSidebar = useCallback(
     (tab: SidebarTab, next?: SidebarIntent) => {
-      setTool(tab);
+      setPanel(tab);
       if (next) setIntent({ ...next, id: ++intentId.current });
     },
-    [setTool],
+    [setPanel],
   );
 
   const open = useCallback(() => setIsOpen(true), [setIsOpen]);
@@ -137,15 +137,15 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
     [setLeftCollapsed],
   );
 
-  const assistantOpen = isOpen && activeTool === 'assistant';
+  const assistantOpen = isOpen && activePanel === 'assistant';
   const setAssistantOpen = useCallback(
     (next: SetStateAction<boolean>) => {
       const value = typeof next === 'function' ? next(assistantOpen) : next;
-      if (value) setTool('assistant');
+      if (value) setPanel('assistant');
       // Closing "the assistant" only closes the sidebar if that is what it shows.
       else if (assistantOpen) setIsOpen(false);
     },
-    [assistantOpen, setIsOpen, setTool],
+    [assistantOpen, setIsOpen, setPanel],
   );
   const toggleAssistant = useCallback(
     () => setAssistantOpen((v) => !v),
@@ -176,8 +176,8 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(
     () => ({
-      activeTool,
-      setTool,
+      activePanel,
+      setPanel,
       researchSource,
       setResearchSource,
       openSidebar,
@@ -194,7 +194,7 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       setLeftCollapsed,
       toggleLeftCollapsed,
       isDesktop,
-      toolsDocked,
+      panelsDocked,
       mobileNavOpen,
       setMobileNavOpen,
       assistantOpen,
@@ -205,8 +205,8 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       assistantOpen,
       setAssistantOpen,
       toggleAssistant,
-      activeTool,
-      setTool,
+      activePanel,
+      setPanel,
       researchSource,
       setResearchSource,
       openSidebar,
@@ -223,7 +223,7 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       setLeftCollapsed,
       toggleLeftCollapsed,
       isDesktop,
-      toolsDocked,
+      panelsDocked,
       mobileNavOpen,
     ],
   );

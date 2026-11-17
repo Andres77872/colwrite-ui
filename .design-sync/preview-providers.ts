@@ -27,7 +27,8 @@
 // exports and nothing more.
 
 import { createElement, type ReactNode } from 'react';
-import type { AgentToolsContextValue } from '../src/components/preferences/agentToolsContextState';
+import { catalogValue } from '../src/components/preferences/assistantCatalogContextState';
+import { assistantCatalog } from '../src/dev/msw/assistantCatalog';
 import {
   EditorActionsContext,
   EditorActiveBlockContext,
@@ -35,6 +36,12 @@ import {
   type EditorActionsContextValue,
   type EditorStateContextValue,
 } from '../src/editor/editorContextState';
+import {
+  DocumentActionsContext,
+  DocumentSessionContext,
+  type DocumentActionsValue,
+  type DocumentSessionValue,
+} from '../src/editor/documentSessionState';
 
 export { PanelsProvider } from '../src/components/panels';
 export { ViewProvider } from '../src/components/layout/ViewContext';
@@ -51,6 +58,12 @@ export { AuthContext } from '../src/components/auth/authContextState';
 // preview must be able to hand a component a document, a pending proposal or a
 // chat session outright, since none of that state is reachable offline.
 export { EditorContext } from '../src/editor/editorContextState';
+import {
+  DocumentActionsContext,
+  DocumentSessionContext,
+  type DocumentActionsValue,
+  type DocumentSessionValue,
+} from '../src/editor/documentSessionState';
 // The editor now publishes three contexts — state (`useEditorState`), actions
 // (`useEditorActions`) and the active block (`useActiveBlock`) — so an
 // editable re-renders on focus moves without re-rendering on every keystroke.
@@ -59,6 +72,12 @@ export { EditorContext } from '../src/editor/editorContextState';
 // throw without their provider. `LiteralEditor` hands one literal value to all
 // three; every editor preview goes through it.
 export { EditorActionsContext, EditorActiveBlockContext } from '../src/editor/editorContextState';
+import {
+  DocumentActionsContext,
+  DocumentSessionContext,
+  type DocumentActionsValue,
+  type DocumentSessionValue,
+} from '../src/editor/documentSessionState';
 
 const noop = () => {};
 
@@ -66,7 +85,9 @@ const noop = () => {};
  * One literal editor for a preview — the state, the actions and the active
  * block, from a single object. `value` is the same partial, cast literal the
  * previews always built (see NOTES.md "Editor previews"); `activeId` is which
- * block, if any, reads as focused.
+ * block, if any, reads as focused. The same literal is the page's session
+ * (`documentId`) and its actions (`ensureRemoteDocument`, `hasPendingEdits`,
+ * `saveRemote`), which an AI passage reads to save the page before a run.
  */
 export function LiteralEditor({
   value,
@@ -78,12 +99,20 @@ export function LiteralEditor({
   children?: ReactNode;
 }) {
   return createElement(
-    EditorStateContext.Provider,
-    { value: value as EditorStateContextValue },
+    DocumentSessionContext.Provider,
+    { value: value as DocumentSessionValue },
     createElement(
-      EditorActionsContext.Provider,
-      { value: value as EditorActionsContextValue },
-      createElement(EditorActiveBlockContext.Provider, { value: { activeId, setActive: noop } }, children),
+      DocumentActionsContext.Provider,
+      { value: value as DocumentActionsValue },
+      createElement(
+        EditorStateContext.Provider,
+        { value: value as EditorStateContextValue },
+        createElement(
+          EditorActionsContext.Provider,
+          { value: value as EditorActionsContextValue },
+          createElement(EditorActiveBlockContext.Provider, { value: { activeId, setActive: noop } }, children),
+        ),
+      ),
     ),
   );
 }
@@ -97,34 +126,32 @@ export { BibliographyContext } from '../src/editor/bibliographyContextState';
 export { buildBibliography } from '../src/editor/citations';
 export { ProposalsContext } from '../src/editor/proposalsContextState';
 export { ChatSessionsContext } from '../src/components/chat/chatSessionsState';
-export { AgentToolsContext } from '../src/components/preferences/agentToolsContextState';
+export { AssistantCatalogContext } from '../src/components/preferences/assistantCatalogContextState';
 
-// ── Agent-tool capability fixture ────────────────────────────────────────
-// `AgentToolsProvider` GETs /users/me/agent-tools on mount and FAILS CLOSED
-// until the server answers, so under a static capture every gated affordance
-// disappears: AIActionMenu drops each `agent_tool` action (the menu empties
-// and the whole toolbar renders nothing) and CitationInline hides its arXiv
-// and Semantic Scholar lookups. Mounting the real provider would therefore
-// both fire a failing request and photograph the degraded state.
+// ── Assistant catalog fixture ────────────────────────────────────────────
+// `AssistantCatalogProvider` GETs the workspace's assistant catalog on mount
+// and FAILS CLOSED until it answers, so under a static capture every gated
+// affordance disappears: Ask AI and the toolbar's "…" menu lose the server's
+// presets, CitationInline hides its Semantic Scholar lookup, and tool rows
+// fall back to their ids. Mounting the real provider would both fire a
+// failing request and photograph the degraded state.
 //
 // This is the same treatment `EditorContext` gets, for the same reason: one
-// literal value, no network, deterministic across syncs. Four components read
-// it (AIActionMenu, FloatingToolbar via AIActionMenu, CitationInline, and
-// ParagraphBlock via CitationInline) and between them touch only
-// `isToolEnabled`, `isSourceEnabled` and `loading` — so, exactly as with
-// `EditorContextValue`'s ~50 members, the rest is a cast rather than an
-// invented copy of an API payload that would silently rot.
-//
-// It represents an account with every capability switched on, which is the
-// state worth showing on a card: the full menu, all reference sources.
-export const agentToolsAllEnabled = {
-  settings: null,
-  loading: false,
-  loaded: true,
-  error: null,
-  isToolEnabled: () => true,
-  isSourceEnabled: () => true,
-} as unknown as AgentToolsContextValue;
+// literal value, no network, deterministic across syncs. It is computed by
+// the mock API's own catalog (`src/dev/msw/assistantCatalog.ts`, a port of the
+// API's), for an owner with every switch on in a workspace that restricts
+// nothing: the full menu, every tool's name, all reference sources.
+export const assistantCatalogAllOn = catalogValue(
+  assistantCatalog({
+    account: { switches: { papers: true, web: true, workers: true, images: true }, sources: { semantic_scholar: true } },
+    policy: { web_search: true, outside_research: true, auto: true },
+    role: 'owner',
+    engine: 'gateway',
+    engines: [{ id: 'gateway', label: 'ColWrite model gateway', available: true, message: '' }],
+  }),
+  false,
+  null,
+);
 
 // ── Gaps in the ui barrel ────────────────────────────────────────────────
 // These are all real, shipped `src/components/ui` code that

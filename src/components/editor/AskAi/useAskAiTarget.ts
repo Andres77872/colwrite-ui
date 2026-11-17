@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { uid } from '@/lib/uid';
-import { blocksToMarkdown, citationLookup, inlineHtmlToMarkdown } from '@/editor/markdown';
+import { citationLookup, inlineHtmlToMarkdown } from '@/editor/markdown';
 import { htmlToText, isFigureBlock, useEditorActions, useEditorDoc, useEditorView } from '@/editor';
 import { blockText } from '@/editor/proposals';
 import { serializeEditableHtml } from '../../common/Editable/editableHtml';
 import { ASK_AI_EVENT, type AskAiRequest } from './askAiEvents';
-import type { AskAiTarget } from './AskAi';
+import type { AskAiTarget } from './target';
+
+/** How many blocks above an empty line go with it as context. */
+const NEARBY_BLOCKS = 3;
 
 /**
  * Listens for Ask AI requests and captures what they are about.
@@ -13,6 +16,10 @@ import type { AskAiTarget } from './AskAi';
  * Lives in the canvas, which renders the panel directly under the target
  * block: an in-flow panel scrolls with the document and never has to chase
  * its anchor the way a floating one does.
+ *
+ * A target is ids, plus the selected text for a selection: the server reads
+ * the page itself. A block marked "Hide from assistant" is captured as
+ * `hidden`, and the prompt refuses it rather than send anything about it.
  */
 export function useAskAiTarget() {
   const { blocks } = useEditorDoc();
@@ -50,9 +57,9 @@ export function useAskAiTarget() {
             kind: 'blocks',
             blockIds: chosen.map((block) => block.id),
             anchorId: last.id,
-            markdown: blocksToMarkdown(chosen),
             text: chosen.map(blockText).join('\n\n'),
             locked: chosen.some((block) => block.locked),
+            hidden: chosen.some((block) => block.aiHidden),
             citations: citationLookup(chosen),
             preset: request.actionId,
           };
@@ -69,6 +76,7 @@ export function useAskAiTarget() {
         blockIds: [block.id],
         anchorId: block.id,
         locked: block.locked === true,
+        hidden: block.aiHidden === true,
         citations,
         preset: request.actionId,
       };
@@ -90,27 +98,24 @@ export function useAskAiTarget() {
         ).trim();
         const selected = { ...block, html: serializeEditableHtml(holder) } as typeof block;
         const text = blockText(selected);
-        if (markdown) return { ...base, kind: 'selection', markdown, text, diffBase: selected, range };
+        if (markdown) return { ...base, kind: 'selection', selection: markdown, text, diffBase: selected, range };
       }
 
       const text = block.type === 'code' ? block.text : 'html' in block ? htmlToText(block.html) : '';
       const hasWidgets = block.type === 'paragraph' && (block.children ?? []).length > 0;
       if ((block.type === 'paragraph' || block.type === 'heading') && !text.trim() && !hasWidgets) {
         const index = all.findIndex((candidate) => candidate.id === block.id);
-        const before = all.slice(Math.max(0, index - 3), index);
-        return {
-          ...base,
-          kind: 'empty',
-          markdown: '',
-          text: '',
-          anchorText: blocksToMarkdown(before).trim() || undefined,
-        };
+        const nearby = all
+          .slice(Math.max(0, index - NEARBY_BLOCKS), index)
+          // A hidden neighbour is simply not context.
+          .filter((candidate) => !candidate.aiHidden)
+          .map((candidate) => candidate.id);
+        return { ...base, kind: 'empty', text: '', nearbyIds: nearby };
       }
       if (block.type === 'divider') return null;
       return {
         ...base,
         kind: 'block',
-        markdown: blocksToMarkdown([block]),
         text: blockText(block),
         diffBase: block,
         figure: isFigureBlock(block),

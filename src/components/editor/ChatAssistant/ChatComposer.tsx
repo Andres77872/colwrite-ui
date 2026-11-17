@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useEditorDoc } from '@/editor';
 import { refLabel } from './ChatRefTags/refTags';
-import type { RefPart } from './ChatTaggedInput/refParts';
+import type { ChatRefTag } from './ChatRefTags/refTags';
 import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
 import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
 import { ChatAttachmentPicker, DraftAttachments } from './ChatAttachments';
@@ -14,6 +14,9 @@ import type { AutoBlockedReason } from '@/editor/types';
 import { AutoModeStrip, AutoModeSwitch } from './AutoModeSwitch';
 import { CollectionPdfOffer } from './CollectionPdfOffer';
 import { AutoModeDialog } from './AutoModeDialog';
+import { EffortSwitcher, type ComposerEffort } from './EffortSwitcher';
+import { WebSwitch, type ComposerWeb } from './WebSwitch';
+import { ImageGenerationButton } from '../ImageGeneration/ImageGenerationHost';
 
 /** File data is protected during dragover; browsers still expose the Files type. */
 function hasDraggedFiles(data: DataTransfer) {
@@ -49,7 +52,6 @@ export type ComposerAuto = {
 };
 
 /** What the workspace's policy switched off for the assistant here, in words. */
-const SWITCHED_OFF_LABEL = { web_search: 'web search', outside_research: 'outside research' } as const;
 
 /**
  * Where the author writes to the assistant.
@@ -76,6 +78,8 @@ export function ChatComposer({
   auto,
   switchedOff = [],
   canUpload = true,
+  effort,
+  web,
 }: {
   value: string;
   onChange: Dispatch<SetStateAction<string>>;
@@ -90,12 +94,15 @@ export function ChatComposer({
   pickerRef: RefObject<ChatRefPickerHandle | null>;
   auto: ComposerAuto;
   /** The assistant's features the workspace switched off for everyone in it. */
-  switchedOff?: ReadonlyArray<keyof typeof SWITCHED_OFF_LABEL>;
+  /** What the workspace switched off for everyone in it, in the catalog's words. */
+  switchedOff?: readonly string[];
   /**
    * Files can be uploaded from here: images and PDFs need an editor (D6). A
    * viewer attaches a PDF already in the Library instead.
    */
   canUpload?: boolean;
+  effort?: ComposerEffort;
+  web?: ComposerWeb;
 }) {
   const hintId = useId();
   const dragDepth = useRef(0);
@@ -103,7 +110,7 @@ export function ChatComposer({
   /** The Auto warning is open. */
   const [confirmingAuto, setConfirmingAuto] = useState(false);
   const { blocks } = useEditorDoc();
-  const labelForRef = useCallback((part: RefPart) => refLabel(part, blocks), [blocks]);
+  const labelForRef = useCallback((part: ChatRefTag) => refLabel(part, blocks), [blocks]);
   const overLimit = value.length > MAX_MESSAGE_LENGTH;
   const nearLimit = value.length > MAX_MESSAGE_LENGTH * 0.8;
 
@@ -237,6 +244,9 @@ export function ChatComposer({
         </Tooltip>
 
         <ChatAttachmentPicker draft={files} disabled={isStreaming} canUpload={canUpload} />
+        <ImageGenerationButton disabled={isStreaming || !canUpload} />
+        {effort && <EffortSwitcher effort={effort} disabled={isStreaming} />}
+        {web && <WebSwitch web={web} disabled={isStreaming} />}
 
         {/* Local servers only: which engine answers (gateway, Claude Code,
             Codex). Locked while a reply runs; it applies to the next one. */}
@@ -321,9 +331,8 @@ export function ChatComposer({
  * assistant's tools off for everyone in it, so a reply that never searched
  * the web is not a surprise. Its name says what is off.
  */
-function WorkspaceLimits({ off }: { off: ReadonlyArray<keyof typeof SWITCHED_OFF_LABEL> }) {
-  const words = off.map((key) => SWITCHED_OFF_LABEL[key]);
-  const text = `${words.join(' and ').replace(/^./, (first) => first.toUpperCase())} ${words.length === 1 ? 'is' : 'are'} switched off in this workspace`;
+function WorkspaceLimits({ off }: { off: readonly string[] }) {
+  const text = off.join(' ');
   return (
     <Tooltip>
       <TooltipTrigger asChild>

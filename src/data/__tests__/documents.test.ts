@@ -63,7 +63,7 @@ describe('saveDocument and createDocument', () => {
     expect(put?.headers.get('If-Match')).toBe(etag);
     expect(put?.headers.get('Idempotency-Key')).toBeTruthy();
     const body = await jsonOf(put) as { content: Record<string, unknown> };
-    expect(Object.keys(body.content).sort()).toEqual(['blocks', 'citationStyle', 'name', 'schema_version', 'sources']);
+    expect(Object.keys(body.content).sort()).toEqual(['blocks', 'citationStyle', 'documentType', 'instructions', 'name', 'schema_version', 'sources']);
     expect(body.content).toMatchObject({ name: 'My Doc', schema_version: 1, sources: null, citationStyle: null });
     expect(saved.etag).toBe('"cw:canonical-json-v1:1:4:preview"');
   });

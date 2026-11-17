@@ -4,25 +4,25 @@ import { createContext, useContext } from 'react';
  * The right sidebar's tabs. `json` is transient: it only shows while it is
  * the active tab, and choosing any other tab dismisses it.
  */
-export type SidebarTab = 'assistant' | 'research' | 'library' | 'sources' | 'history' | 'json';
+export type SidebarTab = 'assistant' | 'research' | 'review' | 'library' | 'sources' | 'history' | 'json';
 
 /**
  * Where the Research tab searches. `pdfs` is "Search inside my PDFs", which
  * hands the query to the Library tab and shows its matches there.
  */
-export type ResearchSourceId = 'arxiv' | 'semantic-scholar' | 'colpali' | 'pdfs';
+export type ResearchSourceId = 'papers' | 'claims' | 'pdfs';
 
 /**
- * Everything `setTool` accepts: a tab, or a research source (which opens the
- * Research tab on that source). `chats` is the assistant's chat list, which
- * lives inside the Assistant tab. The source ids are also the ids the old
- * tool rail persisted, so saved preferences keep meaning something.
+ * Everything `setPanel` accepts: a tab, or a research source (which opens the
+ * Research tab on that source).
  */
-export type ToolId = SidebarTab | ResearchSourceId;
+export type PanelId = SidebarTab | ResearchSourceId;
 
 /** Context for opening the sidebar on a specific thing, not just a tab. */
 export type SidebarIntent =
   | { tab: 'research'; query: string }
+  /** Check a claim (the Research panel's claim check), with the works to judge it against. */
+  | { tab: 'research'; claim: string; sources?: string[] }
   /** Search inside every PDF, in the Library. */
   | { tab: 'library'; query: string }
   /** Browse one collection in the Library: its pages, collections and PDFs. */
@@ -33,9 +33,9 @@ type SetStateAction<T> = T | ((previous: T) => T);
 
 export type PanelsContextValue = {
   /** The sidebar's current tab. There is always one, open or not. */
-  activeTool: SidebarTab;
+  activePanel: SidebarTab;
   /** Open the sidebar on a tab or research source; `null` closes it. */
-  setTool: (tool: ToolId | null) => void;
+  setPanel: (panel: PanelId | null) => void;
   researchSource: ResearchSourceId;
   setResearchSource: (source: ResearchSourceId) => void;
   /**
@@ -63,7 +63,7 @@ export type PanelsContextValue = {
    * from 768px) rather than opening as a sheet over it. What depends on the
    * page staying in view next to the sidebar asks this, not `isDesktop`.
    */
-  toolsDocked: boolean;
+  panelsDocked: boolean;
   mobileNavOpen: boolean;
   setMobileNavOpen: (open: boolean) => void;
   /**

@@ -56,8 +56,8 @@ export function AppShell({ main, left, aside }: AppShellProps) {
     isDesktop,
     mobileNavOpen,
     setMobileNavOpen,
-    activeTool,
-    toolsDocked,
+    activePanel,
+    panelsDocked,
   } = usePanels();
   const sidebarDocked = useSidebarDocked();
   const leftAutoHidden = useLeftSidebarAutoHidden();
@@ -66,8 +66,8 @@ export function AppShell({ main, left, aside }: AppShellProps) {
   // narrower and fixed, so a tablet in portrait keeps the page in view next
   // to Research, Sources or History: where a citation lands, what a History
   // diff is compared with.
-  const tabletDock = Boolean(aside) && !isDesktop && toolsDocked;
-  useTabletDockFocus(tabletDock, isOpen, activeTool);
+  const tabletDock = Boolean(aside) && !isDesktop && panelsDocked;
+  useTabletDockFocus(tabletDock, isOpen, activePanel);
   // Both sheets open from code ("Open sidebar", Ask AI, a page-menu item),
   // never a Radix trigger, so Radix has nothing to give focus back to on
   // close. Each remembers its opener instead (a menu item resolves to the

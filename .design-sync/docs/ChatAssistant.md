@@ -30,7 +30,7 @@ providers.
 ## Usage
 
 ```jsx
-<ToolsAside />  {/* mounts <ChatAssistant /> in its AI tab */}
+<PanelsAside />  {/* mounts <ChatAssistant /> in its AI tab */}
 ```
 
 ## Composition

@@ -28,8 +28,8 @@ function Probe() {
   useEffect(() => {
     handle.current = context;
   });
-  const { activeTool, researchSource, isDesktop, isOpen, assistantOpen } = context;
-  return <output>{JSON.stringify({ activeTool, researchSource, isDesktop, isOpen, assistantOpen })}</output>;
+  const { activePanel, researchSource, isDesktop, isOpen, assistantOpen } = context;
+  return <output>{JSON.stringify({ activePanel, researchSource, isDesktop, isOpen, assistantOpen })}</output>;
 }
 
 function renderProvider() {
@@ -56,8 +56,8 @@ describe('PanelsProvider', () => {
     const state = renderProvider();
 
     expect(state()).toEqual({
-      activeTool: 'assistant',
-      researchSource: 'arxiv',
+      activePanel: 'assistant',
+      researchSource: 'papers',
       isDesktop: true,
       isOpen: false,
       assistantOpen: false,
@@ -74,7 +74,7 @@ describe('PanelsProvider', () => {
     localStorage.setItem(panelKey('tab'), JSON.stringify(saved));
     const state = renderProvider();
 
-    expect(state()).toMatchObject({ activeTool: tab, researchSource: 'arxiv' });
+    expect(state()).toMatchObject({ activePanel: tab, researchSource: 'papers' });
   });
 
   it('never reopens on the developer JSON view', () => {
@@ -82,7 +82,7 @@ describe('PanelsProvider', () => {
     localStorage.setItem(panelKey('tab'), JSON.stringify('json'));
     const state = renderProvider();
 
-    expect(state().activeTool).toBe('assistant');
+    expect(state().activePanel).toBe('assistant');
   });
 
   it('falls back to the assistant when nothing valid was saved', () => {
@@ -90,18 +90,18 @@ describe('PanelsProvider', () => {
     localStorage.setItem(panelKey('tab'), 'null');
     const state = renderProvider();
 
-    expect(state().activeTool).toBe('assistant');
+    expect(state().activePanel).toBe('assistant');
   });
 
   it('opens a research source on the Research tab with that source selected', () => {
     installDesktopMatchMedia();
     const state = renderProvider();
 
-    act(() => handle.current!.setTool('semantic-scholar'));
-    expect(state()).toMatchObject({ activeTool: 'research', researchSource: 'semantic-scholar', isOpen: true });
+    act(() => handle.current!.setPanel('papers'));
+    expect(state()).toMatchObject({ activePanel: 'research', researchSource: 'papers', isOpen: true });
 
-    act(() => handle.current!.setTool(null));
-    expect(state()).toMatchObject({ activeTool: 'research', isOpen: false });
+    act(() => handle.current!.setPanel(null));
+    expect(state()).toMatchObject({ activePanel: 'research', isOpen: false });
   });
 
   it('treats the assistant as the sidebar on its tab', () => {
@@ -109,14 +109,14 @@ describe('PanelsProvider', () => {
     const state = renderProvider();
 
     act(() => handle.current!.toggleAssistant());
-    expect(state()).toMatchObject({ activeTool: 'assistant', isOpen: true, assistantOpen: true });
+    expect(state()).toMatchObject({ activePanel: 'assistant', isOpen: true, assistantOpen: true });
 
     // Closing "the assistant" while another tab shows leaves the sidebar alone.
-    act(() => handle.current!.setTool('sources'));
+    act(() => handle.current!.setPanel('sources'));
     act(() => handle.current!.setAssistantOpen(false));
-    expect(state()).toMatchObject({ activeTool: 'sources', isOpen: true, assistantOpen: false });
+    expect(state()).toMatchObject({ activePanel: 'sources', isOpen: true, assistantOpen: false });
 
-    act(() => handle.current!.setTool('assistant'));
+    act(() => handle.current!.setPanel('assistant'));
     act(() => handle.current!.toggleAssistant());
     expect(state()).toMatchObject({ isOpen: false, assistantOpen: false });
   });
@@ -125,23 +125,23 @@ describe('PanelsProvider', () => {
     installDesktopMatchMedia();
     const state = renderProvider();
 
-    act(() => handle.current!.setTool('history'));
-    act(() => handle.current!.setTool('json'));
-    expect(state()).toMatchObject({ activeTool: 'json', isOpen: true });
+    act(() => handle.current!.setPanel('history'));
+    act(() => handle.current!.setPanel('json'));
+    expect(state()).toMatchObject({ activePanel: 'json', isOpen: true });
 
     // Persisted writes are coalesced to the next frame.
     await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     cleanup();
     const reloaded = renderProvider();
-    expect(reloaded().activeTool).toBe('history');
+    expect(reloaded().activePanel).toBe('history');
   });
 
   it('opens the Library as a tab of its own', () => {
     installDesktopMatchMedia();
     const state = renderProvider();
 
-    act(() => handle.current!.setTool('library'));
-    expect(state()).toMatchObject({ activeTool: 'library', researchSource: 'arxiv', isOpen: true });
+    act(() => handle.current!.setPanel('library'));
+    expect(state()).toMatchObject({ activePanel: 'library', researchSource: 'papers', isOpen: true });
 
     act(() => handle.current!.openSidebar('library', { tab: 'library', query: 'router' }));
     expect(handle.current!.intent).toMatchObject({ tab: 'library', query: 'router' });
@@ -154,7 +154,7 @@ describe('PanelsProvider', () => {
     act(() => handle.current!.openSidebar('research', { tab: 'research', query: 'sparse routing' }));
     const first = handle.current!.intent;
     expect(first).toMatchObject({ tab: 'research', query: 'sparse routing' });
-    expect(handle.current!.activeTool).toBe('research');
+    expect(handle.current!.activePanel).toBe('research');
 
     act(() => handle.current!.openSidebar('research', { tab: 'research', query: 'sparse routing' }));
     expect(handle.current!.intent?.id).not.toBe(first?.id);

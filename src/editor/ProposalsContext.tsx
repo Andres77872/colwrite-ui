@@ -23,6 +23,7 @@ import {
 import { isRetryableProblem } from '@/api/retry';
 import {
   buildChangeSet,
+  groupChanges,
   caretHeldBlock,
   isReady,
   isStale,
@@ -38,6 +39,7 @@ import {
   rejectChange,
   resolveAcceptPlan,
   resumeReview,
+  wordingChanges,
   type ChangeSet,
   type DocumentInvite,
   type OperationTarget,
@@ -53,6 +55,7 @@ import {
 } from './reviewDecisions';
 import { focusPageTitle } from './useDocumentTitle';
 import { uid } from '../lib/uid';
+import { itemAt } from '../lib/itemAt';
 import { revealElement } from '../lib/reveal';
 import { scrollBehavior } from '../lib/motion';
 import { lastInputWasPointer } from '../lib/inputModality';
@@ -146,25 +149,16 @@ function staleSkippedError(count: number): string {
     : `${count} suggestions were not applied because their text changed after they were suggested. They are still on the page for you to reject.`;
 }
 
-/** An insert whose block is already in the document has nothing left to apply. */
+/** An insert whose blocks are already in the document has nothing left to apply. */
 function hasLanded(change: ProposedChange, blocks: readonly Block[]): boolean {
   return change.kind === 'insert'
-    && change.producesBlockId !== null
-    && blocks.some((block) => block.id === change.producesBlockId);
+    && change.producesBlockIds.length > 0
+    && change.producesBlockIds.every((id) => blocks.some((block) => block.id === id));
 }
 
 /* ----------------------------------------
    Remembering decisions on durable batches
    ---------------------------------------- */
-
-/** Staging fingerprints of a batch, keyed by operation index. */
-function basesOf(set: ChangeSet): Record<string, string> {
-  const bases: Record<string, string> = {};
-  for (const change of set.changes) {
-    if (change.opIndex !== undefined && change.base !== undefined) bases[change.opIndex] = change.base;
-  }
-  return bases;
-}
 
 /** Requests recording decisions, one chain per change set. */
 const decisionChains = new Map<string, Promise<void>>();
@@ -247,24 +241,12 @@ function rememberDecisions(
   }
 }
 
-/**
- * Write the fingerprints of every durable batch `rebased` changed. A batch
- * with server targets needs none: a reload asks the server what each block
- * looks like then.
- */
-function rememberRebased(workspaceId: string, before: ChangeSet[], rebased: ChangeSet[]): void {
-  rebased.forEach((set, index) => {
-    if (set === before[index] || set.targetsOnServer) return;
-    saveReview(workspaceId, set.documentId, set.changeSetId, { bases: basesOf(set) });
-  });
-}
-
 /** What the server said about a durable batch when it was read. */
 type ServerReview = {
   /** In the order they were made. */
   decisions: ReviewDecision[];
-  /** By operation index; `null` when the API sent none for this batch. */
-  targets: ReadonlyArray<OperationTarget | null> | null;
+  /** One list per operation index; `null` for a batch stored before targets were recorded. */
+  targets: ReadonlyArray<readonly OperationTarget[]> | null;
   /** Stages recorded by the batches this one was written on top of. */
   earlier: ReadonlyMap<string, ReadonlySet<string>>;
 };
@@ -295,7 +277,7 @@ function serverReview(
 function needsAncestors(changeSet: AgentChangeSet): boolean {
   return Boolean(changeSet.dependsOnChangeSetId)
     && (changeSet.operationTargets ?? []).some(
-      (target) => target !== null && target.headFingerprint !== target.fingerprint,
+      (entry) => entry.some((target) => target.headFingerprint !== target.fingerprint),
     );
 }
 
@@ -328,8 +310,7 @@ async function ancestorStages(
         break;
       }
     }
-    for (const target of parent.operationTargets ?? []) {
-      if (!target) continue;
+    for (const target of (parent.operationTargets ?? []).flat()) {
       const recorded = stages.get(target.blockId) ?? new Set<string>();
       recorded.add(target.fingerprint);
       stages.set(target.blockId, recorded);
@@ -349,9 +330,8 @@ async function ancestorStages(
  * ones that could not be sent, which are applied after the server's and sent
  * again.
  *
- * The same goes for staleness: with the server's targets, a change whose
- * block was edited after the proposal is marked from them; without, the
- * staging fingerprints kept in this browser are restored.
+ * The same goes for staleness: a change whose blocks were edited after the
+ * proposal is marked from the server's targets.
  */
 function resumeDurableSet(
   workspaceId: string,
@@ -363,17 +343,12 @@ function resumeDurableSet(
   const { documentId, changeSetId } = built;
   const recorded = server.decisions;
   const targets = server.targets;
-  const set: ChangeSet = { ...built, ...(targets ? { targetsOnServer: true } : null) };
+  const set: ChangeSet = built;
 
   const local = loadReview(workspaceId, documentId, changeSetId);
   const onServer = new Set(recorded.map(([opIndex]) => opIndex));
   const unsent = (local?.decisions ?? []).filter(([opIndex]) => !onServer.has(opIndex));
-  const stored = local || onServer.size > 0
-    ? {
-        decisions: [...recorded, ...unsent],
-        bases: targets ? {} : local?.bases ?? {},
-      }
-    : null;
+  const stored = local || onServer.size > 0 ? { decisions: [...recorded, ...unsent] } : null;
   const { set: resumed, landed } = resumeReview(set, stored, blocks);
   const found = landed.map((opIndex): ReviewDecision => [opIndex, 'accepted']);
 
@@ -384,7 +359,6 @@ function resumeDurableSet(
   // an open that can send them, and nothing is sent from here.
   if (!canDecide) return targets ? markOutdated(resumed, targets, server.earlier) : resumed;
   void sendDecisions(workspaceId, documentId, changeSetId, [...unsent, ...found]);
-  saveReview(workspaceId, documentId, changeSetId, { decisions: [], bases: targets ? {} : basesOf(resumed) });
   return targets ? markOutdated(resumed, targets, server.earlier) : resumed;
 }
 
@@ -408,12 +382,10 @@ function fallbackFor(
   status: 'accepted' | 'rejected',
   blocks: readonly Block[],
 ): FocusFallback {
-  if (change.kind === 'rename') return { blockId: null, title: true };
+  if (change.kind === 'meta' || change.kind === 'sources') return { blockId: null, title: true };
   if (change.kind === 'insert') {
-    if (status === 'accepted' && change.producesBlockId) {
-      return { blockId: change.producesBlockId, title: false };
-    }
-    if (change.placement === 'start') return { blockId: blocks[0]?.id ?? null, title: false };
+    const [first] = change.producesBlockIds;
+    if (status === 'accepted' && first) return { blockId: first, title: false };
     if (change.placement === 'end') return { blockId: blocks[blocks.length - 1]?.id ?? null, title: false };
     return { blockId: change.anchorBlockId, title: false };
   }
@@ -656,11 +628,8 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
           }),
           before: base,
           after: result.blocks,
+          page: result.doc,
           touched: result.touched,
-          renamed: plan.ops.reduce<string | undefined>(
-            (name, op) => (op.op === 'update_meta' && op.meta?.name ? op.meta.name : name),
-            undefined,
-          ),
         };
       }
       return null;
@@ -681,9 +650,9 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
           touched: outcome.touched,
           after: {
             blocks: outcome.after,
-            name: outcome.renamed ?? page.name,
-            sources: page.sources,
-            citationStyle: page.citationStyle,
+            name: outcome.page.name ?? page.name,
+            sources: outcome.page.sources,
+            citationStyle: outcome.page.citationStyle,
           },
           undone: false,
         }
@@ -726,10 +695,6 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       applied.flatMap((change): ReviewDecision[] => (change.opIndex === undefined ? [] : [[change.opIndex, 'accepted']])),
       'auto',
     );
-    if (outcome) {
-      const accepted = markChanges(sets, appliedIds, 'accepted');
-      rememberRebased(workspaceId, accepted, rebaseAfterAccept(accepted, outcome.before, outcome.after, outcome.touched));
-    }
   }, [applyPatch, batch, markRecentlyChanged, updateForDocument, workspaceId]);
 
   /**
@@ -824,6 +789,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
             documentId: targetDocumentId,
             actions: fetched.operations,
             changeSetId: fetched.changeSetId,
+            groups: fetched.groups,
           },
           blocksRef.current,
         );
@@ -900,12 +866,12 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
           }
           const set = buildChangeSet(
             {
-              tool: 'doc_edit',
               toolCallId: changeSet.toolCallId ?? '',
               documentId: ownerDocumentId,
               status: 'proposed',
               actions: changeSet.operations,
               changeSetId: changeSet.changeSetId,
+              groups: changeSet.groups,
             },
             blocksRef.current,
           );
@@ -976,7 +942,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
    * describes work the server did not do. `doc_edit` never commits by itself.
    */
   const receive = useCallback<ProposalsContextValue['receive']>((action, options = {}) => {
-    if (activeDocumentIdRef.current !== ownerDocumentId) return { changes: 0, invited: false };
+    if (activeDocumentIdRef.current !== ownerDocumentId) return;
 
     const createOp = action.actions.find(
       (op): op is Extract<ToolOperation, { op: 'create_document' }> =>
@@ -1003,15 +969,12 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         // done nothing.
         || action.documentId === '');
 
-    let changes = 0;
     if (targetsThisDocument && action.status === 'proposed' && action.changeSetId) {
       const signature = `change-set:${action.changeSetId}`;
-      // A redelivery adds nothing, and saying otherwise made the reply claim
-      // changes the document does not have.
+      // A redelivery adds nothing: the set is staged once.
       if (!seenBatchesRef.current.has(signature)) {
         seenBatchesRef.current.add(signature);
         void stageDurableProposal(action, action.changeSetId, options);
-        changes = action.proposalOperationCount ?? 0;
       }
     }
 
@@ -1030,7 +993,6 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
           : { ...current, invites, error: nextError };
       });
     }
-    return { changes, invited };
   }, [stageDurableProposal, ownerDocumentId, updateForDocument]);
 
   const settle = useCallback(
@@ -1078,7 +1040,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
               plan = resolveAcceptPlan([target], state.sets, liveBlocks);
               outcome = plan.ops.length > 0
                 ? applyPatch(plan.ops, { persist: true, base: liveBlocks })
-                : { blocks: liveBlocks, desynced: [], touched: [] };
+                : { blocks: liveBlocks, doc: outcome.doc, desynced: [], touched: [] };
             }
             markRecentlyChanged(outcome.touched);
             settled = !outcome.stale && plan.ops.length > 0 && outcome.desynced.length === 0;
@@ -1126,10 +1088,6 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       // Durable batches outlive this page. Without a record, a reload stages
       // every one of their operations again, decided or not.
       rememberDecisions(workspaceId, state.sets, decided);
-      if (landed) {
-        const accepted = markChanges(state.sets, new Set([changeId]), 'accepted');
-        rememberRebased(workspaceId, accepted, rebaseAfterAccept(accepted, landed.before, landed.after, landed.touched));
-      }
 
       // The card that held focus is gone with its buttons; focus moves on to
       // the next suggestion once the decision is on screen (see the effect
@@ -1175,6 +1133,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
 
     let plan = resolveAcceptPlan(queue, sets, blocks);
     let applyDesynced = 0;
+    let appliedIds = new Set<string>();
     let landed: { before: Block[]; after: Block[]; touched: string[] } | null = null;
     if (plan.ops.length > 0) {
       let base = blocks;
@@ -1187,23 +1146,27 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         plan = resolveAcceptPlan(queue, sets, liveBlocks);
         outcome = plan.ops.length > 0
           ? applyPatch(plan.ops, { persist: true, base: liveBlocks })
-          : { blocks: liveBlocks, desynced: [], touched: [] };
+          : { blocks: liveBlocks, doc: outcome.doc, desynced: [], touched: [] };
       }
       markRecentlyChanged(outcome.touched);
       // Ops that desynced at apply time count as failures too — simulation
       // passing is no guarantee the live document agreed.
       applyDesynced = outcome.stale ? plan.ops.length : outcome.desynced.length;
+      if (!outcome.stale) {
+        const failedOps = new Set(outcome.desynced);
+        appliedIds = new Set(plan.applied.filter((_, index) => !failedOps.has(itemAt(plan.ops, index))).map((change) => change.id));
+      }
       if (!outcome.stale) landed = { before: base, after: outcome.blocks, touched: outcome.touched };
     }
 
     // Only what this run actually decided. Clearing every set discarded a
     // batch that had arrived while the confirmation dialog was open — the
     // author never saw it, and it was counted as reviewed.
-    const decided = new Set([...landedIds, ...plan.applied.map((change) => change.id)]);
+    const decided = new Set([...landedIds, ...appliedIds]);
     const failed = plan.desynced.length + applyDesynced;
     const messages = [
       failed > 0
-        ? `${failed} change${failed === 1 ? '' : 's'} could not be applied — the page has moved on since the assistant read it.`
+        ? `${failed} change${failed === 1 ? '' : 's'} could not be applied — a target is unavailable or locked, or an earlier decision is still pending.`
         : null,
       stale.length > 0 ? staleSkippedError(stale.length) : null,
     ].filter((message): message is string => message !== null);
@@ -1229,10 +1192,6 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         .filter((change) => decided.has(change.id))
         .map((change) => [change.id, 'accepted'] as const),
     );
-    if (landed) {
-      const accepted = markChanges(state.sets, decided, 'accepted');
-      rememberRebased(workspaceId, accepted, rebaseAfterAccept(accepted, landed.before, landed.after, landed.touched));
-    }
   }, [
     applyPatch,
     blocks,
@@ -1247,8 +1206,21 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     // Original authoring order, across batches: a later batch may build on an
     // earlier one, and replaying them out of order puts blocks in the wrong
     // place even though each operation on its own is valid.
-    acceptOpen(orderedChanges(state.sets).filter((change) => change.status === 'pending'));
-  }, [acceptOpen, ownerDocumentId, state.sets]);
+    batch(() => acceptOpen(orderedChanges(state.sets).filter(
+      (change) => change.status === 'pending' && !change.op.newInformation,
+    )));
+  }, [acceptOpen, batch, ownerDocumentId, state.sets]);
+
+  const acceptWording = useCallback(() => {
+    if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
+    batch(() => acceptOpen(wordingChanges(state.sets)));
+  }, [acceptOpen, batch, ownerDocumentId, state.sets]);
+
+  const acceptGroup = useCallback<ProposalsContextValue['acceptGroup']>((setId, kind) => {
+    if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
+    const set = state.sets.find((candidate) => candidate.id === setId);
+    if (set) batch(() => acceptOpen(groupChanges(set, kind).filter((change) => !change.op.newInformation)));
+  }, [acceptOpen, batch, ownerDocumentId, state.sets]);
 
   /**
    * "Apply all" on the changes an Auto turn left waiting: one undo step, and
@@ -1261,7 +1233,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     if (waiting.size === 0) return;
     batch(() => acceptOpen(
       orderedChanges(state.sets.filter((set) => waiting.has(set.id)))
-        .filter((change) => change.status === 'pending'),
+        .filter((change) => change.status === 'pending' && !change.op.newInformation),
     ));
     updateForDocument((current) => ({
       ...current,
@@ -1289,7 +1261,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
   }, [state.autoApplied, undo, updateForDocument]);
 
   const rejectAll = useCallback(() => {
-    if (readOnlyRef.current) return;
+    if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
     // Same reasoning as `acceptAll`: reject what was on screen, not whatever
     // has arrived since.
     const decided = new Set(pendingChanges(state.sets).map((change) => change.id));
@@ -1307,7 +1279,24 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         .filter((change) => decided.has(change.id))
         .map((change) => [change.id, 'rejected'] as const),
     );
-  }, [state.sets, updateForDocument, workspaceId]);
+  }, [ownerDocumentId, state.sets, updateForDocument, workspaceId]);
+
+  const rejectGroup = useCallback<ProposalsContextValue['rejectGroup']>((setId, kind) => {
+    if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
+    const set = state.sets.find((candidate) => candidate.id === setId);
+    if (!set) return;
+    const selected = groupChanges(set, kind).map((change) => change.id);
+    const decide = (sets: ChangeSet[]) => selected.reduce(
+      (current, id) => rejectChange(current, id).sets, sets,
+    );
+    const decided = orderedChanges(decide(state.sets)).filter((change) =>
+      change.status === 'rejected'
+      && pendingChanges(state.sets).some((candidate) => candidate.id === change.id));
+    updateForDocument((current) => ({
+      ...current, sets: pruneSettledSets(decide(current.sets)), focusedChangeId: null,
+    }));
+    rememberDecisions(workspaceId, state.sets, decided.map((change) => [change.id, 'rejected'] as const));
+  }, [ownerDocumentId, state.sets, updateForDocument, workspaceId]);
 
   /**
    * Mark a change as the one under review and bring its card to focus.
@@ -1452,6 +1441,9 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       accept,
       reject,
       acceptAll,
+      acceptWording,
+      acceptGroup,
+      rejectGroup,
       rejectAll,
       ready,
       focusChange,
@@ -1468,6 +1460,9 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     [
       accept,
       acceptAll,
+      acceptWording,
+      acceptGroup,
+      rejectGroup,
       applyWaiting,
       autoApplied,
       clearError,

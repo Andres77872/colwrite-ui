@@ -1,11 +1,12 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { autoStripMessage, useAutoMode, type AutoModeScope } from '../useAutoMode';
+import { autoPausedNote, autoStripMessage, useAutoMode } from '../useAutoMode';
+import type { ConversationScope } from '../conversationScope';
 
-const scope = (over: Partial<AutoModeScope> = {}): AutoModeScope => ({ workspace: 'wsp-a', page: 'session-1', chat: null, chatEpoch: 0, ...over });
+const scope = (over: Partial<ConversationScope> = {}): ConversationScope => ({ workspace: 'wsp-a', page: 'session-1', chat: null, chatEpoch: 0, ...over });
 
-function setup(initial: AutoModeScope = scope()) {
-  return renderHook((props: AutoModeScope) => useAutoMode(props), { initialProps: initial });
+function setup(initial: ConversationScope = scope()) {
+  return renderHook((props: ConversationScope) => useAutoMode(props), { initialProps: initial });
 }
 
 describe('useAutoMode', () => {
@@ -71,8 +72,8 @@ describe('useAutoMode', () => {
   it('keeps the reason the server paused it for the message, until the next one', () => {
     const hook = setup();
     act(() => hook.result.current.turnOn());
-    act(() => hook.result.current.notePolicy('review', 'web_research'));
-    expect(hook.result.current.blocked).toBe('web_research');
+    act(() => hook.result.current.notePolicy('review', 'untrusted_content'));
+    expect(hook.result.current.blocked).toBe('untrusted_content');
     act(() => hook.result.current.startTurn());
     expect(hook.result.current.blocked).toBeNull();
     act(() => hook.result.current.notePolicy('auto', null));
@@ -89,8 +90,16 @@ describe('useAutoMode', () => {
 describe('autoStripMessage', () => {
   it('says what Auto does, or why it is paused', () => {
     expect(autoStripMessage(null)).toBe('Auto is on: edits apply without asking');
-    expect(autoStripMessage('web_research')).toBe('Auto is paused: web research is on for this message');
     expect(autoStripMessage('policy')).toBe("Auto isn't available in this workspace");
     expect(autoStripMessage('role')).toBe("Viewers can't use Auto");
+    expect(autoStripMessage('untrusted_content')).toBe('Auto paused: this reply read outside material, so its changes wait for your review');
+  });
+});
+
+describe('autoPausedNote', () => {
+  it('says under a reply why its changes waited, for every reason', () => {
+    expect(autoPausedNote('untrusted_content')).toBe('Auto paused: this reply read outside material, so its changes wait for your review');
+    expect(autoPausedNote('policy')).toBe("Auto paused: this workspace switched Auto off, so this reply's changes wait for your review");
+    expect(autoPausedNote('role')).toBe("Auto paused: your role in this workspace doesn't allow it, so this reply's changes wait for review");
   });
 });

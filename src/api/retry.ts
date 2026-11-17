@@ -20,13 +20,13 @@ import type { ErrorCode } from '@/api/schema';
 export const RETRYABLE_PROBLEM_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   'rate_limited',
   'document_rate_limit_exceeded',
-  'research_rate_limited',
+  'provider_rate_limited',
   'limit_exceeded',
   'unavailable',
   'auth_unavailable',
-  'image_storage_unavailable',
+  'asset_storage_unavailable',
   'retrieval_unavailable',
-  'research_unavailable',
+  'provider_unavailable',
   'resolver_unavailable',
   'bad_gateway',
   'timeout',
@@ -41,7 +41,7 @@ export const RETRYABLE_PROBLEM_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode
 const REFUSED_BEFORE_WORK: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   'rate_limited',
   'document_rate_limit_exceeded',
-  'research_rate_limited',
+  'provider_rate_limited',
   'limit_exceeded',
 ]);
 

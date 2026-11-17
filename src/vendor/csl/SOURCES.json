@@ -1,0 +1,105 @@
+{
+  "note": "Copied unmodified from the Citation Style Language project by scripts/vendor-csl.mjs. Do not edit these files.",
+  "files": [
+    {
+      "path": "styles/nlm-citation-sequence-brackets.csl",
+      "title": "NLM/Vancouver: Citing Medicine 2nd edition (citation-sequence, brackets)",
+      "license": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "repository": "https://github.com/citation-style-language/styles",
+      "commit": "bcae404e9f8130cc2b94b0749d53514212a15a4a",
+      "source": "nlm-citation-sequence-brackets.csl",
+      "url": "https://raw.githubusercontent.com/citation-style-language/styles/bcae404e9f8130cc2b94b0749d53514212a15a4a/nlm-citation-sequence-brackets.csl",
+      "sha256": "a6eec81011d742f6478527e917d8c6b997014e7d35a3a0544f50adf09a8e53be"
+    },
+    {
+      "path": "styles/apa.csl",
+      "title": "APA Style 7th edition",
+      "license": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "repository": "https://github.com/citation-style-language/styles",
+      "commit": "bcae404e9f8130cc2b94b0749d53514212a15a4a",
+      "source": "apa.csl",
+      "url": "https://raw.githubusercontent.com/citation-style-language/styles/bcae404e9f8130cc2b94b0749d53514212a15a4a/apa.csl",
+      "sha256": "3917def5fc951b104d64216c3373096042368b9704ba269ca83c14ebaba889fc"
+    },
+    {
+      "path": "styles/ieee.csl",
+      "title": "IEEE Reference Guide version 11.29.2023",
+      "license": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "repository": "https://github.com/citation-style-language/styles",
+      "commit": "bcae404e9f8130cc2b94b0749d53514212a15a4a",
+      "source": "ieee.csl",
+      "url": "https://raw.githubusercontent.com/citation-style-language/styles/bcae404e9f8130cc2b94b0749d53514212a15a4a/ieee.csl",
+      "sha256": "b4c7619fc16c45a31e4cc3271eab94ffe83192d3b4c7fc729470a3b459448de3"
+    },
+    {
+      "path": "styles/american-medical-association.csl",
+      "title": "AMA Manual of Style 11th edition",
+      "license": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "repository": "https://github.com/citation-style-language/styles",
+      "commit": "bcae404e9f8130cc2b94b0749d53514212a15a4a",
+      "source": "american-medical-association.csl",
+      "url": "https://raw.githubusercontent.com/citation-style-language/styles/bcae404e9f8130cc2b94b0749d53514212a15a4a/american-medical-association.csl",
+      "sha256": "d70f843d93c2b1e8c59c0e26e2396bea4ed99fb4a1aac69b6dddc249a10fadf7"
+    },
+    {
+      "path": "styles/chicago-author-date.csl",
+      "title": "Chicago Manual of Style 18th edition (author-date)",
+      "license": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "repository": "https://github.com/citation-style-language/styles",
+      "commit": "bcae404e9f8130cc2b94b0749d53514212a15a4a",
+      "source": "chicago-author-date.csl",
+      "url": "https://raw.githubusercontent.com/citation-style-language/styles/bcae404e9f8130cc2b94b0749d53514212a15a4a/chicago-author-date.csl",
+      "sha256": "002fade78d7e4fe9d42936a16b43a8066b097013f6255df40b1bfba6631eff9b"
+    },
+    {
+      "path": "styles/nlm-citation-sequence.csl",
+      "title": "NLM/Vancouver: Citing Medicine 2nd edition (citation-sequence)",
+      "license": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "repository": "https://github.com/citation-style-language/styles",
+      "commit": "bcae404e9f8130cc2b94b0749d53514212a15a4a",
+      "source": "nlm-citation-sequence.csl",
+      "url": "https://raw.githubusercontent.com/citation-style-language/styles/bcae404e9f8130cc2b94b0749d53514212a15a4a/nlm-citation-sequence.csl",
+      "sha256": "492f7935df42054b33d515f7275122f419780df990ea35925dcbbff0fecf1137"
+    },
+    {
+      "path": "styles/nature.csl",
+      "title": "Nature",
+      "license": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "repository": "https://github.com/citation-style-language/styles",
+      "commit": "bcae404e9f8130cc2b94b0749d53514212a15a4a",
+      "source": "nature.csl",
+      "url": "https://raw.githubusercontent.com/citation-style-language/styles/bcae404e9f8130cc2b94b0749d53514212a15a4a/nature.csl",
+      "sha256": "15b1272a3c360168e0b51ab9257534b08ced67190ed57be7a1c32cea8fc87be8"
+    },
+    {
+      "path": "styles/association-for-computing-machinery.csl",
+      "title": "Association for Computing Machinery",
+      "license": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "repository": "https://github.com/citation-style-language/styles",
+      "commit": "bcae404e9f8130cc2b94b0749d53514212a15a4a",
+      "source": "association-for-computing-machinery.csl",
+      "url": "https://raw.githubusercontent.com/citation-style-language/styles/bcae404e9f8130cc2b94b0749d53514212a15a4a/association-for-computing-machinery.csl",
+      "sha256": "085a33eac864b8a88cfcac2ff25929d038d82a5227b15bdd3b23309d1c418771"
+    },
+    {
+      "path": "locales/locales-en-US.xml",
+      "title": null,
+      "license": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "repository": "https://github.com/citation-style-language/locales",
+      "commit": "14940e56f7c783e4173cafbd92e0f5856f2caa14",
+      "source": "locales-en-US.xml",
+      "url": "https://raw.githubusercontent.com/citation-style-language/locales/14940e56f7c783e4173cafbd92e0f5856f2caa14/locales-en-US.xml",
+      "sha256": "ac864c7c21166b4390d82c31792cdc509400727fa0060b43d8aa17e07f9cb079"
+    },
+    {
+      "path": "locales/locales-en-GB.xml",
+      "title": null,
+      "license": "http://creativecommons.org/licenses/by-sa/3.0/",
+      "repository": "https://github.com/citation-style-language/locales",
+      "commit": "14940e56f7c783e4173cafbd92e0f5856f2caa14",
+      "source": "locales-en-GB.xml",
+      "url": "https://raw.githubusercontent.com/citation-style-language/locales/14940e56f7c783e4173cafbd92e0f5856f2caa14/locales-en-GB.xml",
+      "sha256": "e4a1fed9cec04b5fed5e9027b4055925cd4d8f7c9fe233eb0ceca6d4be3999f6"
+    }
+  ]
+}

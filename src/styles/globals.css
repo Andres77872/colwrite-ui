@@ -885,6 +885,12 @@
     }
   }
 
+  /* Block markup the API flattened inside a paragraph (`span.legacy-block`,
+     from a `<div>` or `<p>`): still its own line, as the export draws it. */
+  :is(.block-content, .editable) .legacy-block {
+    display: block;
+  }
+
   /* The space the API leaves after a table or chart: kept in the text,
      not drawn as an indent on the line below the figure. */
   .editable [data-figure-gap] {
@@ -1122,6 +1128,12 @@
 
   /* The page text a composer selection chip stands for, kept marked while
      focus is in the composer (see chatContextHighlight.ts). */
+  ::highlight(review-comment) {
+    background-color: var(--color-diff-add);
+    text-decoration: underline;
+    text-decoration-color: var(--color-primary);
+  }
+
   ::highlight(chat-context) {
     background-color: var(--color-selection);
   }

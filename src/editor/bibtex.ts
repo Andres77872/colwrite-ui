@@ -1,50 +1,50 @@
-import { canonicalArxivId, canonicalDoi, firstAuthorSurname, yearOf } from './citations';
-import type { CitationSource, SourceKind } from './types';
+import { canonicalArxivId, canonicalDoi, manualRecord, referenceNames, referenceYear } from './referenceRecords';
+import type { CslItem, CslName, CslType, ReferenceRecord } from './types';
 
 /**
  * BibTeX in and out of the source library.
  *
- * Export is what a LaTeX workflow needs from ColWrite: every source with a
- * stable, readable cite key (`vaswani2017attention`). Import accepts the
- * `.bib` files reference managers produce (Zotero, Mendeley, Google Scholar,
- * Overleaf) and maps them onto the library's fields. Imported entries are
- * marked `manual` — they are what a file said, not what a registry
- * confirmed — until the author verifies them against their DOI or arXiv id.
+ * Export is what a LaTeX workflow needs from ColWrite: every reference with a
+ * stable, readable cite key (`vaswani2017attention`), from its CSL item.
+ * Import accepts the `.bib` files reference managers produce (Zotero,
+ * Mendeley, Google Scholar, Overleaf) as CSL items. Imported entries are
+ * `manual` and `unchecked` — they are what a file said, not what a registry
+ * confirmed — until the author checks them against the registries.
  */
 
-const TYPE_BY_KIND: Record<SourceKind, string> = {
-  article: 'article',
-  preprint: 'misc',
-  conference: 'inproceedings',
+/** The BibTeX entry type for a CSL item type. */
+const TYPE_BY_CSL: Partial<Record<CslType, string>> = {
+  'article-journal': 'article',
+  'article-magazine': 'article',
+  'article-newspaper': 'article',
+  'paper-conference': 'inproceedings',
   book: 'book',
   chapter: 'incollection',
   thesis: 'phdthesis',
   report: 'techreport',
-  web: 'misc',
-  dataset: 'misc',
   software: 'software',
-  other: 'misc',
 };
 
-const KIND_BY_TYPE: Record<string, SourceKind> = {
-  article: 'article',
-  inproceedings: 'conference',
-  conference: 'conference',
-  proceedings: 'conference',
-  book: 'book',
-  inbook: 'chapter',
-  incollection: 'chapter',
-  phdthesis: 'thesis',
-  mastersthesis: 'thesis',
-  thesis: 'thesis',
-  techreport: 'report',
-  report: 'report',
-  online: 'web',
-  electronic: 'web',
-  www: 'web',
-  dataset: 'dataset',
-  software: 'software',
-  unpublished: 'preprint',
+/** The CSL item type and the reference kind for a BibTeX entry type. */
+const CSL_BY_TYPE: Record<string, { type: CslType; kind: ReferenceRecord['kind'] }> = {
+  article: { type: 'article-journal', kind: 'paper' },
+  inproceedings: { type: 'paper-conference', kind: 'paper' },
+  conference: { type: 'paper-conference', kind: 'paper' },
+  proceedings: { type: 'book', kind: 'book' },
+  book: { type: 'book', kind: 'book' },
+  inbook: { type: 'chapter', kind: 'book' },
+  incollection: { type: 'chapter', kind: 'book' },
+  phdthesis: { type: 'thesis', kind: 'other' },
+  mastersthesis: { type: 'thesis', kind: 'other' },
+  thesis: { type: 'thesis', kind: 'other' },
+  techreport: { type: 'report', kind: 'other' },
+  report: { type: 'report', kind: 'other' },
+  online: { type: 'webpage', kind: 'web' },
+  electronic: { type: 'webpage', kind: 'web' },
+  www: { type: 'webpage', kind: 'web' },
+  dataset: { type: 'dataset', kind: 'dataset' },
+  software: { type: 'software', kind: 'other' },
+  unpublished: { type: 'manuscript', kind: 'preprint' },
 };
 
 /** Escape the characters BibTeX treats specially inside a braced value. */
@@ -57,14 +57,15 @@ function escapeValue(value: string): string {
     .trim();
 }
 
-/** "A. Smith, B. Jones" → "A. Smith and B. Jones", keeping "et al." as "others". */
-function bibtexAuthors(authors: string): string {
-  const names = authors
-    .split(/\s*(?:;|\band\b|,(?=\s*[A-Z][^,]*\s[A-Z]))\s*/)
-    .map((name) => name.trim())
-    .filter(Boolean)
-    .map((name) => (/^et al\.?$/i.test(name) ? 'others' : name));
-  return names.join(' and ');
+/** CSL names → "Smith, John and Doe, Jane"; an organisation braced, so BibTeX keeps it whole. */
+function bibtexNames(names: readonly CslName[]): string {
+  return names
+    .map((name) => {
+      if (name.literal) return `{${escapeValue(name.literal)}}`;
+      const family = [name['non-dropping-particle'], name.family].filter(Boolean).join(' ');
+      return escapeValue(name.given ? `${family}, ${name.given}` : family);
+    })
+    .join(' and ');
 }
 
 function slug(value: string | undefined): string {
@@ -78,48 +79,54 @@ function slug(value: string | undefined): string {
 const STOP_WORDS = new Set(['a', 'an', 'the', 'on', 'of', 'in', 'for', 'and', 'to', 'with', 'towards', 'toward']);
 
 /** A readable cite key, `surname` + `year` + first significant title word. */
-export function bibtexKey(source: CitationSource): string {
-  const surname = slug(firstAuthorSurname(source.authors)?.split(/\s+/).pop());
-  const year = yearOf(source.year) ?? '';
-  const word = (source.title ?? '')
+export function bibtexKey(record: ReferenceRecord): string {
+  const surname = slug(referenceNames(record, true)[0]?.split(/\s+/).pop());
+  const year = referenceYear(record) ?? '';
+  const word = record.csl.title
     .split(/\s+/)
     .map(slug)
     .find((candidate) => candidate && !STOP_WORDS.has(candidate)) ?? '';
   const key = `${surname}${year}${word}`;
-  return key || slug(source.key) || 'source';
+  return key || slug(record.key) || 'source';
 }
 
-/** One `.bib` document for *sources*, with unique cite keys. */
-export function toBibtex(sources: readonly CitationSource[]): string {
+/** One `.bib` document for *records*, with unique cite keys. */
+export function toBibtex(records: readonly ReferenceRecord[]): string {
   const used = new Map<string, number>();
-  const entries = sources.map((source) => {
-    let key = bibtexKey(source);
+  const entries = records.map((record) => {
+    const { csl } = record;
+    let key = bibtexKey(record);
     const count = used.get(key) ?? 0;
     used.set(key, count + 1);
     if (count > 0) key = `${key}${String.fromCharCode(96 + count + 1)}`;
 
-    const arxivKey = /^\d{4}\.\d{4,5}$/.test(canonicalArxivId(source.key) ?? '');
-    const kind = source.kind ?? (arxivKey ? 'preprint' : undefined);
-    const type = kind ? TYPE_BY_KIND[kind] : source.venue ? 'article' : 'misc';
+    const type = TYPE_BY_CSL[csl.type] ?? 'misc';
     const fields: Array<[string, string]> = [];
     // Double braces keep a title's capitalisation from being lowered by styles.
-    if (source.title) fields.push(['title', `{${escapeValue(source.title)}}`]);
-    if (source.authors) fields.push(['author', escapeValue(bibtexAuthors(source.authors))]);
-    const year = yearOf(source.year);
+    fields.push(['title', `{${escapeValue(csl.title)}}`]);
+    if (csl.author?.length) fields.push(['author', bibtexNames(csl.author)]);
+    if (csl.editor?.length) fields.push(['editor', bibtexNames(csl.editor)]);
+    const year = referenceYear(record);
     if (year) fields.push(['year', year]);
-    if (source.venue && source.venue !== 'arXiv') {
+    const venue = csl['container-title'];
+    if (venue) {
       const venueField = type === 'inproceedings' || type === 'incollection' ? 'booktitle' : type === 'article' ? 'journal' : 'howpublished';
-      fields.push([venueField, escapeValue(source.venue)]);
+      fields.push([venueField, escapeValue(venue)]);
     }
-    const doi = canonicalDoi(source.doi ?? source.key);
+    if (csl.publisher) fields.push(['publisher', escapeValue(csl.publisher)]);
+    if (csl.volume) fields.push(['volume', escapeValue(csl.volume)]);
+    if (csl.issue) fields.push(['number', escapeValue(csl.issue)]);
+    if (csl.page) fields.push(['pages', escapeValue(csl.page.replace(/[–—-]+/g, '--'))]);
+    const doi = canonicalDoi(csl.DOI);
     if (doi) fields.push(['doi', doi]);
-    const arxiv = source.externalIds?.ArXiv ?? (/^\d{4}\.\d{4,5}$/.test(source.key) ? source.key : undefined);
+    const arxiv = record.key.startsWith('arxiv:') ? canonicalArxivId(record.key.slice(6)) : undefined;
     if (arxiv) {
       fields.push(['eprint', arxiv]);
       fields.push(['archiveprefix', 'arXiv']);
     }
-    if (source.url) fields.push(['url', source.url]);
-    if (source.accessed) fields.push(['urldate', source.accessed]);
+    if (csl.URL) fields.push(['url', csl.URL]);
+    const accessed = csl.accessed?.['date-parts']?.[0];
+    if (accessed) fields.push(['urldate', accessed.map((part) => String(part).padStart(2, '0')).join('-')]);
     const body = fields.map(([name, value]) => `  ${name} = {${value}}`);
     return `@${type}{${key},\n${body.join(',\n')}\n}`;
   });
@@ -174,23 +181,27 @@ function plain(value: string): string {
     .trim();
 }
 
-/** "Smith, John and Doe, Jane" → "John Smith, Jane Doe". */
-function readAuthors(value: string): string {
-  return plain(value)
+/** "Smith, John and Doe, Jane" → CSL names; a braced name is an organisation. */
+function readNames(value: string): CslName[] {
+  return value
     .split(/\s+and\s+/i)
-    .map((name) => {
-      if (/^others$/i.test(name)) return 'et al.';
+    .map((raw) => raw.trim())
+    .filter((raw) => raw && !/^others$/i.test(raw))
+    .map((raw): CslName => {
+      if (/^\{.*\}$/.test(raw)) return { literal: plain(raw) };
+      const name = plain(raw);
       const [family, given] = name.split(/\s*,\s*/, 2);
-      return given ? `${given} ${family}` : name;
-    })
-    .join(', ');
+      if (given !== undefined) return { family: family ?? name, given };
+      const words = name.split(/\s+/);
+      return words.length > 1 ? { family: words.at(-1) ?? name, given: words.slice(0, -1).join(' ') } : { family: name };
+    });
 }
 
-export type BibtexImport = { sources: CitationSource[]; skipped: number };
+export type BibtexImport = { sources: ReferenceRecord[]; skipped: number };
 
 /** Library entries for the entries in a `.bib` document. */
 export function parseBibtex(text: string): BibtexImport {
-  const sources: CitationSource[] = [];
+  const sources: ReferenceRecord[] = [];
   let skipped = 0;
   const entryStart = /@\s*([A-Za-z]+)\s*[{(]/g;
   let match: RegExpExecArray | null;
@@ -226,23 +237,31 @@ export function parseBibtex(text: string): BibtexImport {
     const arxiv = fields.eprint && /arxiv/i.test(fields.archiveprefix ?? fields.eprinttype ?? 'arxiv')
       ? canonicalArxivId(fields.eprint)
       : undefined;
-    const source: CitationSource = {
-      key: doi ?? arxiv ?? citeKey,
-      title,
-      provider: 'manual',
-    };
-    if (fields.author) source.authors = readAuthors(fields.author);
-    const year = yearOf(fields.year ?? fields.date);
-    if (year) source.year = year;
-    const venue = fields.journal ?? fields.journaltitle ?? fields.booktitle ?? fields.publisher ?? fields.howpublished;
-    if (venue) source.venue = plain(venue);
-    if (doi) source.doi = doi;
-    if (fields.url) source.url = plain(fields.url);
-    if (arxiv) source.externalIds = { ArXiv: arxiv };
-    const kind = KIND_BY_TYPE[type] ?? (arxiv ? 'preprint' : undefined);
-    if (kind) source.kind = kind;
-    if (fields.urldate) source.accessed = plain(fields.urldate);
-    sources.push(source);
+    const mapped = CSL_BY_TYPE[type] ?? (arxiv ? { type: 'article' as const, kind: 'preprint' as const } : { type: 'document' as const, kind: 'other' as const });
+    const csl: Omit<CslItem, 'id'> = { type: mapped.type, title };
+    if (fields.author) {
+      const author = readNames(fields.author);
+      if (author.length) csl.author = author;
+    }
+    if (fields.editor) {
+      const editor = readNames(fields.editor);
+      if (editor.length) csl.editor = editor;
+    }
+    const year = (fields.year ?? fields.date)?.match(/\d{4}/)?.[0];
+    if (year) csl.issued = { 'date-parts': [[Number(year)]] };
+    const venue = fields.journal ?? fields.journaltitle ?? fields.booktitle ?? fields.howpublished;
+    if (venue) csl['container-title'] = plain(venue);
+    if (fields.publisher) csl.publisher = plain(fields.publisher);
+    if (fields.volume) csl.volume = plain(fields.volume);
+    if (fields.number) csl.issue = plain(fields.number);
+    if (fields.pages) csl.page = plain(fields.pages).replace(/-{1,2}/g, '–');
+    if (doi) csl.DOI = doi;
+    if (fields.url) csl.URL = plain(fields.url);
+    if (arxiv) csl.number = `arXiv:${arxiv}`;
+    const accessed = fields.urldate?.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (accessed) csl.accessed = { 'date-parts': [[Number(accessed[1]), Number(accessed[2]), Number(accessed[3])]] };
+    const key = doi ? `doi:${doi}` : arxiv ? `arxiv:${arxiv}` : citeKey;
+    sources.push(manualRecord(key, csl, mapped.kind, mapped.kind === 'preprint' ? ['preprint'] : []));
   }
   return { sources, skipped };
 }

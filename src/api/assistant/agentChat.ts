@@ -1,27 +1,27 @@
 import type { AgentChatRequestInput, AgentContext, EngineCatalogResponse, EngineStatusResponse } from '@/api/schema';
-import { streamAgentSession, type ResumeAgentRun } from './agentSessionChat';
+import { streamAgentSession, type CheckpointResume, type ResumeAgentRun } from './agentSessionChat';
 import type { ChatAttachment } from './chatAttachments';
-import type { AgentEventHandlers } from './streamParser';
+import type { AgentDone, AgentEventHandlers } from './streamParser';
 
 // ── Types ──
 
 /**
- * Which tools the server-side agent gets.
+ * The kind of run (`ColWrite-api/src/models/agent_chat_request.py`).
  *
- * - `assistant` — the chat panel; the agent may read, edit and create
- *   documents. Its edits do **not** reach storage: the server stores them as
- *   change sets and sends them down as `tool_action` events with status
- *   `proposed`, which the editor shows on the affected blocks for the author
- *   to accept or reject, or applies itself while Auto is on.
- * - `rewrite` — the selection toolbar and the inline AI passage; the agent
- *   returns text only, because the caller applies the result itself behind its
- *   own accept/reject affordance. Handing that agent the document tools let it
- *   rewrite the paper while the user was still deciding.
+ * - `chat` — the assistant panel, stored as a chat; the agent may read,
+ *   propose edits to and create pages. Its edits do **not** reach storage:
+ *   the server stores them as change sets and sends them down as
+ *   `tool_action` events with status `proposed`, which the editor shows on
+ *   the affected blocks for the author to accept or reject, or applies
+ *   itself while Auto is on.
+ * - `inline` — Ask AI and the AI beats: the run returns text only, because
+ *   the caller applies the result itself behind its own accept/reject
+ *   affordance, and stores no chat. It cannot resume one or use Auto.
  *
- * Both modes therefore end at the same place: the person editing the document
- * decides what lands in it.
+ * Both end at the same place: the person editing the page decides what lands
+ * in it.
  */
-export type AgentChatMode = 'assistant' | 'rewrite';
+export type AgentRunProfile = AgentChatRequestInput['profile'];
 
 /**
  * Where the author is working, sent next to the message rather than pasted
@@ -49,29 +49,36 @@ export type AgentChatParams = {
    * error and never falls back to another engine.
    */
   engine?: EngineStatusResponse['engine'] | null;
-  mode?: AgentChatMode;
+  /** Omitted means `chat`. */
+  profile?: AgentRunProfile;
+  review?: NonNullable<AgentChatRequestInput['review']>;
   /**
-   * One-shot run with no chat behind it (rewrite mode only). The editor's
-   * inline AI uses this: each rewrite used to become a single-message chat
-   * cluttering the document's chat list.
+   * A server preset id (`ColWrite-api/src/agent/profiles/presets.py`): the
+   * server supplies its instruction, so the message carries only the
+   * author's own words, and may be empty. Its profile must be the run's.
    */
-  ephemeral?: boolean;
+  preset?: string;
+  /** The run's catalog-backed budget tier; Deep without a plan scopes one first. */
+  effort?: NonNullable<AgentChatRequestInput['effort']>;
+  /** Default off. Only narrows account/workspace permissions, never grants them. */
+  web?: boolean;
+  plan_id?: string;
+  plan?: NonNullable<AgentChatRequestInput['plan']>;
+  answers?: NonNullable<AgentChatRequestInput['answers']>;
   context?: AgentChatContext;
   attachments?: ChatAttachment[];
   /**
    * `auto` asks for the run's change sets to be applied by the open editor
    * without review (D18): sent while the author has Auto on in the chat
-   * composer, and only in `assistant` mode. The server decides; each set
+   * composer, and only for a `chat` run. The server decides; each set
    * carries the effective `apply_policy`. Omitted means `propose`.
    */
   apply_mode?: Extract<AgentChatRequestInput['apply_mode'], 'auto'>;
 };
 
 export type AgentChatResult = {
-  chatId: string | null;
-  /** The turn's answer, the chat's new leaf. */
-  messageId: number | null;
-  usage: { promptTokens: number; completionTokens: number } | null;
+  /** The turn's `done`: its stored answer (the chat's new leaf), what served it, used and cost. */
+  done: AgentDone | null;
   /**
    * How the stream ended: `done` (completed), `error` (server reported a
    * terminal error), or `null` — the connection closed without either, which
@@ -92,6 +99,8 @@ export type AgentChatOptions = {
   /** Detach on navigation; explicit Stop uses signal.reason === 'cancel'. */
   abortBehavior?: 'cancel' | 'detach';
   resume?: ResumeAgentRun;
+  /** New generation from an interrupted run's checkpoint, not event replay. */
+  checkpoint?: CheckpointResume;
   onRunStarted?: (run: ResumeAgentRun) => void;
   /**
    * WebSocket reconnect policy. The saved event cursor and idempotent start

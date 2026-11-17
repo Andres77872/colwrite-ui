@@ -8,6 +8,7 @@ import { createTestQueryClient } from '@/__tests__/queryClient';
 import { TestWorkspace } from '@/__tests__/workspace';
 import { useChatAttachments } from '../useChatAttachments';
 import * as images from '@/api/assistant/chatAttachments';
+import { MAX_IMAGE_UPLOAD_BYTES } from '@/data/assets';
 import { http, multipartFields, server } from '@/__tests__/server';
 import { makeResource, onPage } from '@/data/__tests__/resourceFixtures';
 import type { ResourceItem } from '@/data/resources';
@@ -44,7 +45,7 @@ function mockResources(stored: ResourceItem = makeResource()) {
 beforeEach(() => { vi.restoreAllMocks(); });
 afterEach(() => cleanup());
 const ensurePage = vi.fn(async () => 'doc-1' as string | null);
-const image = { kind: 'image' as const, image_id: 'image-1', filename: 'chart.png', media_type: 'image/png', size_bytes: 3 };
+const image = { kind: 'image' as const, asset_id: 'ast-00000000-0000-4000-8000-000000000001', filename: 'chart.png', media_type: 'image/png', size_bytes: 3 };
 
 describe('chat attachment draft', () => {
   it('saves a page that has no id before uploading a PDF to it, and says so when it cannot', async () => {
@@ -122,7 +123,7 @@ describe('chat attachment draft', () => {
     const { result } = renderHook(() => useChatAttachments(null, ensurePage));
     act(() => result.current.addFiles([
       new File(['svg'], 'unsafe.svg', { type: 'image/svg+xml' }),
-      new File([new Uint8Array(images.MAX_CHAT_IMAGE_BYTES + 1)], 'large.png', { type: 'image/png' }),
+      new File([new Uint8Array(MAX_IMAGE_UPLOAD_BYTES + 1)], 'large.png', { type: 'image/png' }),
     ]));
     expect(result.current.items.every((item) => item.state === 'error')).toBe(true);
     expect(upload).not.toHaveBeenCalled();

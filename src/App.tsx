@@ -3,12 +3,15 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { createAppQueryClient } from './api/query'
 import { EditorProvider, useDocumentActions, useDocumentSession, useDocumentStatus } from './editor'
 import { ProposalsProvider } from './editor/ProposalsContext'
+import { ReferenceHealthProvider } from './components/editor/References/ReferenceHealthProvider'
+import { ReviewCommentsProvider } from './components/editor/ReviewComments/ReviewCommentsProvider'
 import { AppShell } from './components/layout/AppShell'
 import { Canvas } from './components/editor/Canvas'
 import { PageTopbar } from './components/editor/DocumentChrome'
 import { FloatingToolbar } from './components/editor/FloatingToolbar'
 import { SlashMenu } from './components/editor/SlashMenu'
-import { PanelsProvider, ToolsAside } from './components/panels'
+import { FindCitationsHost } from './components/editor/FindCitations'
+import { PanelsProvider, PanelsAside } from './components/panels'
 import { Sidebar } from './components/layout/Sidebar'
 import { DocumentUrlSync, NavigationProvider } from './components/layout/NavigationContext'
 import { useDocumentTitle, useStrayFileDropGuard, useUnsavedGuard } from './components/layout/useAppChrome'
@@ -21,7 +24,7 @@ import { LandingPage } from './components/landing'
 import { SettingsDialog } from './components/profile'
 import { Spinner } from './components/ui/spinner'
 import { ErrorBoundary } from './components/common/ErrorBoundary'
-import { AgentEngineProvider, AgentToolsProvider } from './components/preferences'
+import { AgentEngineProvider, AssistantCatalogProvider } from './components/preferences'
 import { DocumentLoadingBoundary } from './components/editor/DocumentLoading'
 import { useToast } from './components/ui/toastContext'
 import { WorkspaceProvider } from './components/workspace/WorkspaceProvider'
@@ -64,19 +67,22 @@ function App() {
         <AgentEngineProvider>
           <PanelsProvider>
             <WorkspaceScope>
-              <AgentToolsProvider>
+              <AssistantCatalogProvider>
                 <EditorProvider>
                   <DocumentUrlSync />
                   {/* Pending agent changes are applied through the editor's own patch
                       path once the author accepts them. These providers reset their
                       tagged page state without remounting the scope. */}
                   <ProposalsProvider>
-                    <ChatSessionsProvider>
-                      <Surface />
-                    </ChatSessionsProvider>
+                    {/* The page's last reference audit, and "Check references". */}
+                    <ReferenceHealthProvider>
+                      <ChatSessionsProvider>
+                        <ReviewCommentsProvider><Surface /></ReviewCommentsProvider>
+                      </ChatSessionsProvider>
+                    </ReferenceHealthProvider>
                   </ProposalsProvider>
                 </EditorProvider>
-              </AgentToolsProvider>
+              </AssistantCatalogProvider>
             </WorkspaceScope>
           </PanelsProvider>
         </AgentEngineProvider>
@@ -137,6 +143,7 @@ function Surface() {
               <PageTopbar />
               <Canvas />
               <FloatingToolbar />
+              <FindCitationsHost />
               <SlashMenu />
             </DocumentLoadingBoundary>
           </ErrorBoundary>
@@ -144,7 +151,7 @@ function Surface() {
         aside={
           <ErrorBoundary label="this panel">
             <DocumentToolBoundary>
-              <ToolsAside />
+              <PanelsAside />
             </DocumentToolBoundary>
           </ErrorBoundary>
         }

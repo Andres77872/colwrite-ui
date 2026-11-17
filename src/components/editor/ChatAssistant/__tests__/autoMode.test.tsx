@@ -1,3 +1,4 @@
+import { agentDone } from '@/__tests__/agentDone';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createRef, useImperativeHandle } from 'react';
@@ -26,8 +27,8 @@ import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 const serverDoc = () => ({
   name: 'Doc',
   blocks: [
-    { id: 'a', type: 'paragraph', html: '<p>a</p>', children: [] },
-    { id: 'b', type: 'paragraph', html: '<p>b</p>', children: [] },
+    { id: 'a', type: 'paragraph', html: 'a', children: [] },
+    { id: 'b', type: 'paragraph', html: 'b', children: [] },
   ],
 });
 
@@ -73,26 +74,16 @@ const { ChatAssistant } = await import('../ChatAssistant');
 const { TooltipProvider } = await import('@/components/ui/tooltip');
 const { ConfirmContext } = await import('@/components/ui/confirmContext');
 const { ToastContext } = await import('@/components/ui/toastContext');
-const { AgentToolsContext } = await import('@/components/preferences/agentToolsContextState');
+const { AssistantCatalogContext, catalogValue } = await import('@/components/preferences/assistantCatalogContextState');
+const { assistantCatalog } = await import('@/dev/msw/assistantCatalog');
+const { fixtures: mockState } = await import('@/dev/msw/fixtures');
 
-/** The workspace's policy a test runs under; `null` leaves the composer without one, as before it is read. */
+/** The workspace's policy a test runs under, as its catalog reports it; `null` keeps the test workspace's own. */
 let workspacePolicy: { web_search: boolean; outside_research: boolean; auto: boolean } | null = null;
 function WithPolicy({ children }: { children: React.ReactNode }) {
   if (!workspacePolicy) return <>{children}</>;
-  const policy = workspacePolicy;
-  return (
-    <AgentToolsContext.Provider
-      value={{
-        settings: null, loading: false, loaded: true, error: null,
-        refresh: async () => null,
-        updateSettings: async () => { throw new Error('not in this test'); },
-        isSourceEnabled: () => false, isToolEnabled: () => false,
-        policy, switchedOffBy: () => null,
-      }}
-    >
-      {children}
-    </AgentToolsContext.Provider>
-  );
+  const catalog = assistantCatalog({ account: mockState.assistant, policy: { ...workspacePolicy, images: true }, role: 'owner', engine: 'gateway', engines: [] });
+  return <AssistantCatalogContext.Provider value={catalogValue(catalog, false, null)}>{children}</AssistantCatalogContext.Provider>;
 }
 
 // ── Harness ──
@@ -165,8 +156,8 @@ async function turnOnAuto() {
 function answer(play: (handlers: AgentEventHandlers) => void = () => {}) {
   runAgentTurn.mockImplementationOnce(async (_params: AgentChatParams, handlers: AgentEventHandlers) => {
     play(handlers);
-    handlers.onDone?.('chat-1', 1, { promptTokens: 0, completionTokens: 0 });
-    return { chatId: 'chat-1', messageId: 1, usage: null, terminal: 'done' };
+    handlers.onDone?.(agentDone('chat-1', 1, { promptTokens: 0, completionTokens: 0 }));
+    return { done: null, terminal: 'done' };
   });
 }
 
@@ -188,8 +179,8 @@ const autoSet = () => ({
   documentId: 'doc-1',
   status: 'pending',
   operations: [
-    { op: 'replace_block', blockId: 'a', block: { html: '<p>a, tighter</p>' } },
-    { op: 'append_block', block: { id: 'n', type: 'paragraph', html: '<p>new</p>', children: [] } },
+    { op: 'write_blocks', position: 'replace', blockId: 'a', blocks: [{ id: 'a', type: 'paragraph', html: 'a, tighter', children: [] }] },
+    { op: 'write_blocks', position: 'append', blockId: null, blocks: [{ id: 'n', type: 'paragraph', html: 'new', children: [] }] },
   ],
   unmappableOperations: [],
   baseEtag: 'cw:1',
@@ -258,7 +249,7 @@ describe('the Auto switch', () => {
     expect(screen.getByText('Auto is on: edits apply without asking')).toBeTruthy();
     answer();
     await send();
-    expect(lastParams()).toMatchObject({ mode: 'assistant', apply_mode: 'auto' });
+    expect(lastParams()).toMatchObject({ profile: 'chat', apply_mode: 'auto' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
     expect(autoSwitch().getAttribute('aria-checked')).toBe('false');
@@ -275,10 +266,23 @@ describe('the Auto switch', () => {
     expect(off.getAttribute('aria-checked')).toBe('false');
     expect(document.getElementById(off.getAttribute('aria-describedby') ?? '')?.textContent).toBe("Auto isn't available in this workspace");
     // What else the workspace switched off is marked beside it.
-    expect(screen.getByRole('img', { name: 'Web search is switched off in this workspace' })).toBeTruthy();
+    // In the catalog's words, from the toolset the policy blocked.
+    expect(screen.getByRole('img', { name: 'Web search is switched off in this workspace.' })).toBeTruthy();
     answer();
     await send();
     expect(lastParams().apply_mode).toBeUndefined();
+  });
+
+  it('stays available with Web on, and asks for Auto: the server grants it whatever the run’s tools', async () => {
+    mockState.assistant = { switches: { web: true }, sources: { semantic_scholar: true } };
+    workspacePolicy = { web_search: true, outside_research: true, auto: true };
+    await mount();
+    const on = autoSwitch() as HTMLButtonElement;
+    expect(on.disabled).toBe(false);
+    await turnOnAuto();
+    answer();
+    await send();
+    expect(lastParams().apply_mode).toBe('auto');
   });
 
   it('cannot be turned on by a viewer, and says so before sending (M6.UI-2)', async () => {
@@ -298,9 +302,9 @@ describe('the Auto switch', () => {
   it('says why the server paused it for a message', async () => {
     await mount();
     await turnOnAuto();
-    answer((handlers) => handlers.onApplyPolicy?.('review', 'web_research'));
+    answer((handlers) => handlers.onApplyPolicy?.('review', 'untrusted_content'));
     await send();
-    expect(screen.getByText('Auto is paused: web research is on for this message')).toBeTruthy();
+    expect(screen.getByText('Auto paused: this reply read outside material, so its changes wait for your review')).toBeTruthy();
 
     // The next message is asked about afresh.
     answer();
@@ -349,7 +353,7 @@ describe('an Auto turn', () => {
     await send();
 
     await waitFor(() => expect(editor().blocks.map((block) => block.id)).toEqual(['a', 'b', 'n']));
-    expect(editor().blocks[0]).toMatchObject({ html: '<p>a, tighter</p>' });
+    expect(editor().blocks[0]).toMatchObject({ html: 'a, tighter' });
     expect(decideChangeSetOperations).toHaveBeenCalledWith(
       'doc-1',
       'cs-1',
@@ -361,8 +365,58 @@ describe('an Auto turn', () => {
 
     fireEvent.click(within(line).getByRole('button', { name: 'Undo the 2 changes Auto applied' }));
     await waitFor(() => expect(editor().blocks.map((block) => block.id)).toEqual(['a', 'b']));
-    expect(editor().blocks[0]).toMatchObject({ html: '<p>a</p>' });
+    expect(editor().blocks[0]).toMatchObject({ html: 'a' });
     expect(line.textContent).toContain('Undid 2 changes');
+  });
+
+  it('applies what it stored before the run read outside material, and leaves the set after it for review', async () => {
+    // The run's first set is stored `auto`. It then reads a paper (untrusted
+    // content): its next status says Auto ended, and the server stores the
+    // set after it as `review` with `untrusted_content`.
+    const afterRead = {
+      ...autoSet(),
+      changeSetId: 'cs-2',
+      toolCallId: 'call_2',
+      operations: [{ op: 'write_blocks', position: 'replace', blockId: 'b', blocks: [{ id: 'b', type: 'paragraph', html: 'b, from the paper', children: [] }] }],
+      applyPolicy: 'review',
+      autoBlockedReason: 'untrusted_content',
+    };
+    getChangeSet.mockImplementation(async (_documentId: string, changeSetId: string) => (changeSetId === 'cs-2' ? afterRead : autoSet()));
+    await mount();
+    await turnOnAuto();
+    answer((handlers) => {
+      handlers.onApplyPolicy?.('auto', null);
+      handlers.onToolAction?.(stored());
+      handlers.onApplyPolicy?.('review', 'untrusted_content');
+      handlers.onToolAction?.({
+        ...stored(), toolCallId: 'call_2', changeSetId: 'cs-2', proposalOperationCount: 1,
+        applyPolicy: 'review', autoBlockedReason: 'untrusted_content',
+      });
+    });
+    await send();
+
+    // The first set is applied; the one after the read is not.
+    await waitFor(() => expect(editor().blocks.map((block) => block.id)).toEqual(['a', 'b', 'n']));
+    await waitFor(() => expect(getChangeSet).toHaveBeenCalledWith('doc-1', 'cs-2'));
+    await act(async () => {});
+    expect(editor().blocks[0]).toMatchObject({ html: 'a, tighter' });
+    expect(editor().blocks[1]).toMatchObject({ html: 'b' });
+    expect(decideChangeSetOperations).toHaveBeenCalledTimes(1);
+    expect(decideChangeSetOperations).toHaveBeenCalledWith('doc-1', 'cs-1', expect.anything(), 'auto');
+    expect(await screen.findByRole('button', { name: /Review 1 change/ })).toBeTruthy();
+
+    // Above the composer, and kept under the reply once the strip moves on.
+    const paused = 'Auto paused: this reply read outside material, so its changes wait for your review';
+    expect(screen.getAllByText(paused)).toHaveLength(2);
+    const applied = await screen.findByRole('list', { name: 'Changes Auto applied' });
+    expect(applied.textContent).toContain('Applied 2 changes');
+    expect(within(applied.parentElement as HTMLElement).getByText(paused)).toBeTruthy();
+
+    // The next message is asked about afresh; the reply keeps its note.
+    answer();
+    await send();
+    expect(screen.getByText('Auto is on: edits apply without asking')).toBeTruthy();
+    expect(screen.getByText(paused)).toBeTruthy();
   });
 
   it('leaves the set for review once Auto is off', async () => {

@@ -2,7 +2,6 @@ import { takeItems } from '@/lib/itemAt';
 import { describe, it, expect, afterEach } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { AuthProvider } from '@/components/auth/AuthContext';
-import { ASK_AI_PRESETS } from '@/components/editor/AskAi/presets';
 import { LandingPage } from '../LandingPage';
 
 function renderLanding() {
@@ -31,18 +30,16 @@ describe('LandingPage', () => {
     expect(screen.getAllByRole('button', { name: /sign in/i }).length).toBeGreaterThan(1);
   });
 
-  it('lists every Ask AI action a selection offers', () => {
+  it('pictures Ask AI on a selection, in its groups', () => {
     renderLanding();
-    const presets = ASK_AI_PRESETS.filter((preset) => preset.applies.includes('selection'));
-    expect(presets.length).toBeGreaterThan(5);
-    for (const preset of presets) {
-      expect(screen.getAllByText(preset.label).length).toBeGreaterThan(0);
+    for (const label of ['Edit or review', 'Improve writing', 'Change tone', 'Check the claims']) {
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
   });
 
   it('surfaces the real tool panels', () => {
     renderLanding();
-    for (const label of ['Search arXiv', 'Search paper pages', 'Library', 'Document JSON']) {
+    for (const label of ['Paper search', 'Library', 'Sources', 'Document JSON']) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
   });

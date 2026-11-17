@@ -4,20 +4,22 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { describeApiError } from '@/api/errors';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { resourceContentUrl, resourceListQuery, resourcesOf } from '@/data/resources';
+import { assetContentUrl, loadAssetBlob } from '@/data/assets';
 import {
-  attachmentKey, attachmentName, CHAT_FILE_ACCEPT, chatImageContentUrl, loadChatImageBlob, MAX_CHAT_ATTACHMENTS,
+  attachmentKey, attachmentName, CHAT_FILE_ACCEPT, MAX_CHAT_ATTACHMENTS,
   type ChatAttachment,
 } from '@/api/assistant/chatAttachments';
 import type { ChatAttachmentDraft } from './useChatAttachments';
 import { ListSkeleton } from '@/components/ui/list-skeleton';
+import { Spinner } from '@/components/ui/spinner';
 import { InlineError } from '@/components/ui/inline-error';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 
-function ImagePreview({ imageId, name, small = false }: { imageId: string; name: string; small?: boolean }) {
+function ImagePreview({ assetId, name, small = false }: { assetId: string; name: string; small?: boolean }) {
   const host = useRef<HTMLSpanElement>(null);
   const workspaceId = useWorkspaceId();
-  const [preview, setPreview] = useState<{ imageId: string; url: string | null } | null>(null);
+  const [preview, setPreview] = useState<{ workspaceId: string; assetId: string; url: string | null } | null>(null);
   useEffect(() => {
     const controller = new AbortController();
     let objectUrl: string | undefined;
@@ -27,12 +29,12 @@ function ImagePreview({ imageId, name, small = false }: { imageId: string; name:
       if (started || controller.signal.aborted) return;
       started = true;
       observer?.disconnect();
-      void loadChatImageBlob(workspaceId, imageId, controller.signal).then((blob) => {
+      void loadAssetBlob(workspaceId, assetId, controller.signal, 'thumbnail').then((blob) => {
         if (controller.signal.aborted) return;
         objectUrl = URL.createObjectURL(blob);
-        setPreview({ imageId, url: objectUrl });
+        setPreview({ workspaceId, assetId, url: objectUrl });
       }).catch(() => {
-        if (!controller.signal.aborted) setPreview({ imageId, url: null });
+        if (!controller.signal.aborted) setPreview({ workspaceId, assetId, url: null });
       });
     };
     // Native image lazy-loading does not defer fetch-to-blob. Observe the
@@ -44,12 +46,13 @@ function ImagePreview({ imageId, name, small = false }: { imageId: string; name:
       observer.observe(host.current);
     } else load();
     return () => { controller.abort(); observer?.disconnect(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [imageId, workspaceId]);
+  }, [assetId, workspaceId]);
   return <span ref={host} className="inline-flex min-h-4 min-w-4 max-w-full">
-    {preview?.imageId !== imageId ? <LoaderCircle aria-label="Loading image preview" className="size-4 animate-spin text-muted-foreground" />
+    {/* A bare svg's aria-label is read by few screen readers: the words go in text. */}
+    {preview?.workspaceId !== workspaceId || preview.assetId !== assetId ? <span className="inline-flex"><Spinner className="size-4 text-muted-foreground" /><span className="sr-only">Loading image preview</span></span>
       : preview.url === null
         ? <span className="flex items-center gap-1 text-xs text-muted-foreground"><ImageOff aria-hidden="true" className="size-4" />{!small && 'Preview unavailable'}</span>
-        : <img src={preview.url} alt={name} onError={() => setPreview({ imageId, url: null })}
+        : <img src={preview.url} alt={name} onError={() => setPreview({ workspaceId, assetId, url: null })}
           className={small ? 'size-8 shrink-0 rounded object-cover' : 'max-h-36 max-w-full rounded object-contain'} />}
   </span>;
 }
@@ -59,10 +62,10 @@ export function MessageAttachments({ attachments }: { attachments?: ChatAttachme
   if (!attachments?.length) return null;
   return <ul aria-label="Message attachments" className="mb-2 flex flex-wrap gap-2 whitespace-normal">
     {attachments.map((item) => <li key={attachmentKey(item)} className="min-w-0 max-w-full">
-      <a href={item.kind === 'image' ? chatImageContentUrl(workspaceId, item.image_id) : resourceContentUrl(workspaceId, item.resource_id)}
+      <a href={item.kind === 'image' ? assetContentUrl(workspaceId, item.asset_id) : resourceContentUrl(workspaceId, item.resource_id)}
         target="_blank" rel="noopener noreferrer" className="flex max-w-full flex-col gap-1 rounded-lg border border-border bg-background p-1.5 text-xs hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
         {item.kind === 'image'
-          ? <ImagePreview imageId={item.image_id} name={attachmentName(item)} />
+          ? <ImagePreview assetId={item.asset_id} name={attachmentName(item)} />
           : <FileText aria-hidden="true" className="h-5 w-5 text-muted-foreground" />}
         <span className="max-w-48 truncate">{attachmentName(item)}</span>
       </a>
@@ -77,7 +80,7 @@ export function DraftAttachments({ draft }: { draft: ChatAttachmentDraft }) {
       {draft.items.map((item) => <li key={item.id} className="rounded-md border border-border bg-subtle/40 px-2 py-1.5">
         <div className="flex items-center gap-2 text-xs">
           {item.state === 'uploading' ? <LoaderCircle aria-hidden="true" className="size-4 shrink-0 animate-spin" />
-            : item.attachment?.kind === 'image' ? <ImagePreview imageId={item.attachment.image_id} name="" small />
+            : item.attachment?.kind === 'image' ? <ImagePreview assetId={item.attachment.asset_id} name="" small />
               : <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
           <span className="min-w-0 flex-1 truncate" title={item.filename}>{item.filename}</span>
           {item.state === 'uploading' && <span role="status" className="text-muted-foreground">Uploading…</span>}

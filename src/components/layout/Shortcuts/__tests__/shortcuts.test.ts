@@ -1,6 +1,6 @@
 import { itemAt } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
-import { SHORTCUTS, keycapLabel, matchShortcut, shortcutBindingKey, shortcutReference } from '../shortcuts';
+import { SHORTCUTS, keycapLabel, matchShortcut, modKeyLabel, shortcutBindingKey, shortcutReference } from '../shortcuts';
 
 /** A KeyboardEvent without needing a DOM target. */
 function key(init: KeyboardEventInit): KeyboardEvent {
@@ -140,7 +140,10 @@ describe('shortcutReference', () => {
     ]);
     const redo = itemAt(sections, 0).rows.find((row) => row.label === 'Redo');
     expect(redo?.bindings).toHaveLength(2);
-    expect(labels).toContain('Ask AI on the current block');
+    expect(labels).toContain('Ask AI on the current block or selection');
+    // One action, one row: both chords that show the assistant share it.
+    const assistant = sections.find((section) => section.group === 'AI')?.rows.find((row) => row.label === 'Show or hide the assistant');
+    expect(assistant?.bindings).toEqual([['Mod', 'Shift', 'J'], ['Mod', 'J']]);
     expect(labels).toContain('Duplicate the block');
   });
 
@@ -172,5 +175,13 @@ describe('keycapLabel', () => {
   it('keeps Ctrl and Alt elsewhere', () => {
     expect(keycapLabel('Mod', 'Ctrl')).toBe('Ctrl');
     expect(keycapLabel('Alt', 'Ctrl')).toBe('Alt');
+  });
+});
+
+describe('modKeyLabel (U-19: one helper for every hint)', () => {
+  it('reads a chord as the platform writes it', () => {
+    expect(modKeyLabel('Enter', '⌘')).toBe('⌘Enter');
+    expect(modKeyLabel('Enter', 'Ctrl')).toBe('Ctrl+Enter');
+    expect(modKeyLabel('↵', 'Ctrl')).toBe('Ctrl+↵');
   });
 });

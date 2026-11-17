@@ -129,6 +129,17 @@ export function followJob(workspaceId: string, job: WorkspaceJob, follow: Follow
   look(0);
 }
 
+/**
+ * Follow `job` as `followJob` does, and resolve with it once it is `done` or
+ * `failed`: for work whose result the caller shows (a claim check, a
+ * reference audit). A workspace switch forgets it, and the promise with it.
+ */
+export function settledJob(workspaceId: string, job: WorkspaceJob, follow: Omit<Follow, 'onSettled'>): Promise<WorkspaceJob> {
+  return new Promise((resolve) => {
+    followJob(workspaceId, job, { ...follow, onSettled: resolve });
+  });
+}
+
 /** Stop showing a job that failed. */
 export function dismissJob(key: string): void {
   forget(key);

@@ -1,6 +1,8 @@
-import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { insertEmptyCitation } from '../SlashMenu/items/insertChild';
+import { openInlineEditor } from '../SlashMenu/items/editInline';
+import { modKeyLabel } from '@/components/layout/Shortcuts/shortcuts';
 import { cn } from '@/lib/utils';
-import { uid } from '@/lib/uid';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -14,7 +16,6 @@ import {
   useEditorActions,
   type BlockKindId,
 } from '@/editor';
-import { AgentToolsContext } from '@/components/preferences/agentToolsContextState';
 import { PanelsContext } from '@/components/panels/panelsContextState';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import {
@@ -28,16 +29,20 @@ import {
   Link2,
   MoreHorizontal,
   Quote,
+  SearchCheck,
   Sparkles,
   Strikethrough,
   Telescope,
   Underline,
 } from 'lucide-react';
 import { openAskAi } from '../AskAi/askAiEvents';
-import { ASK_AI_PRESETS, type AskAiPreset } from '../AskAi/presets';
+import { askAiPresets, type AskAiPreset } from '../AskAi/presets';
+import { AssistantCatalogContext } from '@/components/preferences/assistantCatalogContextState';
 import { ToolbarMenu } from './ToolbarMenu';
 import { EDIT_LINK_EVENT, normalizeHref } from './linkHref';
 import { LinkHoverCard } from './LinkHoverCard';
+import { openFindCitations, planSentences } from '../FindCitations';
+import { proseOffset, proseText } from '../References/citeAtCursor';
 
 const TOOLBAR_HEIGHT = 36;
 const VIEWPORT_MARGIN = 8;
@@ -47,14 +52,6 @@ const GAP = 8;
 const ESTIMATED_WIDTH = 460;
 /** Tall enough for either menu; decides whether a menu opens up or down. */
 const MENU_ROOM = 480;
-
-/** `⌘X` on Apple platforms, `Ctrl+X` everywhere else. */
-function modKeyLabel(key: string): string {
-  const apple =
-    typeof navigator !== 'undefined' &&
-    /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent);
-  return apple ? `⌘${key}` : `Ctrl+${key}`;
-}
 
 /**
  * The top of the room the toolbar may use: just under the page's topbar (the
@@ -96,12 +93,8 @@ const EMPTY_STATE: FormatState = { bold: false, italic: false, underline: false,
  */
 const MORE_AI_GROUPS: ReadonlyArray<{ label: string; ids: readonly string[] }> = [
   { label: 'Edit', ids: ['improve', 'grammar', 'shorter', 'longer', 'simplify', 'tone', 'translate'] },
-  { label: 'Research', ids: ['explain', 'cite', 'check', 'counter'] },
+  { label: 'Research', ids: ['explain', 'check', 'counter'] },
 ];
-
-function presetById(id: string): AskAiPreset | undefined {
-  return ASK_AI_PRESETS.find((preset) => preset.id === id);
-}
 
 /** The `<code>` element the selection sits inside, if any. */
 function codeAncestor(node: Node | null): HTMLElement | null {
@@ -147,7 +140,7 @@ function toggleInlineCode(range: Range): void {
  * class, which `Editable` renders on every prose block.
  */
 function useFloatingToolbar() {
-  const { exec, refs, updateHtml, addParagraphChild, getBlock, setBlockKind } = useEditorActions();
+  const { exec, refs, updateHtml, addParagraphChild, removeParagraphChild, getBlock, setBlockKind } = useEditorActions();
   const documentId = useDocumentId();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0, below: false });
@@ -396,6 +389,16 @@ function useFloatingToolbar() {
     [],
   );
 
+  /** The selection as prose offsets in its block, the part inside the block only. */
+  const selectedProse = useCallback((): { blockId: string; element: HTMLElement; start: number; end: number } | null => {
+    const range = savedRangeRef.current;
+    const el = blockId ? refs.current[blockId] : null;
+    if (!range || !el || !blockId) return null;
+    const start = el.contains(range.startContainer) ? proseOffset(el, range.startContainer, range.startOffset) : 0;
+    const end = el.contains(range.endContainer) ? proseOffset(el, range.endContainer, range.endOffset) : proseText(el).length;
+    return { blockId, element: el, start: Math.min(start, end), end: Math.max(start, end) };
+  }, [blockId, refs]);
+
   /** Write the block's DOM back to document state after a hand-made edit. */
   const commitActiveBlock = useCallback(() => {
     const { el, id } = findBlockId(document.getSelection()?.anchorNode ?? null);
@@ -460,40 +463,26 @@ function useFloatingToolbar() {
 
   /**
    * Put an empty citation straight after the selection and open its source
-   * picker — the selected words are the claim being cited.
-   *
-   * The placeholder and the child are committed together: a paragraph whose
-   * html and children disagree fails validation for every later edit.
+   * picker — the selected words are the claim being cited. The same action
+   * as `/citation`, at the selection's end.
    */
   const cite = useCallback(() => {
     const range = savedRangeRef.current;
     if (!range || !blockId) return;
-    const el = refs.current[blockId];
-    if (!el || !range.endContainer.isConnected || !el.contains(range.endContainer)) return;
-
     const at = range.cloneRange();
     at.collapse(false);
-    const childId = uid();
-    const placeholder = document.createElement('span');
-    placeholder.setAttribute('data-child-id', childId);
-    placeholder.contentEditable = 'false';
-    at.insertNode(placeholder);
-
     dismissedRef.current = true;
     setVisible(false);
-    addParagraphChild(blockId, { id: childId, type: 'citation', keys: [], style: 'numeric' });
-    updateHtml(blockId, serializeEditableHtml(el));
-
-    // The widget mounts into the placeholder on the next render; open it
-    // then, so the author lands in the search field rather than on a red pill.
-    let attempts = 0;
-    const open = () => {
-      const pill = document.querySelector<HTMLElement>(`[data-child-id="${childId}"] button`);
-      if (pill) pill.click();
-      else if (++attempts < 10) requestAnimationFrame(open);
-    };
-    requestAnimationFrame(open);
-  }, [addParagraphChild, blockId, refs, updateHtml]);
+    insertEmptyCitation({
+      blockId,
+      insertionRange: at,
+      refs,
+      updateHtml,
+      addParagraphChild,
+      editInline: (childId, isEmpty) =>
+        openInlineEditor({ blockId, childId, isEmpty, refs, getBlock, removeParagraphChild, updateHtml }),
+    });
+  }, [addParagraphChild, blockId, getBlock, refs, removeParagraphChild, updateHtml]);
 
   const block = blockId ? getBlock(blockId) : undefined;
 
@@ -508,6 +497,7 @@ function useFloatingToolbar() {
     onFormat,
     onAskAi,
     selectedText,
+    selectedProse,
     turnInto,
     cite,
     dismiss,
@@ -712,9 +702,15 @@ function SelectionToolbar() {
   // A read-only page (a viewer) gets no formatting toolbar: the text can still
   // be selected and copied, and Mod+J asks the assistant about it.
   const { loadingDocumentId, readOnly } = useDocumentSession();
-  const agentTools = useContext(AgentToolsContext);
   // Optional, like the agent tools: outside the workspace there is no sidebar.
   const panels = useContext(PanelsContext);
+  // The Ask AI presets the "…" menu offers: the catalog's labels, and only those it would run here.
+  const catalogPresets = useContext(AssistantCatalogContext)?.presets;
+  // Find citations and the claim check search papers: only where paper search runs.
+  const papersOn = useContext(AssistantCatalogContext)?.papers.on === true;
+  const aiPresets = useMemo(() => new Map(
+    askAiPresets(catalogPresets ?? []).filter((preset) => !preset.unavailable).map((preset) => [preset.id, preset]),
+  ), [catalogPresets]);
   const {
     visible,
     pos,
@@ -726,6 +722,7 @@ function SelectionToolbar() {
     onFormat,
     onAskAi,
     selectedText,
+    selectedProse,
     turnInto,
     cite,
     dismiss,
@@ -853,6 +850,27 @@ function SelectionToolbar() {
     });
   }, []);
 
+  /**
+   * Find citations for the selected sentences (P2.UI-3): the selection as
+   * prose offsets in its paragraph, for the dialog to search and cite.
+   */
+  const findCitations = () => {
+    const selection = selectedProse();
+    if (!selection) return;
+    const el = selection.element;
+    const sentences = planSentences(el, block, selection.start, selection.end);
+    dismiss();
+    openFindCitations(selection.blockId, sentences);
+  };
+
+  /** Check the selection as a claim in the Research panel (P2.UI-3). */
+  const checkClaim = () => {
+    const claim = selectedText();
+    if (!panels || !claim) return;
+    dismiss();
+    panels.openSidebar('research', { tab: 'research', claim });
+  };
+
   /** Runs the selection as a Research query in the right sidebar. */
   const searchPapers = () => {
     const query = selectedText();
@@ -892,7 +910,6 @@ function SelectionToolbar() {
   const kind = block && (block.type === 'paragraph' || block.type === 'heading') ? kindOf(block) : null;
   const KindIcon = kind ? blockKind(kind).icon : Sparkles;
   const canCite = block?.type === 'paragraph' && !locked;
-  const citationsEnabled = agentTools?.isToolEnabled('search_citations') ?? false;
   // Open menus upwards when the toolbar sits low on the screen.
   const menuAbove = pos.top + TOOLBAR_HEIGHT + MENU_ROOM > window.innerHeight && pos.top > MENU_ROOM;
 
@@ -1103,8 +1120,8 @@ function SelectionToolbar() {
                     {groupIndex > 0 && <div role="separator" className={menuSeparator} />}
                     <div className={menuLabel}>{group.label}</div>
                     {group.ids
-                      .map(presetById)
-                      .filter((preset): preset is AskAiPreset => !!preset && (!preset.citations || citationsEnabled))
+                      .map((id) => aiPresets.get(id))
+                      .filter((preset): preset is AskAiPreset => Boolean(preset))
                       .map((preset) => (
                         <button
                           key={preset.id}
@@ -1131,6 +1148,31 @@ function SelectionToolbar() {
                       >
                         <Telescope aria-hidden="true" />
                         <span className="min-w-0 flex-1 truncate">Search papers for this</span>
+                      </button>
+                    )}
+                    {/* Paper search runs here: find sources for the sentences, or judge the claim. */}
+                    {group.label === 'Research' && papersOn && canCite && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        tabIndex={-1}
+                        className={cn(menuItem, 'w-full text-left')}
+                        onClick={findCitations}
+                      >
+                        <Quote aria-hidden="true" />
+                        <span className="min-w-0 flex-1 truncate">Find citations</span>
+                      </button>
+                    )}
+                    {group.label === 'Research' && panels && papersOn && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        tabIndex={-1}
+                        className={cn(menuItem, 'w-full text-left')}
+                        onClick={checkClaim}
+                      >
+                        <SearchCheck aria-hidden="true" />
+                        <span className="min-w-0 flex-1 truncate">Check this claim</span>
                       </button>
                     )}
                   </div>

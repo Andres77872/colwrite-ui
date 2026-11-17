@@ -34,7 +34,7 @@ const EXEMPT_FILES: readonly RegExp[] = [
  * Files that build instructions for the model. Only their UI keys (a preset's
  * `label`, `description`, …) are copy; the rest is prompt text.
  */
-const MODEL_TEXT_FILES: readonly RegExp[] = [/^components\/editor\/AskAi\/presets\.ts$/];
+const MODEL_TEXT_FILES: readonly RegExp[] = [/^components\/editor\/AskAi\/(presets|target)\.ts$/];
 
 /** Object keys whose strings go to the model, never to the screen. */
 const MODEL_KEYS = new Set(['instruction', 'prompt']);

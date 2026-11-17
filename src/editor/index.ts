@@ -1,5 +1,17 @@
 export * from './types';
 export * from './citations';
+export * from './referenceRecords';
+export {
+  CITATION_CREDITS,
+  CITATION_STYLES,
+  DEFAULT_CITATION_STYLE,
+  citationStyleInfo,
+  isCitationStyle,
+  type CitationStyleInfo,
+} from './csl/styles';
+export { markupHasLink, markupHtml, markupMarkdown, markupText, type CslMarkup, type CslNode } from './csl/markup';
+export { loadCitationProcessor } from './csl/processor';
+export { useCitationProcessor } from './csl/useCitationProcessor';
 export { EditorProvider } from './EditorContext';
 export {
   useEditorActions,

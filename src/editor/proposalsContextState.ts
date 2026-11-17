@@ -45,20 +45,18 @@ export type ProposalsContextValue = {
   pendingCount: number;
   invites: DocumentInvite[];
   /**
-   * Take a streamed `tool_action`.
-   *
-   * `changes` is the size of the change set it names, which is staged for
+   * Take a streamed `tool_action`: the change set it names is staged for
    * review, or applied for an Auto turn, once it has been read (see
-   * `autoApplied`). A redelivery reports zero — the caller prints these
-   * numbers in the transcript.
+   * `autoApplied`); a page it created is offered. A redelivery changes
+   * nothing.
    */
-  receive: (action: ToolAction, options?: ReceiveOptions) => {
-    changes: number;
-    invited: boolean;
-  };
+  receive: (action: ToolAction, options?: ReceiveOptions) => void;
   accept: (changeId: string) => void;
   reject: (changeId: string) => void;
   acceptAll: () => void;
+  acceptWording: () => void;
+  acceptGroup: (setId: string, kind: ChangeSet['groups'][number]['kind']) => void;
+  rejectGroup: (setId: string, kind: ChangeSet['groups'][number]['kind']) => void;
   rejectAll: () => void;
   ready: (change: ProposedChange) => boolean;
   focusChange: (changeId: string) => void;

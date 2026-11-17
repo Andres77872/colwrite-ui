@@ -29,7 +29,7 @@ const WORKSPACE = 'colwrite:ws:';
 export const THEME_KEY = `${DEVICE}theme`;
 export const PAGE_SETTINGS_KEY = `${DEVICE}page-settings`;
 export const AGENT_ENGINE_KEY = `${DEVICE}agent-engine`;
-/** One panel-layout setting (`activeTool`, `leftWidth`, …). */
+/** One panel-layout setting (`activePanel`, `leftWidth`, …). */
 export const panelKey = (setting: string) => `${DEVICE}panels:${setting}`;
 /**
  * The last session refresh, shared between tabs so a tab that lost a refresh
@@ -61,6 +61,8 @@ export const reviewKey = (workspaceId: string, documentId: string, changeSetId: 
 /** The chat a page last had open. */
 export const chatSelectionKey = (workspaceId: string, documentId: string) =>
   `${workspaceStoragePrefix(workspaceId)}chat:${documentId}`;
+/** The last 200 run completions this browser has read, scoped to the workspace. */
+export const seenRunsKey = (workspaceId: string) => `${workspaceStoragePrefix(workspaceId)}runs:seen`;
 /** The collections open in the sidebar's pages tree (at most 200 ids). */
 export const treeExpandedKey = (workspaceId: string) => `${workspaceStoragePrefix(workspaceId)}tree:expanded`;
 /** Whether the sidebar's Recent list is folded away. */

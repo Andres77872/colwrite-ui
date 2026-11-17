@@ -1,8 +1,9 @@
 /**
  * The mock API's state, shared by the dev preview (`dev-preview.html`) and the
  * tests: two workspaces (the personal one and a second), their pages with
- * version trees, the stored change sets, chats, PDFs, the Library's
- * collections, the agent tool catalog and the engines.
+ * version trees, the stored change sets, chats with their reply records,
+ * PDFs, the Library's collections, the account's assistant switches and the
+ * engines (the catalog is computed from them, `./assistantCatalog`).
  *
  * Everything here answers in the contract's shapes (`src/api/schema.d.ts`);
  * where the contract is looser than ColWrite-api, the rules follow the API
@@ -10,21 +11,23 @@
  * it all back as it was; the tests do that after every case.
  */
 import { uid } from '@/lib/uid';
+import { escapeHtml } from '@/lib/clipboard';
 import type {
-  AgentToolSettingsResponse,
+  AiUseEntry,
+  ReferenceAuditReport,
   ChangeSetOperationDecisionResponse,
   ChangeSetResponse,
-  ChatImageItem,
+  AssetInfo,
+  ImageGenerationInfo,
   ChatMessage,
+  ChatPlan,
   ChatSummary,
-  CitationSource,
-  ClaimAssessment,
-  ClaimEvidenceFinding,
   CollectionDetail,
   CollectionGrantState,
   CollectionSummary,
   DeletedWorkspaceSummary,
   DocumentContentOutput,
+  DocumentComment,
   DocumentStateResponse,
   DocumentSummaryResponse,
   EngineStatusResponse,
@@ -33,9 +36,15 @@ import type {
   MessageImage,
   MessagePdf,
   OwnershipTransferModel,
+  Paper as WirePaper,
   PaperGraphResponse,
-  PaperPayload,
+  PaperPassagesResponse,
+  PaperSearchResponse,
+  ReferenceRecordOutput,
+  ReplyRecord,
+  RequestRecord,
   ResourceItem,
+  ReviewSummary,
   RevisionMetadataResponse,
   SemanticDiffEntry,
   TrashCounts,
@@ -51,8 +60,20 @@ import type {
   WorkspaceUsageShare,
   AccountUsageResponse,
 } from '@/api/schema';
-import agentTools from '../agentToolsFixture.json';
 import { FIXTURE_DOCUMENT_ID, fixtureDocument } from '../fixtureDocument';
+import {
+  DU,
+  FEDUS,
+  GOOGLE_STMOE_BLOG,
+  HF_MOE_BLOG,
+  JIANG,
+  LEPIKHIN,
+  ZOPH,
+  asFound,
+} from '../fixtureReferences';
+import { MOCK_DEPLOYMENT, REGISTRY, assistantCatalog, type AccountSwitches, type EngineId } from './assistantCatalog';
+import { emptyEvidence, seededEvidence, type StoredEvidence, type Work } from './evidence';
+import { MOCK_BUILD, auditPage, purposesOf, verificationOf } from './references';
 
 export { FIXTURE_DOCUMENT_ID };
 
@@ -84,7 +105,13 @@ export type SortMode = CollectionSummary['sort_mode'];
 export type WorkspacePolicy = WorkspacePolicyModel;
 
 /** Every switch on: what a workspace with no stored policy restricts (nothing). */
-export const OPEN_POLICY: WorkspacePolicy = { web_search: true, outside_research: true, auto: true };
+export const OPEN_POLICY: WorkspacePolicy = { web_search: true, outside_research: true, auto: true, images: true };
+/**
+ * The lab workspace's policy: its admins turned web search and outside
+ * research off, so its catalog reports Papers and Web blocked, with the
+ * API's reasons, and its paper routes refuse with `workspace_policy`.
+ */
+export const LAB_POLICY: WorkspacePolicy = { web_search: false, outside_research: false, auto: true, images: true };
 
 /** The newest export of a workspace, downloadable until it expires. */
 export type StoredExport = {
@@ -134,7 +161,7 @@ function seededWorkspaces(): Map<string, StoredWorkspace> {
     {
       id: LAB_WORKSPACE_ID, name: 'Lab workspace', kind: 'shared', icon: '🧪',
       last_opened_at: '2026-09-12T08:00:00Z', created_at: '2026-03-02T10:00:00Z', updated_at: '2026-09-12T08:00:00Z',
-      root_sort_mode: 'name', row_version: 1, tree_version: 1, ...live,
+      root_sort_mode: 'name', row_version: 1, tree_version: 1, ...live, policy: LAB_POLICY,
     },
     {
       id: OWNED_WORKSPACE_ID, name: 'Side project', kind: 'shared', icon: 'tint:green',
@@ -340,7 +367,7 @@ export function deleteWorkspaceElsewhere(workspaceId: string): boolean {
 
 /** The workspace's policy; one the account cannot open restricts everything. */
 export function workspacePolicyOf(workspaceId: string): WorkspacePolicy {
-  return liveWorkspace(workspaceId)?.policy ?? { web_search: false, outside_research: false, auto: false };
+  return liveWorkspace(workspaceId)?.policy ?? { web_search: false, outside_research: false, auto: false, images: false };
 }
 
 /** A workspace in the list the switcher reads (`GET /workspaces` `items`). */
@@ -377,8 +404,10 @@ export type StoredDocument = {
   head_seq: number;
   tags: string[];
   blocks: WireBlock[];
-  sources?: CitationSource[] | null;
+  sources?: ReferenceRecordOutput[] | null;
   citationStyle?: DocumentContentOutput['citationStyle'];
+  instructions?: DocumentContentOutput['instructions'];
+  documentType?: DocumentContentOutput['documentType'];
   created_at: string;
   updated_at: string;
   /**
@@ -404,10 +433,10 @@ type WireChild = NonNullable<Extract<WireBlock, { type: 'paragraph' }>['children
 /** A child with the fields its model defaults filled in, as the API serializes it. */
 function wireChild(value: Json): WireChild {
   switch (value.type) {
-    case 'citation': return { style: 'numeric', ...value } as WireChild;
+    case 'citation': return { style: 'nlm-citation-sequence-brackets', sources: [], ...value } as unknown as WireChild;
     case 'equation': return { display: false, numbered: false, ...value } as WireChild;
     case 'table': return { header: false, ...value } as WireChild;
-    case 'aiBeat': return { collapsed: false, message: '', prompt: '', ...value } as WireChild;
+    case 'aiBeat': return { collapsed: false, message: '', prompt: '', output: null, ...value } as WireChild;
     default: return value as WireChild;
   }
 }
@@ -521,8 +550,8 @@ function seededDocuments(): Map<string, StoredDocument> {
       placement_seq: 1,
       name: fixture.name,
       head_seq: fixture.head_seq,
-      citationStyle: 'numeric',
-      sources: fixture.sources as CitationSource[],
+      citationStyle: 'nlm-citation-sequence-brackets',
+      sources: structuredClone(fixture.sources),
       blocks: fixture.blocks.map((block) => wireBlock(block)),
       tags: [],
       created_at: '2026-09-18T17:40:00Z',
@@ -762,6 +791,8 @@ export function contentOf(doc: StoredDocument): DocumentContentOutput {
     blocks: doc.blocks,
     sources: doc.sources ?? null,
     citationStyle: doc.citationStyle ?? null,
+    instructions: doc.instructions ?? null,
+    documentType: doc.documentType ?? null,
   };
 }
 
@@ -830,7 +861,9 @@ function revisionContent(content: DocumentContentOutput, revisionNo: number): Do
     if (block.id === 'li-4') return [];
     if (block.id === 'p-1') {
       const children = (block.children ?? []).map((child) =>
-        child.id === 'c-1' && child.type === 'citation' ? { ...child, keys: ['2101.03961'] } : child,
+        child.id === 'c-1' && child.type === 'citation'
+          ? { ...child, keys: [FEDUS.key], sources: (child.sources ?? []).filter((source) => source.key === FEDUS.key) }
+          : child,
       );
       return [{ ...block, children }];
     }
@@ -1135,16 +1168,33 @@ function mockFingerprint(block: Json): string {
 
 type Target = { block_id: string; fingerprint: string };
 
-/** A stored change set: its row, the target each operation found, and the review so far. */
+/** A stored change set: its row, the targets each operation found, and the review so far. */
 export type StoredChangeSet = Omit<ChangeSetResponse, 'operation_targets' | 'operation_decisions' | 'compared_head_seq' | 'duplicate'> & {
-  /** The target block as each rewrite or deletion found it; `null` for the rest. */
-  targets: Array<Target | null>;
+  /** Per operation, the blocks it rewrites or deletes as it found them; `[]` for the rest. */
+  targets: Target[][];
   decisions: ChangeSetOperationDecisionResponse[];
 };
 
+/** A run's review policy as a change set records it (D18): `auto`, or `review` and why when Auto was asked for. */
+export type RunPolicy = Pick<StoredChangeSet, 'apply_policy' | 'auto_blocked_reason'>;
+
+type GroupKind = StoredChangeSet['groups'][number]['kind'];
+const GROUP_LABELS: Record<GroupKind, string> = {
+  wording: 'Wording', structure: 'Structure', citations: 'Citations', new_content: 'New content',
+};
+
+/** The scripted operations' declared intents, grouped as the API stores and labels them. */
+function groupsFor(intents: GroupKind[]): StoredChangeSet['groups'] {
+  return (Object.keys(GROUP_LABELS) as GroupKind[]).flatMap((kind) => {
+    const operations = intents.flatMap((intent, index) => intent === kind ? [index] : []);
+    return operations.length ? [{ kind, label: GROUP_LABELS[kind], operations }] : [];
+  });
+}
+
 function changeSetRow(
   documentId: string,
-  fields: Pick<StoredChangeSet, 'change_set_id' | 'operations' | 'targets' | 'decisions' | 'proposed_at' | 'summary' | 'apply_policy'>,
+  fields: Pick<StoredChangeSet, 'change_set_id' | 'operations' | 'groups' | 'targets' | 'decisions' | 'proposed_at' | 'summary' | 'apply_policy'>
+    & Partial<Pick<StoredChangeSet, 'auto_blocked_reason'>>,
 ): StoredChangeSet {
   return {
     document_id: documentId,
@@ -1179,18 +1229,38 @@ function seededChangeSet(documents: Map<string, StoredDocument>): StoredChangeSe
   });
   return changeSetRow(REVIEW_DOCUMENT_ID, {
     change_set_id: REVIEW_CHANGE_SET_ID,
+    groups: groupsFor(['wording', 'new_content', 'wording', 'structure', 'new_content']),
+    // In the stored form (`ColWrite-api/docs/document-history-api.md`): every
+    // written block complete, `basis`, and the server's `new_information`.
     operations: [
       {
-        op: 'replace_block',
+        op: 'replace_text',
         block_id: 'cr-abstract',
-        block: { html: 'We study sparse routing at context lengths of up to 128k tokens and find that its compute cost grows <strong>sublinearly</strong>.' },
+        find: 'at long context lengths and find that it scales well',
+        replace: 'at context lengths of up to 128k tokens and find that its compute cost grows sublinearly',
+        block: reviewParagraph('cr-abstract', 'We study sparse routing at context lengths of up to 128k tokens and find that its compute cost grows sublinearly.'),
+        basis: ['author'],
+        new_information: false,
       },
-      { op: 'insert_block_after', reference_id: 'cr-setup', block: reviewParagraph('cr-seeds', 'Each configuration is run with three seeds, and we report the mean.') },
-      { op: 'replace_block', block_id: 'cr-results', block: { html: 'Sparse routing matches the dense baseline at 40% of the compute.' } },
-      { op: 'delete_block', block_id: 'cr-thanks' },
-      { op: 'append_block', block: reviewParagraph('cr-future', 'Future work will extend the evaluation beyond 128k tokens.') },
+      {
+        op: 'write_blocks', position: 'after', block_id: 'cr-setup',
+        blocks: [reviewParagraph('cr-seeds', 'Each configuration is run with three seeds, and we report the mean.')],
+        basis: ['author'], new_information: false,
+      },
+      {
+        op: 'write_blocks', position: 'replace', block_id: 'cr-results',
+        blocks: [reviewParagraph('cr-results', 'Sparse routing matches the dense baseline at 40% of the compute.')],
+        // A number the page does not hold, with no source to show for it.
+        new_information: true,
+      },
+      { op: 'delete_blocks', block_ids: ['cr-thanks'], new_information: false },
+      {
+        op: 'write_blocks', position: 'append',
+        blocks: [reviewParagraph('cr-future', 'Future work will extend the evaluation beyond 128k tokens.')],
+        basis: ['author'], new_information: false,
+      },
     ],
-    targets: [found('cr-abstract'), null, found('cr-results', RESULTS_AS_PROPOSED), found('cr-thanks'), null],
+    targets: [[found('cr-abstract')], [], [found('cr-results', RESULTS_AS_PROPOSED)], [found('cr-thanks')], []],
     decisions: [
       { index: 1, decision: 'accepted', decided_at: '2026-09-20T13:10:00Z', decided_by: 'preview', origin: 'manual' },
       { index: 3, decision: 'rejected', decided_at: '2026-09-20T13:11:00Z', decided_by: 'preview', origin: 'manual' },
@@ -1206,17 +1276,24 @@ function seededChangeSet(documents: Map<string, StoredDocument>): StoredChangeSe
  * viewer sees it, and cannot accept or reject it.
  */
 function viewerChangeSet(documents: Map<string, StoredDocument>): StoredChangeSet {
-  const paragraph = documents.get(VIEWER_DOCUMENT_ID)?.blocks.find((block) => block.id === `${VIEWER_DOCUMENT_ID}-p`);
+  const id = `${VIEWER_DOCUMENT_ID}-p`;
+  const paragraph = documents.get(VIEWER_DOCUMENT_ID)?.blocks.find((block) => block.id === id);
   return changeSetRow(VIEWER_DOCUMENT_ID, {
+    groups: groupsFor(['wording']),
     change_set_id: '2c4e6a8b-0d1f-4a3c-9e5b-7d9f1b3d5f70',
     operations: [
       {
-        op: 'replace_block',
-        block_id: `${VIEWER_DOCUMENT_ID}-p`,
-        block: { html: 'Multi-head latent attention (MLA) compresses the keys and values into one low-rank latent vector per token, which shrinks the KV cache.' },
+        op: 'write_blocks', position: 'replace', block_id: id,
+        blocks: [wireBlock({
+          ...(paragraph as Json | undefined),
+          id, type: 'paragraph',
+          html: 'Multi-head latent attention (MLA) compresses the keys and values into one low-rank latent vector per token, which shrinks the KV cache.',
+          children: [],
+        })],
+        basis: ['author'], new_information: false,
       },
     ],
-    targets: [{ block_id: `${VIEWER_DOCUMENT_ID}-p`, fingerprint: mockFingerprint((paragraph ?? {}) as Json) }],
+    targets: [[{ block_id: id, fingerprint: mockFingerprint((paragraph ?? {}) as Json) }]],
     decisions: [],
     proposed_at: '2026-08-20T09:00:00Z',
     summary: 'Explain what MLA compresses.',
@@ -1236,11 +1313,10 @@ export function changeSetResponse(changeSet: StoredChangeSet, options: { duplica
   return {
     ...row,
     duplicate,
-    operation_targets: targets.map((target) => {
-      if (!target) return null;
+    operation_targets: targets.map((entry) => entry.map((target) => {
       const block = saved.get(target.block_id);
       return { ...target, head_fingerprint: block ? mockFingerprint(block) : null };
-    }),
+    })),
     compared_head_seq: doc?.head_seq ?? null,
     operation_decisions: decisions,
   };
@@ -1250,45 +1326,316 @@ export function changeSetsOf(documentId: string): StoredChangeSet[] {
   return fixtures.changeSets.get(documentId) ?? [];
 }
 
+/** One point `cite_sources` cites: the works, after which text, and the passage the claim rests on. */
+export type CitationPoint = { records: ReferenceRecordOutput[]; afterText: string; passage?: { id: string; level: 'full_text' | 'abstract' | 'snippet' | 'metadata'; chat_id?: string } };
+
 /**
- * The edits the preview agent proposes when asked to improve the text: a
- * rewrite, an addition and a deletion, stored as a change set as `doc_edit`
- * stores them, so the review flow (pill, rows, accept/reject) and Auto can be
- * seen without a backend. Its policy follows the turn's `apply_mode`.
+ * What `cite_sources` stores (`ColWrite-api/src/agent/tools/citations/cite_sources.py`):
+ * per paragraph a `write_blocks` replace with a placeholder after the cited
+ * text and a citation child built from the checked references, and one
+ * `add_sources` for the works new to the page's library; `null` when the
+ * page no longer holds the text.
  */
-export function storeProposedEdits(documentId: string, applyPolicy: 'auto' | 'review'): StoredChangeSet {
-  const saved = new Map((liveDocument(documentId)?.blocks ?? []).map((block) => [block.id, block as Json]));
-  const target = (id: string): Target | null => {
-    const block = saved.get(id);
-    return block ? { block_id: id, fingerprint: mockFingerprint(block) } : null;
+export function storeCitations(documentId: string, blockId: string, point: CitationPoint, policy: RunPolicy): StoredChangeSet | null {
+  const doc = liveDocument(documentId);
+  const block = doc?.blocks.find((item) => item.id === blockId) as Json | undefined;
+  const html = typeof block?.html === 'string' ? block.html : null;
+  if (!block || html === null || !html.includes(point.afterText)) return null;
+  const childId = `cite-${uid().slice(0, 8)}`;
+  const at = html.indexOf(point.afterText) + point.afterText.length;
+  const child = {
+    id: childId, type: 'citation', keys: point.records.map((record) => record.key), style: doc?.citationStyle ?? 'nlm-citation-sequence-brackets',
+    sources: structuredClone(point.records), ...(point.passage ? { passage: point.passage } : {}),
   };
+  const edited = wireBlock({
+    ...block,
+    html: `${html.slice(0, at)}<span data-child-id="${childId}" contenteditable="false"></span>${html.slice(at)}`,
+    children: [...((block.children as Json[] | undefined) ?? []), child],
+  });
+  const library = new Set((doc?.sources ?? []).map((source) => source.key));
+  const cited = new Set((doc?.blocks ?? []).flatMap((block) => block.type === 'paragraph'
+    ? (block.children ?? []).flatMap((entry) => entry.type === 'citation' ? entry.keys : []) : []));
+  const fresh = point.records.filter((record) => !library.has(record.key));
+  const operations: Json[] = [
+    { op: 'write_blocks', position: 'replace', block_id: blockId, blocks: [edited], basis: child.keys,
+      new_information: child.keys.some((key) => !library.has(key) && !cited.has(key)) },
+    ...(fresh.length ? [{ op: 'add_sources', sources: structuredClone(fresh), basis: fresh.map((record) => record.key), new_information: true }] : []),
+  ];
   const changeSet = changeSetRow(documentId, {
     change_set_id: uid(),
-    operations: [
-      {
-        op: 'replace_block',
-        block_id: 'p-2',
-        block: {
-          id: 'p-2',
-          type: 'paragraph',
-          html: 'In this paper, we show that sparse routing lets models scale <strong>sublinearly</strong> in compute while keeping quality. A learned gate assigns each token to one expert.',
-          children: [],
-        },
-      },
-      {
-        op: 'insert_block_after',
-        reference_id: 'li-4',
-        block: { id: 'li-5', type: 'paragraph', variant: 'bullet', html: 'A study of routing collapse under long contexts.', children: [] },
-      },
-      { op: 'delete_block', block_id: 'q-1' },
-    ],
-    targets: [target('p-2'), null, target('q-1')],
+    groups: groupsFor(operations.map(() => 'citations')),
+    operations: operations as StoredChangeSet['operations'],
+    targets: operations.map((operation) => (operation.op === 'write_blocks' ? [{ block_id: blockId, fingerprint: mockFingerprint(block) }] : [])),
     decisions: [],
     proposed_at: new Date().toISOString(),
-    summary: 'Tighten the introduction.',
-    apply_policy: applyPolicy,
+    summary: 'Cite the sources this claim rests on.',
+    apply_policy: policy.apply_policy,
+    auto_blocked_reason: policy.auto_blocked_reason,
+  });
+  changeSet.tool_call_id = 'call_cite';
+  fixtures.changeSets.set(documentId, [...changeSetsOf(documentId), changeSet]);
+  logChangeSet(documentId, changeSet, 'cite_sources');
+  return changeSet;
+}
+
+/**
+ * What the reference audit stores to refresh stale library records
+ * (`update_sources`, never the model's): each record replaces the entry of
+ * its key.
+ */
+export function storeSourceRefresh(documentId: string, sources: ReferenceRecordOutput[], policy: RunPolicy): StoredChangeSet {
+  const changeSet = changeSetRow(documentId, {
+    change_set_id: uid(),
+    groups: groupsFor(['citations']),
+    operations: [{ op: 'update_sources', sources: structuredClone(sources), basis: [], new_information: false }] as unknown as StoredChangeSet['operations'],
+    targets: [[]],
+    decisions: [],
+    proposed_at: new Date().toISOString(),
+    summary: 'Refresh references the registries now give otherwise.',
+    apply_policy: policy.apply_policy,
+    auto_blocked_reason: policy.auto_blocked_reason,
+  });
+  changeSet.tool_call_id = null;
+  changeSet.origin = 'reference_audit';
+  changeSet.proposer_type = 'system';
+  fixtures.changeSets.set(documentId, [...changeSetsOf(documentId), changeSet]);
+  return changeSet;
+}
+
+/* ----------------------------------------
+   The reference audit and the AI-use log (`references.ts`)
+   ---------------------------------------- */
+
+/** An AI-use entry as the mock keeps it: a change set's verification is read from its decisions when shown. */
+export type StoredAiUse = AiUseEntry;
+
+const AI_USE_MODEL = 'anthropic/claude-sonnet-5.5';
+
+/** The headings the blocks sit under, in page order (`sections_of`). */
+function sectionsOf(documentId: string, blockIds: readonly string[]): string[] {
+  const wanted = new Set(blockIds);
+  let heading: string | null = null;
+  const found: string[] = [];
+  for (const block of liveDocument(documentId)?.blocks ?? []) {
+    const html = (block as { html?: unknown }).html;
+    if (block.type === 'heading' && typeof html === 'string') heading = html.replace(/<[^>]*>/g, '').trim() || heading;
+    if (wanted.has(block.id) && heading && !found.includes(heading)) found.push(heading);
+  }
+  return found;
+}
+
+const pendingVerification = (operations: number): AiUseEntry['verification'] => ({
+  method: 'pending', status: 'pending', operations, accepted: 0, accepted_by_auto: 0, rejected: 0, pending: operations, decided_at: null,
+});
+
+/** What a chat run's change set adds to the page's log (`record_change_set`). */
+function logChangeSet(documentId: string, changeSet: StoredChangeSet, tool: string): void {
+  const operations = changeSet.operations as unknown as Array<{ op: string; position?: string; block_id?: string; blocks?: Array<{ id: string }> }>;
+  const blockIds = operations.flatMap((operation) => [operation.block_id, ...(operation.blocks ?? []).map((block) => block.id)]).filter((id): id is string => Boolean(id));
+  fixtures.aiUse.set(documentId, [...aiUseOf(documentId), {
+    id: `ai-${changeSet.change_set_id}`, at: changeSet.proposed_at, kind: 'change_set', tool: 'ColWrite assistant', action: tool,
+    purposes: purposesOf(tool, operations), models: [AI_USE_MODEL], build: MOCK_BUILD, sections: sectionsOf(documentId, blockIds),
+    block_ids: [...new Set(blockIds)], run_id: changeSet.run_uuid, change_set_id: changeSet.change_set_id, preset: null,
+    verification: pendingVerification(operations.length), references: null, generation: null,
+  }]);
+}
+
+export function aiUseOf(documentId: string): StoredAiUse[] {
+  return fixtures.aiUse.get(documentId) ?? [];
+}
+
+/** The page's log as `GET …/ai-use` shows it: each change set's verification read from its decisions now. */
+export function aiUseEntries(documentId: string): AiUseEntry[] {
+  const doc = fixtures.documents.get(documentId);
+  if (doc) {
+    const entries = [...aiUseOf(documentId)];
+    for (const block of doc.blocks) {
+      if (block.type !== 'image' || block.origin?.kind !== 'generated') continue;
+      const asset = fixtures.assets.get(block.assetId);
+      const generation = asset?.asset.generation;
+      if (!generation) throw new Error('A generated image requires its immutable provenance.');
+      const id = `ai-image-${documentId}-${block.assetId}`;
+      if (entries.some((entry) => entry.id === id)) continue;
+      entries.push({
+        id, at: now(), kind: 'image_generation', tool: 'ColWrite assistant', action: 'image_generate',
+        purposes: ['generated_images'], models: [generation.model ?? `Codex ${generation.codex_version ?? '(version not reported)'}`],
+        build: MOCK_BUILD, sections: sectionsOf(documentId, [block.id]),
+        block_ids: doc.blocks.filter((item) => item.type === 'image' && item.assetId === block.assetId).map((item) => item.id),
+        run_id: null, change_set_id: null, preset: null, references: null, generation: structuredClone(generation),
+        verification: { method: 'image_present', status: null, operations: null, accepted: null, accepted_by_auto: null, rejected: null, pending: null, decided_at: null },
+      });
+    }
+    fixtures.aiUse.set(documentId, entries);
+  }
+  return aiUseOf(documentId).map((entry) => {
+    const changeSet = entry.kind === 'change_set' && entry.change_set_id
+      ? changeSetsOf(documentId).find((candidate) => candidate.change_set_id === entry.change_set_id)
+      : undefined;
+    return changeSet
+      ? { ...structuredClone(entry), verification: verificationOf(changeSet.operations.length, changeSet.decisions, changeSet.status) }
+      : structuredClone(entry);
+  });
+}
+
+/** The fixture page's log: a cited related-work turn the author accepted, and an inline suggestion. */
+function seededAiUse(): Map<string, StoredAiUse[]> {
+  const nulls = { accepted_by_auto: 0, rejected: 0, pending: 0 };
+  return new Map([[FIXTURE_DOCUMENT_ID, [
+    {
+      id: 'ai-seed-cite', at: '2026-09-18T09:41:10Z', kind: 'change_set', tool: 'ColWrite assistant', action: 'cite_sources',
+      purposes: ['added_citations'], models: [AI_USE_MODEL], build: MOCK_BUILD, sections: ['Introduction'], block_ids: ['p-1'],
+      run_id: 'run-seed-related', change_set_id: 'cs-seed-cite', preset: null,
+      verification: { method: 'accepted_by_author', status: 'superseded', operations: 2, accepted: 2, ...nulls, decided_at: '2026-09-18T09:45:02Z' },
+      references: null, generation: null,
+    },
+    {
+      id: 'ai-seed-inline', at: '2026-09-20T13:10:00Z', kind: 'suggestion', tool: 'ColWrite assistant', action: 'inline',
+      purposes: ['suggested'], models: ['openai/gpt-6-luna'], build: MOCK_BUILD, sections: ['Method'], block_ids: ['p-3'],
+      run_id: 'run-seed-inline', change_set_id: null, preset: 'shorter',
+      verification: { method: 'not_recorded', status: null, operations: null, accepted: null, accepted_by_auto: null, rejected: null, pending: null, decided_at: null },
+      references: null, generation: null,
+    },
+  ] satisfies StoredAiUse[]]]);
+}
+
+/**
+ * Run the page's reference audit (`POST …/references/check`): the report is
+ * kept for `…/references/status`, stale records are proposed as a refresh,
+ * the log gains a `reference_check` entry, and a `reference_audit` job
+ * reports the counts and the refresh's id when it is done.
+ */
+export function startReferenceAudit(workspaceId: string, doc: StoredDocument): StoredJob {
+  const { report, refresh } = auditPage(doc, etagOf(doc), workspacePolicyOf(workspaceId).outside_research);
+  if (refresh.length) {
+    report.change_set_id = storeSourceRefresh(doc._id, refresh, { apply_policy: 'review', auto_blocked_reason: null }).change_set_id;
+  }
+  fixtures.referenceAudits.set(doc._id, report);
+  const { counts } = report;
+  fixtures.aiUse.set(doc._id, [...aiUseOf(doc._id), {
+    id: `ai-audit-${uid().slice(0, 8)}`, at: report.checked_at, kind: 'reference_check', tool: 'ColWrite assistant', action: 'reference_audit',
+    purposes: ['checked_references'], models: [], build: MOCK_BUILD, sections: [], block_ids: [], run_id: null,
+    change_set_id: report.change_set_id, preset: null,
+    verification: { method: 'reference_check', status: null, operations: null, accepted: null, accepted_by_auto: null, rejected: null, pending: null, decided_at: null }, generation: null,
+    references: {
+      references: counts.references, verified: counts.verified, needs_review: counts.needs_review, not_found: counts.not_found,
+      retracted: counts.retracted, stale: counts.stale, orphans: counts.orphans, duplicates: counts.duplicates,
+    },
+  }]);
+  return startJob(workspaceId, 'reference_audit', Math.max(1, counts.references), jobResult({ audit: { ...counts, change_set_id: report.change_set_id } }));
+}
+
+/**
+ * The edits the preview agent proposes when asked to improve the text, stored
+ * as `doc_edit` stores them: one change set with every operation kind, so the
+ * review flow (pill, rows, accept/reject, the evidence notes) and Auto can be
+ * seen without a backend. An operation is left out when the page no longer
+ * holds what it needs. It is stored with the run's policy when it is made,
+ * which can have moved from `auto` to `review` partway through.
+ */
+export function storeProposedEdits(documentId: string, policy: RunPolicy): StoredChangeSet {
+  const doc = liveDocument(documentId);
+  const saved = new Map((doc?.blocks ?? []).map((block) => [block.id, block as Json]));
+  const target = (id: string): Target[] => {
+    const block = saved.get(id);
+    return block ? [{ block_id: id, fingerprint: mockFingerprint(block) }] : [];
+  };
+  const paragraph = (id: string, html: string, extra: Json = {}) => wireBlock({ ...extra, id, type: 'paragraph', html, children: [] });
+  const cited = new Set((doc?.blocks ?? []).flatMap((block) => (block.type === 'paragraph' ? block.children ?? [] : [])
+    .flatMap((child) => (child.type === 'citation' ? child.keys : []))));
+  const uncited = (doc?.sources ?? []).find((source) => !cited.has(source.key))?.key;
+  const p2 = saved.get('p-2');
+  const candidates: Array<[Json, Target[], GroupKind] | null> = [
+    p2 && typeof p2.html === 'string' && p2.html.includes('in compute.')
+      ? [{
+          op: 'replace_text', block_id: 'p-2', find: 'in compute', replace: 'in compute while keeping quality',
+          block: wireBlock({ ...p2, html: p2.html.replace('in compute.', 'in compute while keeping quality.') }),
+          basis: ['author'], new_information: false,
+        }, target('p-2'), 'wording']
+      : null,
+    saved.has('li-4')
+      ? [{
+          op: 'write_blocks', position: 'after', block_id: 'li-4',
+          blocks: [paragraph('li-5', 'A study of routing collapse under long contexts.', { variant: 'bullet' })],
+          basis: [FEDUS.key], new_information: false,
+        }, [], 'new_content']
+      : null,
+    saved.has('li-2')
+      ? [{
+          op: 'write_blocks', position: 'replace', block_id: 'li-2',
+          blocks: [
+            paragraph('li-2', 'A long-context curriculum that extends training to 128k tokens.', { variant: 'bullet' }),
+            paragraph('li-2b', 'A schedule that raises the sequence length in four stages.', { variant: 'bullet', indent: 1 }),
+          ],
+          basis: ['author'], new_information: false,
+        }, target('li-2'), 'new_content']
+      : null,
+    saved.has('q-1') ? [{ op: 'delete_blocks', block_ids: ['q-1'], new_information: false }, target('q-1'), 'structure'] : null,
+    saved.has('todo-1') && saved.has('todo-2')
+      ? [{ op: 'move_block', block_id: 'todo-2', position: 'before', target_block_id: 'todo-1', new_information: false }, [], 'structure']
+      : null,
+    [{ op: 'set_meta', name: 'Sparse Routing for Long-Context Pretraining at Scale', new_information: false }, [], 'wording'],
+    (doc?.sources ?? []).some((source) => source.key === ZOPH.key)
+      ? null
+      : [{ op: 'add_sources', sources: [asFound(ZOPH)], new_information: true }, [], 'citations'],
+    uncited ? [{ op: 'remove_sources', keys: [uncited], new_information: false }, [], 'citations'] : null,
+    [{
+      op: 'write_blocks', position: 'append',
+      blocks: [paragraph('p-6', 'Code and training logs will be released with the camera-ready version, about 40 GB in all.')],
+      // Words and a number the page does not hold, with no basis.
+      new_information: true,
+    }, [], 'new_content'],
+  ];
+  const chosen = candidates.filter((entry): entry is [Json, Target[], GroupKind] => entry !== null);
+  const changeSet = changeSetRow(documentId, {
+    change_set_id: uid(),
+    groups: groupsFor(chosen.map(([, , intent]) => intent)),
+    operations: chosen.map(([operation]) => operation),
+    targets: chosen.map(([, targets]) => targets),
+    decisions: [],
+    proposed_at: new Date().toISOString(),
+    summary: 'Tighten the introduction and tidy the page.',
+    apply_policy: policy.apply_policy,
+    auto_blocked_reason: policy.auto_blocked_reason,
   });
   fixtures.changeSets.set(documentId, [...changeSetsOf(documentId), changeSet]);
+  logChangeSet(documentId, changeSet, 'doc_edit');
+  return changeSet;
+}
+
+/** A planned section is one proposal, not an accepted write to the page. */
+export function storePlanSection(
+  documentId: string,
+  section: ChatPlan['sections'][number],
+  policy: RunPolicy,
+  runId: string,
+  callId: string,
+): StoredChangeSet {
+  const doc = liveDocument(documentId);
+  const id = uid();
+  const changeSet = changeSetRow(documentId, {
+    change_set_id: uid(),
+    operations: [{
+      op: 'write_blocks', position: 'append',
+      blocks: [
+        wireBlock({ id: `heading-${id}`, type: 'heading', level: 2, html: escapeHtml(section.title) }),
+        wireBlock({ id: `paragraph-${id}`, type: 'paragraph', html: escapeHtml(section.goal || 'State the question, assess the evidence and distinguish what remains uncertain.'), children: [] }),
+      ],
+      basis: ['author'], new_information: true,
+    }],
+    groups: groupsFor(['new_content']), targets: [[]], decisions: [],
+    proposed_at: new Date().toISOString(), summary: `Draft: ${section.title}`,
+    ...policy,
+  });
+  if (doc) {
+    const revision = historyOf(doc).pointer;
+    changeSet.base_head_seq = doc.head_seq;
+    changeSet.base_revision_id = revision;
+    changeSet.base_etag = etagOf(doc);
+  }
+  changeSet.run_uuid = runId;
+  changeSet.tool_call_id = callId;
+  fixtures.changeSets.set(documentId, [...changeSetsOf(documentId), changeSet]);
+  logChangeSet(documentId, changeSet, 'doc_edit');
   return changeSet;
 }
 
@@ -1297,11 +1644,21 @@ export function storeProposedEdits(documentId: string, applyPolicy: 'auto' | 're
    ---------------------------------------- */
 
 /** A stored message: the messages of a chat form a tree through `parent_id`. */
+export type StoredAsset = {
+  asset: AssetInfo;
+  file: Blob | null;
+  requestHash: string;
+  pending: boolean;
+  references: { kind: 'document' | 'chat'; referenceId: string; documentId: string; createdBy: string }[];
+};
+
 export type StoredMessage = ChatMessage;
 
 /** A stored conversation: its row and its messages, oldest first. */
 export type StoredChat = Omit<ChatSummary, 'last_message_id'> & {
   messages: StoredMessage[];
+  /** The conversation's sources and passages, kept beside its messages and deleted with it (`evidence.ts`). */
+  evidence: StoredEvidence;
 };
 
 function message(
@@ -1311,37 +1668,142 @@ function message(
   content: string,
   createdAt: string,
   runId: string | null = null,
+  record: ReplyRecord | RequestRecord | null = null,
 ): StoredMessage {
-  return { id, parent_id: parentId, role, content, attachments: [], run_id: runId, created_at: createdAt };
+  return { id, parent_id: parentId, role, content, attachments: [], run_id: runId, created_at: createdAt, record };
 }
+
+const askedFor = (preset: string | null = null, effort: RequestRecord['effort'] = 'standard', planId: string | null = null, web = false): RequestRecord => (
+  { kind: 'request', preset, effort, web, plan_id: planId }
+);
+
+/** A reply's record with nothing in it but how it ended: the fields a seeded reply leaves out. */
+function replyRecord(fields: Partial<ReplyRecord>): ReplyRecord {
+  return {
+    kind: 'reply', status: 'completed', tool_calls: [], sources: [], passages: [], tasks: [], workers: [], skills: [], instructions: [], artifacts: [], change_sets: [],
+    created_pages: [], claims: [], plan: null, question: null, models: [], usage: { prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0 }, cost: null,
+    cost_limit: null, limit_reached: null, error: null, ...fields,
+  };
+}
+
+/** One finished call, as a record keeps it. */
+function recordedCall(tool: string, id: string, ms: number, args: Record<string, unknown>, chars: number): ReplyRecord['tool_calls'][number] {
+  return {
+    tool_call_id: id, tool, worker_id: id.includes(':') ? id.slice(0, id.indexOf(':')) : null, arguments: args,
+    duration_ms: ms, is_error: false, error: null, error_type: null, output_chars: chars, output_truncated: false, finished: true,
+  };
+}
+
+/**
+ * The papers the preview's paper search returns, as the API's paper
+ * sources state them (`fixtureReferences.ts`, unchecked): keyed by their
+ * arXiv id, known also by their OpenAlex and Semantic Scholar ids.
+ */
+export const PREVIEW_PAPERS: readonly Work[] = [
+  { kind: 'paper', aliases: ['openalex:W3128552218', 's2:fdacf2a732f55befdc410ea927091cad3b791f13'], record: asFound(FEDUS) },
+  { kind: 'preprint', aliases: ['openalex:W4221143046', 's2:1b2b0a4e05c2f7a5c4b4bd3bd0e4f4e9ab3d9b2a'], record: asFound(ZOPH) },
+];
+
+/** The pages the preview's web search returns, as the API's `web_source` states them. */
+export const PREVIEW_WEB_PAGES: readonly [Work, Work] = [
+  { kind: 'web', record: structuredClone(HF_MOE_BLOG) },
+  { kind: 'web', record: structuredClone(GOOGLE_STMOE_BLOG) },
+];
+
+/** The conversation's evidence of a stored chat; `null` for a chat this document does not have. */
+export function chatEvidence(documentId: string, chatId: string): StoredEvidence | null {
+  return chatsOf(documentId).find((chat) => chat.id === chatId)?.evidence ?? null;
+}
+
+/**
+ * What the seeded research turn found, as its conversation keeps it: two
+ * papers its paper search returned (`S1`, `S2`; a paper search stores no
+ * passages), and a page its research worker's web search returned (`S3`),
+ * with the snippet it stored (`S3.1`).
+ */
+function seededRelatedEvidence(): StoredEvidence {
+  return seededEvidence(
+    [...PREVIEW_PAPERS, PREVIEW_WEB_PAGES[0]],
+    [{ handle: 'S3', excerpt: { text: 'Mixture of Experts enable models to be pretrained with far less compute.', level: 'snippet' } }],
+  );
+}
+
+/** A stored source as the `evidence` event sent it and a reply's record keeps it. */
+const recordedSources = (evidence: StoredEvidence): ReplyRecord['sources'] =>
+  evidence.sources.map(({ aliases: _aliases, ...source }) => structuredClone(source));
+const recordedPassages = (evidence: StoredEvidence): ReplyRecord['passages'] =>
+  evidence.passages.map(({ id, level }) => ({ id, level }));
 
 /*
  * As the API stores a turn: the question when its run starts, the answer
- * when it ends, both with the run's id, so the transcript can say how long
- * each reply took.
+ * when it ends with its record, both with the run's id, so the transcript
+ * can say how long each reply took. "Related work" kept what it did: a
+ * search, a research worker's search, its task list, two sources, the
+ * served models and the cost. "Tighten the method section" was stopped
+ * while it drafted its edit.
  */
 function seededChats(): Map<string, StoredChat[]> {
+  const search = { content_redacted: true, query_redacted: true, query_length: 34, limit: 10, year_from: 2020 };
+  const workerSearch = { content_redacted: true, query_redacted: true, query_length: 24, limit: 6 };
+  const related = seededRelatedEvidence();
   return new Map([[
     FIXTURE_DOCUMENT_ID,
     [
       {
         id: 'chat-method',
         title: 'Tighten the method section',
+        evidence: emptyEvidence(),
         created_at: '2026-09-20T13:04:41Z',
         updated_at: '2026-09-20T13:05:00Z',
         messages: [
-          message(1, null, 'user', 'Tighten the method section without losing the load-balancing detail.', '2026-09-20T13:04:41Z', 'run-seed-method'),
-          message(2, 1, 'assistant', 'I shortened the gating paragraph and kept the auxiliary loss definition. The change is waiting in the page for you to review.', '2026-09-20T13:05:00Z', 'run-seed-method'),
+          message(1, null, 'user', 'Tighten the method section without losing the load-balancing detail.', '2026-09-20T13:04:41Z', 'run-seed-method', askedFor()),
+          message(2, 1, 'assistant', 'I shortened the gating paragraph and kept the auxiliary loss definition.', '2026-09-20T13:05:00Z', 'run-seed-method', replyRecord({
+            status: 'stopped',
+            tool_calls: [
+              recordedCall('doc_read', 'call_read', 140, { content_redacted: true, block_count: 12 }, 5200),
+              {
+                ...recordedCall('doc_edit', 'call_edit', 0, { content_redacted: true }, 0),
+                arguments: null, duration_ms: null, finished: false,
+              },
+            ],
+            models: [{ model: 'openai/gpt-6.1-sol', tier: 'main', calls: 2, fallback: false, prompt_tokens: 6100, completion_tokens: 240, cost: 0.0093 }],
+            usage: { prompt_tokens: 6100, completion_tokens: 240, cached_tokens: 4096 },
+            cost: 0.0093,
+            cost_limit: 5,
+          })),
         ],
       },
       {
         id: 'chat-related',
         title: 'Related work on expert routing',
+        evidence: related,
         created_at: '2026-09-18T09:39:52Z',
         updated_at: '2026-09-18T09:40:00Z',
         messages: [
-          message(3, null, 'user', 'Which routing papers should the related work cite?', '2026-09-18T09:39:52Z', 'run-seed-related'),
-          message(4, 3, 'assistant', 'Switch Transformers and ST-MoE are the two closest; both study top-1 routing at scale.', '2026-09-18T09:40:00Z', 'run-seed-related'),
+          message(3, null, 'user', 'Which routing papers should the related work cite?', '2026-09-18T09:39:52Z', 'run-seed-related', askedFor(null, 'standard', null, true)),
+          message(4, 3, 'assistant', 'Switch Transformers [S1] and ST-MoE [S2] are the two closest; both study top-1 routing at scale.', '2026-09-18T09:40:00Z', 'run-seed-related', replyRecord({
+            tool_calls: [
+              recordedCall('paper_search', 'call_1', 2612, search, 4200),
+              recordedCall('web_search', 'worker-related:call_1', 1840, workerSearch, 2100),
+            ],
+            sources: recordedSources(related),
+            passages: recordedPassages(related),
+            tasks: [
+              { id: 'review', content: 'Find the closest routing papers', status: 'completed' },
+              { id: 'synthesis', content: 'Recommend what to cite', status: 'completed' },
+            ],
+            workers: [{
+              id: 'worker-related', status: 'completed', engine: 'gateway', profile: 'web_researcher',
+              title: 'Routing evidence', objective: 'Find evidence about router stability in the available sources.',
+            }],
+            models: [
+              { model: 'anthropic/claude-sonnet-5.5', tier: 'main', calls: 3, fallback: true, prompt_tokens: 9800, completion_tokens: 410, cost: 0.0214 },
+              { model: 'openai/gpt-6-luna', tier: 'lite', calls: 2, fallback: false, prompt_tokens: 3100, completion_tokens: 260, cost: null },
+            ],
+            usage: { prompt_tokens: 12900, completion_tokens: 670, cached_tokens: 6144 },
+            cost: 0.0214,
+            cost_limit: 5,
+          })),
         ],
       },
     ],
@@ -1374,30 +1836,55 @@ export function messageChain(chat: StoredChat, leaf: number): StoredMessage[] {
 }
 
 /**
- * Keep a turn with its chat, starting one when the request names none. The
- * question continues from `leafId` (the chat's newest message without one).
- * Returns the chat and the answer's id, the chat's new leaf.
+ * The question of a turn, kept with its chat when its run starts, starting
+ * one when the request names none. It continues from `leafId` (the chat's
+ * newest message without one). A chat preset sent with no words of the
+ * author's is stored with the preset's label as its text. The answer's id is
+ * kept for it: the answer is stored when the run ends (`recordAnswer`).
  */
-export function recordTurn(
+export function recordQuestion(
   documentId: string,
-  chatId: string | null,
-  leafId: number | null,
-  text: string,
+  turn: {
+    chatId: string | null; leafId: number | null; text: string; preset: string | null; runId: string;
+    effort?: RequestRecord['effort']; planId?: string | null; web: boolean;
+  },
   attachments: Array<MessageImage | MessagePdf> = [],
-): { chatId: string; messageId: number } {
+): { chatId: string; questionId: number; answerId: number } {
   const list = chatsOf(documentId);
-  let chat = chatId ? list.find((item) => item.id === chatId) : undefined;
+  let chat = turn.chatId ? list.find((item) => item.id === turn.chatId) : undefined;
   const now = new Date().toISOString();
   if (!chat) {
-    chat = { id: `chat-preview-${list.length + 1}`, title: null, created_at: now, updated_at: now, messages: [] };
+    chat = { id: `chat-preview-${list.length + 1}`, title: null, created_at: now, updated_at: now, messages: [], evidence: emptyEvidence() };
     fixtures.chats.set(documentId, [chat, ...list]);
   }
-  const parent = leafId ?? newestMessage(chat)?.id ?? null;
-  const question = { ...message(fixtures.nextMessageId++, parent, 'user', text, now), attachments };
-  const answer = message(fixtures.nextMessageId++, question.id, 'assistant', `Here is what I found about "${text.slice(0, 60)}".`, now);
-  chat.messages.push(question, answer);
+  const parent = turn.leafId ?? newestMessage(chat)?.id ?? null;
+  const label = turn.preset ? REGISTRY.presets.find((preset) => preset.id === turn.preset)?.label ?? '' : '';
+  const question = {
+    ...message(fixtures.nextMessageId++, parent, 'user', turn.text.trim() ? turn.text : label, now, turn.runId, askedFor(turn.preset, turn.effort ?? 'standard', turn.planId ?? null, turn.web)),
+    attachments,
+  };
+  chat.messages.push(question);
   chat.updated_at = now;
-  return { chatId: chat.id, messageId: answer.id };
+  return { chatId: chat.id, questionId: question.id, answerId: fixtures.nextMessageId++ };
+}
+
+/**
+ * The answer of a turn, stored when its run ends with the record of what it
+ * did: also a stopped or failed turn's, when it did something, even with no
+ * text. A turn that neither wrote nor did anything leaves its question alone.
+ */
+export function recordAnswer(
+  documentId: string,
+  turn: { chatId: string; questionId: number; answerId: number; runId: string },
+  text: string,
+  record: ReplyRecord,
+  hasActivity: boolean,
+): void {
+  const chat = chatsOf(documentId).find((item) => item.id === turn.chatId);
+  if (!chat || (!text && !hasActivity) || chat.messages.some((item) => item.id === turn.answerId)) return;
+  const now = new Date().toISOString();
+  chat.messages.push(message(turn.answerId, turn.questionId, 'assistant', text, now, turn.runId, record));
+  chat.updated_at = now;
 }
 
 /* ----------------------------------------
@@ -1479,7 +1966,6 @@ function seededPdfs(): StoredPdf[] {
   ];
 }
 
-export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
 
 /** A grant's origin: added by hand, or by the collection's "Pages here can use these PDFs". */
 export type GrantOrigin = 'manual' | 'setting';
@@ -1808,6 +2294,11 @@ function purgePage(doc: StoredDocument): void {
   fixtures.histories.delete(doc._id);
   fixtures.changeSets.delete(doc._id);
   fixtures.chats.delete(doc._id);
+  for (const stored of fixtures.assets.values()) {
+    if (stored.asset.workspace_id !== doc.workspace_id) continue;
+    stored.references = stored.references.filter((ref) => ref.documentId !== doc._id);
+    if (!stored.pending && !stored.references.length) stored.file = null;
+  }
   for (const collection of fixtures.collections.values()) collection.grants.delete(doc._id);
   for (const pdf of fixtures.pdfs) {
     if (pdf.document_id === doc._id) Object.assign(pdf, { document_id: null, trashed_at: null, trash_root: null, trashed_by: null });
@@ -1885,7 +2376,8 @@ export function jobState(job: StoredJob): WorkspaceJob {
 
 /** A result of nothing but the fields a job kind fills. */
 export const jobResult = (fields: Partial<JobResult>): JobResult => ({
-  document_id: null, page_count: null, pdf_count: null, byte_size: null, expires_at: null, ...fields,
+  document_id: null, page_count: null, pdf_count: null, image_count: null, byte_size: null, expires_at: null, audit: null, claim: null,
+  generation_id: null, generation_status: null, ...fields,
 });
 
 /**
@@ -1926,10 +2418,28 @@ export function copyPage(
   const id = `66f0c0ffee0000000000${String(fixtures.nextDocumentNumber++).padStart(4, '0')}`;
   const at = now();
   const siblings = pagesHomedIn(target.id, collectionId);
+  const imageCopies = new Map<string, string>();
+  const blocks = structuredClone(source.blocks).map((block) => {
+    if (block.type !== 'image') return block;
+    let targetId = imageCopies.get(block.assetId);
+    if (!targetId) {
+      const stored = fixtures.assets.get(block.assetId);
+      if (!stored?.file || stored.asset.workspace_id !== source.workspace_id) throw new Error('The image to copy is unavailable.');
+      targetId = `ast-${uid()}`;
+      fixtures.assets.set(targetId, {
+        asset: { ...stored.asset, asset_id: targetId, workspace_id: target.id, created_by: PREVIEW_USER_ID, created_at: at },
+        file: stored.file, pending: false, requestHash: `copy:${id}:${block.assetId}`,
+        references: [{ kind: 'document', referenceId: id, documentId: id, createdBy: PREVIEW_USER_ID }],
+      });
+      imageCopies.set(block.assetId, targetId);
+    }
+    return { ...block, assetId: targetId };
+  });
   const copy: StoredDocument = {
     _id: id, workspace_id: target.id, collection_id: collectionId, sort_key: lastKeyOf(siblings), placement_seq: 1,
-    name: source.name, head_seq: 1, tags: [...source.tags], blocks: structuredClone(source.blocks),
+    name: source.name, head_seq: 1, tags: [...source.tags], blocks,
     sources: source.sources ? structuredClone(source.sources) : null, citationStyle: source.citationStyle ?? null,
+    instructions: source.instructions, documentType: source.documentType,
     created_at: at, updated_at: at, deleted_at: null,
   };
   fixtures.documents.set(id, copy);
@@ -1949,59 +2459,125 @@ export function copyPage(
     });
   }
   bumpTree(target.id);
-  return startJob(target.id, 'workspace_copy', 1 + pdfs.length, jobResult({ document_id: id, pdf_count: pdfs.length }));
+  return startJob(target.id, 'workspace_copy', 1 + pdfs.length + imageCopies.size, jobResult({ document_id: id, pdf_count: pdfs.length, image_count: imageCopies.size }));
 }
 
 /* ----------------------------------------
    Research
    ---------------------------------------- */
 
-export const PAPERS = [
-  { id: '2101.03961', title: 'Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity', authors: 'William Fedus, Barret Zoph, Noam Shazeer', year: 2021, venue: 'JMLR', cites: 2841, abstract: 'We simplify the MoE routing algorithm and design intuitive improved models with reduced communication and computational costs, training models up to a trillion parameters.' },
-  { id: '2202.08906', title: 'ST-MoE: Designing Stable and Transferable Sparse Expert Models', authors: 'Barret Zoph, Irwan Bello, Sameer Kumar, Nan Du', year: 2022, venue: 'arXiv', cites: 512, abstract: 'We design a 269B sparse model with the router z-loss, which resolves training instabilities while keeping quality.' },
-  { id: '2006.16668', title: 'GShard: Scaling Giant Models with Conditional Computation and Automatic Sharding', authors: 'Dmitry Lepikhin, HyoukJoong Lee, Yuanzhong Xu', year: 2020, venue: 'ICLR', cites: 1630, abstract: 'GShard enables scaling a multilingual translation Transformer with Sparsely-Gated Mixture-of-Experts beyond 600 billion parameters.' },
-  { id: '2112.06905', title: 'GLaM: Efficient Scaling of Language Models with Mixture-of-Experts', authors: 'Nan Du, Yanping Huang, Andrew M. Dai', year: 2022, venue: 'ICML', cites: 690, abstract: 'GLaM uses a sparsely activated mixture-of-experts architecture to scale capacity while incurring substantially less training cost than dense variants.' },
-  { id: '2401.04088', title: 'Mixtral of Experts', authors: 'Albert Q. Jiang, Alexandre Sablayrolles, Antoine Roux', year: 2024, venue: 'arXiv', cites: 1450, abstract: 'Mixtral 8x7B is a sparse mixture of experts language model where each layer is composed of 8 feed-forward blocks.' },
-] as const;
-type Paper = (typeof PAPERS)[number];
+type PaperSourceId = WirePaper['found_by'][number];
 
-export function s2Paper(paper: Paper): PaperPayload {
+/** One work the mock's paper sources know: its reference, and what they say about it. */
+export type MockPaper = {
+  record: ReferenceRecordOutput;
+  aliases: string[];
+  abstract: string;
+  citationCount: number;
+  foundBy: PaperSourceId[];
+  openAccessUrl: string | null;
+};
+
+/**
+ * What the mock's paper sources hold (OpenAlex and Semantic Scholar; the
+ * arXiv index is not configured), each work once, merged by identifier as
+ * the API merges them: Switch Transformers is the same record whether a
+ * search, the graph, a lookup or a scripted turn returns it.
+ */
+export const PAPERS: readonly MockPaper[] = [
+  {
+    record: asFound(FEDUS), aliases: ['openalex:W3128552218', 's2:fdacf2a732f55befdc410ea927091cad3b791f13'], citationCount: 2841,
+    foundBy: ['openalex', 'semantic_scholar'], openAccessUrl: 'https://arxiv.org/pdf/2101.03961',
+    abstract: 'We simplify the MoE routing algorithm and design intuitive improved models with reduced communication and computational costs, training models up to a trillion parameters.',
+  },
+  {
+    record: asFound(ZOPH), aliases: ['openalex:W4221143046', 's2:1b2b0a4e05c2f7a5c4b4bd3bd0e4f4e9ab3d9b2a'], citationCount: 512,
+    foundBy: ['openalex', 'semantic_scholar'], openAccessUrl: 'https://arxiv.org/pdf/2202.08906',
+    abstract: 'We design a 269B sparse model with the router z-loss, which resolves training instabilities while keeping quality.',
+  },
+  {
+    record: asFound(LEPIKHIN), aliases: ['openalex:W3036167779'], citationCount: 1630, foundBy: ['openalex'], openAccessUrl: null,
+    abstract: 'GShard enables scaling a multilingual translation Transformer with Sparsely-Gated Mixture-of-Experts beyond 600 billion parameters.',
+  },
+  {
+    record: asFound(DU), aliases: ['s2:2c8c5d2bf9b0d5d2f2d0b4d1c2a7e2c1b3e0f9a1'], citationCount: 690, foundBy: ['semantic_scholar'], openAccessUrl: null,
+    abstract: 'GLaM uses a sparsely activated mixture-of-experts architecture to scale capacity while incurring substantially less training cost than dense variants.',
+  },
+  {
+    record: asFound(JIANG), aliases: ['openalex:W4390577282'], citationCount: 1450, foundBy: ['openalex', 'semantic_scholar'], openAccessUrl: 'https://arxiv.org/pdf/2401.04088',
+    abstract: 'Mixtral 8x7B is a sparse mixture of experts language model where each layer is composed of 8 feed-forward blocks.',
+  },
+];
+
+/** Semantic Scholar's terms ask for its name where its data is shown. */
+const S2_ATTRIBUTION = 'Data from Semantic Scholar (semanticscholar.org).';
+
+/** The work a key or one of its aliases names. */
+export function paperByKey(key: string): MockPaper | undefined {
+  return PAPERS.find((paper) => paper.record.key === key || paper.aliases.includes(key));
+}
+
+/** A work as a paper route states it. */
+function paperPayload(paper: MockPaper): WirePaper {
   return {
-    provider: 'semantic_scholar',
-    paper_id: `s2-${paper.id}`,
-    portable_key: `arxiv:${paper.id}`,
-    corpus_id: 1000 + paper.cites,
-    external_ids: { ArXiv: paper.id },
-    title: paper.title,
+    record: structuredClone(paper.record),
     abstract: paper.abstract,
-    url: `https://www.semanticscholar.org/paper/s2-${paper.id}`,
-    authors: paper.authors.split(', ').map((name, index) => ({ author_id: `a${index}`, name })),
-    year: paper.year,
-    venue: paper.venue,
-    citation_count: paper.cites,
-    influential_citation_count: Math.round(paper.cites / 12),
+    citation_count: paper.citationCount,
     reference_count: 60,
-    is_open_access: true,
-    tldr: `${paper.abstract.split('.')[0]}.`,
-    publication_types: ['JournalArticle'],
-    fields_of_study: ['Computer Science'],
-    bibtex: null,
-    evidence: [],
-    journal_name: paper.venue,
-    journal_pages: null,
-    journal_volume: null,
-    open_access_pdf: null,
-    pdf_url: `https://arxiv.org/pdf/${paper.id}`,
-    provenance: [{ provider: 'semantic_scholar', endpoint: 'paper/search', provider_id: `s2-${paper.id}` }],
-    publication_date: `${paper.year}-01-15`,
-    relevance_score: null,
+    open_access: paper.openAccessUrl
+      ? { is_oa: true, status: 'green', license: 'CC BY 4.0', url: paper.openAccessUrl.replace('/pdf/', '/abs/'), pdf_url: paper.openAccessUrl }
+      : null,
+    found_by: [...paper.foundBy],
   };
 }
 
-/** Papers citing (or cited by) the one asked about, with citation contexts. */
-export function semanticScholarGraph(paperId: string, direction: 'citations' | 'references'): PaperGraphResponse {
-  const others = PAPERS.filter((paper) => `s2-${paper.id}` !== paperId);
-  const contexts = direction === 'citations'
+function answered(papers: readonly MockPaper[]) {
+  return {
+    providers: ['openalex', 'semantic_scholar'] as PaperSourceId[],
+    failed: [],
+    attribution: papers.some((paper) => paper.foundBy.includes('semantic_scholar')) ? [S2_ATTRIBUTION] : [],
+  };
+}
+
+/**
+ * `GET /papers/search`: the works whose title or abstract has a word of the
+ * query, in the year range, a page at a time (the cursor is the offset).
+ */
+export function paperSearch(query: string, options: { yearFrom?: number; yearTo?: number; limit: number; cursor: string | null }): PaperSearchResponse {
+  const words = query.toLowerCase().split(/\W+/).filter((word) => word.length > 2);
+  const year = (paper: MockPaper) => paper.record.csl.issued?.['date-parts']?.[0]?.[0] ?? 0;
+  const matches = PAPERS.filter((paper) => {
+    const text = `${paper.record.csl.title} ${paper.abstract}`.toLowerCase();
+    return (words.length === 0 || words.some((word) => text.includes(word)))
+      && (!options.yearFrom || year(paper) >= options.yearFrom)
+      && (!options.yearTo || year(paper) <= options.yearTo);
+  });
+  const offset = Number(options.cursor ?? 0) || 0;
+  const page = matches.slice(offset, offset + options.limit);
+  return {
+    items: page.map(paperPayload),
+    next_cursor: offset + options.limit < matches.length ? String(offset + options.limit) : null,
+    ignored: [],
+    ...answered(page),
+  };
+}
+
+/** `GET /papers/{key}`: one work, with its copies. */
+export function paperDetail(paper: MockPaper) {
+  return {
+    paper: {
+      ...paperPayload(paper),
+      versions: [{ version: 'submitted' as const, doi: paper.record.csl.DOI ?? null, url: paper.record.csl.URL ?? null, venue: 'arXiv', preprint_server: true }],
+      passages_from: ['semantic_scholar'] as PaperSourceId[],
+    },
+    ...answered([paper]),
+  };
+}
+
+/** `GET /papers/{key}/graph`: the other works, as citing (or cited by) the one asked about. */
+export function paperGraph(seed: MockPaper, relation: PaperGraphResponse['relation']): PaperGraphResponse {
+  const others = PAPERS.filter((paper) => paper !== seed);
+  const contexts = relation === 'citations'
     ? [
         'Following Switch Transformers, we route each token to a single expert and keep the capacity factor at 1.25.',
         'Top-1 routing (Fedus et al.) reduces communication cost relative to top-2 gating.',
@@ -2015,99 +2591,47 @@ export function semanticScholarGraph(paperId: string, direction: 'citations' | '
         'Dense Transformers remain the baseline for quality per FLOP.',
       ];
   return {
-    provider: 'semantic_scholar',
-    paper_id: paperId,
-    direction,
-    offset: 0,
-    next_offset: null,
-    data: others.map((paper, index) => ({
-      contexts: [contexts[index % contexts.length] ?? ''],
-      intents: index === 0 ? ['methodology'] : index === 1 ? ['background', 'result'] : ['background'],
-      is_influential: index < 2,
-      evidence: [],
-      paper: s2Paper(paper),
+    seed: seed.record.key,
+    relation,
+    items: others.map((paper, index) => ({
+      paper: paperPayload(paper),
+      contexts: relation === 'related' ? [] : [contexts[index % contexts.length] ?? ''],
+      intents: relation === 'related' ? [] : index === 0 ? ['methodology'] : ['background'],
+      influential: relation === 'related' ? null : index < 2,
     })),
+    next_cursor: null,
+    ...answered(others),
   };
 }
 
-/** A worked "check a claim" answer: a verdict, evidence both ways, limits. */
-export function claimAssessment(claim: string): ClaimAssessment {
-  const [fedus, stmoe, gshard, glam] = PAPERS;
-  const finding = (
-    paper: Paper,
-    id: string,
-    stance: ClaimEvidenceFinding['stance'],
-    kind: ClaimEvidenceFinding['kind'],
-    excerpt: string,
-    explanation: string,
-    score: number,
-  ): ClaimEvidenceFinding => ({
-    evidence_id: id,
-    stance,
-    explanation,
-    excerpt,
-    kind,
-    paper_id: `s2-${paper.id}`,
-    corpus_id: 1000 + paper.cites,
-    title: paper.title,
-    authors: paper.authors,
-    year: paper.year,
-    url: `https://www.semanticscholar.org/paper/s2-${paper.id}`,
-    score,
-    license: 'CC BY 4.0',
-    open_access_status: 'GREEN',
-    disclaimer: null,
-    provenance: [{ provider: 'semantic_scholar', endpoint: 'snippet/search', provider_id: `s2-${paper.id}` }],
-  });
-  return {
-    claim,
-    verdict: 'mixed',
-    confidence: 0.64,
-    rationale:
-      'Several large-scale studies report that sparse expert models reach dense-model quality at lower training cost, but at least one reports instabilities and quality loss at small scale, so support depends on model size and routing choices.',
-    evidence: [
-      finding(fedus, 'E1', 'supports', 'abstract', 'We achieve up to 7x increases in pre-training speed with the same computational resources.', 'Reports a large speed-up at equal compute for a sparse model.', 0.91),
-      finding(glam, 'E2', 'supports', 'abstract', 'GLaM consumes only 1/3 of the energy used to train GPT-3 while achieving better overall zero-shot performance.', 'Lower training cost at better quality than a dense baseline.', 0.86),
-      finding(stmoe, 'E3', 'contradicts', 'body', 'Sparse models are prone to training instabilities, and at smaller scales we observe quality degradation relative to dense baselines.', 'Finds quality loss and instability, weakening the claim at small scale.', 0.72),
-      finding(gshard, 'E4', 'context', 'citation_context', 'Conditional computation lets model capacity grow without a proportional increase in computation.', 'Background on why sparse routing can scale sublinearly.', 0.55),
-    ],
-    limitations: [
-      'Only abstracts and open-access snippets were searched.',
-      'Results at under 1B parameters are sparse.',
-    ],
-    provider: 'semantic_scholar',
-    disclaimer: 'Automated assessment from literature snippets. Read the papers before relying on it.',
+/** `GET /papers/passages`: a sentence of each matching work's abstract. */
+/** Words a passage search does not count: they match every paper. */
+const STOPWORDS = new Set('the and for with that this from into than then they their these those have has had was were are its our can not but all any one two each such also more most less very when where which while what who how why been being about over under between both only once'.split(' '));
+
+/**
+ * `GET /papers/passages`: the papers whose title and abstract share the
+ * most topic words with the query, at least two (stopwords and short words
+ * do not count), so a sentence about nothing in the mock's papers finds none.
+ */
+export function paperPassages(query: string, keys: readonly string[], limit: number): PaperPassagesResponse {
+  const pool = keys.length ? PAPERS.filter((paper) => keys.some((key) => paperByKey(key) === paper)) : PAPERS;
+  const words = [...new Set(query.toLowerCase().split(/[^a-z0-9-]+/).filter((word) => word.length > 3 && !STOPWORDS.has(word)))];
+  const score = (paper: MockPaper) => {
+    const text = `${paper.record.csl.title} ${paper.abstract}`.toLowerCase();
+    return words.filter((word) => text.includes(word)).length;
   };
-}
-
-/** The public arXiv text search (`VITE_ARZ_API`), which is not ColWrite-api. */
-export function arxivSearch(): unknown[] {
-  return PAPERS.map((paper, index) => ({
-    id: paper.id,
-    title: paper.title,
-    authors: paper.authors,
-    date: `${paper.year}-01-15`,
-    abstract: paper.abstract,
-    doi: null,
-    score: 0.92 - index * 0.07,
-  }));
-}
-
-/** The public ColPali page search (`VITE_COLPALI_BASE`), which is not ColWrite-api. */
-export function colpaliSearch(): Json {
+  const papers = pool
+    .map((paper) => ({ paper, score: score(paper) }))
+    .filter((item) => item.score >= 2)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((item) => item.paper);
   return {
-    data: PAPERS.slice(0, 3).map((paper, index) => ({
-      page: index + 3,
-      id: paper.id,
-      doi: null,
-      date: `${paper.year}-01-15`,
-      title: paper.title,
-      authors: paper.authors,
-      abstract: paper.abstract,
-      url: `https://arxiv.org/abs/${paper.id}`,
-      version: 'v1',
-      page_image: null,
+    items: papers.map((paper) => ({
+      paper: paperPayload(paper), text: `${paper.abstract.split('.')[0]}.`, level: 'abstract', section: null, page: null,
     })),
+    ignored: [],
+    ...answered(papers),
   };
 }
 
@@ -2152,7 +2676,9 @@ export function workspaceDetail(workspace: StoredWorkspace): WorkspaceDetailResp
 export function usageOf(workspaceId: string, days: number): WorkspaceUsageResponse {
   const series = Array.from({ length: 30 }, (_, index) => {
     const day = new Date(Date.UTC(2026, 7, 22 + index)).toISOString().slice(0, 10);
-    return { day, document_events: (index * 7) % 5, agent_run_events: (index * 3) % 4, resource_events: index % 6 === 0 ? 1 : 0 };
+    const runs = (index * 3) % 4;
+    // What the day's runs cost, as providers reported it.
+    return { day, document_events: (index * 7) % 5, assistant_run_events: runs, resource_events: index % 6 === 0 ? 1 : 0, cost: runs * 0.0175 };
   });
   const documents = documentsIn(workspaceId);
   const pdfs = pdfsIn(workspaceId);
@@ -2162,8 +2688,9 @@ export function usageOf(workspaceId: string, days: number): WorkspaceUsageRespon
     summary: {
       documents_active: documents.length, documents_deleted: deleted + 1,
       first_document_at: '2026-02-01T10:00:00Z', last_document_at: NOW, document_saves: 412,
-      chats_total: 18, chat_messages_total: 240, agent_runs_total: 96, agent_runs_completed: 91, agent_runs_failed: 5, last_agent_run_at: NOW,
-      tokens_input: 1_240_000, tokens_output: 98_000, llm_calls_total: 310, tool_calls_total: 520, tool_calls_failed: 12,
+      chats_total: 18, chat_messages_total: 240, assistant_runs_total: 96, assistant_runs_completed: 91, assistant_runs_failed: 5,
+      last_assistant_run_at: NOW, tokens_input: 1_240_000, tokens_output: 98_000, tokens_cached: 610_000, cost: 1.68,
+      llm_calls_total: 310, tool_calls_total: 520, tool_calls_failed: 12,
       resources_active: pdfs.length, resources_bytes: pdfs.reduce((total, pdf) => total + pdf.byte_size, 0),
       last_resource_at: NOW, resources_extracted: pdfs.filter((pdf) => pdf.extraction.status === 'ready').length,
       collections_active: liveCollections(workspaceId).length,
@@ -2171,7 +2698,7 @@ export function usageOf(workspaceId: string, days: number): WorkspaceUsageRespon
     activity: series.slice(-days),
     tools: [
       { tool_name: 'doc_edit', call_count: 140, error_count: 3, avg_duration_ms: 420, last_used_at: NOW },
-      { tool_name: 'semantic_scholar_search', call_count: 88, error_count: 2, avg_duration_ms: 900, last_used_at: NOW },
+      { tool_name: 'paper_search', call_count: 88, error_count: 2, avg_duration_ms: 900, last_used_at: NOW },
       { tool_name: 'cite_sources', call_count: 41, error_count: 0, avg_duration_ms: 610, last_used_at: NOW },
     ],
     pages: documents
@@ -2195,20 +2722,22 @@ export function accountUsageOf(days: number): AccountUsageResponse {
   const each = workspaces.map((workspace) => ({ workspace, usage: usageOf(workspace.id, days) }));
   const summary = { ...(each[0]?.usage.summary ?? usageOf(PERSONAL_WORKSPACE_ID, days).summary) };
   const counters = [
-    'documents_active', 'documents_deleted', 'document_saves', 'chats_total', 'chat_messages_total', 'agent_runs_total',
-    'agent_runs_completed', 'agent_runs_failed', 'tokens_input', 'tokens_output', 'llm_calls_total', 'tool_calls_total',
-    'tool_calls_failed', 'resources_active', 'resources_bytes', 'resources_extracted', 'collections_active',
+    'documents_active', 'documents_deleted', 'document_saves', 'chats_total', 'chat_messages_total', 'assistant_runs_total',
+    'assistant_runs_completed', 'assistant_runs_failed', 'tokens_input', 'tokens_output', 'tokens_cached', 'cost', 'llm_calls_total',
+    'tool_calls_total', 'tool_calls_failed', 'resources_active', 'resources_bytes', 'resources_extracted', 'collections_active',
   ] as const;
   for (const counter of counters) {
     summary[counter] = each.reduce((total, { usage }) => total + (usage.summary[counter] ?? 0), 0);
   }
+  summary.cost = Math.round(summary.cost * 1e6) / 1e6;
   const activity = new Map<string, AccountUsageResponse['activity'][number]>();
   for (const { usage } of each) {
     for (const day of usage.activity) {
-      const sum = activity.get(day.day) ?? { day: day.day, document_events: 0, agent_run_events: 0, resource_events: 0 };
+      const sum = activity.get(day.day) ?? { day: day.day, document_events: 0, assistant_run_events: 0, resource_events: 0, cost: 0 };
       sum.document_events += day.document_events;
-      sum.agent_run_events += day.agent_run_events;
+      sum.assistant_run_events += day.assistant_run_events;
       sum.resource_events += day.resource_events;
+      sum.cost += day.cost;
       activity.set(day.day, sum);
     }
   }
@@ -2228,43 +2757,21 @@ export function accountUsageOf(days: number): AccountUsageResponse {
   };
 }
 
-type AgentSettings = Required<Pick<AgentToolSettingsResponse, 'version' | 'sources' | 'categories' | 'skills' | 'features'>>;
-
 /**
- * Save the agent tool switches and resolve what each one makes effective,
- * exactly as the API catalog does: sources, then tool dependencies, then
- * skills and features.
+ * What the assistant can do for the account in a workspace, on an engine,
+ * as `GET …/assistant/catalog` answers it: the account's switches, the
+ * workspace's policy, the account's role there, and the engines' gates.
  */
-export function updateAgentSettings(changes: { sources?: Record<string, boolean> | null; tools?: Record<string, boolean> | null; skills?: Record<string, boolean> | null; features?: Record<string, boolean> | null }): AgentSettings {
-  const settings = fixtures.agentSettings;
-  const tools = settings.categories.flatMap((category) => category.tools ?? []);
-  for (const [key, options] of [
-    ['sources', settings.sources], ['tools', tools], ['skills', settings.skills], ['features', settings.features],
-  ] as const) {
-    const wanted = changes[key];
-    for (const option of options) {
-      if (typeof wanted?.[option.id] === 'boolean') option.enabled = wanted[option.id] as boolean;
-    }
-  }
-  for (const source of settings.sources) source.effective_enabled = source.enabled && source.available;
-  for (let pass = 0; pass < tools.length; pass += 1) {
-    for (const tool of tools) {
-      const dependencies = (tool.requires_sources ?? []).map((id) => settings.sources.find((source) => source.id === id)?.effective_enabled === true);
-      const sourcesReady = dependencies.length === 0 || (tool.source_policy === 'any' ? dependencies.some(Boolean) : dependencies.every(Boolean));
-      tool.effective_enabled = tool.enabled && tool.available && sourcesReady
-        && (tool.requires_tools ?? []).every((id) => tools.find((candidate) => candidate.id === id)?.effective_enabled);
-    }
-  }
-  for (const item of [...settings.skills, ...settings.features]) {
-    item.effective_enabled = item.enabled && item.available
-      && (item.requires_tools ?? []).every((id) => tools.find((tool) => tool.id === id)?.effective_enabled);
-  }
-  return settings;
-}
-
-/** The features a run of the preview agent has on. */
-export function enabledFeatures(): string[] {
-  return fixtures.agentSettings.features.filter((feature) => feature.effective_enabled).map((feature) => feature.id);
+export function catalogOf(workspaceId: string, engine: EngineId = 'gateway', role: WorkspaceRole = roleOf(workspaceId) ?? 'viewer') {
+  return assistantCatalog({
+    account: fixtures.assistant,
+    policy: workspacePolicyOf(workspaceId),
+    role,
+    engine,
+    engines: (['gateway', 'claude', 'codex'] as const).map((id) => ({
+      id, label: fixtures.engines[id].name, available: fixtures.engines[id].available, message: fixtures.engines[id].message,
+    })),
+  });
 }
 
 /**
@@ -2385,11 +2892,20 @@ function createFixtures() {
       [VIEWER_DOCUMENT_ID, [viewerChangeSet(documents)]],
     ]),
     chats: seededChats(),
+    /** Shared notes and review summaries, separate from page content/history. */
+    comments: new Map<string, DocumentComment[]>(),
+    reviewRuns: new Map<string, ReviewSummary[]>(),
+    /** Plans are shared by the chat HTTP routes and its scripted socket turns. */
+    plans: new Map<string, { workspaceId: string; documentId: string; chatId: string; plan: ChatPlan }>(),
     nextMessageId: 100,
     pdfs: seededPdfs(),
     /** The bytes of a PDF uploaded in this session; the seeded ones have metadata only. */
     pdfFiles: new Map<number, Blob>(),
-    images: new Map<string, { workspaceId: string; image: ChatImageItem; file: Blob }>(),
+    assets: new Map<string, StoredAsset>(),
+    imageGenerations: new Map<string, ImageGenerationInfo>(),
+    imageGenerationActions: new Map<string, { hash: string; generationId: string }>(),
+    imageConfirmations: new Map<string, { key: string; token: string }>(),
+    imageGenerationEnabled: false,
     collections: seededCollections(),
     nextCollectionId: 13,
     /** The number in the next created page's id; purged pages leave the map, so its size is not one. */
@@ -2399,7 +2915,16 @@ function createFixtures() {
     nextJobId: 1,
     /** How long a job takes to report done: long enough in the preview to see its progress. */
     jobDurationMs: 2400,
-    agentSettings: structuredClone(agentTools) as AgentSettings,
+    /** Each page's last reference audit (`GET …/references/status`); none until one runs. */
+    referenceAudits: new Map<string, ReferenceAuditReport>(),
+    /** Each page's AI-use log, oldest first (`GET …/ai-use`). */
+    aiUse: seededAiUse(),
+    /**
+     * The account's assistant switches, as `preferences.assistant` keeps
+     * them (overrides of the defaults): the preview's account keeps the
+     * defaults, Papers with every source on, Web and Research workers off.
+     */
+    assistant: { switches: {}, sources: {} } as AccountSwitches,
     engines: seededEngines(),
     profile: {} as Partial<UserProfileModel>,
     /** What a page write answered, by its `Idempotency-Key`, so a replay gets the same answer. */
@@ -2413,5 +2938,6 @@ export type Fixtures = ReturnType<typeof createFixtures>;
 export const fixtures: Fixtures = createFixtures();
 
 export function resetFixtures(): void {
+  MOCK_DEPLOYMENT.capabilities.delete('image_generation');
   Object.assign(fixtures, createFixtures());
 }

@@ -56,7 +56,6 @@ describe('ParagraphBlock accessibility', () => {
     render(
       <ParagraphBlock
         block={{ id: 'p1', type: 'paragraph', html: 'Body text', children: [] }}
-        documentId={null}
       />,
     );
 
@@ -67,7 +66,6 @@ describe('ParagraphBlock accessibility', () => {
     render(
       <ParagraphBlock
         block={{ id: 'p1', type: 'paragraph', html: 'Locked text', children: [], locked: true }}
-        documentId={null}
       />,
     );
 
@@ -81,7 +79,6 @@ describe('ParagraphBlock placeholders', () => {
     render(
       <ParagraphBlock
         block={{ id: 'p1', type: 'paragraph', html: '', children: [], ...(variant ? { variant } : {}) }}
-        documentId={null}
       />,
     );
     const field = screen.getByRole('textbox');

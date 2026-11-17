@@ -243,16 +243,18 @@ describe('problems become ApiErrors', () => {
   });
 
   it('reads the string detail of a research problem, whose provider is a top-level member', async () => {
-    server.use(http.get('/research/semantic-scholar/search', () => problem('research_unavailable', 'Semantic Scholar is temporarily unavailable.', {
-      provider: 'semantic_scholar', operation: 'search_papers',
+    server.use(http.get('/workspaces/{workspace_id}/papers/search', () => problem('provider_unavailable', 'Semantic Scholar is temporarily unavailable.', {
+      provider: 'semantic_scholar', operation: 'search_papers', retry_after: 30,
     })));
 
-    const error = await api.GET('/research/semantic-scholar/search', { params: { query: { query: 'test' } } })
+    const error = await api.GET('/workspaces/{workspace_id}/papers/search', {
+      params: { path: { workspace_id: 'wsp-test' }, query: { query: 'test' } },
+    })
       .catch((caught: unknown) => caught);
 
     expect(error).toMatchObject({
       status: 503,
-      data: { provider: 'semantic_scholar', operation: 'search_papers' },
+      data: { provider: 'semantic_scholar', operation: 'search_papers', retry_after: 30 },
       message: 'Semantic Scholar is temporarily unavailable.',
     });
   });

@@ -64,7 +64,7 @@ export function PageTitle({
   }, [pageKey, untitledBlank]);
 
   // Uncontrolled while focused, so a rename arriving from elsewhere (the
-  // agent's update_meta, another tab) never moves the caret mid-word.
+  // agent's set_meta, another tab) never moves the caret mid-word.
   useLayoutEffect(() => {
     const el = fieldRef.current;
     if (!el || document.activeElement === el) return;

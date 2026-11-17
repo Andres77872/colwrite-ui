@@ -151,7 +151,7 @@ describe('Editable active-block synchronization', () => {
     act(() => currentEditor().setActive('p1'));
     act(() =>
       currentEditor().applyPatch(
-        [{ op: 'replace_block', blockId: 'p1', block: { html: 'Agent wrote this' } }],
+        [{ op: 'write_blocks', position: 'replace', blockId: 'p1', blocks: [{ id: 'p1', type: 'paragraph', html: 'Agent wrote this', children: [] }] }],
         { persist: true },
       ),
     );
@@ -201,7 +201,7 @@ describe('Editable active-block synchronization', () => {
     act(() => currentEditor().setActive('p2'));
     act(() =>
       currentEditor().applyPatch(
-        [{ op: 'replace_block', blockId: 'p1', block: { html: 'Patched while inactive' } }],
+        [{ op: 'write_blocks', position: 'replace', blockId: 'p1', blocks: [{ id: 'p1', type: 'paragraph', html: 'Patched while inactive', children: [] }] }],
         { persist: true },
       ),
     );
@@ -909,6 +909,15 @@ describe('Editable pasting as plain text', () => {
     expect(exec).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledWith('insertText', false, 'Bold words');
     expect(currentEditor().blocks).toHaveLength(1);
+  });
+
+  it('pastes block markup inside a paragraph as the API stores it', () => {
+    // The API's sanitizer output for the same html (`sanitize_inline_html`).
+    const { field, exec } = mount();
+    pasteInto(field, { html: '<div>Moved <b>here</b></div>', text: 'Moved here' });
+    expect(exec).toHaveBeenLastCalledWith('insertHTML', false, '<span class="legacy-block">Moved <b>here</b></span>');
+    pasteInto(field, { html: '<p dir="ltr" style="x">One <em>two</em></p>', text: 'One two' });
+    expect(exec).toHaveBeenLastCalledWith('insertHTML', false, '<span class="legacy-block">One <em>two</em></span>');
   });
 
   it('goes back to a normal paste for the one after', () => {

@@ -263,105 +263,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/research/semantic-scholar/claim-assessment": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Assess Semantic Scholar Claim */
-        post: operations["research-assess_semantic_scholar_claim"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/research/semantic-scholar/graph": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Semantic Scholar Graph */
-        get: operations["research-get_semantic_scholar_graph"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/research/semantic-scholar/recommendations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Semantic Scholar Recommendations */
-        get: operations["research-get_semantic_scholar_recommendations"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/research/semantic-scholar/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Search Semantic Scholar
-         * @description Search the first 1,000 relevance-ranked Semantic Scholar results.
-         */
-        get: operations["research-search_semantic_scholar"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/sources/resolve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Resolve Source
-         * @description Resolve a DOI, arXiv id or Semantic Scholar id.
-         *
-         *     Returns ``{"source": {...}}`` shaped like a document ``CitationSource``.
-         *
-         *     - 400 ``unrecognized_identifier``: not a DOI, arXiv or S2 identifier.
-         *     - 403 ``paper_source_disabled``: an S2 id while Semantic Scholar is off.
-         *     - 404 ``source_not_found``: the registry does not know it.
-         *     - 503 ``resolver_unavailable``: the registry could not be reached — the
-         *       identifier may be valid; try again.
-         */
-        get: operations["sources-resolve_source"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/users/me": {
         parameters: {
             query?: never;
@@ -401,7 +302,7 @@ export interface paths {
         patch: operations["users-update_me"];
         trace?: never;
     };
-    "/users/me/agent-tools": {
+    "/users/me/assistant": {
         parameters: {
             query?: never;
             header?: never;
@@ -409,15 +310,17 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Agent Tool Settings
-         * @description Every selectable assistant tool, skill, feature and paper source.
+         * Get Assistant Settings
+         * @description The account's capability switches: Papers with its sources, Web,
+         *     Workers and Images, each with the account's choice and whether this
+         *     server can serve it. A workspace's own say is in its catalog.
          */
-        get: operations["users-get_agent_tool_settings"];
+        get: operations["users-get_assistant_settings"];
         /**
-         * Update Agent Tool Settings
-         * @description Change some selections; the others keep their values.
+         * Update Assistant Settings
+         * @description Change some switches or sources; the others keep their values.
          */
-        put: operations["users-update_agent_tool_settings"];
+        put: operations["users-update_assistant_settings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -550,7 +453,7 @@ export interface paths {
         patch: operations["workspaces-update_workspace"];
         trace?: never;
     };
-    "/workspaces/{workspace_id}/chat-images": {
+    "/workspaces/{workspace_id}/assets": {
         parameters: {
             query?: never;
             header?: never;
@@ -560,18 +463,51 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Upload Chat Image
-         * @description Store an image to attach to a message. A replay with the same
-         *     ``Idempotency-Key`` and the same image returns the stored image.
+         * Upload Asset
+         * @description Store an author's image privately until explicitly linked to a page.
          */
-        post: operations["chat-images-upload_chat_image"];
+        post: operations["assets-upload_asset"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/workspaces/{workspace_id}/chat-images/{image_id}/content": {
+    "/workspaces/{workspace_id}/assets/{asset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Asset */
+        get: operations["assets-get_asset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/assets/{asset_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Asset Content */
+        get: operations["assets-get_asset_content"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/assistant/catalog": {
         parameters: {
             query?: never;
             header?: never;
@@ -579,15 +515,70 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Download Chat Image
-         * @description The stored image, for a plain link: the workspace is in the path and
-         *     the session cookie authorizes the request. Images belong to chats, which
-         *     are private to their author: only the member who uploaded the image gets
-         *     it; for anyone else it is 404 ``image_not_found``.
+         * Get Assistant Catalog
+         * @description The profiles, the account's switches, the toolsets and tools with
+         *     their states, the presets, the skills, the engines and the policy, as
+         *     a run of this account in this workspace on ``engine`` would have them.
+         *
+         *     A state is ``on``, ``off`` (the account's switch), ``blocked`` (the
+         *     workspace policy or the caller's role) or ``unavailable`` (not
+         *     configured on this server, or not on this engine), with a reason in
+         *     words when it is not ``on``.
          */
-        get: operations["chat-images-download_chat_image"];
+        get: operations["assistant-get_assistant_catalog"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/assistant/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Assistant Runs
+         * @description The caller's recent runs in this workspace, newest first: their state,
+         *     profile, effort, duration and cost, and whether an interrupted ``deep``
+         *     run can be resumed (``runs.resume`` on the assistant WebSocket). Another
+         *     member's runs are not listed. The list carries no total.
+         */
+        get: operations["assistant-list_assistant_runs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/claims/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check Claim
+         * @description Check one claim, as a ``claim_check`` job.
+         *
+         *     ``sources`` names the papers to judge it against by identifier
+         *     (``doi:10.…``, ``arxiv:…``): their passages about the claim, or a
+         *     paper's abstract where no source holds its text. With no sources,
+         *     passages of papers' text about the claim are found first. On abstracts
+         *     and snippets alone the verdict is ``insufficient`` with ``cannot_assess``
+         *     ("Cannot assess without the full text"). 400 ``unrecognized_identifier``
+         *     for a source that is not an identifier with its scheme.
+         */
+        post: operations["papers-check_claim"];
         delete?: never;
         options?: never;
         head?: never;
@@ -861,6 +852,51 @@ export interface paths {
         patch: operations["documents-patch_workspace_document"];
         trace?: never;
     };
+    "/workspaces/{workspace_id}/documents/{document_id}/ai-use": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ai Use Log
+         * @description The page's AI-use log, oldest first: each action of the assistant
+         *     that changed the page or suggested a change, with its purposes, the
+         *     models that served it, the sections it touched and how it was verified
+         *     (read from its change set's decisions). ``next_cursor`` continues it.
+         */
+        get: operations["references-ai_use_log"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/documents/{document_id}/ai-use/statement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ai Use Statement
+         * @description A draft disclosure statement for ``venue``, from the page's log, with
+         *     where the venue asks for it and what its policy asks; the author edits
+         *     it. It says what the log cannot know: text pasted from other tools.
+         */
+        get: operations["references-ai_use_statement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspace_id}/documents/{document_id}/change-sets": {
         parameters: {
             query?: never;
@@ -977,7 +1013,8 @@ export interface paths {
         post?: never;
         /**
          * Delete Chat
-         * @description Delete one of the caller's chats on this page, with its messages.
+         * @description Delete one of the caller's chats on this page, with its messages, its
+         *     sources and their passages.
          */
         delete: operations["chats-delete_chat"];
         options?: never;
@@ -1000,8 +1037,12 @@ export interface paths {
          * List Chat Messages
          * @description One branch of the chat: the messages from the first one to ``leaf``.
          *
-         *     A ``leaf`` that is not a message of this chat is 404
-         *     ``message_not_found``.
+         *     Each assistant message carries its ``record`` (``kind: "reply"``): the
+         *     turn's tool calls, sources, tasks, workers, change sets and created
+         *     pages, the models that served it, its usage and cost, and how it ended,
+         *     so a reload shows the reply the author saw. A user message's record
+         *     (``kind: "request"``) names the preset it ran. A ``leaf`` that is not a
+         *     message of this chat is 404 ``message_not_found``.
          */
         get: operations["chats-list_chat_messages"];
         put?: never;
@@ -1010,6 +1051,98 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/documents/{document_id}/chats/{chat_id}/plans/{plan_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Chat Plan
+         * @description One of the chat's plans, with its sections and their states. Another
+         *     chat's plan, or one of another workspace, is 404 ``plan_not_found``.
+         */
+        get: operations["chats-get_chat_plan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Chat Plan
+         * @description The author's edits to a proposed plan, or to the pending sections of a
+         *     running one (a run reads the plan again before each section), or
+         *     ``state: "discarded"``. Approving is starting a ``deep`` run from it.
+         *
+         *     ``If-Match`` names the revision edited: an old one is 412 ``stale_plan``
+         *     with ``expected_head`` and ``current_head``. A section being written or
+         *     already written cannot change (422).
+         */
+        patch: operations["chats-update_chat_plan"];
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/documents/{document_id}/chats/{chat_id}/sources/{handle}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Chat Source
+         * @description A source and excerpts of the caller's own chat. A citation's passage
+         *     is read on demand; no excerpt is added to events or reply records.
+         */
+        get: operations["chats-get_chat_source"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/documents/{document_id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Comments
+         * @description Newest first, with exact-quote anchors checked against the saved page.
+         */
+        get: operations["review-list_comments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/documents/{document_id}/comments/{comment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Decide Comment
+         * @description Resolve, dismiss or reopen one note. The page's ETag is unchanged.
+         */
+        patch: operations["review-decide_comment"];
         trace?: never;
     };
     "/workspaces/{workspace_id}/documents/{document_id}/copy": {
@@ -1137,6 +1270,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspace_id}/documents/{document_id}/references/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check References
+         * @description Start the page's reference audit, as a ``reference_audit`` job.
+         *
+         *     The job looks every library reference up again (identity, a second
+         *     source, retraction and version status), counts the page's orphan
+         *     citations, uncited entries, duplicates, preprints with a version of
+         *     record and citations with no passage, and stores the report
+         *     (``GET …/references/status``). Records the registries now give
+         *     otherwise are proposed as a change set (``update_sources``, and
+         *     ``add_sources`` for an orphan citation whose key resolves), named in the
+         *     job's ``progress.result.change_set_id``. Asking again while it runs runs
+         *     it once more. A page in the Trash is 409 ``document_in_trash``.
+         */
+        post: operations["references-check_references"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/documents/{document_id}/references/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reference Status
+         * @description The page's last reference audit; 404 ``reference_audit_not_found`` before the first.
+         */
+        get: operations["references-reference_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspace_id}/documents/{document_id}/reorder": {
         parameters: {
             query?: never;
@@ -1180,6 +1363,26 @@ export interface paths {
          *     ``document_in_trash`` with that ``trash_root``: restore the collection.
          */
         post: operations["documents-restore_workspace_document"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/documents/{document_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Reviews
+         * @description Past and running reviews, with counts and no score.
+         */
+        get: operations["review-list_reviews"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1342,6 +1545,93 @@ export interface paths {
          *     Asking again while it runs builds it once more afterwards.
          */
         post: operations["workspaces-export_workspace"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/image-generations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Generations */
+        get: operations["images-list_generations"];
+        put?: never;
+        /** Propose Image */
+        post: operations["images-propose_image"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/image-generations/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Image Availability */
+        get: operations["images-image_availability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/image-generations/{generation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Generation */
+        get: operations["images-get_generation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Edit Generation */
+        patch: operations["images-edit_generation"];
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/image-generations/{generation_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm Generation */
+        post: operations["images-confirm_generation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/image-generations/{generation_id}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Discard Generation */
+        post: operations["images-discard_generation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1523,6 +1813,86 @@ export interface paths {
          *     already is 409 ``workspace_limit``.
          */
         post: operations["members-accept_ownership_transfer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/papers/passages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Paper Passages
+         * @description Passages from papers' text that bear on a question.
+         */
+        get: operations["papers-paper_passages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/papers/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Papers
+         * @description Papers on a topic, merged across the sources by identifier.
+         */
+        get: operations["papers-search_papers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/papers/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Paper
+         * @description One paper's record, with its status and its copies.
+         */
+        get: operations["papers-get_paper"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/papers/{key}/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Paper Graph
+         * @description The works a paper cites, the works citing it, or works like it.
+         */
+        get: operations["papers-paper_graph"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1768,6 +2138,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspace_id}/sources/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve Source
+         * @description Resolve, match and check one identifier.
+         *
+         *     - 400 ``unrecognized_identifier``: not a DOI, arXiv id, PMID, PMCID,
+         *       OpenAlex or Semantic Scholar id.
+         *     - 403 ``workspace_policy``: the workspace turned outside research off.
+         *     - 403 ``paper_source_disabled``: an id only a paper source resolves,
+         *       while the account has that source off.
+         *     - 404 ``source_not_found``: no registry knows it.
+         *     - 409 ``source_mismatch``: it is another work than ``title`` names
+         *       (``claimed_title``, ``found_title``).
+         *     - 503 ``paper_source_unavailable``: an id only a paper source resolves,
+         *       on a server without one.
+         *     - 503 ``resolver_unavailable``: the registry could not be reached; the
+         *       identifier may be valid. Try again.
+         */
+        get: operations["sources-resolve_source"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspace_id}/trash": {
         parameters: {
             query?: never;
@@ -1918,8 +2321,10 @@ export interface components {
          * @description One day of activity. Days with none are absent from the series.
          */
         ActivityDay: {
-            /** Agent Run Events */
-            agent_run_events: number;
+            /** Assistant Run Events */
+            assistant_run_events: number;
+            /** Cost */
+            cost: number;
             /** Day */
             day: string;
             /** Document Events */
@@ -1936,34 +2341,8 @@ export interface components {
             email: string;
         };
         /**
-         * AgentCapabilityOption
-         * @description An engine-independent skill or optional agent-loop capability.
-         */
-        AgentCapabilityOption: {
-            /** Available */
-            available: boolean;
-            /** Default Enabled */
-            default_enabled: boolean;
-            /** Description */
-            description: string;
-            /** Effective Enabled */
-            effective_enabled: boolean;
-            /** Enabled */
-            enabled: boolean;
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
-            /** Modes */
-            modes: ("assistant" | "rewrite")[];
-            /** Requires Tools */
-            requires_tools: string[];
-            /** Unavailable Reason */
-            unavailable_reason: string | null;
-        };
-        /**
          * AgentChatRequest
-         * @description Request body for the unified agent chat endpoint.
+         * @description One agent run, as ``runs.start`` on the assistant WebSocket carries it.
          *
          *     Parameters
          *     ----------
@@ -1996,37 +2375,229 @@ export interface components {
          *         by GET /api/agent/engines. Applies to helper calls under every engine.
          *         ``main`` also selects the gateway loop's model; CLI loop models are
          *         chosen by ``model``.
-         *     mode : {"assistant", "rewrite"}
-         *         Which tools the agent is given.  ``assistant`` (the default) is the
-         *         chat panel: the agent can read, edit and create documents.
-         *         ``rewrite`` is the selection toolbar, where the *client* owns applying
-         *         the result through its accept/reject affordance — handing that agent
-         *         ``doc_edit`` made it mutate the stored document behind the user's back
-         *         while the toolbar was still offering them the choice.
+         *     profile : {"chat", "inline"}
+         *         The kind of run (05 §3). ``chat`` (the default) is the assistant
+         *         panel: the agent can read, propose edits to and create pages, and the
+         *         turn is stored in a chat. ``inline`` is Ask AI and the AI beats: the
+         *         *client* applies the returned text itself, so the run gets no page
+         *         tool and stores no chat (its usage, duration and tool calls are still
+         *         recorded); it cannot resume a chat.
+         *     preset : str or None
+         *         A server preset (``src/agent/profiles/presets.py``): the server
+         *         supplies its instruction, so the client sends no prompt text. Its
+         *         profile must be the request's. ``message`` may then be empty.
          *     apply_mode : {"propose", "auto"}
          *         Both store the same atomic change sets; ``doc_edit`` never moves the
          *         page head. ``propose`` (the default) leaves every set for the author
          *         to review. ``auto`` asks for the sets to be applied by the open
-         *         editor without review (D18). The server grants it only in
-         *         ``assistant`` mode, for an editor or above, under a workspace policy
-         *         that allows it, and with no web-research tool enabled; each set then
-         *         carries ``apply_policy: "auto"``, otherwise ``"review"`` with an
-         *         ``auto_blocked_reason``. The run's ``status`` events report the
-         *         effective policy. ``auto`` is refused in ``rewrite`` mode.
-         *     ephemeral : bool
-         *         Run without creating or extending a chat. For the editor's inline
-         *         AI (a rewrite of a selection, a drafted paragraph): those requests are
-         *         one-shot, and persisting each one as a conversation filled the chat
-         *         list with single-message chats. The run itself — usage, duration, tool
-         *         executions — is still recorded. Only valid in ``rewrite`` mode and
-         *         without ``chat_id``.
+         *         editor without review (D18). The server grants it only to a ``chat``
+         *         run, for an editor or above, under a workspace policy that allows it;
+         *         each set then carries
+         *         ``apply_policy: "auto"``, otherwise ``"review"`` with an
+         *         ``auto_blocked_reason``. Auto also ends at the run's first result of a
+         *         tool that returns untrusted content (``untrusted_content``). The
+         *         run's ``status`` events report the policy in effect when each is
+         *         sent. ``auto`` is refused for an ``inline`` run.
+         *     web : bool
+         *         Off by default for each turn. Only narrows Web permissions granted
+         *         by the account, workspace, deployment and engine. Requested but
+         *         unavailable Web is explained in the first status, not enabled.
          *     context : AgentContext or None
          *         Where the author is working: the caret's block, selected text, and
          *         blocks referenced in the message. Only blocks the model can see are
          *         kept.
+         *     effort : {"quick", "standard", "deep"} or None
+         *         The budget tier (08 §2): model calls, tool calls, calls per outside
+         *         destination, workers, wall clock, cost ceiling and reasoning effort.
+         *         Omitted: ``standard`` for a chat run, ``quick`` for an inline run,
+         *         which is always ``quick``. A ``deep`` run follows an approved plan
+         *         (``plan_id``); a ``deep`` message without one is a planning turn: it
+         *         scopes the request within the ``standard`` tier's limits, may not
+         *         write (``plan_required``), and ends by proposing a plan.
+         *     plan_id : str or None
+         *         The plan this ``deep`` run follows: its sections are the run's
+         *         tasks, written in order, each as one change set.
+         *     plan : PlanEdit or None
+         *         The plan as the author edited it, sent with ``plan_id`` when they
+         *         changed it; ``stale_plan`` when it was edited from an old revision.
+         *     answers : QuestionAnswers or None
+         *         The author's answers to the question card an earlier turn asked.
+         */
+        AgentChatRequest: {
+            /** @description The author's answers to an earlier turn's question card. */
+            answers?: components["schemas"]["QuestionAnswers"] | null;
+            /**
+             * Apply Mode
+             * @description 'propose' leaves every stored change set for review; 'auto' asks for them to be applied by the open editor. The server decides: each change set carries the effective apply_policy.
+             * @default propose
+             * @enum {string}
+             */
+            apply_mode: "propose" | "auto";
+            /** Attachments */
+            attachments?: (components["schemas"]["ImageAttachment"] | components["schemas"]["ResourceAttachment"])[];
+            /**
+             * Chat Id
+             * @description Existing chat UUID to resume.  None = new conversation.
+             */
+            chat_id?: string | null;
+            /** @description The author's caret block, selection and referenced blocks; blocks the model cannot see are ignored. */
+            context?: components["schemas"]["AgentContext"] | null;
+            /**
+             * Document Id
+             * @description MongoDB document ObjectId
+             */
+            document_id: string;
+            /**
+             * Effort
+             * @description The budget tier. Omitted: 'standard' for chat, 'quick' for inline (always quick). 'deep' follows an approved plan (plan_id); without one the run proposes a plan first.
+             */
+            effort?: ("quick" | "standard" | "deep") | null;
+            /**
+             * Engine
+             * @description Agent backend. 'gateway' is the configured model gateway; 'claude' and 'codex' use the developer's own local CLI login and are only available to a local (COLWRITE_ENVIRONMENT=local) server over loopback.
+             * @default gateway
+             * @enum {string}
+             */
+            engine: "gateway" | "claude" | "codex";
+            /** @description Configured main/lite gateway model choices; omitted tiers use server defaults. */
+            gateway_models?: components["schemas"]["GatewayModelSelection"] | null;
+            /**
+             * Leaf Id
+             * @description The message to continue from; None continues the chat's newest message.
+             */
+            leaf_id?: number | null;
+            /**
+             * Message
+             * @description User's message; may be empty when attachments are provided
+             * @default
+             */
+            message: string;
+            /**
+             * Model
+             * @description The CLI model for the claude and codex engines; refused for gateway.
+             */
+            model?: string | null;
+            /** @description The plan as the author edited it, sent with plan_id when they changed it. */
+            plan?: components["schemas"]["PlanEdit"] | null;
+            /**
+             * Plan Id
+             * @description The approved plan a deep run follows; its sections are the run's tasks.
+             */
+            plan_id?: string | null;
+            /**
+             * Preset
+             * @description A server preset id; the server supplies its instruction.
+             */
+            preset?: string | null;
+            /**
+             * Profile
+             * @description 'chat' is the assistant panel, stored as a chat; 'inline' returns text only, for callers that apply the result themselves, and stores no chat. 'review' writes shared comments and a review summary.
+             * @default chat
+             * @enum {string}
+             */
+            profile: "chat" | "inline" | "review";
+            /**
+             * Review
+             * @description The named review workflow; required only for the review profile.
+             */
+            review?: ("proofread" | "claims" | "sources" | "structure" | "peer_review") | null;
+            /**
+             * Web
+             * @description Whether this turn may use Web. Off by default; only narrows the account's, workspace's and server's permissions, and never enables an account switch.
+             * @default false
+             */
+            web: boolean;
+        };
+        /**
+         * AgentChatRequest
+         * @description One agent run, as ``runs.start`` on the assistant WebSocket carries it.
+         *
+         *     Parameters
+         *     ----------
+         *     message : str
+         *         The user's message to the agent.  Required, non-empty.
+         *     document_id : str
+         *         MongoDB ObjectId of the document being discussed.  Required,
+         *         non-empty.
+         *     chat_id : str or None
+         *         Existing chat UUID to resume a conversation.  ``None`` starts
+         *         a new conversation.
+         *     leaf_id : int or None
+         *         The message whose branch the run continues: its chain from the root
+         *         is the history, and the new message is its child. ``None`` continues
+         *         from the chat's newest message.
+         *     model : str or None
+         *         The CLI model for the ``claude`` / ``codex`` engines: a model id or
+         *         alias the CLI understands (e.g. ``sonnet``). ``None`` uses the CLI's
+         *         own default. The ``gateway`` engine refuses it; its models are chosen
+         *         by ``gateway_models``.
+         *     engine : {"gateway", "claude", "codex"}
+         *         Which backend runs the agent loop. ``gateway`` (the default) is Magic
+         *         LLM over the configured gateway. ``claude`` and ``codex`` run the
+         *         developer's own Claude Code / Codex CLI under their own account
+         *         login; they exist only when ``COLWRITE_ENVIRONMENT=local`` and the
+         *         request comes directly from the same machine, and are rejected with an
+         *         ``ENGINE_*`` SSE error otherwise.
+         *     gateway_models : GatewayModelSelection or None
+         *         First choices for gateway main/lite work, limited to the chains exposed
+         *         by GET /api/agent/engines. Applies to helper calls under every engine.
+         *         ``main`` also selects the gateway loop's model; CLI loop models are
+         *         chosen by ``model``.
+         *     profile : {"chat", "inline"}
+         *         The kind of run (05 §3). ``chat`` (the default) is the assistant
+         *         panel: the agent can read, propose edits to and create pages, and the
+         *         turn is stored in a chat. ``inline`` is Ask AI and the AI beats: the
+         *         *client* applies the returned text itself, so the run gets no page
+         *         tool and stores no chat (its usage, duration and tool calls are still
+         *         recorded); it cannot resume a chat.
+         *     preset : str or None
+         *         A server preset (``src/agent/profiles/presets.py``): the server
+         *         supplies its instruction, so the client sends no prompt text. Its
+         *         profile must be the request's. ``message`` may then be empty.
+         *     apply_mode : {"propose", "auto"}
+         *         Both store the same atomic change sets; ``doc_edit`` never moves the
+         *         page head. ``propose`` (the default) leaves every set for the author
+         *         to review. ``auto`` asks for the sets to be applied by the open
+         *         editor without review (D18). The server grants it only to a ``chat``
+         *         run, for an editor or above, under a workspace policy that allows it;
+         *         each set then carries
+         *         ``apply_policy: "auto"``, otherwise ``"review"`` with an
+         *         ``auto_blocked_reason``. Auto also ends at the run's first result of a
+         *         tool that returns untrusted content (``untrusted_content``). The
+         *         run's ``status`` events report the policy in effect when each is
+         *         sent. ``auto`` is refused for an ``inline`` run.
+         *     web : bool
+         *         Off by default for each turn. Only narrows Web permissions granted
+         *         by the account, workspace, deployment and engine. Requested but
+         *         unavailable Web is explained in the first status, not enabled.
+         *     context : AgentContext or None
+         *         Where the author is working: the caret's block, selected text, and
+         *         blocks referenced in the message. Only blocks the model can see are
+         *         kept.
+         *     effort : {"quick", "standard", "deep"} or None
+         *         The budget tier (08 §2): model calls, tool calls, calls per outside
+         *         destination, workers, wall clock, cost ceiling and reasoning effort.
+         *         Omitted: ``standard`` for a chat run, ``quick`` for an inline run,
+         *         which is always ``quick``. A ``deep`` run follows an approved plan
+         *         (``plan_id``); a ``deep`` message without one is a planning turn: it
+         *         scopes the request within the ``standard`` tier's limits, may not
+         *         write (``plan_required``), and ends by proposing a plan.
+         *     plan_id : str or None
+         *         The plan this ``deep`` run follows: its sections are the run's
+         *         tasks, written in order, each as one change set.
+         *     plan : PlanEdit or None
+         *         The plan as the author edited it, sent with ``plan_id`` when they
+         *         changed it; ``stale_plan`` when it was edited from an old revision.
+         *     answers : QuestionAnswers or None
+         *         The author's answers to the question card an earlier turn asked.
          */
         "AgentChatRequest-Input": {
             /**
+             * @description The author's answers to an earlier turn's question card.
+             * @default null
+             */
+            answers: components["schemas"]["QuestionAnswers"] | null;
+            /**
              * Apply Mode
              * @description 'propose' leaves every stored change set for review; 'auto' asks for them to be applied by the open editor. The server decides: each change set carries the effective apply_policy.
              * @default propose
@@ -2052,18 +2623,18 @@ export interface components {
              */
             document_id: string;
             /**
+             * Effort
+             * @description The budget tier. Omitted: 'standard' for chat, 'quick' for inline (always quick). 'deep' follows an approved plan (plan_id); without one the run proposes a plan first.
+             * @default null
+             */
+            effort: ("quick" | "standard" | "deep") | null;
+            /**
              * Engine
              * @description Agent backend. 'gateway' is the configured model gateway; 'claude' and 'codex' use the developer's own local CLI login and are only available to a local (COLWRITE_ENVIRONMENT=local) server over loopback.
              * @default gateway
              * @enum {string}
              */
             engine: "gateway" | "claude" | "codex";
-            /**
-             * Ephemeral
-             * @description Do not create or extend a chat (rewrite mode only, no chat_id). The run and its usage are still recorded.
-             * @default false
-             */
-            ephemeral: boolean;
             /**
              * @description Configured main/lite gateway model choices; omitted tiers use server defaults.
              * @default null
@@ -2082,22 +2653,51 @@ export interface components {
              */
             message: string;
             /**
-             * Mode
-             * @description 'assistant' grants the document tools; 'rewrite' returns text only, for callers that apply the result themselves.
-             * @default assistant
-             * @enum {string}
-             */
-            mode: "assistant" | "rewrite";
-            /**
              * Model
              * @description The CLI model for the claude and codex engines; refused for gateway.
              * @default null
              */
             model: string | null;
+            /**
+             * @description The plan as the author edited it, sent with plan_id when they changed it.
+             * @default null
+             */
+            plan: components["schemas"]["PlanEdit"] | null;
+            /**
+             * Plan Id
+             * @description The approved plan a deep run follows; its sections are the run's tasks.
+             * @default null
+             */
+            plan_id: string | null;
+            /**
+             * Preset
+             * @description A server preset id; the server supplies its instruction.
+             * @default null
+             */
+            preset: string | null;
+            /**
+             * Profile
+             * @description 'chat' is the assistant panel, stored as a chat; 'inline' returns text only, for callers that apply the result themselves, and stores no chat. 'review' writes shared comments and a review summary.
+             * @default chat
+             * @enum {string}
+             */
+            profile: "chat" | "inline" | "review";
+            /**
+             * Review
+             * @description The named review workflow; required only for the review profile.
+             * @default null
+             */
+            review: ("proofread" | "claims" | "sources" | "structure" | "peer_review") | null;
+            /**
+             * Web
+             * @description Whether this turn may use Web. Off by default; only narrows the account's, workspace's and server's permissions, and never enables an account switch.
+             * @default false
+             */
+            web: boolean;
         };
         /**
          * AgentChatRequest
-         * @description Request body for the unified agent chat endpoint.
+         * @description One agent run, as ``runs.start`` on the assistant WebSocket carries it.
          *
          *     Parameters
          *     ----------
@@ -2130,36 +2730,60 @@ export interface components {
          *         by GET /api/agent/engines. Applies to helper calls under every engine.
          *         ``main`` also selects the gateway loop's model; CLI loop models are
          *         chosen by ``model``.
-         *     mode : {"assistant", "rewrite"}
-         *         Which tools the agent is given.  ``assistant`` (the default) is the
-         *         chat panel: the agent can read, edit and create documents.
-         *         ``rewrite`` is the selection toolbar, where the *client* owns applying
-         *         the result through its accept/reject affordance — handing that agent
-         *         ``doc_edit`` made it mutate the stored document behind the user's back
-         *         while the toolbar was still offering them the choice.
+         *     profile : {"chat", "inline"}
+         *         The kind of run (05 §3). ``chat`` (the default) is the assistant
+         *         panel: the agent can read, propose edits to and create pages, and the
+         *         turn is stored in a chat. ``inline`` is Ask AI and the AI beats: the
+         *         *client* applies the returned text itself, so the run gets no page
+         *         tool and stores no chat (its usage, duration and tool calls are still
+         *         recorded); it cannot resume a chat.
+         *     preset : str or None
+         *         A server preset (``src/agent/profiles/presets.py``): the server
+         *         supplies its instruction, so the client sends no prompt text. Its
+         *         profile must be the request's. ``message`` may then be empty.
          *     apply_mode : {"propose", "auto"}
          *         Both store the same atomic change sets; ``doc_edit`` never moves the
          *         page head. ``propose`` (the default) leaves every set for the author
          *         to review. ``auto`` asks for the sets to be applied by the open
-         *         editor without review (D18). The server grants it only in
-         *         ``assistant`` mode, for an editor or above, under a workspace policy
-         *         that allows it, and with no web-research tool enabled; each set then
-         *         carries ``apply_policy: "auto"``, otherwise ``"review"`` with an
-         *         ``auto_blocked_reason``. The run's ``status`` events report the
-         *         effective policy. ``auto`` is refused in ``rewrite`` mode.
-         *     ephemeral : bool
-         *         Run without creating or extending a chat. For the editor's inline
-         *         AI (a rewrite of a selection, a drafted paragraph): those requests are
-         *         one-shot, and persisting each one as a conversation filled the chat
-         *         list with single-message chats. The run itself — usage, duration, tool
-         *         executions — is still recorded. Only valid in ``rewrite`` mode and
-         *         without ``chat_id``.
+         *         editor without review (D18). The server grants it only to a ``chat``
+         *         run, for an editor or above, under a workspace policy that allows it;
+         *         each set then carries
+         *         ``apply_policy: "auto"``, otherwise ``"review"`` with an
+         *         ``auto_blocked_reason``. Auto also ends at the run's first result of a
+         *         tool that returns untrusted content (``untrusted_content``). The
+         *         run's ``status`` events report the policy in effect when each is
+         *         sent. ``auto`` is refused for an ``inline`` run.
+         *     web : bool
+         *         Off by default for each turn. Only narrows Web permissions granted
+         *         by the account, workspace, deployment and engine. Requested but
+         *         unavailable Web is explained in the first status, not enabled.
          *     context : AgentContext or None
          *         Where the author is working: the caret's block, selected text, and
          *         blocks referenced in the message. Only blocks the model can see are
          *         kept.
+         *     effort : {"quick", "standard", "deep"} or None
+         *         The budget tier (08 §2): model calls, tool calls, calls per outside
+         *         destination, workers, wall clock, cost ceiling and reasoning effort.
+         *         Omitted: ``standard`` for a chat run, ``quick`` for an inline run,
+         *         which is always ``quick``. A ``deep`` run follows an approved plan
+         *         (``plan_id``); a ``deep`` message without one is a planning turn: it
+         *         scopes the request within the ``standard`` tier's limits, may not
+         *         write (``plan_required``), and ends by proposing a plan.
+         *     plan_id : str or None
+         *         The plan this ``deep`` run follows: its sections are the run's
+         *         tasks, written in order, each as one change set.
+         *     plan : PlanEdit or None
+         *         The plan as the author edited it, sent with ``plan_id`` when they
+         *         changed it; ``stale_plan`` when it was edited from an old revision.
+         *     answers : QuestionAnswers or None
+         *         The author's answers to the question card an earlier turn asked.
          */
         "AgentChatRequest-Output": {
+            /**
+             * @description The author's answers to an earlier turn's question card.
+             * @default null
+             */
+            answers: components["schemas"]["QuestionAnswers"] | null;
             /**
              * Apply Mode
              * @description 'propose' leaves every stored change set for review; 'auto' asks for them to be applied by the open editor. The server decides: each change set carries the effective apply_policy.
@@ -2186,18 +2810,18 @@ export interface components {
              */
             document_id: string;
             /**
+             * Effort
+             * @description The budget tier. Omitted: 'standard' for chat, 'quick' for inline (always quick). 'deep' follows an approved plan (plan_id); without one the run proposes a plan first.
+             * @default null
+             */
+            effort: ("quick" | "standard" | "deep") | null;
+            /**
              * Engine
              * @description Agent backend. 'gateway' is the configured model gateway; 'claude' and 'codex' use the developer's own local CLI login and are only available to a local (COLWRITE_ENVIRONMENT=local) server over loopback.
              * @default gateway
              * @enum {string}
              */
             engine: "gateway" | "claude" | "codex";
-            /**
-             * Ephemeral
-             * @description Do not create or extend a chat (rewrite mode only, no chat_id). The run and its usage are still recorded.
-             * @default false
-             */
-            ephemeral: boolean;
             /**
              * @description Configured main/lite gateway model choices; omitted tiers use server defaults.
              * @default null
@@ -2216,18 +2840,47 @@ export interface components {
              */
             message: string;
             /**
-             * Mode
-             * @description 'assistant' grants the document tools; 'rewrite' returns text only, for callers that apply the result themselves.
-             * @default assistant
-             * @enum {string}
-             */
-            mode: "assistant" | "rewrite";
-            /**
              * Model
              * @description The CLI model for the claude and codex engines; refused for gateway.
              * @default null
              */
             model: string | null;
+            /**
+             * @description The plan as the author edited it, sent with plan_id when they changed it.
+             * @default null
+             */
+            plan: components["schemas"]["PlanEdit"] | null;
+            /**
+             * Plan Id
+             * @description The approved plan a deep run follows; its sections are the run's tasks.
+             * @default null
+             */
+            plan_id: string | null;
+            /**
+             * Preset
+             * @description A server preset id; the server supplies its instruction.
+             * @default null
+             */
+            preset: string | null;
+            /**
+             * Profile
+             * @description 'chat' is the assistant panel, stored as a chat; 'inline' returns text only, for callers that apply the result themselves, and stores no chat. 'review' writes shared comments and a review summary.
+             * @default chat
+             * @enum {string}
+             */
+            profile: "chat" | "inline" | "review";
+            /**
+             * Review
+             * @description The named review workflow; required only for the review profile.
+             * @default null
+             */
+            review: ("proofread" | "claims" | "sources" | "structure" | "peer_review") | null;
+            /**
+             * Web
+             * @description Whether this turn may use Web. Off by default; only narrows the account's, workspace's and server's permissions, and never enables an account switch.
+             * @default false
+             */
+            web: boolean;
         };
         /**
          * AgentContext
@@ -2252,30 +2905,21 @@ export interface components {
              */
             block_ids?: string[];
             /**
+             * Figure Problems
+             * @description Client compiler findings for the target figure, not instructions.
+             */
+            figure_problems?: string[];
+            /**
+             * Previous Result
+             * @description An inline draft the author wants to refine; private quoted context, not an instruction.
+             * @default null
+             */
+            previous_result: string | null;
+            /**
              * @description Text the author had selected, if any.
              * @default null
              */
             selection: components["schemas"]["AgentSelection"] | null;
-        };
-        /**
-         * AgentPaperSourceOption
-         * @description One selectable paper-search provider and its effective state.
-         */
-        AgentPaperSourceOption: {
-            /** Available */
-            available: boolean;
-            /** Default Enabled */
-            default_enabled: boolean;
-            /** Description */
-            description: string;
-            /** Effective Enabled */
-            effective_enabled: boolean;
-            /** Enabled */
-            enabled: boolean;
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
         };
         /**
          * AgentSelection
@@ -2287,75 +2931,8 @@ export interface components {
             /** Text */
             text: string;
         };
-        /**
-         * AgentToolCategory
-         * @description A stable display group for related agent tools.
-         */
-        AgentToolCategory: {
-            /** Description */
-            description: string;
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
-            /** Tools */
-            tools: components["schemas"]["AgentToolOption"][];
-        };
-        /**
-         * AgentToolOption
-         * @description One server-known agent tool in the account preferences catalog.
-         */
-        AgentToolOption: {
-            /** Available */
-            available: boolean;
-            /** Category */
-            category: string;
-            /** Default Enabled */
-            default_enabled: boolean;
-            /** Description */
-            description: string;
-            /** Effective Enabled */
-            effective_enabled: boolean;
-            /** Enabled */
-            enabled: boolean;
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
-            /** Modes */
-            modes: ("assistant" | "rewrite")[];
-            /** Requires Sources */
-            requires_sources: string[];
-            /** Requires Tools */
-            requires_tools: string[];
-            /**
-             * Source Policy
-             * @default all
-             * @enum {string}
-             */
-            source_policy: "all" | "any";
-        };
-        /**
-         * AgentToolSettingsResponse
-         * @description Complete capability catalog plus the current account selections.
-         */
-        AgentToolSettingsResponse: {
-            /** Categories */
-            categories: components["schemas"]["AgentToolCategory"][];
-            /** Features */
-            features: components["schemas"]["AgentCapabilityOption"][];
-            /** Skills */
-            skills: components["schemas"]["AgentCapabilityOption"][];
-            /** Sources */
-            sources: components["schemas"]["AgentPaperSourceOption"][];
-            /**
-             * Version
-             * @default 1
-             */
-            version: number;
-        };
         /** AiBeatChild */
-        AiBeatChild: {
+        "AiBeatChild-Input": {
             /**
              * Collapsed
              * @default false
@@ -2368,8 +2945,7 @@ export interface components {
              * @default
              */
             message: string;
-            /** Output */
-            output?: string | null;
+            output?: components["schemas"]["AssistantOutput-Input"] | null;
             /**
              * Prompt
              * @default
@@ -2381,10 +2957,362 @@ export interface components {
              */
             type: "aiBeat";
         };
-        AssistantClientMessage: components["schemas"]["PingCommand"] | components["schemas"]["SessionsCreateCommand"] | components["schemas"]["SessionsListCommand"] | components["schemas"]["SessionsGetCommand"] | components["schemas"]["SessionsDeleteCommand"] | components["schemas"]["SessionsSubscribeCommand"] | components["schemas"]["SessionsUnsubscribeCommand"] | components["schemas"]["RunsStartCommand"] | components["schemas"]["RunsCancelCommand"];
-        AssistantEvent: components["schemas"]["StatusEvent"] | components["schemas"]["ReasoningEvent"] | components["schemas"]["TokenEvent"] | components["schemas"]["ToolCallStartEvent"] | components["schemas"]["ToolCallProgressEvent"] | components["schemas"]["ToolCallArgsEvent"] | components["schemas"]["ToolCallEndEvent"] | components["schemas"]["ToolActionEvent"] | components["schemas"]["SourcesEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["DoneEvent"] | components["schemas"]["TodoEvent"] | components["schemas"]["SubagentEvent"] | components["schemas"]["SessionChatEvent"] | components["schemas"]["RunStatusEvent"];
+        /** AiBeatChild */
+        "AiBeatChild-Output": {
+            /**
+             * Collapsed
+             * @default false
+             */
+            collapsed: boolean;
+            /** Id */
+            id: string;
+            /**
+             * Message
+             * @default
+             */
+            message: string;
+            output?: components["schemas"]["AssistantOutput-Output"] | null;
+            /**
+             * Prompt
+             * @default
+             */
+            prompt: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "aiBeat";
+        };
+        /**
+         * AiUseEntry
+         * @description One action of the assistant on the page (TD19's five fields).
+         */
+        AiUseEntry: {
+            /** Action */
+            action: string | null;
+            /** At */
+            at: string | null;
+            /** Block Ids */
+            block_ids: string[];
+            /** Build */
+            build: string | null;
+            /** Change Set Id */
+            change_set_id: string | null;
+            generation: components["schemas"]["ImageGenerationProvenance"] | null;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "change_set" | "page_created" | "suggestion" | "reference_check" | "image_generation";
+            /** Models */
+            models: string[];
+            /** Preset */
+            preset: string | null;
+            /** Purposes */
+            purposes: ("drafted" | "rewrote" | "edited" | "restructured" | "added_citations" | "managed_sources" | "refreshed_references" | "set_metadata" | "created_page" | "suggested" | "checked_references" | "generated_images")[];
+            references: components["schemas"]["AiUseReferenceCounts"] | null;
+            /** Run Id */
+            run_id: string | null;
+            /** Sections */
+            sections: string[];
+            /** Tool */
+            tool: string;
+            verification: components["schemas"]["AiUseVerification"];
+        };
+        /** AiUseLogResponse */
+        AiUseLogResponse: {
+            /** Entries */
+            entries: components["schemas"]["AiUseEntry"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** AiUseReferenceCounts */
+        AiUseReferenceCounts: {
+            /** Duplicates */
+            duplicates: number;
+            /** Needs Review */
+            needs_review: number;
+            /** Not Found */
+            not_found: number;
+            /** Orphans */
+            orphans: number;
+            /** References */
+            references: number;
+            /** Retracted */
+            retracted: number;
+            /** Stale */
+            stale: number;
+            /** Verified */
+            verified: number;
+        };
+        /**
+         * AiUseStatement
+         * @description A draft disclosure for one venue, from the page's log, to edit.
+         */
+        AiUseStatement: {
+            /** Notes */
+            notes: string[];
+            /** Statement */
+            statement: string;
+            summary: components["schemas"]["AiUseSummary"];
+            venue: components["schemas"]["VenueProfile"];
+        };
+        /** AiUseSummary */
+        AiUseSummary: {
+            /** Accepted By Author */
+            accepted_by_author: number;
+            /** Actions */
+            actions: number;
+            /** Applied By Auto */
+            applied_by_auto: number;
+            /** Build */
+            build: string;
+            /** First At */
+            first_at: string | null;
+            /** Last At */
+            last_at: string | null;
+            /** Last Reference Check */
+            last_reference_check: string | null;
+            /** Models */
+            models: string[];
+            /** Purposes */
+            purposes: ("drafted" | "rewrote" | "edited" | "restructured" | "added_citations" | "managed_sources" | "refreshed_references" | "set_metadata" | "created_page" | "suggested" | "checked_references" | "generated_images")[];
+            /** Reference Checks */
+            reference_checks: number;
+            /** Sections */
+            sections: string[];
+            /** Suggestions */
+            suggestions: number;
+        };
+        /**
+         * AiUseVerification
+         * @description How an entry's result was verified, read from its change set.
+         */
+        AiUseVerification: {
+            /** Accepted */
+            accepted: number | null;
+            /** Accepted By Auto */
+            accepted_by_auto: number | null;
+            /** Decided At */
+            decided_at: string | null;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "accepted_by_author" | "partly_accepted" | "applied_by_auto" | "rejected" | "pending" | "not_applied" | "created_on_request" | "not_recorded" | "reference_check" | "unknown" | "image_present";
+            /** Operations */
+            operations: number | null;
+            /** Pending */
+            pending: number | null;
+            /** Rejected */
+            rejected: number | null;
+            /** Status */
+            status: string | null;
+        };
+        /**
+         * ArtifactData
+         * @description An image proposal from the run. ``kind: image`` is reserved; jobs do
+         *     not reopen terminal run streams (see docs/assets.md).
+         */
+        ArtifactData: {
+            /**
+             * Aspect Ratio
+             * @default null
+             */
+            aspect_ratio: string | null;
+            /**
+             * Asset Id
+             * @default null
+             */
+            asset_id: string | null;
+            /**
+             * Estimated Cost
+             * @default null
+             */
+            estimated_cost: number | null;
+            /** Generation Id */
+            generation_id: string;
+            /**
+             * Generator
+             * @default null
+             */
+            generator: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "image_request" | "image";
+            /**
+             * Prompt
+             * @default null
+             */
+            prompt: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "proposed" | "confirmed" | "running" | "succeeded" | "failed" | "refused" | "unknown" | "discarded";
+        };
+        /** ArtifactEvent */
+        ArtifactEvent: {
+            data: components["schemas"]["ArtifactData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "artifact";
+        };
+        /**
+         * ArtifactEventMessage
+         * @description A stored ``artifact`` event, as a subscription delivers it.
+         */
+        ArtifactEventMessage: {
+            data: components["schemas"]["ArtifactData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "artifact";
+            /** Run Id */
+            run_id: string;
+            /** Seq */
+            seq: number;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "event";
+        };
+        /** AssetInfo */
+        AssetInfo: {
+            /** Asset Id */
+            asset_id: string;
+            /** Bytes */
+            bytes: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Filename */
+            filename: string;
+            generation: components["schemas"]["ImageGenerationProvenance"] | null;
+            /** Generation Id */
+            generation_id: string | null;
+            /** Height */
+            height: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "upload" | "generated";
+            /**
+             * Media Type
+             * @enum {string}
+             */
+            media_type: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+            /** Sha256 */
+            sha256: string;
+            /** Width */
+            width: number;
+            /** Workspace Id */
+            workspace_id: string;
+        };
+        /**
+         * AssistantCatalogResponse
+         * @description What the assistant can do for this account in this workspace, on
+         *     ``engine``. Toolsets, tools, presets and skills carry a state and, when
+         *     it is not ``on``, the reason in words.
+         */
+        AssistantCatalogResponse: {
+            /** Efforts */
+            efforts: components["schemas"]["CatalogEffort"][];
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "gateway" | "claude" | "codex";
+            /** Engines */
+            engines: components["schemas"]["CatalogEngine"][];
+            policy: components["schemas"]["CatalogPolicy"];
+            /** Presets */
+            presets: components["schemas"]["CatalogPreset"][];
+            /** Profiles */
+            profiles: components["schemas"]["CatalogProfile"][];
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "owner" | "admin" | "editor" | "viewer";
+            /** Skills */
+            skills: components["schemas"]["CatalogSkill"][];
+            /** Switches */
+            switches: components["schemas"]["AssistantSwitch"][];
+            /** Tools */
+            tools: components["schemas"]["CatalogTool"][];
+            /** Toolsets */
+            toolsets: components["schemas"]["CatalogToolset"][];
+            /** Workers */
+            workers: components["schemas"]["CatalogWorker"][];
+        };
+        AssistantClientMessage: components["schemas"]["PingCommand"] | components["schemas"]["SessionsCreateCommand"] | components["schemas"]["SessionsListCommand"] | components["schemas"]["SessionsGetCommand"] | components["schemas"]["SessionsDeleteCommand"] | components["schemas"]["SessionsSubscribeCommand"] | components["schemas"]["SessionsUnsubscribeCommand"] | components["schemas"]["RunsStartCommand"] | components["schemas"]["RunsCancelCommand"] | components["schemas"]["RunsResumeCommand"];
+        AssistantEvent: components["schemas"]["StatusEvent"] | components["schemas"]["ReasoningEvent"] | components["schemas"]["TokenEvent"] | components["schemas"]["ToolCallStartEvent"] | components["schemas"]["ToolCallProgressEvent"] | components["schemas"]["ToolCallArgsEvent"] | components["schemas"]["ToolCallEndEvent"] | components["schemas"]["ToolActionEvent"] | components["schemas"]["EvidenceEvent"] | components["schemas"]["ClaimEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["DoneEvent"] | components["schemas"]["TodoEvent"] | components["schemas"]["SubagentEvent"] | components["schemas"]["SessionChatEvent"] | components["schemas"]["RunStatusEvent"] | components["schemas"]["PlanEvent"] | components["schemas"]["QuestionEvent"] | components["schemas"]["ArtifactEvent"] | components["schemas"]["CommentEvent"] | components["schemas"]["BudgetEvent"] | components["schemas"]["SkillEvent"] | components["schemas"]["InstructionsEvent"];
+        /**
+         * AssistantOutput
+         * @description Generated Markdown with durable reference keys, never run handles.
+         */
+        "AssistantOutput-Input": {
+            /** Sources */
+            sources?: components["schemas"]["ReferenceRecord-Input"][];
+            /** Text */
+            text: string;
+        };
+        /**
+         * AssistantOutput
+         * @description Generated Markdown with durable reference keys, never run handles.
+         */
+        "AssistantOutput-Output": {
+            /** Sources */
+            sources?: components["schemas"]["ReferenceRecord-Output"][];
+            /** Text */
+            text: string;
+        };
+        /**
+         * AssistantPaperSource
+         * @description One paper source under Papers, with the account's choice.
+         */
+        AssistantPaperSource: {
+            /** Default */
+            default: boolean;
+            /** Description */
+            description: string;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Id
+             * @enum {string}
+             */
+            id: "openalex" | "arxiv_index" | "semantic_scholar";
+            /** Label */
+            label: string;
+            /** Reason */
+            reason: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "on" | "off" | "blocked" | "unavailable";
+        };
         /** AssistantRun */
         AssistantRun: {
+            /** After Seq */
+            after_seq: number;
             /** Created At */
             created_at: string;
             /** Event Bytes */
@@ -2396,6 +3324,8 @@ export interface components {
             request: components["schemas"]["AgentChatRequest-Output"];
             /** Request Id */
             request_id: string;
+            /** Resumed From */
+            resumed_from: string | null;
             /** Session Id */
             session_id: string;
             /**
@@ -2408,7 +3338,71 @@ export interface components {
             /** Workspace Id */
             workspace_id: string;
         };
-        AssistantServerMessage: (components["schemas"]["PingReply"] | components["schemas"]["SessionsCreateReply"] | components["schemas"]["SessionsListReply"] | components["schemas"]["SessionsGetReply"] | components["schemas"]["SessionsDeleteReply"] | components["schemas"]["SessionsSubscribeReply"] | components["schemas"]["SessionsUnsubscribeReply"] | components["schemas"]["RunsStartReply"] | components["schemas"]["RunsCancelReply"]) | components["schemas"]["CommandFailure"] | (components["schemas"]["StatusEventMessage"] | components["schemas"]["ReasoningEventMessage"] | components["schemas"]["TokenEventMessage"] | components["schemas"]["ToolCallStartEventMessage"] | components["schemas"]["ToolCallProgressEventMessage"] | components["schemas"]["ToolCallArgsEventMessage"] | components["schemas"]["ToolCallEndEventMessage"] | components["schemas"]["ToolActionEventMessage"] | components["schemas"]["SourcesEventMessage"] | components["schemas"]["ErrorEventMessage"] | components["schemas"]["DoneEventMessage"] | components["schemas"]["TodoEventMessage"] | components["schemas"]["SubagentEventMessage"] | components["schemas"]["SessionChatEventMessage"] | components["schemas"]["RunStatusEventMessage"]) | components["schemas"]["SubscriptionError"];
+        /** AssistantRunListResponse */
+        AssistantRunListResponse: {
+            /** Items */
+            items: components["schemas"]["AssistantRunSummary"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * AssistantRunSummary
+         * @description One of the caller's runs in the workspace, as the Runs list shows it.
+         */
+        AssistantRunSummary: {
+            /** Chat Id */
+            chat_id: string | null;
+            /** Cost */
+            cost: number | null;
+            /** Created At */
+            created_at: string;
+            /** Document Id */
+            document_id: string;
+            /** Duration Ms */
+            duration_ms: number | null;
+            /**
+             * Effort
+             * @enum {string}
+             */
+            effort: "quick" | "standard" | "deep";
+            /** Ended At */
+            ended_at: string | null;
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "gateway" | "claude" | "codex";
+            /** Error Code */
+            error_code: string | null;
+            /** Id */
+            id: string;
+            /** Leaf Id */
+            leaf_id: number | null;
+            /** Limit Reached */
+            limit_reached: string | null;
+            /** Preset */
+            preset: string | null;
+            /**
+             * Profile
+             * @enum {string}
+             */
+            profile: "chat" | "inline" | "review";
+            request: components["schemas"]["AgentChatRequest"] | null;
+            /** Resumable */
+            resumable: boolean;
+            /** Resumed From */
+            resumed_from: string | null;
+            /** Session Id */
+            session_id: string | null;
+            /** Started At */
+            started_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled" | "interrupted";
+        };
+        AssistantServerMessage: (components["schemas"]["PingReply"] | components["schemas"]["SessionsCreateReply"] | components["schemas"]["SessionsListReply"] | components["schemas"]["SessionsGetReply"] | components["schemas"]["SessionsDeleteReply"] | components["schemas"]["SessionsSubscribeReply"] | components["schemas"]["SessionsUnsubscribeReply"] | components["schemas"]["RunsStartReply"] | components["schemas"]["RunsCancelReply"] | components["schemas"]["RunsResumeReply"]) | components["schemas"]["CommandFailure"] | (components["schemas"]["StatusEventMessage"] | components["schemas"]["ReasoningEventMessage"] | components["schemas"]["TokenEventMessage"] | components["schemas"]["ToolCallStartEventMessage"] | components["schemas"]["ToolCallProgressEventMessage"] | components["schemas"]["ToolCallArgsEventMessage"] | components["schemas"]["ToolCallEndEventMessage"] | components["schemas"]["ToolActionEventMessage"] | components["schemas"]["EvidenceEventMessage"] | components["schemas"]["ErrorEventMessage"] | components["schemas"]["DoneEventMessage"] | components["schemas"]["TodoEventMessage"] | components["schemas"]["SubagentEventMessage"] | components["schemas"]["SessionChatEventMessage"] | components["schemas"]["RunStatusEventMessage"] | components["schemas"]["PlanEventMessage"] | components["schemas"]["QuestionEventMessage"] | components["schemas"]["ArtifactEventMessage"] | components["schemas"]["CommentEventMessage"] | components["schemas"]["BudgetEventMessage"]) | components["schemas"]["SubscriptionError"];
         /** AssistantSession */
         AssistantSession: {
             /** Active Run Id */
@@ -2419,12 +3413,15 @@ export interface components {
             created_at: string;
             /** Document Id */
             document_id: string;
-            /** Ephemeral */
-            ephemeral: boolean;
             /** Id */
             id: string;
             /** Last Seq */
             last_seq: number;
+            /**
+             * Profile
+             * @enum {string}
+             */
+            profile: "chat" | "inline" | "review";
             /** Request Id */
             request_id: string | null;
             /** Title */
@@ -2433,6 +3430,118 @@ export interface components {
             updated_at: string;
             /** Workspace Id */
             workspace_id: string;
+        };
+        /**
+         * AssistantSettingsResponse
+         * @description The account's switches. Not under a workspace: ``state`` is ``on``,
+         *     ``off`` or ``unavailable``, never ``blocked``.
+         */
+        AssistantSettingsResponse: {
+            /** Switches */
+            switches: components["schemas"]["AssistantSwitch"][];
+        };
+        /**
+         * AssistantSwitch
+         * @description One of the account's four capability switches.
+         */
+        AssistantSwitch: {
+            /** Default */
+            default: boolean;
+            /** Description */
+            description: string;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Id
+             * @enum {string}
+             */
+            id: "papers" | "web" | "workers" | "images";
+            /** Label */
+            label: string;
+            /** Reason */
+            reason: string | null;
+            /** Sources */
+            sources: components["schemas"]["AssistantPaperSource"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "on" | "off" | "blocked" | "unavailable";
+        };
+        /** AuditCounts */
+        AuditCounts: {
+            /** Cited */
+            cited: number;
+            /** Duplicates */
+            duplicates: number;
+            /** Mismatched */
+            mismatched: number;
+            /** Needs Review */
+            needs_review: number;
+            /** Not Found */
+            not_found: number;
+            /** Orphans */
+            orphans: number;
+            /** Preprints */
+            preprints: number;
+            /** References */
+            references: number;
+            /** Retracted */
+            retracted: number;
+            /** Stale */
+            stale: number;
+            /** Unchecked */
+            unchecked: number;
+            /** Uncited */
+            uncited: number;
+            /** Verified */
+            verified: number;
+            /** Without Passage */
+            without_passage: number;
+        };
+        /**
+         * AuditedReference
+         * @description One library entry, as the registries now give it.
+         */
+        AuditedReference: {
+            /** Aliases */
+            aliases: string[] | null;
+            /** Changes */
+            changes: string[] | null;
+            /** Checked */
+            checked: string | null;
+            /** Cited */
+            cited: number;
+            /** Differs */
+            differs: string[] | null;
+            /** Flags */
+            flags: ("retracted" | "corrected" | "concern" | "has_published_version" | "preprint" | "uncited")[];
+            /** Found Title */
+            found_title: string | null;
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string | null;
+            /** Notices */
+            notices: components["schemas"]["ReferenceNotice"][] | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "checked" | "mismatch" | "not_found" | "unavailable" | "not_checkable" | "not_checked";
+            /** Provider */
+            provider: string | null;
+            /** Published Doi */
+            published_doi: string | null;
+            /** Stale */
+            stale: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "verified" | "needs_review" | "not_found" | "unchecked";
+            /** Title */
+            title: string;
         };
         /**
          * AuthSessionResponse
@@ -2481,12 +3590,12 @@ export interface components {
             /** User Id */
             user_id: string;
         };
-        /** Body_chat-images-upload_chat_image */
-        "Body_chat-images-upload_chat_image": {
+        /** Body_assets-upload_asset */
+        "Body_assets-upload_asset": {
             /**
              * File
              * Format: binary
-             * @description A PNG, JPEG, WebP or GIF image.
+             * @description A PNG, JPEG, WebP or GIF with its matching media type.
              */
             file: string;
         };
@@ -2515,6 +3624,355 @@ export interface components {
              */
             location: "document" | "collection" | "unfiled";
         };
+        /** BudgetCounter */
+        BudgetCounter: {
+            /**
+             * Limit
+             * @default null
+             */
+            limit: number | null;
+            /** Used */
+            used: number;
+        };
+        /**
+         * BudgetData
+         * @description The run's ledger: in ``done`` at the end, and as the ``budget`` event
+         *     when a counter crosses two thirds of its limit and when it reaches it.
+         *
+         *     ``counters`` holds ``model_calls``, ``tool_calls``, ``workers`` and one
+         *     ``<destination>_calls`` per outside destination the run reached or is
+         *     limited on (``web_calls``, ``scholarly_calls``). ``effort`` is the run's
+         *     tier (``quick``, ``standard``, ``deep``); its limits are the tier's, but a
+         *     ``deep`` message with no approved plan plans within ``standard``'s.
+         */
+        BudgetData: {
+            /**
+             * Cost
+             * @default null
+             */
+            cost: number | null;
+            /**
+             * Cost Limit
+             * @default null
+             */
+            cost_limit: number | null;
+            /** Counters */
+            counters: {
+                [key: string]: components["schemas"]["BudgetCounter"];
+            };
+            /**
+             * Effort
+             * @enum {string}
+             */
+            effort: "quick" | "standard" | "deep";
+            /**
+             * Limit Reached
+             * @default null
+             */
+            limit_reached: string | null;
+        };
+        /** BudgetEvent */
+        BudgetEvent: {
+            data: components["schemas"]["BudgetData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "budget";
+        };
+        /**
+         * BudgetEventMessage
+         * @description A stored ``budget`` event, as a subscription delivers it.
+         */
+        BudgetEventMessage: {
+            data: components["schemas"]["BudgetData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "budget";
+            /** Run Id */
+            run_id: string;
+            /** Seq */
+            seq: number;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "event";
+        };
+        /**
+         * CatalogEffort
+         * @description One effort tier, for the composer's choice.
+         */
+        CatalogEffort: {
+            budget: components["schemas"]["CatalogEffortBudget"];
+            /** Cuts */
+            cuts: components["schemas"]["CatalogEffortCut"][];
+            /** Description */
+            description: string;
+            /**
+             * Id
+             * @enum {string}
+             */
+            id: "quick" | "standard" | "deep";
+            /** Label */
+            label: string;
+            /** Needs Plan */
+            needs_plan: boolean;
+            resume: components["schemas"]["CatalogResume"];
+        };
+        /**
+         * CatalogEffortBudget
+         * @description What a run of one tier may spend (08 §2); ``null`` where it has no limit.
+         */
+        CatalogEffortBudget: {
+            /** Cost Limit */
+            cost_limit: number | null;
+            /** Model Calls */
+            model_calls: number;
+            /** Scholarly Calls */
+            scholarly_calls: number | null;
+            /** Tool Calls */
+            tool_calls: number;
+            /** Wall Clock Seconds */
+            wall_clock_seconds: number;
+            /** Web Calls */
+            web_calls: number | null;
+            /** Workers */
+            workers: number;
+        };
+        /**
+         * CatalogEffortCut
+         * @description A tool a run of the tier does not get, and why (``delegate`` in a
+         *     quick run: "A quick run starts no workers.").
+         */
+        CatalogEffortCut: {
+            /** Reason */
+            reason: string;
+            /** Tool */
+            tool: string;
+        };
+        /**
+         * CatalogEngine
+         * @description One engine: whether this request may run it, and its capability record.
+         */
+        CatalogEngine: {
+            /** Capabilities */
+            capabilities: {
+                [key: string]: unknown;
+            };
+            /**
+             * Id
+             * @enum {string}
+             */
+            id: "gateway" | "claude" | "codex";
+            /** Label */
+            label: string;
+            /** Reason */
+            reason: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "on" | "off" | "blocked" | "unavailable";
+        };
+        /**
+         * CatalogPolicy
+         * @description The workspace's policy, as its admins set it.
+         */
+        CatalogPolicy: {
+            /** Auto */
+            auto: boolean;
+            /** Images */
+            images: boolean;
+            /** Outside Research */
+            outside_research: boolean;
+            /** Web Search */
+            web_search: boolean;
+        };
+        /**
+         * CatalogPreset
+         * @description A server-owned action; a run names it by ``id`` (``preset``).
+         */
+        CatalogPreset: {
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "edit" | "understand" | "research" | "write";
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Profile
+             * @enum {string}
+             */
+            profile: "chat" | "inline" | "review";
+            /** Reason */
+            reason: string | null;
+            /** Skill */
+            skill: string | null;
+            /** Skill Reference */
+            skill_reference: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "on" | "off" | "blocked" | "unavailable";
+        };
+        /** CatalogProfile */
+        CatalogProfile: {
+            /**
+             * Default Effort
+             * @enum {string}
+             */
+            default_effort: "quick" | "standard" | "deep";
+            /** Efforts */
+            efforts: ("quick" | "standard" | "deep")[];
+            /**
+             * Id
+             * @enum {string}
+             */
+            id: "chat" | "inline" | "review";
+            /** Label */
+            label: string;
+            /** Toolsets */
+            toolsets: string[];
+        };
+        /**
+         * CatalogResume
+         * @description Whether a run of the tier, on the catalog's engine, can be resumed
+         *     after an interruption (``runs.resume``): ``on`` for a deep run on an
+         *     engine that checkpoints, else ``unavailable`` with the reason.
+         */
+        CatalogResume: {
+            /** Reason */
+            reason: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "on" | "off" | "blocked" | "unavailable";
+        };
+        /**
+         * CatalogSkill
+         * @description A skill, as its ``SKILL.md`` describes it (07 §1): ``on`` when a run
+         *     here can load it, else why not (a toolset it needs, or the role for the
+         *     editing skill the tools that write blocks bring).
+         */
+        CatalogSkill: {
+            /** Description */
+            description: string;
+            /** Guidelines */
+            guidelines: string | null;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Needs */
+            needs: string[];
+            /** Profiles */
+            profiles: ("chat" | "inline" | "review")[];
+            /** Read */
+            read: string | null;
+            /** Reason */
+            reason: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "on" | "off" | "blocked" | "unavailable";
+            /** Version */
+            version: string;
+        };
+        /**
+         * CatalogTool
+         * @description How the feed shows a tool, and whether a run here has it.
+         *
+         *     ``detail_templates`` are one line about a call in order of preference:
+         *     the feed shows the first whose placeholders all have a value in the
+         *     call's ``arguments``, or none. They name only closed-set arguments
+         *     (``{relation}``, ``{limit}``, ``{papers_count}``, ``{url_host}``; TD34).
+         */
+        CatalogTool: {
+            /** Detail Templates */
+            detail_templates: string[];
+            /** Effects */
+            effects: ("read" | "propose" | "create" | "comment" | "spend")[];
+            /** Icon */
+            icon: string;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Profiles */
+            profiles: ("chat" | "inline" | "review")[];
+            /** Reason */
+            reason: string | null;
+            /** Running Label */
+            running_label: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "on" | "off" | "blocked" | "unavailable";
+            /** Toolset */
+            toolset: string;
+            /** Value Labels */
+            value_labels: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
+        };
+        /** CatalogToolset */
+        CatalogToolset: {
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Reason */
+            reason: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "on" | "off" | "blocked" | "unavailable";
+            /** Switch */
+            switch: ("papers" | "web" | "workers" | "images") | null;
+        };
+        /**
+         * CatalogWorker
+         * @description A worker profile ``delegate`` can start (08 §3): how the feed names
+         *     its group, and whether a chat run here can start it (``delegate`` on,
+         *     and a tool of its own: a web researcher needs Papers or Web).
+         */
+        CatalogWorker: {
+            /** Description */
+            description: string;
+            /**
+             * Id
+             * @enum {string}
+             */
+            id: "web_researcher" | "library_reader" | "reviewer";
+            /** Label */
+            label: string;
+            /** Reason */
+            reason: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "on" | "off" | "blocked" | "unavailable";
+            /** Tools */
+            tools: string[];
+        };
         /**
          * ChangeSetDecisionsRequest
          * @description The author's decision on one or more operations of a change set.
@@ -2526,6 +3984,27 @@ export interface components {
         ChangeSetDecisionsRequest: {
             /** Decisions */
             decisions: components["schemas"]["ChangeSetOperationDecisionRequest"][];
+        };
+        /**
+         * ChangeSetGroupResponse
+         * @description Operations of the set that share an intent (TD18), by batch index.
+         *
+         *     ``kind`` is ``wording``, ``structure``, ``citations`` or
+         *     ``new_content``; ``label`` is how the review bar names it. Every
+         *     operation is in one group. A group can be accepted at once, except its
+         *     operations marked ``new_information``, which the author decides one by
+         *     one.
+         */
+        ChangeSetGroupResponse: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "wording" | "structure" | "citations" | "new_content";
+            /** Label */
+            label: string;
+            /** Operations */
+            operations: number[];
         };
         /** ChangeSetListResponse */
         ChangeSetListResponse: {
@@ -2574,7 +4053,7 @@ export interface components {
         };
         /**
          * ChangeSetOperationTargetResponse
-         * @description The existing block an operation rewrites or deletes.
+         * @description One existing block an operation rewrites or deletes.
          *
          *     ``fingerprint`` is the block as the batch found it, and
          *     ``head_fingerprint`` the same digest for that block in the head this
@@ -2607,7 +4086,7 @@ export interface components {
              */
             apply_policy: "review" | "auto";
             /** Auto Blocked Reason */
-            auto_blocked_reason: ("web_research" | "role" | "policy") | null;
+            auto_blocked_reason: ("role" | "policy" | "untrusted_content") | null;
             /** Base Content Hash */
             base_content_hash: string;
             /** Base Etag */
@@ -2641,12 +4120,17 @@ export interface components {
              */
             expires_at: string;
             /**
+             * Groups
+             * @default []
+             */
+            groups: components["schemas"]["ChangeSetGroupResponse"][];
+            /**
              * Operation Decisions
              * @default []
              */
             operation_decisions: components["schemas"]["ChangeSetOperationDecisionResponse"][];
             /** Operation Targets */
-            operation_targets: (components["schemas"]["ChangeSetOperationTargetResponse"] | null)[] | null;
+            operation_targets: components["schemas"]["ChangeSetOperationTargetResponse"][][] | null;
             /** Operations */
             operations: {
                 [key: string]: unknown;
@@ -2676,20 +4160,6 @@ export interface components {
             /** Tool Call Id */
             tool_call_id: string | null;
         };
-        /** ChatImageItem */
-        ChatImageItem: {
-            /** Filename */
-            filename: string;
-            /** Id */
-            id: string;
-            /**
-             * Media Type
-             * @enum {string}
-             */
-            media_type: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
-            /** Size Bytes */
-            size_bytes: number;
-        };
         /** ChatListResponse */
         ChatListResponse: {
             /** Items */
@@ -2715,6 +4185,8 @@ export interface components {
             id: number;
             /** Parent Id */
             parent_id: number | null;
+            /** Record */
+            record: (components["schemas"]["ReplyRecord"] | components["schemas"]["RequestRecord"]) | null;
             /**
              * Role
              * @enum {string}
@@ -2732,6 +4204,130 @@ export interface components {
             items: components["schemas"]["ChatMessage"][];
             /** Leaf Id */
             leaf_id: number | null;
+        };
+        /**
+         * ChatPlan
+         * @description One of a chat's plans (TD5). Its ``ETag`` is ``"cwplan:{revision}"``.
+         */
+        ChatPlan: {
+            /** Brief */
+            brief: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Effort
+             * @enum {string}
+             */
+            effort: "quick" | "standard" | "deep";
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "outline" | "research" | "review";
+            /** Open Questions */
+            open_questions: string[];
+            /** Plan Id */
+            plan_id: string;
+            /** Revision */
+            revision: number;
+            /** Run Id */
+            run_id: string | null;
+            /** Sections */
+            sections: components["schemas"]["ChatPlanSection"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "proposed" | "running" | "stopped" | "done" | "discarded" | "superseded";
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ChatPlanSection */
+        ChatPlanSection: {
+            /** Change Set Ids */
+            change_set_ids: string[];
+            /** Goal */
+            goal: string;
+            /** Id */
+            id: string;
+            /** Sources */
+            sources: string[];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "working" | "proposed" | "needs_attention";
+            /** Title */
+            title: string;
+        };
+        /**
+         * ChatPlanUpdateRequest
+         * @description The author's edits to a plan, against the revision ``If-Match`` names.
+         *
+         *     ``sections`` is the whole list in its new order: a section left out is
+         *     removed, one with no id is added. A running plan takes edits to its
+         *     pending sections only. ``state: "discarded"`` discards a plan nothing
+         *     follows now, and changes nothing else.
+         */
+        ChatPlanUpdateRequest: {
+            /** Brief */
+            brief?: string | null;
+            /** Open Questions */
+            open_questions?: string[] | null;
+            /** Sections */
+            sections?: components["schemas"]["ChatPlanUpdateSection"][] | null;
+            /** State */
+            state?: "discarded" | null;
+        };
+        /**
+         * ChatPlanUpdateSection
+         * @description One section as the author edited it; ``id`` ``null`` for a new one.
+         */
+        ChatPlanUpdateSection: {
+            /**
+             * Goal
+             * @default
+             */
+            goal: string;
+            /** Id */
+            id?: string | null;
+            /** Sources */
+            sources?: string[];
+            /** Title */
+            title: string;
+        };
+        /**
+         * ChatSourcePassage
+         * @description An excerpt read on demand, never included in tool-call telemetry.
+         */
+        ChatSourcePassage: {
+            /** Id */
+            id: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "full_text" | "abstract" | "snippet" | "metadata";
+            /** Locator */
+            locator: {
+                [key: string]: unknown;
+            };
+            /** Text */
+            text: string;
+        };
+        /** ChatSourceResponse */
+        ChatSourceResponse: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Passages */
+            passages: components["schemas"]["ChatSourcePassage"][];
+            source: components["schemas"]["EvidenceSource"];
         };
         /** ChatSummary */
         ChatSummary: {
@@ -2782,23 +4378,51 @@ export interface components {
             username_available?: boolean | null;
         };
         /** CitationChild */
-        CitationChild: {
+        "CitationChild-Input": {
             /** Id */
             id: string;
             /** Keys */
             keys: string[];
             /** Locator */
             locator?: string | null;
+            passage?: components["schemas"]["CitationPassage"] | null;
             /** Prefix */
             prefix?: string | null;
             /** Sources */
-            sources?: components["schemas"]["CitationSource"][];
+            sources?: components["schemas"]["ReferenceRecord-Input"][];
             /**
              * Style
-             * @default numeric
+             * @default nlm-citation-sequence-brackets
              * @enum {string}
              */
-            style: "numeric" | "author-year" | "ieee";
+            style: "nlm-citation-sequence-brackets" | "apa" | "ieee" | "american-medical-association" | "chicago-author-date" | "nlm-citation-sequence" | "nature" | "association-for-computing-machinery";
+            /** Suffix */
+            suffix?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "citation";
+        };
+        /** CitationChild */
+        "CitationChild-Output": {
+            /** Id */
+            id: string;
+            /** Keys */
+            keys: string[];
+            /** Locator */
+            locator?: string | null;
+            passage?: components["schemas"]["CitationPassage"] | null;
+            /** Prefix */
+            prefix?: string | null;
+            /** Sources */
+            sources?: components["schemas"]["ReferenceRecord-Output"][];
+            /**
+             * Style
+             * @default nlm-citation-sequence-brackets
+             * @enum {string}
+             */
+            style: "nlm-citation-sequence-brackets" | "apa" | "ieee" | "american-medical-association" | "chicago-author-date" | "nlm-citation-sequence" | "nature" | "association-for-computing-machinery";
             /** Suffix */
             suffix?: string | null;
             /**
@@ -2808,130 +4432,181 @@ export interface components {
             type: "citation";
         };
         /**
-         * CitationSource
-         * @description Frontend citation metadata retained without lossy projection.
+         * CitationPassage
+         * @description The passage a citation's claim rests on (09 §4, step 6).
+         *
+         *     ``id`` is the passage in the conversation that cited it (``chat_id``),
+         *     where ``evidence_read`` and the reference audit read it back; ``level``
+         *     is how much of the work the server held behind it.
          */
-        CitationSource: {
-            /** Accessed */
-            accessed?: string | null;
-            /** Authors */
-            authors?: string | null;
-            /** Citationcount */
-            citationCount?: number | null;
-            /** Doi */
-            doi?: string | null;
-            /** Externalids */
-            externalIds?: {
-                [key: string]: string;
-            } | null;
-            /** Influentialcitationcount */
-            influentialCitationCount?: number | null;
-            /** Isopenaccess */
-            isOpenAccess?: boolean | null;
-            /** Key */
-            key: string;
-            /** Kind */
-            kind?: ("article" | "preprint" | "conference" | "book" | "chapter" | "thesis" | "report" | "web" | "dataset" | "software" | "other") | null;
-            /** Pdfurl */
-            pdfUrl?: string | null;
-            /** Provider */
-            provider?: ("arxiv" | "semantic_scholar" | "crossref" | "manual" | "web" | "resource") | null;
-            /** Providerid */
-            providerId?: string | null;
-            /** Referencecount */
-            referenceCount?: number | null;
-            /** Title */
-            title?: string | null;
-            /** Url */
-            url?: string | null;
-            /** Venue */
-            venue?: string | null;
-            /** Year */
-            year?: string | number | null;
+        CitationPassage: {
+            /** Chat Id */
+            chat_id?: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "full_text" | "abstract" | "snippet" | "metadata";
+        };
+        /** CitationWithoutPassage */
+        CitationWithoutPassage: {
+            /** Block Id */
+            block_id: string;
+            /** Citation Id */
+            citation_id: string;
+            /** Keys */
+            keys: string[];
         };
         /**
-         * ClaimAssessment
-         * @description Source-backed claim verdict returned by the public tool and route.
+         * ClaimCheckPassage
+         * @description A passage the judge read: its text, how much of the work the source
+         *     holds behind it, the judge's stance, and the work's reference (Cite and
+         *     Add to sources build from it).
          */
-        ClaimAssessment: {
+        ClaimCheckPassage: {
+            /** Id */
+            id: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "full_text" | "abstract" | "snippet" | "metadata";
+            /** Page */
+            page: number | null;
+            record: components["schemas"]["ReferenceRecord-Output"];
+            /** Section */
+            section: string | null;
+            /**
+             * Stance
+             * @enum {string}
+             */
+            stance: "supports" | "limits" | "contradicts" | "unrelated";
+            /** Text */
+            text: string;
+        };
+        /**
+         * ClaimCheckRequest
+         * @description One claim, and the papers to judge it against.
+         *
+         *     ``sources`` are paper identifiers with their scheme (``doi:10.…``,
+         *     ``arxiv:2101.00001``, ``openalex:W…``), as the paper routes return them
+         *     in ``record.key``; empty to find passages about the claim first.
+         */
+        ClaimCheckRequest: {
             /** Claim */
             claim: string;
-            /** Confidence */
-            confidence: number;
-            /**
-             * Disclaimer
-             * @default This assessment is limited to the retrieved excerpts and is not a substitute for reading the papers or expert review.
-             */
-            disclaimer: string;
-            /** Evidence */
-            evidence?: components["schemas"]["ClaimEvidenceFinding"][];
-            /** Limitations */
-            limitations?: string[];
-            /**
-             * Provider
-             * @default semantic_scholar
-             */
-            provider: string;
-            /** Rationale */
-            rationale: string;
-            verdict: components["schemas"]["ClaimVerdict"];
+            /** Sources */
+            sources?: string[];
         };
         /**
-         * ClaimAssessmentRequest
-         * @description Request body for ``POST /research/semantic-scholar/claim-assessment``.
+         * ClaimCheckResult
+         * @description The verdict advises (TD11): shown with the passages it rests on, it
+         *     acts on nothing. On abstracts and snippets alone, ``insufficient`` is
+         *     ``cannot_assess`` ("Cannot assess without the full text") with
+         *     ``how_to_get``.
          */
-        ClaimAssessmentRequest: {
+        ClaimCheckResult: {
+            /** Cannot Assess */
+            cannot_assess: boolean;
             /** Claim */
             claim: string;
+            /** Evidence Level */
+            evidence_level: ("full_text" | "abstract" | "snippet" | "metadata") | null;
+            /** How To Get */
+            how_to_get: string | null;
+            /** Judged */
+            judged: ("supported" | "partly" | "contradicted" | "insufficient") | null;
+            /** Not Found */
+            not_found: string[];
+            /** Note */
+            note: string | null;
+            /** Notes */
+            notes: string[];
+            /** Passages */
+            passages: components["schemas"]["ClaimCheckPassage"][];
+            /** Summary */
+            summary: string;
+            usage: components["schemas"]["ClaimCheckUsage"];
             /**
-             * Limit
-             * @default 8
+             * Verdict
+             * @enum {string}
              */
-            limit: number;
-            /** Year */
-            year?: string | null;
+            verdict: "supported" | "partly" | "contradicted" | "insufficient";
         };
         /**
-         * ClaimEvidenceFinding
-         * @description One selected excerpt plus its source metadata.
+         * ClaimCheckUsage
+         * @description The judge's model call, accounted to the account that asked.
          */
-        ClaimEvidenceFinding: {
-            /** Authors */
-            authors?: string | null;
-            /** Corpus Id */
-            corpus_id?: number | null;
-            /** Disclaimer */
-            disclaimer?: string | null;
-            /** Evidence Id */
-            evidence_id: string;
-            /** Excerpt */
-            excerpt: string;
-            /** Explanation */
-            explanation: string;
-            kind: components["schemas"]["EvidenceKind"];
-            /** License */
-            license?: string | null;
-            /** Open Access Status */
-            open_access_status?: string | null;
-            /** Paper Id */
-            paper_id?: string | null;
-            /** Provenance */
-            provenance?: components["schemas"]["ProviderProvenance"][];
-            /** Score */
-            score?: number | null;
-            stance: components["schemas"]["EvidenceStance"];
-            /** Title */
-            title?: string | null;
-            /** Url */
-            url?: string | null;
-            /** Year */
-            year?: number | null;
+        ClaimCheckUsage: {
+            /** Cost */
+            cost: number | null;
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Model Calls
+             * @default 0
+             */
+            model_calls: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
         };
         /**
-         * ClaimVerdict
-         * @enum {string}
+         * ClaimData
+         * @description A claim check's verdict (``claim_check``, 09 §6). It advises: nothing
+         *     acts on it. The claim's own words are not sent (TD34): the client shows
+         *     the verdict beside the sentence the author asked about, with the
+         *     passages, each to cite or add.
          */
-        ClaimVerdict: "supported" | "contradicted" | "mixed" | "insufficient";
+        ClaimData: {
+            /** Cannot Assess */
+            cannot_assess: boolean;
+            /** Evidence Level */
+            evidence_level: ("full_text" | "abstract" | "snippet" | "metadata") | null;
+            /** Passages */
+            passages: components["schemas"]["ClaimPassage"][];
+            /** Tool Call Id */
+            tool_call_id: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "supported" | "partly" | "contradicted" | "insufficient";
+        };
+        /** ClaimEvent */
+        ClaimEvent: {
+            data: components["schemas"]["ClaimData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "claim";
+        };
+        /**
+         * ClaimPassage
+         * @description A passage a claim was judged against, and what the judge made of it.
+         */
+        ClaimPassage: {
+            /** Id */
+            id: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "full_text" | "abstract" | "snippet" | "metadata";
+            /**
+             * Stance
+             * @enum {string}
+             */
+            stance: "supports" | "limits" | "contradicts" | "unrelated";
+        };
         /**
          * CodeBlock
          * @description Preformatted text — source code, pseudocode, program output.
@@ -3252,10 +4927,178 @@ export interface components {
             /** Id */
             id: string | null;
         };
+        /**
+         * CommentData
+         * @description The comments a call stored (``doc_comment``, P5).
+         */
+        CommentData: {
+            /** Comments */
+            comments: components["schemas"]["CommentItem"][];
+        };
+        /** CommentEvent */
+        CommentEvent: {
+            data: components["schemas"]["CommentData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "comment";
+        };
+        /**
+         * CommentEventMessage
+         * @description A stored ``comment`` event, as a subscription delivers it.
+         */
+        CommentEventMessage: {
+            data: components["schemas"]["CommentData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "comment";
+            /** Run Id */
+            run_id: string;
+            /** Seq */
+            seq: number;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "event";
+        };
+        /** CommentItem */
+        CommentItem: {
+            /** Block Id */
+            block_id: string;
+            /** Comment Id */
+            comment_id: string;
+            /** Kind */
+            kind: string;
+            /** Quote */
+            quote: string;
+            /** Severity */
+            severity: string;
+        };
+        /** CommentListResponse */
+        CommentListResponse: {
+            /** Items */
+            items: components["schemas"]["DocumentComment"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** CommentSuggestion */
+        CommentSuggestion: {
+            /** Change Set Id */
+            change_set_id: string;
+            /** Operation Index */
+            operation_index: number;
+        };
+        /** CommentUpdate */
+        CommentUpdate: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+        };
         /** ContentData */
         ContentData: {
             /** Content */
             content: string;
+        };
+        /**
+         * CslDate
+         * @description A CSL date: one or two ``date-parts`` (a range), or a literal.
+         */
+        CslDate: {
+            /** Date-Parts */
+            "date-parts"?: number[][] | null;
+            /** Literal */
+            literal?: string | null;
+            /** Raw */
+            raw?: string | null;
+        };
+        /**
+         * CslItem
+         * @description The CSL-JSON item (CSL 1.0.2), with the variables ColWrite keeps.
+         */
+        CslItem: {
+            /** Doi */
+            DOI?: string | null;
+            /** Isbn */
+            ISBN?: string | null;
+            /** Issn */
+            ISSN?: string | null;
+            /** Pmcid */
+            PMCID?: string | null;
+            /** Pmid */
+            PMID?: string | null;
+            /** Url */
+            URL?: string | null;
+            accessed?: components["schemas"]["CslDate"] | null;
+            /** Author */
+            author?: components["schemas"]["CslName"][] | null;
+            /** Collection-Title */
+            "collection-title"?: string | null;
+            /** Container-Title */
+            "container-title"?: string | null;
+            /** Edition */
+            edition?: string | null;
+            /** Editor */
+            editor?: components["schemas"]["CslName"][] | null;
+            /** Event-Title */
+            "event-title"?: string | null;
+            /** Genre */
+            genre?: string | null;
+            /** Id */
+            id: string;
+            /** Issue */
+            issue?: string | null;
+            issued?: components["schemas"]["CslDate"] | null;
+            /** Language */
+            language?: string | null;
+            /** Medium */
+            medium?: string | null;
+            /** Note */
+            note?: string | null;
+            /** Number */
+            number?: string | null;
+            /** Page */
+            page?: string | null;
+            /** Publisher */
+            publisher?: string | null;
+            /** Publisher-Place */
+            "publisher-place"?: string | null;
+            /** Title */
+            title: string;
+            /** Title-Short */
+            "title-short"?: string | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "article" | "article-journal" | "article-magazine" | "article-newspaper" | "bill" | "book" | "broadcast" | "chapter" | "classic" | "collection" | "dataset" | "document" | "entry" | "entry-dictionary" | "entry-encyclopedia" | "event" | "figure" | "graphic" | "hearing" | "interview" | "legal_case" | "legislation" | "manuscript" | "map" | "motion_picture" | "musical_score" | "pamphlet" | "paper-conference" | "patent" | "performance" | "periodical" | "personal_communication" | "post" | "post-weblog" | "regulation" | "report" | "review" | "review-book" | "software" | "song" | "speech" | "standard" | "thesis" | "treaty" | "webpage";
+            /** Volume */
+            volume?: string | null;
+        };
+        /**
+         * CslName
+         * @description A CSL name: a family and given name, or a literal one.
+         */
+        CslName: {
+            /** Dropping-Particle */
+            "dropping-particle"?: string | null;
+            /** Family */
+            family?: string | null;
+            /** Given */
+            given?: string | null;
+            /** Literal */
+            literal?: string | null;
+            /** Non-Dropping-Particle */
+            "non-dropping-particle"?: string | null;
+            /** Suffix */
+            suffix?: string | null;
         };
         /** DeletedResult */
         DeletedResult: {
@@ -3343,15 +5186,74 @@ export interface components {
              */
             saves: number;
         };
+        /** DocumentComment */
+        DocumentComment: {
+            /** Block Id */
+            block_id: string;
+            /** Body */
+            body: string;
+            /** Check */
+            check: string | null;
+            /** Comment Id */
+            comment_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string | null;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Document Id */
+            document_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "claim" | "source" | "structure" | "clarity" | "consistency" | "language" | "guideline";
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "assistant" | "check";
+            /** Outdated */
+            outdated: boolean;
+            /** Quote */
+            quote: string;
+            /** Review */
+            review: ("proofread" | "claims" | "sources" | "structure" | "peer_review") | null;
+            /** Run Id */
+            run_id: string | null;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "must_fix" | "should_fix" | "consider";
+            /** Sources */
+            sources: components["schemas"]["EvidenceSource"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            suggestion: components["schemas"]["CommentSuggestion"] | null;
+        };
         /**
          * DocumentContent
          * @description Complete canonical semantic content for schema version 1.
          */
         "DocumentContent-Input": {
             /** Blocks */
-            blocks?: (components["schemas"]["ParagraphBlock-Input"] | components["schemas"]["HeadingBlock"] | components["schemas"]["DividerBlock"] | components["schemas"]["CodeBlock"])[];
+            blocks?: (components["schemas"]["ParagraphBlock-Input"] | components["schemas"]["HeadingBlock"] | components["schemas"]["DividerBlock"] | components["schemas"]["CodeBlock"] | components["schemas"]["ImageBlock"])[];
             /** Citationstyle */
-            citationStyle?: ("numeric" | "author-year" | "ieee") | null;
+            citationStyle?: ("nlm-citation-sequence-brackets" | "apa" | "ieee" | "american-medical-association" | "chicago-author-date" | "nlm-citation-sequence" | "nature" | "association-for-computing-machinery") | null;
+            /** Documenttype */
+            documentType?: ("research-paper" | "literature-review" | "systematic-review" | "technical-report" | "white-paper") | null;
+            /** Instructions */
+            instructions?: string | null;
             /**
              * Name
              * @default Untitled page
@@ -3363,7 +5265,7 @@ export interface components {
              */
             schema_version: 1;
             /** Sources */
-            sources?: components["schemas"]["CitationSource"][] | null;
+            sources?: components["schemas"]["ReferenceRecord-Input"][] | null;
             /** Tags */
             tags?: string[];
         };
@@ -3373,9 +5275,13 @@ export interface components {
          */
         "DocumentContent-Output": {
             /** Blocks */
-            blocks?: (components["schemas"]["ParagraphBlock-Output"] | components["schemas"]["HeadingBlock"] | components["schemas"]["DividerBlock"] | components["schemas"]["CodeBlock"])[];
+            blocks?: (components["schemas"]["ParagraphBlock-Output"] | components["schemas"]["HeadingBlock"] | components["schemas"]["DividerBlock"] | components["schemas"]["CodeBlock"] | components["schemas"]["ImageBlock"])[];
             /** Citationstyle */
-            citationStyle?: ("numeric" | "author-year" | "ieee") | null;
+            citationStyle?: ("nlm-citation-sequence-brackets" | "apa" | "ieee" | "american-medical-association" | "chicago-author-date" | "nlm-citation-sequence" | "nature" | "association-for-computing-machinery") | null;
+            /** Documenttype */
+            documentType?: ("research-paper" | "literature-review" | "systematic-review" | "technical-report" | "white-paper") | null;
+            /** Instructions */
+            instructions?: string | null;
             /**
              * Name
              * @default Untitled page
@@ -3387,7 +5293,7 @@ export interface components {
              */
             schema_version: 1;
             /** Sources */
-            sources?: components["schemas"]["CitationSource"][] | null;
+            sources?: components["schemas"]["ReferenceRecord-Output"][] | null;
             /** Tags */
             tags?: string[];
         };
@@ -3597,14 +5503,24 @@ export interface components {
         };
         /** DoneData */
         DoneData: {
+            /** @default null */
+            budget: components["schemas"]["BudgetData"] | null;
             /** Chat Id */
             chat_id: string | null;
+            /**
+             * Cost
+             * @default null
+             */
+            cost: number | null;
+            /** Labels */
+            labels?: ("untrusted" | "private")[];
             /** Message Id */
             message_id: number | null;
-            /** Usage */
-            usage: {
-                [key: string]: number;
-            };
+            /** Models */
+            models: components["schemas"]["ServedModel"][];
+            /** @default null */
+            persistence: components["schemas"]["PersistenceData"] | null;
+            usage: components["schemas"]["Usage"];
         };
         /** DoneEvent */
         DoneEvent: {
@@ -3644,6 +5560,19 @@ export interface components {
             id: string;
             /** Kind */
             kind: string;
+        };
+        /**
+         * DuplicateReferences
+         * @description Library entries that are one work.
+         */
+        DuplicateReferences: {
+            /** Keys */
+            keys: string[];
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "identifier" | "title";
         };
         /**
          * EmailAddress
@@ -3722,6 +5651,7 @@ export interface components {
              * @enum {string}
              */
             engine: "gateway" | "claude" | "codex";
+            image_generation?: components["schemas"]["ImageGeneratorAvailability"] | null;
             /** Login Command */
             login_command?: string | null;
             /** Message */
@@ -3774,7 +5704,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "bad_request" | "unauthorized" | "forbidden" | "not_found" | "method_not_allowed" | "conflict" | "payload_too_large" | "unsupported_media_type" | "invalid_request" | "precondition_required" | "rate_limited" | "internal_error" | "bad_gateway" | "unavailable" | "timeout" | "invalid_credentials" | "project_access_denied" | "username_exists" | "email_exists" | "auth_unavailable" | "auth_not_configured" | "workspace_not_found" | "workspace_role_required" | "workspace_limit" | "personal_workspace_locked" | "workspace_not_deleted" | "confirmation_mismatch" | "sole_owner" | "stale_workspace" | "export_not_found" | "member_not_found" | "last_owner" | "invitation_not_found" | "invitation_expired" | "invitation_email_mismatch" | "invitation_not_pending" | "transfer_not_found" | "document_not_found" | "revision_not_found" | "change_set_not_found" | "invalid_cursor" | "invalid_idempotency_key" | "stale_head" | "stale_placement" | "schema_unsupported" | "idempotency_key_reused" | "change_set_conflict" | "history_export_too_large" | "document_validation_failed" | "document_rate_limit_exceeded" | "document_integrity_error" | "export_failed" | "export_unavailable" | "export_timeout" | "chat_not_found" | "message_not_found" | "image_not_found" | "image_too_large" | "image_unsupported" | "image_storage_unavailable" | "resource_not_found" | "collection_not_found" | "upload_empty" | "cycle" | "depth_limit" | "collection_limit" | "unchanged" | "not_custom_order" | "invalid_position" | "stale_collection" | "preview_changed" | "not_in_trash" | "document_in_trash" | "job_not_found" | "resource_conflict" | "upload_too_large" | "upload_not_pdf" | "collection_write_failed" | "resource_write_failed" | "retrieval_unavailable" | "unrecognized_identifier" | "paper_source_disabled" | "source_not_found" | "research_not_found" | "research_invalid_input" | "research_rate_limited" | "research_provider_failed" | "claim_assessment_failed" | "research_unavailable" | "paper_source_unavailable" | "resolver_unavailable" | "method_not_found" | "session_not_found" | "run_not_found" | "run_stopped" | "incomplete_stream" | "limit_exceeded" | "no_workspace_context" | "no_document_context" | "workspace_policy" | "skill_disabled" | "skill_resource_unknown" | "skill_too_large" | "invalid_todos" | "tool_budget_exhausted" | "subagent_failed" | "skill_unavailable" | "subagent_budget_exceeded";
+        ErrorCode: "bad_request" | "unauthorized" | "forbidden" | "not_found" | "method_not_allowed" | "conflict" | "payload_too_large" | "unsupported_media_type" | "invalid_request" | "precondition_required" | "rate_limited" | "internal_error" | "bad_gateway" | "unavailable" | "timeout" | "invalid_credentials" | "project_access_denied" | "username_exists" | "email_exists" | "auth_unavailable" | "auth_not_configured" | "workspace_not_found" | "workspace_role_required" | "workspace_limit" | "personal_workspace_locked" | "workspace_not_deleted" | "confirmation_mismatch" | "sole_owner" | "stale_workspace" | "export_not_found" | "member_not_found" | "last_owner" | "invitation_not_found" | "invitation_expired" | "invitation_email_mismatch" | "invitation_not_pending" | "transfer_not_found" | "document_not_found" | "revision_not_found" | "change_set_not_found" | "invalid_cursor" | "invalid_idempotency_key" | "stale_head" | "stale_placement" | "schema_unsupported" | "idempotency_key_reused" | "change_set_conflict" | "history_export_too_large" | "document_validation_failed" | "document_rate_limit_exceeded" | "document_integrity_error" | "export_failed" | "export_unavailable" | "export_timeout" | "chat_not_found" | "message_not_found" | "asset_not_found" | "asset_too_large" | "asset_type_unsupported" | "asset_storage_unavailable" | "image_generation_unavailable" | "image_generation_not_found" | "image_quota_exceeded" | "image_budget_exhausted" | "image_refused" | "image_generation_failed" | "image_generation_unknown" | "generation_not_pending" | "generation_request_changed" | "resource_not_found" | "collection_not_found" | "upload_empty" | "cycle" | "depth_limit" | "collection_limit" | "unchanged" | "not_custom_order" | "invalid_position" | "stale_collection" | "preview_changed" | "not_in_trash" | "document_in_trash" | "job_not_found" | "resource_conflict" | "upload_too_large" | "upload_not_pdf" | "collection_write_failed" | "resource_write_failed" | "retrieval_unavailable" | "unrecognized_identifier" | "paper_source_disabled" | "source_not_found" | "paper_not_found" | "source_mismatch" | "source_retracted" | "provider_invalid_input" | "provider_rate_limited" | "provider_failed" | "provider_unavailable" | "paper_source_unavailable" | "resolver_unavailable" | "claim_check_failed" | "web_focus_failed" | "reference_audit_not_found" | "comment_not_found" | "method_not_found" | "session_not_found" | "run_not_found" | "run_stopped" | "run_not_resumable" | "incomplete_stream" | "limit_exceeded" | "plan_not_found" | "plan_required" | "stale_plan" | "repeated_call" | "tool_cancelled" | "no_workspace_context" | "no_document_context" | "workspace_policy" | "outbound_refused" | "untrusted_content" | "skill_disabled" | "skill_resource_unknown" | "invalid_todos" | "budget_exhausted" | "worker_failed";
         /** ErrorData */
         ErrorData: {
             /**
@@ -3830,16 +5760,122 @@ export interface components {
             type: "event";
         };
         /**
-         * EvidenceKind
-         * @description Where an evidence excerpt originated.
-         * @enum {string}
+         * EvidenceData
+         * @description The sources and passages a call registered (or found again) in the
+         *     conversation's evidence store, when the call ends. A source found again
+         *     in a later turn keeps its handle and is sent again with any newer
+         *     details; a client keeps the latest by handle.
          */
-        EvidenceKind: "title" | "abstract" | "body" | "citation_context";
+        EvidenceData: {
+            /** Passages */
+            passages: components["schemas"]["EvidencePassage"][];
+            /** Sources */
+            sources: components["schemas"]["EvidenceSource"][];
+        };
+        /** EvidenceEvent */
+        EvidenceEvent: {
+            data: components["schemas"]["EvidenceData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "evidence";
+        };
         /**
-         * EvidenceStance
-         * @enum {string}
+         * EvidenceEventMessage
+         * @description A stored ``evidence`` event, as a subscription delivers it.
          */
-        EvidenceStance: "supports" | "contradicts" | "context";
+        EvidenceEventMessage: {
+            data: components["schemas"]["EvidenceData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "evidence";
+            /** Run Id */
+            run_id: string;
+            /** Seq */
+            seq: number;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "event";
+        };
+        /**
+         * EvidencePassage
+         * @description An excerpt of a source a tool returned, kept with the conversation;
+         *     ``evidence_read`` reads it back by its id. Events carry no excerpt; the
+         *     author may read it on demand through the private chat-source route.
+         */
+        EvidencePassage: {
+            /** Id */
+            id: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "full_text" | "abstract" | "snippet" | "metadata";
+        };
+        /**
+         * EvidenceRecord
+         * @description A source's reference, as the page's library holds it (the HTTP
+         *     contract's ``ReferenceRecord``): its ``key``, ``kind``, ``provider``,
+         *     ``state``, ``flags`` and CSL-JSON item (``csl``), and ``checked``,
+         *     ``differs``, ``notices`` and ``published_doi`` once the citation pipeline
+         *     checked it.
+         *
+         *     Shared with the HTTP contract (a reply's record), so it has no field
+         *     with a default: both generators render it alike.
+         */
+        EvidenceRecord: {
+            /** Csl */
+            csl: {
+                [key: string]: unknown;
+            };
+            /** Flags */
+            flags: string[];
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Provider */
+            provider: string;
+            /** State */
+            state: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * EvidenceSource
+         * @description A work the conversation may cite, under the handle it keeps for the
+         *     life of the conversation (09 §2).
+         */
+        EvidenceSource: {
+            /** Flags */
+            flags: string[];
+            /** Handle */
+            handle: string;
+            /** Key */
+            key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "paper" | "preprint" | "book" | "web" | "pdf" | "page" | "dataset" | "other";
+            /** Provider */
+            provider: string;
+            record: components["schemas"]["EvidenceRecord"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "verified" | "needs_review" | "not_found" | "unchecked";
+            /** Title */
+            title: string;
+        };
         /**
          * FieldError
          * @description One request-validation failure, addressed by its location.
@@ -3877,6 +5913,16 @@ export interface components {
             lite: string[];
             /** Main */
             main: string[];
+        };
+        /** GeneratedImageOrigin */
+        GeneratedImageOrigin: {
+            /** Generationid */
+            generationId: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "generated";
         };
         /** GraphChild */
         GraphChild: {
@@ -3930,6 +5976,8 @@ export interface components {
             html: string;
             /** Id */
             id: string;
+            /** Instructions */
+            instructions?: string | null;
             /**
              * Level
              * @default 2
@@ -3958,18 +6006,317 @@ export interface components {
             /** Revisions */
             revisions: components["schemas"]["RevisionResponse"][];
         };
+        /** ImageArguments */
+        ImageArguments: {
+            /**
+             * Aspect Ratio
+             * @default 3:2
+             * @enum {string}
+             */
+            aspect_ratio: "1:1" | "3:2" | "2:3" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9";
+            /** Description */
+            description: string;
+            /**
+             * Exact Text
+             * @default
+             */
+            exact_text: string;
+            /**
+             * Purpose
+             * @enum {string}
+             */
+            purpose: "illustration" | "graphical_abstract" | "cover" | "schematic" | "other";
+            /**
+             * Style
+             * @default
+             */
+            style: string;
+        };
         /** ImageAttachment */
         ImageAttachment: {
-            /**
-             * Image Id
-             * Format: uuid
-             */
-            image_id: string;
+            /** Asset Id */
+            asset_id: string;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
             kind: "image";
+        };
+        /**
+         * ImageBlock
+         * @description An authorized workspace asset, never a URL or embedded binary payload.
+         */
+        ImageBlock: {
+            /**
+             * Aihidden
+             * @default false
+             */
+            aiHidden: boolean;
+            /** Alt */
+            alt: string;
+            /** Assetid */
+            assetId: string;
+            /** Caption */
+            caption?: string | null;
+            /**
+             * Collapsed
+             * @default false
+             */
+            collapsed: boolean;
+            /** Id */
+            id: string;
+            /** Label */
+            label?: string | null;
+            /**
+             * Locked
+             * @default false
+             */
+            locked: boolean;
+            /** Origin */
+            origin?: components["schemas"]["UploadedImageOrigin"] | components["schemas"]["GeneratedImageOrigin"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "image";
+            /**
+             * Width
+             * @default 1
+             */
+            width: number;
+        };
+        /** ImageGenerationAvailability */
+        ImageGenerationAvailability: {
+            /** Available */
+            available: boolean;
+            /** Reason */
+            reason: string | null;
+            /** Resets At */
+            resets_at: string | null;
+            /** Scope */
+            scope: ("person" | "workspace") | null;
+        };
+        /** ImageGenerationConfirm */
+        ImageGenerationConfirm: {
+            /** Confirmation Token */
+            confirmation_token: string;
+        };
+        /** ImageGenerationEdit */
+        ImageGenerationEdit: {
+            /**
+             * Aspect Ratio
+             * @enum {string}
+             */
+            aspect_ratio: "1:1" | "3:2" | "2:3" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9";
+            /** Confirmation Token */
+            confirmation_token: string;
+            /** Prompt */
+            prompt: string;
+        };
+        /** ImageGenerationInfo */
+        ImageGenerationInfo: {
+            arguments: components["schemas"]["ImageArguments"];
+            /**
+             * Aspect Ratio
+             * @enum {string}
+             */
+            aspect_ratio: "1:1" | "3:2" | "2:3" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9";
+            /** Asset Id */
+            asset_id: string | null;
+            /** Can Decide */
+            can_decide: boolean;
+            /** Chat Id */
+            chat_id: string | null;
+            /** Codex Version */
+            codex_version: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            /** Confirmation Token */
+            confirmation_token: string;
+            /** Confirmed At */
+            confirmed_at: string | null;
+            /** Cost Usd */
+            cost_usd: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Document Id */
+            document_id: string;
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "gateway" | "codex";
+            /** Error Code */
+            error_code: string | null;
+            /** Estimated Cost */
+            estimated_cost: number | null;
+            /** Generation Id */
+            generation_id: string;
+            /** Job Id */
+            job_id: number | null;
+            /** Model */
+            model: string | null;
+            /** Model Slug */
+            model_slug: string | null;
+            /** Output Format */
+            output_format: string | null;
+            /** Prompt */
+            prompt: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "openrouter" | "codex";
+            /** Quality */
+            quality: string | null;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "proposed" | "confirmed" | "running" | "succeeded" | "failed" | "refused" | "unknown" | "discarded";
+            /** Thread Id */
+            thread_id: string | null;
+            /** Tool Call Id */
+            tool_call_id: string;
+            /** Usage */
+            usage: {
+                [key: string]: number;
+            } | null;
+            /** Workspace Id */
+            workspace_id: string;
+        };
+        /** ImageGenerationPage */
+        ImageGenerationPage: {
+            /** Items */
+            items: components["schemas"]["ImageGenerationInfo"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * ImageGenerationProvenance
+         * @description Immutable, portable provenance carried with generated bytes and copies.
+         */
+        ImageGenerationProvenance: {
+            arguments: components["schemas"]["ImageArguments"];
+            /** Aspect Ratio */
+            aspect_ratio: ("1:1" | "3:2" | "2:3" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9") | null;
+            /** Codex Version */
+            codex_version: string | null;
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+            /** Cost Usd */
+            cost_usd: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Generation Id */
+            generation_id: string;
+            /** Model */
+            model: string | null;
+            /** Model Slug */
+            model_slug: string | null;
+            /** Output Format */
+            output_format: string | null;
+            /** Prompt */
+            prompt: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "openrouter" | "codex";
+            /** Quality */
+            quality: string | null;
+            /** Thread Id */
+            thread_id: string | null;
+            /** Usage */
+            usage: {
+                [key: string]: number;
+            } | null;
+        };
+        /** ImageGenerationRequest */
+        ImageGenerationRequest: {
+            /**
+             * Aspect Ratio
+             * @default 3:2
+             * @enum {string}
+             */
+            aspect_ratio: "1:1" | "3:2" | "2:3" | "4:3" | "3:4" | "16:9" | "9:16" | "21:9";
+            /** Description */
+            description: string;
+            /** Document Id */
+            document_id: string;
+            /**
+             * Engine
+             * @default gateway
+             * @enum {string}
+             */
+            engine: "gateway" | "codex" | "claude";
+            /**
+             * Exact Text
+             * @default
+             */
+            exact_text: string;
+            /**
+             * Purpose
+             * @enum {string}
+             */
+            purpose: "illustration" | "graphical_abstract" | "cover" | "schematic" | "other";
+            /**
+             * Style
+             * @default
+             */
+            style: string;
+        };
+        /** ImageGeneratorAvailability */
+        ImageGeneratorAvailability: {
+            /** Available */
+            available: boolean;
+            /** Generator */
+            generator?: ("openrouter" | "codex") | null;
+            /** Model */
+            model?: string | null;
+            /** Quality */
+            quality?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** InstructionSource */
+        InstructionSource: {
+            /** Block Id */
+            block_id: string | null;
+            /** Label */
+            label: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "page" | "section";
+        };
+        /** InstructionsData */
+        InstructionsData: {
+            /** Items */
+            items: components["schemas"]["InstructionSource"][];
+        };
+        /** InstructionsEvent */
+        InstructionsEvent: {
+            data: components["schemas"]["InstructionsData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "instructions";
         };
         /**
          * Invitation
@@ -4105,19 +6452,27 @@ export interface components {
         };
         /**
          * JobResult
-         * @description What a finished copy or export made.
+         * @description What a finished copy, export, claim check or reference audit made.
          *
          *     A copy names the new page (``document_id``) in the job's workspace and
          *     how many PDFs it copied. An export counts the pages and PDFs in the zip,
          *     its size, and when it stops being downloadable.
          */
         JobResult: {
+            audit: components["schemas"]["ReferenceAuditResult"] | null;
             /** Byte Size */
             byte_size: number | null;
+            claim: components["schemas"]["ClaimCheckResult"] | null;
             /** Document Id */
             document_id: string | null;
             /** Expires At */
             expires_at: string | null;
+            /** Generation Id */
+            generation_id: string | null;
+            /** Generation Status */
+            generation_status: ("proposed" | "confirmed" | "running" | "succeeded" | "failed" | "refused" | "unknown" | "discarded") | null;
+            /** Image Count */
+            image_count: number | null;
             /** Page Count */
             page_count: number | null;
             /** Pdf Count */
@@ -4180,13 +6535,13 @@ export interface components {
         };
         /**
          * MessageImage
-         * @description A chat image attached to a user message.
+         * @description An authorized image asset attached to a user message.
          */
         MessageImage: {
+            /** Asset Id */
+            asset_id: string;
             /** Filename */
             filename: string;
-            /** Image Id */
-            image_id: string;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -4223,18 +6578,18 @@ export interface components {
             size_bytes: number;
         };
         /**
-         * OpenAccessLocation
-         * @description Public full-text location and its upstream licensing information.
+         * OrphanCitation
+         * @description A key the page's citations name and its library does not hold.
          */
-        OpenAccessLocation: {
-            /** Disclaimer */
-            disclaimer: string | null;
-            /** License */
-            license: string | null;
-            /** Status */
-            status: string | null;
-            /** Url */
-            url: string;
+        OrphanCitation: {
+            /** Block Ids */
+            block_ids: string[];
+            /** Key */
+            key: string;
+            /** Resolved */
+            resolved: boolean | null;
+            /** Title */
+            title: string;
         };
         /**
          * OwnershipTransferModel
@@ -4314,125 +6669,150 @@ export interface components {
             /** Target Workspace Id */
             target_workspace_id: string;
         };
+        /** Paper */
+        Paper: {
+            /** Abstract */
+            abstract: string | null;
+            /** Citation Count */
+            citation_count: number | null;
+            /** Found By */
+            found_by: ("openalex" | "arxiv_index" | "semantic_scholar")[];
+            open_access: components["schemas"]["PaperOpenAccess"] | null;
+            record: components["schemas"]["ReferenceRecord-Output"];
+            /** Reference Count */
+            reference_count: number | null;
+        };
+        /** PaperDetail */
+        PaperDetail: {
+            /** Abstract */
+            abstract: string | null;
+            /** Citation Count */
+            citation_count: number | null;
+            /** Found By */
+            found_by: ("openalex" | "arxiv_index" | "semantic_scholar")[];
+            open_access: components["schemas"]["PaperOpenAccess"] | null;
+            /** Passages From */
+            passages_from: ("openalex" | "arxiv_index" | "semantic_scholar")[];
+            record: components["schemas"]["ReferenceRecord-Output"];
+            /** Reference Count */
+            reference_count: number | null;
+            /** Versions */
+            versions: components["schemas"]["PaperVersion"][];
+        };
         /** PaperGraphItem */
         PaperGraphItem: {
             /** Contexts */
             contexts: string[];
-            /** Evidence */
-            evidence: components["schemas"]["ResearchEvidence"][];
+            /** Influential */
+            influential: boolean | null;
             /** Intents */
             intents: string[];
-            /** Is Influential */
-            is_influential: boolean | null;
-            paper: components["schemas"]["PaperPayload"];
+            paper: components["schemas"]["Paper"];
         };
         /** PaperGraphResponse */
         PaperGraphResponse: {
-            /** Data */
-            data: components["schemas"]["PaperGraphItem"][];
+            /** Attribution */
+            attribution: string[];
+            /** Failed */
+            failed: components["schemas"]["SourceFailure"][];
+            /** Items */
+            items: components["schemas"]["PaperGraphItem"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Providers */
+            providers: ("openalex" | "arxiv_index" | "semantic_scholar")[];
             /**
-             * Direction
+             * Relation
              * @enum {string}
              */
-            direction: "citations" | "references";
-            /** Next Offset */
-            next_offset: number | null;
-            /** Offset */
-            offset: number;
-            /** Paper Id */
-            paper_id: string;
-            /** Provider */
-            provider: string;
+            relation: "references" | "citations" | "related";
+            /** Seed */
+            seed: string;
         };
-        /**
-         * PaperPayload
-         * @description A paper as the research routes return it.
-         */
-        PaperPayload: {
-            /** Abstract */
-            abstract: string | null;
-            /** Authors */
-            authors: components["schemas"]["ResearchAuthor"][];
-            /** Bibtex */
-            bibtex: string | null;
-            /** Citation Count */
-            citation_count: number | null;
-            /** Corpus Id */
-            corpus_id: number | null;
-            /** Evidence */
-            evidence: components["schemas"]["ResearchEvidence"][];
-            /** External Ids */
-            external_ids: {
-                [key: string]: string;
-            };
-            /** Fields Of Study */
-            fields_of_study: string[];
-            /** Influential Citation Count */
-            influential_citation_count: number | null;
-            /** Is Open Access */
-            is_open_access: boolean | null;
-            /** Journal Name */
-            journal_name: string | null;
-            /** Journal Pages */
-            journal_pages: string | null;
-            /** Journal Volume */
-            journal_volume: string | null;
-            open_access_pdf: components["schemas"]["OpenAccessLocation"] | null;
-            /** Paper Id */
-            paper_id: string;
+        /** PaperOpenAccess */
+        PaperOpenAccess: {
+            /** Is Oa */
+            is_oa: boolean | null;
+            /** License */
+            license: string | null;
             /** Pdf Url */
             pdf_url: string | null;
-            /** Portable Key */
-            portable_key: string;
-            /** Provenance */
-            provenance: components["schemas"]["ProviderProvenance"][];
+            /** Status */
+            status: string | null;
+            /** Url */
+            url: string | null;
+        };
+        /** PaperPassage */
+        PaperPassage: {
             /**
-             * Provider
-             * @constant
+             * Level
+             * @enum {string}
              */
-            provider: "semantic_scholar";
-            /** Publication Date */
-            publication_date: string | null;
-            /** Publication Types */
-            publication_types: string[];
-            /** Reference Count */
-            reference_count: number | null;
-            /** Relevance Score */
-            relevance_score: number | null;
-            /** Title */
-            title: string;
-            /** Tldr */
-            tldr: string | null;
+            level: "full_text" | "abstract" | "snippet" | "metadata";
+            /** Page */
+            page: number | null;
+            paper: components["schemas"]["Paper"];
+            /** Section */
+            section: string | null;
+            /** Text */
+            text: string;
+        };
+        /** PaperPassagesResponse */
+        PaperPassagesResponse: {
+            /** Attribution */
+            attribution: string[];
+            /** Failed */
+            failed: components["schemas"]["SourceFailure"][];
+            /** Ignored */
+            ignored: string[];
+            /** Items */
+            items: components["schemas"]["PaperPassage"][];
+            /** Providers */
+            providers: ("openalex" | "arxiv_index" | "semantic_scholar")[];
+        };
+        /** PaperResponse */
+        PaperResponse: {
+            /** Attribution */
+            attribution: string[];
+            /** Failed */
+            failed: components["schemas"]["SourceFailure"][];
+            paper: components["schemas"]["PaperDetail"];
+            /** Providers */
+            providers: ("openalex" | "arxiv_index" | "semantic_scholar")[];
+        };
+        /** PaperSearchResponse */
+        PaperSearchResponse: {
+            /** Attribution */
+            attribution: string[];
+            /** Failed */
+            failed: components["schemas"]["SourceFailure"][];
+            /** Ignored */
+            ignored: string[];
+            /** Items */
+            items: components["schemas"]["Paper"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Providers */
+            providers: ("openalex" | "arxiv_index" | "semantic_scholar")[];
+        };
+        /**
+         * PaperVersion
+         * @description One copy of the work: a preprint, an accepted manuscript, the article.
+         */
+        PaperVersion: {
+            /** Doi */
+            doi: string | null;
+            /**
+             * Preprint Server
+             * @default false
+             */
+            preprint_server: boolean;
             /** Url */
             url: string | null;
             /** Venue */
             venue: string | null;
-            /** Year */
-            year: number | null;
-        };
-        /** PaperRecommendationsResponse */
-        PaperRecommendationsResponse: {
-            /** Data */
-            data: components["schemas"]["PaperPayload"][];
-            /** Paper Id */
-            paper_id: string;
-            /** Provider */
-            provider: string;
-            /** Seed Paper Ids */
-            seed_paper_ids: string[];
-        };
-        /** PaperSearchResponse */
-        PaperSearchResponse: {
-            /** Data */
-            data: components["schemas"]["PaperPayload"][];
-            /** Next Offset */
-            next_offset: number | null;
-            /** Offset */
-            offset: number;
-            /** Provider */
-            provider: string;
-            /** Total */
-            total: number | null;
+            /** Version */
+            version: ("submitted" | "accepted" | "published") | null;
         };
         /** ParagraphBlock */
         "ParagraphBlock-Input": {
@@ -4444,7 +6824,7 @@ export interface components {
             /** Checked */
             checked?: boolean | null;
             /** Children */
-            children?: (components["schemas"]["AiBeatChild"] | components["schemas"]["TableChild"] | components["schemas"]["CitationChild"] | components["schemas"]["EquationChild"] | components["schemas"]["GraphChild"])[];
+            children?: (components["schemas"]["AiBeatChild-Input"] | components["schemas"]["TableChild"] | components["schemas"]["CitationChild-Input"] | components["schemas"]["EquationChild"] | components["schemas"]["GraphChild"])[];
             /**
              * Collapsed
              * @default false
@@ -4487,7 +6867,7 @@ export interface components {
             /** Checked */
             checked?: boolean | null;
             /** Children */
-            children?: (components["schemas"]["AiBeatChild"] | components["schemas"]["TableChild"] | components["schemas"]["CitationChild"] | components["schemas"]["EquationChild"] | components["schemas"]["GraphChild"])[];
+            children?: (components["schemas"]["AiBeatChild-Output"] | components["schemas"]["TableChild"] | components["schemas"]["CitationChild-Output"] | components["schemas"]["EquationChild"] | components["schemas"]["GraphChild"])[];
             /**
              * Collapsed
              * @default false
@@ -4562,6 +6942,20 @@ export interface components {
             /** Via Collection Name */
             via_collection_name: string | null;
         };
+        /**
+         * PersistenceData
+         * @description What of the run's own records could not be written (R-21).
+         *
+         *     The run went on without them: a conversation that could not be stored,
+         *     a reply that could not be saved, model or tool call rows that were
+         *     dropped. ``failed_writes`` is ``0`` for a run that stored everything.
+         */
+        PersistenceData: {
+            /** Failed Writes */
+            failed_writes: number;
+            /** Kinds */
+            kinds: string[];
+        };
         /** PingCommand */
         PingCommand: {
             /** Id */
@@ -4603,6 +6997,147 @@ export interface components {
             before_id: string;
         };
         /**
+         * PlanData
+         * @description The conversation's plan (TD5): when ``plan_propose`` proposes or
+         *     revises it, when a run starts from it, and each time a section's state
+         *     changes. A client keeps the newest ``revision`` of each ``plan_id``.
+         */
+        PlanData: {
+            /** Brief */
+            brief: string;
+            /**
+             * Effort
+             * @enum {string}
+             */
+            effort: "quick" | "standard" | "deep";
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "outline" | "research" | "review";
+            /** Open Questions */
+            open_questions: string[];
+            /** Plan Id */
+            plan_id: string;
+            /** Revision */
+            revision: number;
+            /** Sections */
+            sections: components["schemas"]["PlanSection"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "proposed" | "running" | "stopped" | "done" | "discarded" | "superseded";
+        };
+        /**
+         * PlanEdit
+         * @description The author's edits to a plan: what they changed, against the revision
+         *     they edited (``stale_plan`` when the plan has moved on since).
+         *
+         *     ``sections`` is the whole list in its new order: a section left out is
+         *     removed, one with no id is added. A running plan takes edits to its
+         *     pending sections only.
+         */
+        PlanEdit: {
+            /**
+             * Brief
+             * @default null
+             */
+            brief: string | null;
+            /**
+             * Open Questions
+             * @default null
+             */
+            open_questions: string[] | null;
+            /** Revision */
+            revision: number;
+            /**
+             * Sections
+             * @default null
+             */
+            sections: components["schemas"]["PlanSectionEdit"][] | null;
+        };
+        /** PlanEvent */
+        PlanEvent: {
+            data: components["schemas"]["PlanData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "plan";
+        };
+        /**
+         * PlanEventMessage
+         * @description A stored ``plan`` event, as a subscription delivers it.
+         */
+        PlanEventMessage: {
+            data: components["schemas"]["PlanData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "plan";
+            /** Run Id */
+            run_id: string;
+            /** Seq */
+            seq: number;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "event";
+        };
+        /** PlanSection */
+        PlanSection: {
+            /** Goal */
+            goal: string;
+            /** Id */
+            id: string;
+            /** Sources */
+            sources: string[];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "working" | "proposed" | "needs_attention";
+            /** Title */
+            title: string;
+        };
+        /**
+         * PlanSectionEdit
+         * @description One section of a plan as the author edited it.
+         */
+        PlanSectionEdit: {
+            /**
+             * Goal
+             * @default
+             */
+            goal: string;
+            /**
+             * Id
+             * @default null
+             */
+            id: string | null;
+            /** Sources */
+            sources?: string[];
+            /** Title */
+            title: string;
+        };
+        /**
+         * PreprintReference
+         * @description A cited preprint that has a version of record.
+         */
+        PreprintReference: {
+            /** Key */
+            key: string;
+            /** Published Doi */
+            published_doi: string | null;
+            /** Published In Library */
+            published_in_library: boolean;
+        };
+        /**
          * ProblemDetails
          * @description An ``application/problem+json`` body.
          *
@@ -4625,12 +7160,22 @@ export interface components {
              * @default null
              */
             change_set_status: string | null;
+            /**
+             * Claimed Title
+             * @default null
+             */
+            claimed_title: string | null;
             code: components["schemas"]["ErrorCode"];
             /**
              * Conflict Reason
              * @default null
              */
             conflict_reason: string | null;
+            /**
+             * Counter
+             * @default null
+             */
+            counter: string | null;
             /**
              * Current Head
              * @default null
@@ -4641,6 +7186,11 @@ export interface components {
              * @default null
              */
             dependency_change_set_id: string | null;
+            /**
+             * Destination
+             * @default null
+             */
+            destination: string | null;
             /** Detail */
             detail: string;
             /**
@@ -4654,10 +7204,15 @@ export interface components {
              */
             expected_head: string | null;
             /**
-             * Findings
+             * Field
              * @default null
              */
-            findings: string | null;
+            field: string | null;
+            /**
+             * Found Title
+             * @default null
+             */
+            found_title: string | null;
             /** Instance */
             instance: string;
             /**
@@ -4701,12 +7256,27 @@ export interface components {
              */
             required_role: string | null;
             /**
+             * Resets At
+             * @default null
+             */
+            resets_at: string | null;
+            /**
              * Retry After
              * @default null
              */
             retry_after: number | null;
             /** Retryable */
             retryable: boolean;
+            /**
+             * Rule
+             * @default null
+             */
+            rule: string | null;
+            /**
+             * Scope
+             * @default null
+             */
+            scope: string | null;
             /**
              * Source
              * @default null
@@ -4744,26 +7314,76 @@ export interface components {
             /** Updated At */
             updated_at?: string | null;
         };
+        /** QuestionAnswer */
+        QuestionAnswer: {
+            /** Answer */
+            answer: string;
+            /** Id */
+            id: string;
+        };
         /**
-         * ProviderProvenance
-         * @description One upstream observation of a normalized research object.
+         * QuestionAnswers
+         * @description The author's answers to a question card (``author_ask``).
          */
-        ProviderProvenance: {
-            /** Endpoint */
-            endpoint: string;
-            /** Provider */
-            provider: string;
-            /** Provider Id */
-            provider_id?: string | null;
-            /** Rank */
-            rank?: number | null;
+        QuestionAnswers: {
+            /** Items */
+            items?: components["schemas"]["QuestionAnswer"][];
+            /** Question Id */
+            question_id: string;
+        };
+        /**
+         * QuestionData
+         * @description Questions the run asks the author (``author_ask``): the turn ends, and
+         *     the author's next message carries the ``answers``.
+         */
+        QuestionData: {
+            /** Question Id */
+            question_id: string;
+            /** Questions */
+            questions: components["schemas"]["QuestionItem"][];
+        };
+        /** QuestionEvent */
+        QuestionEvent: {
+            data: components["schemas"]["QuestionData"];
             /**
-             * Retrieved At
-             * Format: date-time
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
              */
-            retrieved_at?: string;
-            /** Score */
-            score?: number | null;
+            event: "question";
+        };
+        /**
+         * QuestionEventMessage
+         * @description A stored ``question`` event, as a subscription delivers it.
+         */
+        QuestionEventMessage: {
+            data: components["schemas"]["QuestionData"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "question";
+            /** Run Id */
+            run_id: string;
+            /** Seq */
+            seq: number;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "event";
+        };
+        /** QuestionItem */
+        QuestionItem: {
+            /** Allow Free Text */
+            allow_free_text: boolean;
+            /** Id */
+            id: string;
+            /** Options */
+            options: string[];
+            /** Text */
+            text: string;
         };
         /** ReasoningEvent */
         ReasoningEvent: {
@@ -4798,6 +7418,258 @@ export interface components {
             type: "event";
         };
         /**
+         * RecordChangeSet
+         * @description A change set the turn stored, as its ``tool_action`` named it.
+         */
+        RecordChangeSet: {
+            /** Apply Policy */
+            apply_policy: ("review" | "auto") | null;
+            /** Auto Blocked Reason */
+            auto_blocked_reason: ("role" | "policy" | "untrusted_content") | null;
+            /** Change Set Id */
+            change_set_id: string;
+            /** Document Id */
+            document_id: string | null;
+            /** Tool */
+            tool: string | null;
+            /** Tool Call Id */
+            tool_call_id: string | null;
+        };
+        /**
+         * RecordCreatedPage
+         * @description A page the turn created (``doc_create``).
+         */
+        RecordCreatedPage: {
+            /** Collection Id */
+            collection_id: number | null;
+            /** Document Id */
+            document_id: string | null;
+            /** Tool Call Id */
+            tool_call_id: string | null;
+            /** Workspace Id */
+            workspace_id: string | null;
+        };
+        /**
+         * RecordError
+         * @description Why a failed turn ended: the code and words of its ``error`` event.
+         */
+        RecordError: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * RecordToolCall
+         * @description One tool call of a turn, as its events showed it.
+         */
+        RecordToolCall: {
+            /** Arguments */
+            arguments: {
+                [key: string]: unknown;
+            } | null;
+            /** Duration Ms */
+            duration_ms: number | null;
+            /** Error */
+            error: string | null;
+            error_type: components["schemas"]["ErrorCode"] | null;
+            /** Finished */
+            finished: boolean;
+            /** Is Error */
+            is_error: boolean;
+            /** Output Chars */
+            output_chars: number;
+            /** Output Truncated */
+            output_truncated: boolean;
+            /** Tool */
+            tool: string;
+            /** Tool Call Id */
+            tool_call_id: string;
+            /** Worker Id */
+            worker_id: string | null;
+        };
+        /**
+         * RecordWorker
+         * @description A worker of the turn, with the last status it reported, as its
+         *     ``subagent`` events named it.
+         */
+        RecordWorker: {
+            /** Engine */
+            engine: string;
+            /** Id */
+            id: string;
+            /** Objective */
+            objective: string;
+            /**
+             * Profile
+             * @enum {string}
+             */
+            profile: "web_researcher" | "library_reader" | "reviewer";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "partial" | "cancelled" | "budget_exceeded" | "failed";
+            /** Title */
+            title: string;
+        };
+        /**
+         * ReferenceAuditReport
+         * @description The page's last reference audit.
+         */
+        ReferenceAuditReport: {
+            /** Change Set Id */
+            change_set_id: string | null;
+            /** Checked At */
+            checked_at: string;
+            counts: components["schemas"]["AuditCounts"];
+            /** Document Id */
+            document_id: string;
+            /** Duplicates */
+            duplicates: components["schemas"]["DuplicateReferences"][];
+            /** Etag */
+            etag: string;
+            /** Notes */
+            notes: string[];
+            /** Orphans */
+            orphans: components["schemas"]["OrphanCitation"][];
+            /** Outside Lookups */
+            outside_lookups: boolean;
+            /** Preprints */
+            preprints: components["schemas"]["PreprintReference"][];
+            /** References */
+            references: components["schemas"]["AuditedReference"][];
+            /** Uncited */
+            uncited: string[];
+            /** Without Passage */
+            without_passage: components["schemas"]["CitationWithoutPassage"][];
+        };
+        /**
+         * ReferenceAuditResult
+         * @description A finished ``reference_audit`` job's result: the audit's counts and
+         *     the change set it proposed (``null`` when there was nothing to refresh).
+         *     The report itself is ``GET …/references/status``.
+         */
+        ReferenceAuditResult: {
+            /** Change Set Id */
+            change_set_id: string | null;
+            /** Cited */
+            cited: number;
+            /** Duplicates */
+            duplicates: number;
+            /** Mismatched */
+            mismatched: number;
+            /** Needs Review */
+            needs_review: number;
+            /** Not Found */
+            not_found: number;
+            /** Orphans */
+            orphans: number;
+            /** Preprints */
+            preprints: number;
+            /** References */
+            references: number;
+            /** Retracted */
+            retracted: number;
+            /** Stale */
+            stale: number;
+            /** Unchecked */
+            unchecked: number;
+            /** Uncited */
+            uncited: number;
+            /** Verified */
+            verified: number;
+            /** Without Passage */
+            without_passage: number;
+        };
+        /**
+         * ReferenceNotice
+         * @description A registry's update record about the work: a retraction, a correction.
+         */
+        ReferenceNotice: {
+            /** Date */
+            date?: string | null;
+            /** Doi */
+            doi?: string | null;
+            /** Source */
+            source?: string | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "retraction" | "correction" | "expression_of_concern" | "withdrawal";
+            /** Url */
+            url?: string | null;
+        };
+        /**
+         * ReferenceRecord
+         * @description One work as a page, a conversation or a route holds it.
+         */
+        "ReferenceRecord-Input": {
+            /** Checked */
+            checked?: string | null;
+            csl: components["schemas"]["CslItem"];
+            /** Differs */
+            differs?: string[] | null;
+            /** Flags */
+            flags: ("retracted" | "corrected" | "concern" | "has_published_version" | "preprint" | "uncited")[];
+            /** Key */
+            key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "paper" | "preprint" | "book" | "web" | "pdf" | "page" | "dataset" | "other";
+            /** Notices */
+            notices?: components["schemas"]["ReferenceNotice"][] | null;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "openalex" | "semantic_scholar" | "arxiv_index" | "crossref" | "doi_org" | "arxiv" | "web" | "resource" | "page" | "manual";
+            /** Published Doi */
+            published_doi?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "verified" | "needs_review" | "not_found" | "unchecked";
+        };
+        /**
+         * ReferenceRecord
+         * @description One work as a page, a conversation or a route holds it.
+         */
+        "ReferenceRecord-Output": {
+            /** Checked */
+            checked?: string | null;
+            csl: components["schemas"]["CslItem"];
+            /** Differs */
+            differs?: string[] | null;
+            /** Flags */
+            flags: ("retracted" | "corrected" | "concern" | "has_published_version" | "preprint" | "uncited")[];
+            /** Key */
+            key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "paper" | "preprint" | "book" | "web" | "pdf" | "page" | "dataset" | "other";
+            /** Notices */
+            notices?: components["schemas"]["ReferenceNotice"][] | null;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "openalex" | "semantic_scholar" | "arxiv_index" | "crossref" | "doi_org" | "arxiv" | "web" | "resource" | "page" | "manual";
+            /** Published Doi */
+            published_doi?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "verified" | "needs_review" | "not_found" | "unchecked";
+        };
+        /**
          * RegisterRequest
          * @description Consumer signup; email identities are verified after registration.
          */
@@ -4808,51 +7680,76 @@ export interface components {
             username: string;
         };
         /**
-         * ResearchAuthor
-         * @description Normalized author metadata.
+         * ReplyRecord
+         * @description What an assistant message's turn did, kept with it (G-11).
+         *
+         *     A reload rebuilds the reply's activity, sources, tasks, workers and
+         *     details from it.
          */
-        ResearchAuthor: {
-            /** Author Id */
-            author_id: string | null;
-            /** Name */
-            name: string;
+        ReplyRecord: {
+            /** Artifacts */
+            artifacts: components["schemas"]["ArtifactData"][];
+            /** Change Sets */
+            change_sets: components["schemas"]["RecordChangeSet"][];
+            /** Claims */
+            claims: components["schemas"]["ClaimData"][];
+            /** Cost */
+            cost: number | null;
+            /** Cost Limit */
+            cost_limit: number | null;
+            /** Created Pages */
+            created_pages: components["schemas"]["RecordCreatedPage"][];
+            error: components["schemas"]["RecordError"] | null;
+            /** Instructions */
+            instructions: components["schemas"]["InstructionSource"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "reply";
+            /** Limit Reached */
+            limit_reached: ("model_calls" | "tool_calls" | "cost" | "events" | "wall_clock") | null;
+            /** Models */
+            models: components["schemas"]["ServedModel"][];
+            /** Passages */
+            passages: components["schemas"]["EvidencePassage"][];
+            plan: components["schemas"]["PlanData"] | null;
+            question: components["schemas"]["QuestionData"] | null;
+            /** Skills */
+            skills: components["schemas"]["SkillData"][];
+            /** Sources */
+            sources: components["schemas"]["EvidenceSource"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed" | "stopped";
+            /** Tasks */
+            tasks: components["schemas"]["TodoItem"][];
+            /** Tool Calls */
+            tool_calls: components["schemas"]["RecordToolCall"][];
+            usage: components["schemas"]["Usage"];
+            /** Workers */
+            workers: components["schemas"]["RecordWorker"][];
         };
         /**
-         * ResearchEvidence
-         * @description A source-backed excerpt usable by a downstream claim assessor.
+         * RequestRecord
+         * @description What the author asked with a user message, besides its text.
          */
-        ResearchEvidence: {
-            /** Authors */
-            authors: string[];
-            /** Corpus Id */
-            corpus_id: number | null;
-            /** Disclaimer */
-            disclaimer: string | null;
-            /** End */
-            end: number | null;
-            /** Intents */
-            intents: string[];
-            /** Is Influential */
-            is_influential: boolean | null;
-            kind: components["schemas"]["EvidenceKind"];
-            /** License */
-            license: string | null;
-            /** Open Access Status */
-            open_access_status: string | null;
-            /** Paper Id */
-            paper_id: string | null;
-            /** Paper Title */
-            paper_title: string | null;
-            /** Provenance */
-            provenance: components["schemas"]["ProviderProvenance"][];
-            /** Score */
-            score: number | null;
-            /** Section */
-            section: string | null;
-            /** Start */
-            start: number | null;
-            /** Text */
-            text: string;
+        RequestRecord: {
+            /** Effort */
+            effort: ("quick" | "standard" | "deep") | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "request";
+            /** Plan Id */
+            plan_id: string | null;
+            /** Preset */
+            preset: string | null;
+            /** Web */
+            web: boolean;
         };
         /** ResourceAttachment */
         ResourceAttachment: {
@@ -5007,6 +7904,63 @@ export interface components {
              */
             trashed_at: string;
         };
+        /** ReviewCounts */
+        ReviewCounts: {
+            /** By Kind */
+            by_kind: {
+                [key: string]: number;
+            };
+            /** By Severity */
+            by_severity: {
+                [key: string]: number;
+            };
+            /** Total */
+            total: number;
+        };
+        /** ReviewListResponse */
+        ReviewListResponse: {
+            /** Items */
+            items: components["schemas"]["ReviewSummary"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** ReviewSummary */
+        ReviewSummary: {
+            /** After Seq */
+            after_seq: number | null;
+            /** Checks */
+            checks: string[];
+            counts: components["schemas"]["ReviewCounts"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string | null;
+            /** Document Id */
+            document_id: string;
+            /** Ended At */
+            ended_at: string | null;
+            /** Label */
+            label: string;
+            /** Notes */
+            notes: string[];
+            /**
+             * Review
+             * @enum {string}
+             */
+            review: "proofread" | "claims" | "sources" | "structure" | "peer_review";
+            /** Run Id */
+            run_id: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "failed" | "stopped" | "interrupted";
+        };
         /** RevisionDiffResponse */
         RevisionDiffResponse: {
             /** Base Revision Id */
@@ -5124,6 +8078,21 @@ export interface components {
             /** Workspace Id */
             workspace_id: string;
         };
+        /**
+         * RunResume
+         * @description Resume an interrupted ``deep`` run from its last checkpoint: a new run
+         *     of the same request, idempotent by ``request_id``.
+         */
+        RunResume: {
+            /** Request Id */
+            request_id: string;
+            /** Run Id */
+            run_id: string;
+            /** Session Id */
+            session_id: string;
+            /** Workspace Id */
+            workspace_id: string;
+        };
         /** RunStart */
         RunStart: {
             request: components["schemas"]["AgentChatRequest-Input"];
@@ -5208,6 +8177,36 @@ export interface components {
             method: "runs.cancel";
             result: components["schemas"]["AssistantRun"];
         };
+        /**
+         * RunsResumeCommand
+         * @description Resume an interrupted ``deep`` run from its last checkpoint
+         *     (``run_not_resumable`` for any other run).
+         */
+        RunsResumeCommand: {
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            method: "runs.resume";
+            params: components["schemas"]["RunResume"];
+        };
+        /**
+         * RunsResumeReply
+         * @description The run that resumes the interrupted one; a replayed ``request_id``
+         *     returns the stored run.
+         */
+        RunsResumeReply: {
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            method: "runs.resume";
+            result: components["schemas"]["AssistantRun"];
+        };
         /** RunsStartCommand */
         RunsStartCommand: {
             /** Id */
@@ -5278,6 +8277,26 @@ export interface components {
             /** Target Hash */
             target_hash: string;
         };
+        /**
+         * ServedModel
+         * @description One model that served a turn, with what its calls used.
+         */
+        ServedModel: {
+            /** Calls */
+            calls: number;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Cost */
+            cost: number | null;
+            /** Fallback */
+            fallback: boolean;
+            /** Model */
+            model: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Tier */
+            tier: string;
+        };
         /** SessionChatData */
         SessionChatData: {
             /** Chat Id */
@@ -5325,10 +8344,11 @@ export interface components {
             /** Document Id */
             document_id: string;
             /**
-             * Ephemeral
-             * @default false
+             * Profile
+             * @default chat
+             * @enum {string}
              */
-            ephemeral: boolean;
+            profile: "chat" | "inline" | "review";
             /**
              * Request Id
              * @default null
@@ -5540,63 +8560,59 @@ export interface components {
             result: components["schemas"]["UnsubscribedResult"];
         };
         /**
-         * SourceEntry
-         * @description One source a research tool returned; shaped like a ``CitationSource``.
+         * SkillData
+         * @description Instruction metadata only: no skill body or private page text.
          */
-        SourceEntry: {
+        SkillData: {
+            /**
+             * By
+             * @enum {string}
+             */
+            by: "tools" | "preset" | "document_type" | "review" | "read";
             /** Id */
             id: string;
-            /** Key */
-            key: string;
-            /** Origin */
-            origin: string;
-            /** Provider */
-            provider: string;
-            /** Title */
-            title: string;
-        } & {
-            [key: string]: unknown;
+            /** Label */
+            label: string;
+            /**
+             * Resource
+             * @default null
+             */
+            resource: string | null;
+            /** Version */
+            version: string;
         };
-        /** SourceResolveResponse */
-        SourceResolveResponse: {
-            source: components["schemas"]["CitationSource"];
-        };
-        /** SourcesData */
-        SourcesData: {
-            /** Sources */
-            sources: components["schemas"]["SourceEntry"][];
-        };
-        /** SourcesEvent */
-        SourcesEvent: {
-            data: components["schemas"]["SourcesData"];
+        /** SkillEvent */
+        SkillEvent: {
+            data: components["schemas"]["SkillData"];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            event: "sources";
+            event: "skill";
         };
         /**
-         * SourcesEventMessage
-         * @description A stored ``sources`` event, as a subscription delivers it.
+         * SourceFailure
+         * @description A source that was asked and failed; its results are missing.
          */
-        SourcesEventMessage: {
-            data: components["schemas"]["SourcesData"];
+        SourceFailure: {
+            /** Code */
+            code: string;
             /**
-             * @description discriminator enum property added by openapi-typescript
+             * Provider
              * @enum {string}
              */
-            event: "sources";
-            /** Run Id */
-            run_id: string;
-            /** Seq */
-            seq: number;
-            /** Session Id */
-            session_id: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "event";
+            provider: "openalex" | "arxiv_index" | "semantic_scholar";
+        };
+        /**
+         * SourceResolveResponse
+         * @description A checked reference: resolved, matched, corroborated, with its status.
+         */
+        SourceResolveResponse: {
+            /** Aliases */
+            aliases: string[];
+            /** Notes */
+            notes: string[];
+            source: components["schemas"]["ReferenceRecord-Output"];
         };
         /** StatusData */
         StatusData: {
@@ -5609,7 +8625,7 @@ export interface components {
              * Auto Blocked Reason
              * @default null
              */
-            auto_blocked_reason: ("web_research" | "role" | "policy") | null;
+            auto_blocked_reason: ("role" | "policy" | "untrusted_content") | null;
             /** Detail */
             detail: string;
             /**
@@ -5657,17 +8673,29 @@ export interface components {
             /** Pdfs */
             pdfs: number;
         };
-        /** SubagentData */
+        /**
+         * SubagentData
+         * @description A worker's status. Its tool calls are ``<id>:<call id>``.
+         */
         SubagentData: {
             /** Engine */
             engine: string;
             /** Id */
             id: string;
+            /** Objective */
+            objective: string;
+            /**
+             * Profile
+             * @enum {string}
+             */
+            profile: "web_researcher" | "library_reader" | "reviewer";
             /**
              * Status
              * @enum {string}
              */
-            status: "running" | "completed" | "cancelled" | "budget_exceeded" | "failed";
+            status: "queued" | "running" | "completed" | "partial" | "cancelled" | "budget_exceeded" | "failed";
+            /** Title */
+            title: string;
         };
         /** SubagentEvent */
         SubagentEvent: {
@@ -5853,7 +8881,7 @@ export interface components {
              * Auto Blocked Reason
              * @default null
              */
-            auto_blocked_reason: ("web_research" | "role" | "policy") | null;
+            auto_blocked_reason: ("role" | "policy" | "untrusted_content") | null;
             /**
              * Change Set Id
              * @default null
@@ -6007,11 +9035,8 @@ export interface components {
             duration_ms: number;
             /** Error */
             error: string | null;
-            /**
-             * Error Type
-             * @description Set whenever `is_error` is. A registry `ErrorCode` when the tool refused the call (`workspace_policy`, `no_workspace_context`, `no_document_context`, `document_validation_failed`, …); otherwise the failure type the tool runtime reports (`TimeoutError`, `ContentTruncated`, `MalformedArgumentsError`, `UnknownToolError`, `RepeatedToolFailure`, …, or the class name of an exception the tool raised).
-             */
-            error_type: string | null;
+            /** @description Set whenever `is_error` is. Always a registry `ErrorCode`: the tool's refusal (`workspace_policy`, `no_workspace_context`, `no_document_context`, `document_validation_failed`, …) or the executor's own (`timeout`, `tool_cancelled`, `invalid_request` for a malformed or unknown call, `repeated_call`, `internal_error` for an exception the tool raised). The CLI engines add `run_stopped`, `budget_exhausted`, `limit_exceeded` and `bad_gateway`. */
+            error_type: components["schemas"]["ErrorCode"] | null;
             /** Is Error */
             is_error: boolean;
             /** Output Chars */
@@ -6108,6 +9133,8 @@ export interface components {
             arguments_deferred: boolean;
             /** Arguments Preview */
             arguments_preview: string;
+            /** @default null */
+            display: components["schemas"]["ToolDisplay"] | null;
             /** Tool */
             tool: string;
             /** Tool Call Id */
@@ -6144,6 +9171,29 @@ export interface components {
              * @constant
              */
             type: "event";
+        };
+        /**
+         * ToolDisplay
+         * @description How the feed names a tool: its catalog row's display fields.
+         *
+         *     Carried on ``tool_call_start`` so a client whose catalog does not know
+         *     the tool still renders it (``GET /workspaces/{w}/assistant/catalog``).
+         */
+        ToolDisplay: {
+            /** Detail Templates */
+            detail_templates: string[];
+            /** Icon */
+            icon: string;
+            /** Label */
+            label: string;
+            /** Running Label */
+            running_label: string;
+            /** Value Labels */
+            value_labels: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
         };
         /**
          * ToolUsage
@@ -6273,26 +9323,23 @@ export interface components {
             subscribed: false;
         };
         /**
-         * UpdateAgentToolSettingsRequest
-         * @description Partial account-scoped source/tool preference update.
+         * UpdateAssistantSettingsRequest
+         * @description A partial change: the switches and sources named change, the others
+         *     keep their values.
          */
-        UpdateAgentToolSettingsRequest: {
-            /** Features */
-            features?: {
-                [key: string]: boolean;
-            } | null;
-            /** Skills */
-            skills?: {
-                [key: string]: boolean;
-            } | null;
+        UpdateAssistantSettingsRequest: {
+            /** Images */
+            images?: boolean | null;
+            /** Papers */
+            papers?: boolean | null;
             /** Sources */
             sources?: {
                 [key: string]: boolean;
             } | null;
-            /** Tools */
-            tools?: {
-                [key: string]: boolean;
-            } | null;
+            /** Web */
+            web?: boolean | null;
+            /** Workers */
+            workers?: boolean | null;
         };
         /**
          * UpdateUserProfileRequest
@@ -6323,23 +9370,49 @@ export interface components {
             /** Timezone */
             timezone?: string | null;
         };
+        /** UploadedImageOrigin */
+        UploadedImageOrigin: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "upload";
+        };
+        /**
+         * Usage
+         * @description Tokens a turn used, summed over every model call it made (its
+         *     workers' and its tools' included).
+         *
+         *     Shared with the HTTP contract (a reply's record), so it has no field
+         *     with a default: both generators render it alike.
+         */
+        Usage: {
+            /** Cached Tokens */
+            cached_tokens: number;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+        };
         /**
          * UsageSummary
          * @description A workspace's lifetime counters.
          */
         UsageSummary: {
-            /** Agent Runs Completed */
-            agent_runs_completed: number;
-            /** Agent Runs Failed */
-            agent_runs_failed: number;
-            /** Agent Runs Total */
-            agent_runs_total: number;
+            /** Assistant Runs Completed */
+            assistant_runs_completed: number;
+            /** Assistant Runs Failed */
+            assistant_runs_failed: number;
+            /** Assistant Runs Total */
+            assistant_runs_total: number;
             /** Chat Messages Total */
             chat_messages_total: number;
             /** Chats Total */
             chats_total: number;
             /** Collections Active */
             collections_active: number;
+            /** Cost */
+            cost: number;
             /** Document Saves */
             document_saves: number;
             /** Documents Active */
@@ -6348,8 +9421,8 @@ export interface components {
             documents_deleted: number;
             /** First Document At */
             first_document_at: string | null;
-            /** Last Agent Run At */
-            last_agent_run_at: string | null;
+            /** Last Assistant Run At */
+            last_assistant_run_at: string | null;
             /** Last Document At */
             last_document_at: string | null;
             /** Last Resource At */
@@ -6362,6 +9435,8 @@ export interface components {
             resources_bytes: number;
             /** Resources Extracted */
             resources_extracted: number;
+            /** Tokens Cached */
+            tokens_cached: number;
             /** Tokens Input */
             tokens_input: number;
             /** Tokens Output */
@@ -6445,6 +9520,31 @@ export interface components {
             user_id: string;
             /** Username */
             username: string;
+        };
+        /** VenueProfile */
+        VenueProfile: {
+            /** Asks */
+            asks: string[];
+            /**
+             * Id
+             * @enum {string}
+             */
+            id: "elsevier" | "taylor_and_francis" | "ieee" | "plos" | "science" | "acm" | "neurips" | "iclr";
+            /** Name */
+            name: string;
+            /** Placement */
+            placement: string;
+            /** Policy Url */
+            policy_url: string;
+            /**
+             * Read From
+             * @enum {string}
+             */
+            read_from: "page" | "search_extract";
+            /** Read On */
+            read_on: string;
+            /** Required */
+            required: boolean;
         };
         /**
          * VerifyEmailRequest
@@ -6564,7 +9664,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "collection_trash" | "collection_restore" | "collection_purge" | "document_purge" | "resource_purge" | "trash_sweep" | "trash_empty" | "workspace_purge" | "workspace_copy" | "workspace_export";
+            kind: "collection_trash" | "collection_restore" | "collection_purge" | "document_purge" | "resource_purge" | "trash_sweep" | "trash_empty" | "workspace_purge" | "workspace_copy" | "workspace_export" | "reference_audit" | "claim_check" | "image_generation";
             /** Last Error */
             last_error: string | null;
             progress: components["schemas"]["JobProgress"] | null;
@@ -6630,6 +9730,8 @@ export interface components {
         WorkspacePolicyModel: {
             /** Auto */
             auto: boolean;
+            /** Images */
+            images: boolean;
             /** Outside Research */
             outside_research: boolean;
             /** Web Search */
@@ -6642,6 +9744,8 @@ export interface components {
         WorkspacePolicyUpdate: {
             /** Auto */
             auto?: boolean | null;
+            /** Images */
+            images?: boolean | null;
             /** Outside Research */
             outside_research?: boolean | null;
             /** Web Search */
@@ -6734,45 +9838,89 @@ export type AccountUsageResponse = components['schemas']['AccountUsageResponse']
 export type ActionResponse = components['schemas']['ActionResponse'];
 export type ActivityDay = components['schemas']['ActivityDay'];
 export type AddEmailRequest = components['schemas']['AddEmailRequest'];
-export type AgentCapabilityOption = components['schemas']['AgentCapabilityOption'];
+export type AgentChatRequest = components['schemas']['AgentChatRequest'];
 export type AgentChatRequestInput = components['schemas']['AgentChatRequest-Input'];
 export type AgentChatRequestOutput = components['schemas']['AgentChatRequest-Output'];
 export type AgentContext = components['schemas']['AgentContext'];
-export type AgentPaperSourceOption = components['schemas']['AgentPaperSourceOption'];
 export type AgentSelection = components['schemas']['AgentSelection'];
-export type AgentToolCategory = components['schemas']['AgentToolCategory'];
-export type AgentToolOption = components['schemas']['AgentToolOption'];
-export type AgentToolSettingsResponse = components['schemas']['AgentToolSettingsResponse'];
-export type AiBeatChild = components['schemas']['AiBeatChild'];
+export type AiBeatChildInput = components['schemas']['AiBeatChild-Input'];
+export type AiBeatChildOutput = components['schemas']['AiBeatChild-Output'];
+export type AiUseEntry = components['schemas']['AiUseEntry'];
+export type AiUseLogResponse = components['schemas']['AiUseLogResponse'];
+export type AiUseReferenceCounts = components['schemas']['AiUseReferenceCounts'];
+export type AiUseStatement = components['schemas']['AiUseStatement'];
+export type AiUseSummary = components['schemas']['AiUseSummary'];
+export type AiUseVerification = components['schemas']['AiUseVerification'];
+export type ArtifactData = components['schemas']['ArtifactData'];
+export type ArtifactEvent = components['schemas']['ArtifactEvent'];
+export type ArtifactEventMessage = components['schemas']['ArtifactEventMessage'];
+export type AssetInfo = components['schemas']['AssetInfo'];
+export type AssistantCatalogResponse = components['schemas']['AssistantCatalogResponse'];
 export type AssistantClientMessage = components['schemas']['AssistantClientMessage'];
 export type AssistantEvent = components['schemas']['AssistantEvent'];
+export type AssistantOutputInput = components['schemas']['AssistantOutput-Input'];
+export type AssistantOutputOutput = components['schemas']['AssistantOutput-Output'];
+export type AssistantPaperSource = components['schemas']['AssistantPaperSource'];
 export type AssistantRun = components['schemas']['AssistantRun'];
+export type AssistantRunListResponse = components['schemas']['AssistantRunListResponse'];
+export type AssistantRunSummary = components['schemas']['AssistantRunSummary'];
 export type AssistantServerMessage = components['schemas']['AssistantServerMessage'];
 export type AssistantSession = components['schemas']['AssistantSession'];
+export type AssistantSettingsResponse = components['schemas']['AssistantSettingsResponse'];
+export type AssistantSwitch = components['schemas']['AssistantSwitch'];
+export type AuditCounts = components['schemas']['AuditCounts'];
+export type AuditedReference = components['schemas']['AuditedReference'];
 export type AuthSessionResponse = components['schemas']['AuthSessionResponse'];
-export type BodyChatImagesUploadChatImage = components['schemas']['Body_chat-images-upload_chat_image'];
+export type BodyAssetsUploadAsset = components['schemas']['Body_assets-upload_asset'];
 export type BodyResourcesUploadResource = components['schemas']['Body_resources-upload_resource'];
+export type BudgetCounter = components['schemas']['BudgetCounter'];
+export type BudgetData = components['schemas']['BudgetData'];
+export type BudgetEvent = components['schemas']['BudgetEvent'];
+export type BudgetEventMessage = components['schemas']['BudgetEventMessage'];
+export type CatalogEffort = components['schemas']['CatalogEffort'];
+export type CatalogEffortBudget = components['schemas']['CatalogEffortBudget'];
+export type CatalogEffortCut = components['schemas']['CatalogEffortCut'];
+export type CatalogEngine = components['schemas']['CatalogEngine'];
+export type CatalogPolicy = components['schemas']['CatalogPolicy'];
+export type CatalogPreset = components['schemas']['CatalogPreset'];
+export type CatalogProfile = components['schemas']['CatalogProfile'];
+export type CatalogResume = components['schemas']['CatalogResume'];
+export type CatalogSkill = components['schemas']['CatalogSkill'];
+export type CatalogTool = components['schemas']['CatalogTool'];
+export type CatalogToolset = components['schemas']['CatalogToolset'];
+export type CatalogWorker = components['schemas']['CatalogWorker'];
 export type ChangeSetDecisionsRequest = components['schemas']['ChangeSetDecisionsRequest'];
+export type ChangeSetGroupResponse = components['schemas']['ChangeSetGroupResponse'];
 export type ChangeSetListResponse = components['schemas']['ChangeSetListResponse'];
 export type ChangeSetOperationDecisionRequest = components['schemas']['ChangeSetOperationDecisionRequest'];
 export type ChangeSetOperationDecisionResponse = components['schemas']['ChangeSetOperationDecisionResponse'];
 export type ChangeSetOperationTargetResponse = components['schemas']['ChangeSetOperationTargetResponse'];
 export type ChangeSetRejectRequest = components['schemas']['ChangeSetRejectRequest'];
 export type ChangeSetResponse = components['schemas']['ChangeSetResponse'];
-export type ChatImageItem = components['schemas']['ChatImageItem'];
 export type ChatListResponse = components['schemas']['ChatListResponse'];
 export type ChatMessage = components['schemas']['ChatMessage'];
 export type ChatMessageChain = components['schemas']['ChatMessageChain'];
+export type ChatPlan = components['schemas']['ChatPlan'];
+export type ChatPlanSection = components['schemas']['ChatPlanSection'];
+export type ChatPlanUpdateRequest = components['schemas']['ChatPlanUpdateRequest'];
+export type ChatPlanUpdateSection = components['schemas']['ChatPlanUpdateSection'];
+export type ChatSourcePassage = components['schemas']['ChatSourcePassage'];
+export type ChatSourceResponse = components['schemas']['ChatSourceResponse'];
 export type ChatSummary = components['schemas']['ChatSummary'];
 export type ChatUpdateRequest = components['schemas']['ChatUpdateRequest'];
 export type CheckAvailabilityRequest = components['schemas']['CheckAvailabilityRequest'];
 export type CheckAvailabilityResponse = components['schemas']['CheckAvailabilityResponse'];
-export type CitationChild = components['schemas']['CitationChild'];
-export type CitationSource = components['schemas']['CitationSource'];
-export type ClaimAssessment = components['schemas']['ClaimAssessment'];
-export type ClaimAssessmentRequest = components['schemas']['ClaimAssessmentRequest'];
-export type ClaimEvidenceFinding = components['schemas']['ClaimEvidenceFinding'];
-export type ClaimVerdict = components['schemas']['ClaimVerdict'];
+export type CitationChildInput = components['schemas']['CitationChild-Input'];
+export type CitationChildOutput = components['schemas']['CitationChild-Output'];
+export type CitationPassage = components['schemas']['CitationPassage'];
+export type CitationWithoutPassage = components['schemas']['CitationWithoutPassage'];
+export type ClaimCheckPassage = components['schemas']['ClaimCheckPassage'];
+export type ClaimCheckRequest = components['schemas']['ClaimCheckRequest'];
+export type ClaimCheckResult = components['schemas']['ClaimCheckResult'];
+export type ClaimCheckUsage = components['schemas']['ClaimCheckUsage'];
+export type ClaimData = components['schemas']['ClaimData'];
+export type ClaimEvent = components['schemas']['ClaimEvent'];
+export type ClaimPassage = components['schemas']['ClaimPassage'];
 export type CodeBlock = components['schemas']['CodeBlock'];
 export type CollectionCreateRequest = components['schemas']['CollectionCreateRequest'];
 export type CollectionDetail = components['schemas']['CollectionDetail'];
@@ -6792,11 +9940,22 @@ export type CollectionTrashRequest = components['schemas']['CollectionTrashReque
 export type CollectionTrashResult = components['schemas']['CollectionTrashResult'];
 export type CollectionUpdateRequest = components['schemas']['CollectionUpdateRequest'];
 export type CommandFailure = components['schemas']['CommandFailure'];
+export type CommentData = components['schemas']['CommentData'];
+export type CommentEvent = components['schemas']['CommentEvent'];
+export type CommentEventMessage = components['schemas']['CommentEventMessage'];
+export type CommentItem = components['schemas']['CommentItem'];
+export type CommentListResponse = components['schemas']['CommentListResponse'];
+export type CommentSuggestion = components['schemas']['CommentSuggestion'];
+export type CommentUpdate = components['schemas']['CommentUpdate'];
 export type ContentData = components['schemas']['ContentData'];
+export type CslDate = components['schemas']['CslDate'];
+export type CslItem = components['schemas']['CslItem'];
+export type CslName = components['schemas']['CslName'];
 export type DeletedResult = components['schemas']['DeletedResult'];
 export type DeletedWorkspaceSummary = components['schemas']['DeletedWorkspaceSummary'];
 export type DividerBlock = components['schemas']['DividerBlock'];
 export type DocumentActivityResponse = components['schemas']['DocumentActivityResponse'];
+export type DocumentComment = components['schemas']['DocumentComment'];
 export type DocumentContentInput = components['schemas']['DocumentContent-Input'];
 export type DocumentContentOutput = components['schemas']['DocumentContent-Output'];
 export type DocumentCreateRequest = components['schemas']['DocumentCreateRequest'];
@@ -6816,6 +9975,7 @@ export type DoneData = components['schemas']['DoneData'];
 export type DoneEvent = components['schemas']['DoneEvent'];
 export type DoneEventMessage = components['schemas']['DoneEventMessage'];
 export type DryRunItem = components['schemas']['DryRunItem'];
+export type DuplicateReferences = components['schemas']['DuplicateReferences'];
 export type EmailAddress = components['schemas']['EmailAddress'];
 export type EmailListResponse = components['schemas']['EmailListResponse'];
 export type EngineCatalogResponse = components['schemas']['EngineCatalogResponse'];
@@ -6826,16 +9986,34 @@ export type ErrorCode = components['schemas']['ErrorCode'];
 export type ErrorData = components['schemas']['ErrorData'];
 export type ErrorEvent = components['schemas']['ErrorEvent'];
 export type ErrorEventMessage = components['schemas']['ErrorEventMessage'];
-export type EvidenceKind = components['schemas']['EvidenceKind'];
-export type EvidenceStance = components['schemas']['EvidenceStance'];
+export type EvidenceData = components['schemas']['EvidenceData'];
+export type EvidenceEvent = components['schemas']['EvidenceEvent'];
+export type EvidenceEventMessage = components['schemas']['EvidenceEventMessage'];
+export type EvidencePassage = components['schemas']['EvidencePassage'];
+export type EvidenceRecord = components['schemas']['EvidenceRecord'];
+export type EvidenceSource = components['schemas']['EvidenceSource'];
 export type FieldError = components['schemas']['FieldError'];
 export type GatewayModelSelection = components['schemas']['GatewayModelSelection'];
 export type GatewayModels = components['schemas']['GatewayModels'];
+export type GeneratedImageOrigin = components['schemas']['GeneratedImageOrigin'];
 export type GraphChild = components['schemas']['GraphChild'];
 export type GraphData = components['schemas']['GraphData'];
 export type HeadingBlock = components['schemas']['HeadingBlock'];
 export type HistoryExportResponse = components['schemas']['HistoryExportResponse'];
+export type ImageArguments = components['schemas']['ImageArguments'];
 export type ImageAttachment = components['schemas']['ImageAttachment'];
+export type ImageBlock = components['schemas']['ImageBlock'];
+export type ImageGenerationAvailability = components['schemas']['ImageGenerationAvailability'];
+export type ImageGenerationConfirm = components['schemas']['ImageGenerationConfirm'];
+export type ImageGenerationEdit = components['schemas']['ImageGenerationEdit'];
+export type ImageGenerationInfo = components['schemas']['ImageGenerationInfo'];
+export type ImageGenerationPage = components['schemas']['ImageGenerationPage'];
+export type ImageGenerationProvenance = components['schemas']['ImageGenerationProvenance'];
+export type ImageGenerationRequest = components['schemas']['ImageGenerationRequest'];
+export type ImageGeneratorAvailability = components['schemas']['ImageGeneratorAvailability'];
+export type InstructionSource = components['schemas']['InstructionSource'];
+export type InstructionsData = components['schemas']['InstructionsData'];
+export type InstructionsEvent = components['schemas']['InstructionsEvent'];
 export type Invitation = components['schemas']['Invitation'];
 export type InvitationAcceptRequest = components['schemas']['InvitationAcceptRequest'];
 export type InvitationAcceptance = components['schemas']['InvitationAcceptance'];
@@ -6853,35 +10031,63 @@ export type MemberListResponse = components['schemas']['MemberListResponse'];
 export type MemberRoleUpdate = components['schemas']['MemberRoleUpdate'];
 export type MessageImage = components['schemas']['MessageImage'];
 export type MessagePdf = components['schemas']['MessagePdf'];
-export type OpenAccessLocation = components['schemas']['OpenAccessLocation'];
+export type OrphanCitation = components['schemas']['OrphanCitation'];
 export type OwnershipTransferModel = components['schemas']['OwnershipTransferModel'];
 export type OwnershipTransferRequest = components['schemas']['OwnershipTransferRequest'];
 export type PageActivity = components['schemas']['PageActivity'];
 export type PageCopyAccepted = components['schemas']['PageCopyAccepted'];
 export type PageCopyRequest = components['schemas']['PageCopyRequest'];
+export type Paper = components['schemas']['Paper'];
+export type PaperDetail = components['schemas']['PaperDetail'];
 export type PaperGraphItem = components['schemas']['PaperGraphItem'];
 export type PaperGraphResponse = components['schemas']['PaperGraphResponse'];
-export type PaperPayload = components['schemas']['PaperPayload'];
-export type PaperRecommendationsResponse = components['schemas']['PaperRecommendationsResponse'];
+export type PaperOpenAccess = components['schemas']['PaperOpenAccess'];
+export type PaperPassage = components['schemas']['PaperPassage'];
+export type PaperPassagesResponse = components['schemas']['PaperPassagesResponse'];
+export type PaperResponse = components['schemas']['PaperResponse'];
 export type PaperSearchResponse = components['schemas']['PaperSearchResponse'];
+export type PaperVersion = components['schemas']['PaperVersion'];
 export type ParagraphBlockInput = components['schemas']['ParagraphBlock-Input'];
 export type ParagraphBlockOutput = components['schemas']['ParagraphBlock-Output'];
 export type PdfGrant = components['schemas']['PdfGrant'];
 export type PdfGrantListResponse = components['schemas']['PdfGrantListResponse'];
 export type PdfGrantState = components['schemas']['PdfGrantState'];
+export type PersistenceData = components['schemas']['PersistenceData'];
 export type PingCommand = components['schemas']['PingCommand'];
 export type PingReply = components['schemas']['PingReply'];
 export type PingResult = components['schemas']['PingResult'];
 export type PlaceAfter = components['schemas']['PlaceAfter'];
 export type PlaceBefore = components['schemas']['PlaceBefore'];
+export type PlanData = components['schemas']['PlanData'];
+export type PlanEdit = components['schemas']['PlanEdit'];
+export type PlanEvent = components['schemas']['PlanEvent'];
+export type PlanEventMessage = components['schemas']['PlanEventMessage'];
+export type PlanSection = components['schemas']['PlanSection'];
+export type PlanSectionEdit = components['schemas']['PlanSectionEdit'];
+export type PreprintReference = components['schemas']['PreprintReference'];
 export type ProblemDetails = components['schemas']['ProblemDetails'];
 export type ProjectInfo = components['schemas']['ProjectInfo'];
-export type ProviderProvenance = components['schemas']['ProviderProvenance'];
+export type QuestionAnswer = components['schemas']['QuestionAnswer'];
+export type QuestionAnswers = components['schemas']['QuestionAnswers'];
+export type QuestionData = components['schemas']['QuestionData'];
+export type QuestionEvent = components['schemas']['QuestionEvent'];
+export type QuestionEventMessage = components['schemas']['QuestionEventMessage'];
+export type QuestionItem = components['schemas']['QuestionItem'];
 export type ReasoningEvent = components['schemas']['ReasoningEvent'];
 export type ReasoningEventMessage = components['schemas']['ReasoningEventMessage'];
+export type RecordChangeSet = components['schemas']['RecordChangeSet'];
+export type RecordCreatedPage = components['schemas']['RecordCreatedPage'];
+export type RecordError = components['schemas']['RecordError'];
+export type RecordToolCall = components['schemas']['RecordToolCall'];
+export type RecordWorker = components['schemas']['RecordWorker'];
+export type ReferenceAuditReport = components['schemas']['ReferenceAuditReport'];
+export type ReferenceAuditResult = components['schemas']['ReferenceAuditResult'];
+export type ReferenceNotice = components['schemas']['ReferenceNotice'];
+export type ReferenceRecordInput = components['schemas']['ReferenceRecord-Input'];
+export type ReferenceRecordOutput = components['schemas']['ReferenceRecord-Output'];
 export type RegisterRequest = components['schemas']['RegisterRequest'];
-export type ResearchAuthor = components['schemas']['ResearchAuthor'];
-export type ResearchEvidence = components['schemas']['ResearchEvidence'];
+export type ReplyRecord = components['schemas']['ReplyRecord'];
+export type RequestRecord = components['schemas']['RequestRecord'];
 export type ResourceAttachment = components['schemas']['ResourceAttachment'];
 export type ResourceExtraction = components['schemas']['ResourceExtraction'];
 export type ResourceItem = components['schemas']['ResourceItem'];
@@ -6892,22 +10098,29 @@ export type ResourceSearchMatch = components['schemas']['ResourceSearchMatch'];
 export type ResourceSearchResponse = components['schemas']['ResourceSearchResponse'];
 export type ResourceSearchSkipped = components['schemas']['ResourceSearchSkipped'];
 export type ResourceTrashResult = components['schemas']['ResourceTrashResult'];
+export type ReviewCounts = components['schemas']['ReviewCounts'];
+export type ReviewListResponse = components['schemas']['ReviewListResponse'];
+export type ReviewSummary = components['schemas']['ReviewSummary'];
 export type RevisionDiffResponse = components['schemas']['RevisionDiffResponse'];
 export type RevisionListResponse = components['schemas']['RevisionListResponse'];
 export type RevisionMetadataResponse = components['schemas']['RevisionMetadataResponse'];
 export type RevisionResponse = components['schemas']['RevisionResponse'];
 export type RevisionRestoreRequest = components['schemas']['RevisionRestoreRequest'];
 export type RunRef = components['schemas']['RunRef'];
+export type RunResume = components['schemas']['RunResume'];
 export type RunStart = components['schemas']['RunStart'];
 export type RunStatusData = components['schemas']['RunStatusData'];
 export type RunStatusEvent = components['schemas']['RunStatusEvent'];
 export type RunStatusEventMessage = components['schemas']['RunStatusEventMessage'];
 export type RunsCancelCommand = components['schemas']['RunsCancelCommand'];
 export type RunsCancelReply = components['schemas']['RunsCancelReply'];
+export type RunsResumeCommand = components['schemas']['RunsResumeCommand'];
+export type RunsResumeReply = components['schemas']['RunsResumeReply'];
 export type RunsStartCommand = components['schemas']['RunsStartCommand'];
 export type RunsStartReply = components['schemas']['RunsStartReply'];
 export type SemanticDiffEntry = components['schemas']['SemanticDiffEntry'];
 export type SemanticDocumentDiff = components['schemas']['SemanticDocumentDiff'];
+export type ServedModel = components['schemas']['ServedModel'];
 export type SessionChatData = components['schemas']['SessionChatData'];
 export type SessionChatEvent = components['schemas']['SessionChatEvent'];
 export type SessionChatEventMessage = components['schemas']['SessionChatEventMessage'];
@@ -6928,11 +10141,10 @@ export type SessionsSubscribeCommand = components['schemas']['SessionsSubscribeC
 export type SessionsSubscribeReply = components['schemas']['SessionsSubscribeReply'];
 export type SessionsUnsubscribeCommand = components['schemas']['SessionsUnsubscribeCommand'];
 export type SessionsUnsubscribeReply = components['schemas']['SessionsUnsubscribeReply'];
-export type SourceEntry = components['schemas']['SourceEntry'];
+export type SkillData = components['schemas']['SkillData'];
+export type SkillEvent = components['schemas']['SkillEvent'];
+export type SourceFailure = components['schemas']['SourceFailure'];
 export type SourceResolveResponse = components['schemas']['SourceResolveResponse'];
-export type SourcesData = components['schemas']['SourcesData'];
-export type SourcesEvent = components['schemas']['SourcesEvent'];
-export type SourcesEventMessage = components['schemas']['SourcesEventMessage'];
 export type StatusData = components['schemas']['StatusData'];
 export type StatusEvent = components['schemas']['StatusEvent'];
 export type StatusEventMessage = components['schemas']['StatusEventMessage'];
@@ -6965,6 +10177,7 @@ export type ToolCallProgressEventMessage = components['schemas']['ToolCallProgre
 export type ToolCallStartData = components['schemas']['ToolCallStartData'];
 export type ToolCallStartEvent = components['schemas']['ToolCallStartEvent'];
 export type ToolCallStartEventMessage = components['schemas']['ToolCallStartEventMessage'];
+export type ToolDisplay = components['schemas']['ToolDisplay'];
 export type ToolUsage = components['schemas']['ToolUsage'];
 export type TrashCounts = components['schemas']['TrashCounts'];
 export type TrashItem = components['schemas']['TrashItem'];
@@ -6975,13 +10188,16 @@ export type TrashRootResponse = components['schemas']['TrashRootResponse'];
 export type UnfiledLocationTarget = components['schemas']['UnfiledLocationTarget'];
 export type UnfiledResourceLocation = components['schemas']['UnfiledResourceLocation'];
 export type UnsubscribedResult = components['schemas']['UnsubscribedResult'];
-export type UpdateAgentToolSettingsRequest = components['schemas']['UpdateAgentToolSettingsRequest'];
+export type UpdateAssistantSettingsRequest = components['schemas']['UpdateAssistantSettingsRequest'];
 export type UpdateUserProfileRequest = components['schemas']['UpdateUserProfileRequest'];
+export type UploadedImageOrigin = components['schemas']['UploadedImageOrigin'];
+export type Usage = components['schemas']['Usage'];
 export type UsageSummary = components['schemas']['UsageSummary'];
 export type UserGroupInfo = components['schemas']['UserGroupInfo'];
 export type UserInfo = components['schemas']['UserInfo'];
 export type UserMeResponse = components['schemas']['UserMeResponse'];
 export type UserProfileModel = components['schemas']['UserProfileModel'];
+export type VenueProfile = components['schemas']['VenueProfile'];
 export type VerifyEmailRequest = components['schemas']['VerifyEmailRequest'];
 export type WorkspaceCounts = components['schemas']['WorkspaceCounts'];
 export type WorkspaceCreateRequest = components['schemas']['WorkspaceCreateRequest'];
@@ -7730,483 +10946,6 @@ export interface operations {
             };
         };
     };
-    "research-assess_semantic_scholar_claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ClaimAssessmentRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ClaimAssessment"];
-                };
-            };
-            /** @description Unauthorized */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Forbidden */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Unprocessable Content */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Too Many Requests */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Bad Gateway */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-        };
-    };
-    "research-get_semantic_scholar_graph": {
-        parameters: {
-            query: {
-                paper_id: string;
-                direction: "citations" | "references";
-                limit?: number;
-                offset?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PaperGraphResponse"];
-                };
-            };
-            /** @description Unauthorized */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Forbidden */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Unprocessable Content */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Too Many Requests */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Bad Gateway */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-        };
-    };
-    "research-get_semantic_scholar_recommendations": {
-        parameters: {
-            query: {
-                paper_id: string;
-                limit?: number;
-                pool?: "recent" | "all-cs";
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PaperRecommendationsResponse"];
-                };
-            };
-            /** @description Unauthorized */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Forbidden */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Unprocessable Content */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Too Many Requests */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Bad Gateway */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-        };
-    };
-    "research-search_semantic_scholar": {
-        parameters: {
-            query: {
-                query: string;
-                limit?: number;
-                offset?: number;
-                year?: string | null;
-                publication_date_or_year?: string | null;
-                publication_types?: string | null;
-                open_access_only?: boolean;
-                min_citation_count?: number | null;
-                venues?: string | null;
-                fields_of_study?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PaperSearchResponse"];
-                };
-            };
-            /** @description Unauthorized */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Forbidden */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Unprocessable Content */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Too Many Requests */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Bad Gateway */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-        };
-    };
-    "sources-resolve_source": {
-        parameters: {
-            query: {
-                identifier: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SourceResolveResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Unauthorized */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Forbidden */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Unprocessable Content */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-        };
-    };
     "users-get_me": {
         parameters: {
             query?: never;
@@ -8382,7 +11121,7 @@ export interface operations {
             };
         };
     };
-    "users-get_agent_tool_settings": {
+    "users-get_assistant_settings": {
         parameters: {
             query?: never;
             header?: never;
@@ -8397,7 +11136,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgentToolSettingsResponse"];
+                    "application/json": components["schemas"]["AssistantSettingsResponse"];
                 };
             };
             /** @description Unauthorized */
@@ -8429,7 +11168,7 @@ export interface operations {
             };
         };
     };
-    "users-update_agent_tool_settings": {
+    "users-update_assistant_settings": {
         parameters: {
             query?: never;
             header?: never;
@@ -8438,7 +11177,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UpdateAgentToolSettingsRequest"];
+                "application/json": components["schemas"]["UpdateAssistantSettingsRequest"];
             };
         };
         responses: {
@@ -8448,7 +11187,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgentToolSettingsResponse"];
+                    "application/json": components["schemas"]["AssistantSettingsResponse"];
                 };
             };
             /** @description Unauthorized */
@@ -8967,7 +11706,7 @@ export interface operations {
             };
         };
     };
-    "chat-images-upload_chat_image": {
+    "assets-upload_asset": {
         parameters: {
             query?: never;
             header: {
@@ -8982,7 +11721,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_chat-images-upload_chat_image"];
+                "multipart/form-data": components["schemas"]["Body_assets-upload_asset"];
             };
         };
         responses: {
@@ -8992,7 +11731,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ChatImageItem"];
+                    "application/json": components["schemas"]["AssetInfo"];
                 };
             };
             /** @description Bad Request */
@@ -9087,12 +11826,12 @@ export interface operations {
             };
         };
     };
-    "chat-images-download_chat_image": {
+    "assets-get_asset": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                image_id: string;
+                asset_id: string;
                 /** @description The workspace: `wsp-{uuid4}`. */
                 workspace_id: string;
             };
@@ -9100,7 +11839,87 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The stored image. */
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetInfo"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "assets-get_asset_content": {
+        parameters: {
+            query?: {
+                rendition?: "original" | "display" | "thumbnail";
+            };
+            header?: never;
+            path: {
+                asset_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The authorized immutable asset rendition. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -9150,6 +11969,238 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "assistant-get_assistant_catalog": {
+        parameters: {
+            query?: {
+                /** @description The engine whose runs the toolsets and tools describe. */
+                engine?: "gateway" | "claude" | "codex";
+            };
+            header?: never;
+            path: {
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssistantCatalogResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "assistant-list_assistant_runs": {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssistantRunListResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "papers-check_claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10480,6 +13531,179 @@ export interface operations {
             };
         };
     };
+    "references-ai_use_log": {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description The page's 24-hex id. */
+                document_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiUseLogResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "references-ai_use_statement": {
+        parameters: {
+            query: {
+                /** @description The venue profile to write the statement for. */
+                venue: "elsevier" | "taylor_and_francis" | "ieee" | "plos" | "science" | "acm" | "neurips" | "iclr";
+            };
+            header?: never;
+            path: {
+                /** @description The page's 24-hex id. */
+                document_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiUseStatement"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
     "change-sets-list_workspace_document_change_sets": {
         parameters: {
             query?: {
@@ -10884,7 +14108,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The chat and its messages are deleted. */
+            /** @description The chat, its messages and its sources are deleted. */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -11085,6 +14309,418 @@ export interface operations {
             };
         };
     };
+    "chats-get_chat_plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+                chat_id: string;
+                plan_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    /** @description The plan validator, "cwplan:{revision}". Send it back as If-Match. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPlan"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "chats-update_chat_plan": {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The plan's ETag, "cwplan:{revision}". Missing: 428 precondition_required; stale: 412 stale_plan. */
+                "If-Match": string;
+            };
+            path: {
+                document_id: string;
+                chat_id: string;
+                plan_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatPlanUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    /** @description The plan validator, "cwplan:{revision}". Send it back as If-Match. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPlan"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Precondition Failed */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Precondition Required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "chats-get_chat_source": {
+        parameters: {
+            query?: {
+                passage?: string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                document_id: string;
+                chat_id: string;
+                handle: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSourceResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "review-list_comments": {
+        parameters: {
+            query?: {
+                status?: ("open" | "resolved" | "dismissed") | null;
+                run_id?: string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                document_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommentListResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "review-decide_comment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+                comment_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentComment"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
     "documents-copy_workspace_document": {
         parameters: {
             query?: never;
@@ -11194,7 +14830,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The page as LaTeX source or a compiled PDF. */
+            /** @description LaTeX source, a ZIP of source and original image assets, or a compiled PDF. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11202,6 +14838,7 @@ export interface operations {
                 content: {
                     "application/pdf": string;
                     "application/x-tex": string;
+                    "application/zip": string;
                 };
             };
             /** @description Unauthorized */
@@ -11590,6 +15227,164 @@ export interface operations {
             };
         };
     };
+    "references-check_references": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The page's 24-hex id. */
+                document_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "references-reference_status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The page's 24-hex id. */
+                document_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceAuditReport"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
     "documents-reorder_workspace_document": {
         parameters: {
             query?: never;
@@ -11727,6 +15522,87 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "review-list_reviews": {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                document_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewListResponse"];
                 };
             };
             /** @description Unauthorized */
@@ -12430,6 +16306,825 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "images-list_generations": {
+        parameters: {
+            query: {
+                document_id: string;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageGenerationPage"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Precondition Failed */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "images-propose_image": {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description 1–200 visible characters. A replay with the same key and body returns the stored result. */
+                "Idempotency-Key": string;
+            };
+            path: {
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageGenerationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageGenerationInfo"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Precondition Failed */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "images-image_availability": {
+        parameters: {
+            query?: {
+                engine?: "gateway" | "codex" | "claude";
+            };
+            header?: never;
+            path: {
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageGenerationAvailability"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Precondition Failed */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "images-get_generation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                generation_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageGenerationInfo"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Precondition Failed */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "images-edit_generation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                generation_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageGenerationEdit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageGenerationInfo"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Precondition Failed */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "images-confirm_generation": {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description 1–200 visible characters. A replay with the same key and body returns the stored result. */
+                "Idempotency-Key": string;
+            };
+            path: {
+                generation_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageGenerationConfirm"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Precondition Failed */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "images-discard_generation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                generation_id: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageGenerationInfo"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Precondition Failed */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13162,6 +17857,443 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "papers-paper_passages": {
+        parameters: {
+            query: {
+                query: string;
+                papers?: string[] | null;
+                year_from?: number | null;
+                year_to?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperPassagesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "papers-search_papers": {
+        parameters: {
+            query: {
+                query: string;
+                year_from?: number | null;
+                year_to?: number | null;
+                kind?: "article" | "review" | "preprint" | "any";
+                open_access_only?: boolean;
+                sort?: "relevance" | "recent" | "cited";
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperSearchResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "papers-get_paper": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "papers-paper_graph": {
+        parameters: {
+            query: {
+                relation: "references" | "citations" | "related";
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                key: string;
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperGraphResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14094,6 +19226,106 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    "sources-resolve_source": {
+        parameters: {
+            query: {
+                identifier: string;
+                title?: string | null;
+                first_author?: string | null;
+                year?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description The workspace: `wsp-{uuid4}`. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceResolveResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -7,6 +7,56 @@ import { sanitizeEditableHtml, sanitizeInlineFragment } from './sanitize';
  * vectors that previously reached the canvas: event-handler attributes,
  * `javascript:` URLs, active/embed elements, and browser-default paste.
  */
+/**
+ * Inputs and the html the API stores for each, computed with the API's own
+ * sanitizer (`sanitize_inline_html` in
+ * `ColWrite-api/src/documents/domain/validation.py`, Python 3.13.18). The
+ * editor writes the same bytes, so a page holds what the server stores.
+ */
+const AS_THE_API_STORES: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
+  ['block markup inside a paragraph', [
+    ['<div>line1</div><div>line2</div>', '<span class="legacy-block">line1</span><span class="legacy-block">line2</span>'],
+    ['<p>x</p>', '<span class="legacy-block">x</span>'],
+    ['before <h2>Results</h2> after', 'before <span class="legacy-block">Results</span> after'],
+    ['<div onclick="x()" class="y" style="color:red">line</div>', '<span class="legacy-block">line</span>'],
+    ['<P>Upper</P><H3>three</H3><h4>4</h4><h5>5</h5><h6>6</h6>', '<span class="legacy-block">Upper</span><span class="legacy-block">three</span><span class="legacy-block">4</span><span class="legacy-block">5</span><span class="legacy-block">6</span>'],
+    ['<div><br></div>', '<span class="legacy-block"><br></span>'],
+    ['<div/>tail', '<span class="legacy-block"></span>tail'],
+    ['<span class="legacy-block"><span class="legacy-block">a</span>b</span>', '<span class="legacy-block"><span class="legacy-block">a</span>b</span>'],
+  ]],
+  ['tags nested as written, not re-nested as a browser would', [
+    ['<p>a<div>b</div>c</p>', '<span class="legacy-block">a<span class="legacy-block">b</span>c</span>'],
+    ['<h1><p>x</h1>y', '<span class="legacy-block"><span class="legacy-block">x</span></span>y'],
+    ['<b>one<i>two</b>three</i>', '<b>one<i>two</i></b>three'],
+    ['<b>x<p>y</b>z</p>', '<b>x<span class="legacy-block">y</span></b>z'],
+    ['a</br>b', 'ab'],
+  ]],
+  ['a paste from a word processor', [
+    ['<meta charset="utf-8"><b style="font-weight:normal;" id="docs-internal-guid-1"><p dir="ltr" style="line-height:1.38"><span style="font-size:11pt">Hello&nbsp;world</span></p><p dir="ltr"><span>Second</span></p></b><br class="Apple-interchange-newline">', '<b><span class="legacy-block"><span>Hello\u00a0world</span></span><span class="legacy-block"><span>Second</span></span></b><br>'],
+  ]],
+  ['links kept as written', [
+    ['<a href="https://example.test">x</a>', '<a href="https://example.test" rel="noopener noreferrer">x</a>'],
+    ['<a href="https://Example.test">x</a>', '<a href="https://Example.test" rel="noopener noreferrer">x</a>'],
+    ['<a href="https://@x.test">x</a>', '<a href="https://@x.test" rel="noopener noreferrer">x</a>'],
+    ['<a href="https://:pw@x.test">x</a>', '<a>x</a>'],
+    ['<a href="https://ex%zz.test">x</a>', '<a href="https://ex%zz.test" rel="noopener noreferrer">x</a>'],
+    ['<a href="http://x.test\ufeff">bom</a>', '<a href="http://x.test\ufeff" rel="noopener noreferrer">bom</a>'],
+    ['<a href="http://x.test\u00a0">nbsp</a>', '<a>nbsp</a>'],
+    ['<a title="Don\'t &amp; &quot;q&quot; <x>">t</a>', '<a title="Don&#x27;t &amp; &quot;q&quot; &lt;x&gt;">t</a>'],
+  ]],
+  ['placeholders', [
+    ['<span data-child-id="it\'s"></span>', '<span data-child-id="it&#x27;s" contenteditable="false"></span>'],
+    ['<span contenteditable="true" class="w" data-child-id="c1">x<span>y</span>z</span>after', '<span data-child-id="c1" contenteditable="false"></span>after'],
+  ]],
+  ['raw text elements', [
+    ['<xmp><b>x</b></xmp>', '&lt;b&gt;x&lt;/b&gt;'],
+    ['<textarea>&amp;<b></textarea>', '&amp;&lt;b&gt;'],
+    ['<script>a<b>c</b></script>d', 'd'],
+    ['<plaintext><b>x', '&lt;b&gt;x'],
+    ['<script/>after', ''],
+  ]],
+];
+
 describe('sanitizeEditableHtml', () => {
   it('strips event-handler attributes', () => {
     expect(sanitizeEditableHtml('<img src=x onerror="alert(1)">')).toBe('');
@@ -21,8 +71,9 @@ describe('sanitizeEditableHtml', () => {
 
   it('keeps only safe http(s) link hrefs', () => {
     expect(sanitizeEditableHtml('<a href="javascript:alert(1)">x</a>')).toBe('<a>x</a>');
+    // As written: the server stores the link unchanged, so the editor must too.
     expect(sanitizeEditableHtml('<a href="https://example.com">x</a>')).toBe(
-      '<a href="https://example.com/" rel="noopener noreferrer">x</a>',
+      '<a href="https://example.com" rel="noopener noreferrer">x</a>',
     );
   });
 
@@ -32,13 +83,28 @@ describe('sanitizeEditableHtml', () => {
     );
   });
 
-  it('keeps browser line-wrapping divs but strips their attributes', () => {
-    expect(sanitizeEditableHtml('<div>line1</div><div>line2</div>')).toBe(
-      '<div>line1</div><div>line2</div>',
-    );
-    expect(sanitizeEditableHtml('<div onclick="alert(1)" class="x">line</div>')).toBe(
-      '<div>line</div>',
-    );
+  for (const [group, cases] of AS_THE_API_STORES) {
+    it(`writes ${group} as the API stores it`, () => {
+      for (const [input, stored] of cases) {
+        expect(sanitizeEditableHtml(input), input).toBe(stored);
+        // What the server stores comes back unchanged.
+        expect(sanitizeEditableHtml(stored), stored).toBe(stored);
+      }
+    });
+  }
+
+  it('keeps an id of up to 200 characters, as the API does', () => {
+    const id = 'c'.repeat(200);
+    expect(sanitizeEditableHtml(`<span data-child-id="${id}"></span>`)).toBe(`<span data-child-id="${id}" contenteditable="false"></span>`);
+    expect(sanitizeEditableHtml(`<span data-child-id="${id}c">x</span>y`)).toBe('y');
+  });
+
+  it('keeps the class of a span the API flattened block markup into, and no other class', () => {
+    // As the API's sanitizer: `span.legacy-block` is what it stores for a
+    // `<div>` or `<p>` inside a paragraph, and a save must send it back.
+    expect(sanitizeEditableHtml('<span class="legacy-block">one <b>two</b></span>')).toBe('<span class="legacy-block">one <b>two</b></span>');
+    expect(sanitizeInlineFragment('<span class="legacy-block">x</span>').html).toBe('<span class="legacy-block">x</span>');
+    expect(sanitizeEditableHtml('<span class="legacy-block other" onclick="x()">a</span><span class="note">b</span>')).toBe('<span>a</span><span>b</span>');
   });
 
   it('preserves widget placeholder spans by default, in the canonical non-editable form', () => {
@@ -57,7 +123,7 @@ describe('sanitizeEditableHtml', () => {
 
   it('strips placeholder spans with junk or over-long ids', () => {
     expect(sanitizeEditableHtml('<span data-child-id="  "></span>')).toBe('');
-    expect(sanitizeEditableHtml(`<span data-child-id="${'a'.repeat(200)}"></span>`)).toBe('');
+    expect(sanitizeEditableHtml(`<span data-child-id="${'a'.repeat(201)}"></span>`)).toBe('');
   });
 });
 

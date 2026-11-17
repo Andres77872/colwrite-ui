@@ -64,6 +64,11 @@ const POLICY: ReadonlyArray<{ key: keyof WorkspacePolicy; title: string; descrip
     title: 'Auto',
     description: 'Auto in the assistant can apply its edits without asking first.',
   },
+  {
+    key: 'images',
+    title: 'Images',
+    description: 'The assistant can propose generated illustrations. Each image still needs explicit confirmation; Auto cannot confirm it.',
+  },
 ];
 
 /**

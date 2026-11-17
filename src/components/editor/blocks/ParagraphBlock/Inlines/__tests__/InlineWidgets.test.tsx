@@ -29,42 +29,26 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const searchMocks = vi.hoisted(() => ({
-  arxiv: vi.fn(),
-  semanticScholar: vi.fn(),
-}));
-const preferenceState = vi.hoisted(() => ({
-  arxiv: true,
-  semanticScholar: true,
-  loading: false,
-}));
+const preferenceState = vi.hoisted(() => ({ loading: false }));
 
-vi.mock('@/components/preferences', () => ({
-  useAgentTools: () => ({
-    isSourceEnabled: (sourceId: string) =>
-      sourceId === 'arxiv' ? preferenceState.arxiv : preferenceState.semanticScholar,
-    loading: preferenceState.loading,
-  }),
-}));
-
-vi.mock('@/data/arxiv', () => ({
-  searchArxiv: searchMocks.arxiv,
-}));
-
-vi.mock('@/data/semanticScholar', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/data/semanticScholar')>();
-  return {
-    ...actual,
-    searchSemanticScholar: searchMocks.semanticScholar,
-  };
-});
+/** The workspace's catalog, as the mock computes it for the account's switches, read or still loading. */
+function catalogForTest() {
+  return catalogValue(catalogOf(TEST_WORKSPACE_ID), preferenceState.loading, null);
+}
 
 const { EditorProvider } = await import('@/editor');
 const { useEditorProbe } = await import('@/editor/__tests__/editorHarness');
 const { PanelsContext } = await import('@/components/panels/panelsContextState');
+const { AssistantCatalogContext, catalogValue } = await import('@/components/preferences/assistantCatalogContextState');
+const { catalogOf, fixtures } = await import('@/dev/msw/fixtures');
+const { FEDUS } = await import('@/dev/fixtureReferences');
+const { http, problem } = await import('@/dev/msw/handlers');
+const { server, recordRequests, pathOf } = await import('@/__tests__/server');
+const { reference } = await import('@/__tests__/agentSource');
 const { CitationInline } = await import('../CitationInline/CitationInline');
 const { EquationInline } = await import('../EquationInline/EquationInline');
 const { ReferencesSection } = await import('@/components/editor/References');
+const { ToastProvider } = await import('@/components/ui/toast');
 
 const captureRef = createRef<ReturnType<typeof useEditorProbe>>();
 const harness = {
@@ -111,13 +95,17 @@ async function mount(
   localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: null, doc }));
 
   const editor = (
-    <EditorProvider>
-      <Capture />
-      <Host blockId="p1" child={child} />
-      {/* The other half of a citation: mounted so the jump between them is
-          exercised against the real reference list, not a stub. */}
-      <ReferencesSection />
-    </EditorProvider>
+    <ToastProvider>
+    <AssistantCatalogContext.Provider value={catalogForTest()}>
+      <EditorProvider>
+        <Capture />
+        <Host blockId="p1" child={child} />
+        {/* The other half of a citation: mounted so the jump between them is
+            exercised against the real reference list, not a stub. */}
+        <ReferencesSection />
+      </EditorProvider>
+    </AssistantCatalogContext.Provider>
+    </ToastProvider>
   );
   const utils = render(
     panels ? (
@@ -142,18 +130,6 @@ beforeEach(() => {
     configurable: true,
     value: scrollIntoView,
   });
-  searchMocks.arxiv.mockReset();
-  searchMocks.semanticScholar.mockReset();
-  searchMocks.arxiv.mockResolvedValue([]);
-  searchMocks.semanticScholar.mockResolvedValue({
-    provider: 'semantic_scholar',
-    total: 0,
-    offset: 0,
-    next_offset: null,
-    data: [],
-  });
-  preferenceState.arxiv = true;
-  preferenceState.semanticScholar = true;
   preferenceState.loading = false;
 });
 afterEach(() => {
@@ -165,10 +141,12 @@ afterEach(() => {
 });
 
 const citation = (id: string, over: Partial<ParagraphChild> = {}): ParagraphChild =>
-  ({ id, type: 'citation', keys: ['k1'], style: 'numeric', ...over }) as ParagraphChild;
+  ({ id, type: 'citation', keys: ['k1'], style: 'nlm-citation-sequence-brackets', ...over }) as ParagraphChild;
 
 /** The pill's accessible name describes the sources; its text is the label. */
 const pill = () => screen.getByRole('group', { name: 'Citation' }).querySelector('button')!;
+
+const smith = (key: string, title = 'T', authors = 'Jane Smith') => reference(key, { title, authors, year: 2020 });
 
 describe('CitationInline', () => {
   it('numbers by source, so one paper cited three times is [1] every time', async () => {
@@ -197,21 +175,14 @@ describe('CitationInline', () => {
     expect(pill().textContent).toBe('[1–3]');
   });
 
-  it('brackets each number separately in IEEE style', async () => {
+  it('prints IEEE’s brackets on each number', async () => {
     await mount(citation('c1', { style: 'ieee', keys: ['k1', 'k2', 'k3'] }));
-    expect(pill().textContent).toBe('[1]–[3]');
+    expect(pill().textContent).toBe('[1], [2], [3]');
   });
 
-  it('renders author–year from the attached source, key as fallback', async () => {
-    await mount(
-      citation('c1', {
-        style: 'author-year',
-        keys: ['smith2020', 'unknown'],
-        sources: [{ key: 'smith2020', title: 'T', authors: 'J. Smith, A. Doe', year: '2020' }],
-      }),
-    );
-
-    expect(pill().textContent).toBe('(Smith, 2020; unknown)');
+  it('renders an author-date style from the attached record, a bare key as itself', async () => {
+    await mount(citation('c1', { style: 'apa', keys: ['smith2020', 'unknown'], sources: [smith('smith2020', 'T', 'Jane Smith, Ann Doe')] }));
+    expect(pill().textContent).toBe('(Smith & Doe, 2020; unknown, n.d.)');
   });
 
   it('separates two sources that share an author and year', async () => {
@@ -219,38 +190,14 @@ describe('CitationInline', () => {
       id: 'p2',
       type: 'paragraph',
       html: 'text',
-      children: [
-        citation('c2', {
-          style: 'author-year',
-          keys: ['smith2020b'],
-          sources: [{ key: 'smith2020b', title: 'Second', authors: 'J. Smith', year: '2020' }],
-        }),
-      ],
+      children: [citation('c2', { style: 'apa', keys: ['smith2020b'], sources: [smith('smith2020b', 'Second')] })],
     };
-    await mount(
-      citation('c1', {
-        style: 'author-year',
-        keys: ['smith2020a'],
-        sources: [{ key: 'smith2020a', title: 'First', authors: 'J. Smith', year: '2020' }],
-      }),
-      [other],
-    );
-
-    // Alphabetical by title inside the shared author/year group: First, Second.
+    await mount(citation('c1', { style: 'apa', keys: ['smith2020a'], sources: [smith('smith2020a', 'First')] }), [other]);
     expect(pill().textContent).toBe('(Smith, 2020a)');
   });
 
-  it('puts an author–year signal phrase inside the parentheses', async () => {
-    await mount(
-      citation('c1', {
-        style: 'author-year',
-        prefix: 'see',
-        locator: 'p. 12',
-        keys: ['smith2020'],
-        sources: [{ key: 'smith2020', title: 'T', authors: 'J. Smith', year: '2020' }],
-      }),
-    );
-
+  it('puts a signal phrase and a locator inside the parentheses', async () => {
+    await mount(citation('c1', { style: 'apa', prefix: 'see', locator: 'p. 12', keys: ['smith2020'], sources: [smith('smith2020')] }));
     expect(pill().textContent).toBe('(see Smith, 2020, p. 12)');
   });
 
@@ -269,29 +216,14 @@ describe('CitationInline', () => {
   });
 
   it('names its sources for screen readers rather than reading out "[1]"', async () => {
-    await mount(
-      citation('c1', {
-        keys: ['smith2020'],
-        sources: [{ key: 'smith2020', title: 'Attention Is All You Need' }],
-      }),
-    );
-
-    expect(pill().getAttribute('aria-label')).toBe(
-      'Citation [1]: Attention Is All You Need',
-    );
+    await mount(citation('c1', { keys: ['smith2020'], sources: [reference('smith2020', { title: 'Attention Is All You Need' })] }));
+    expect(pill().getAttribute('aria-label')).toBe('Citation [1]: Attention Is All You Need');
   });
 
   it('jumps from the citation to the reference entry it stands for', async () => {
-    await mount(
-      citation('c1', {
-        keys: ['k1'],
-        sources: [{ key: 'k1', title: 'Attention Is All You Need', year: '2017' }],
-      }),
-    );
+    await mount(citation('c1', { keys: ['k1'], sources: [reference('k1', { title: 'Attention Is All You Need', year: 2017 })] }));
     fireEvent.click(pill());
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Show reference 1 for Attention Is All You Need' }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Show reference 1 for Attention Is All You Need' }));
 
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     // Focus lands on the entry, and the popover does not pull it back.
@@ -300,22 +232,43 @@ describe('CitationInline', () => {
 
   it('shows a cited source in the Sources tab when the workspace has one', async () => {
     const openSidebar = vi.fn();
-    const source = { key: 'k1', title: 'Attention Is All You Need', year: '2017' };
-    await mount(citation('c1', { keys: ['k1'], sources: [source] }), [], { openSidebar });
+    await mount(citation('c1', { keys: ['k1'], sources: [reference('k1', { title: 'Attention Is All You Need' })] }), [], { openSidebar });
     fireEvent.click(pill());
     fireEvent.click(screen.getByRole('button', { name: 'Show Attention Is All You Need in sources' }));
 
     expect(openSidebar).toHaveBeenCalledWith('sources', { tab: 'sources', sourceKey: 'k1' });
   });
 
-  it('keeps style and prefix / locator / suffix behind More options', async () => {
+  it('says which passage the claim rests on, or that none was recorded', async () => {
+    await mount(citation('c1', { passage: { id: 'S1.2', level: 'abstract' } }));
+    fireEvent.click(pill());
+    expect(screen.getByText('Rests on passage S1.2 (abstract).')).toBeTruthy();
+    cleanup();
+    await mount(citation('c1'));
+    fireEvent.click(pill());
+    expect(screen.getByText('Passage not recorded.')).toBeTruthy();
+  });
+
+  it('shows a work’s state where it is attached: retracted with its notice', async () => {
+    await mount(citation('c1', {
+      keys: ['k1'],
+      sources: [reference('k1', { title: 'Gone', state: 'verified', flags: ['retracted'], notices: [{ type: 'retraction', date: '2024-03-12' }] })],
+    }));
+    fireEvent.click(pill());
+    expect(screen.getByLabelText('Retracted: Retraction published on 2024-03-12.')).toBeTruthy();
+  });
+
+  it('keeps the page’s style and prefix / locator / suffix behind More options, with the styles’ credit', async () => {
     await mount(citation('c1'));
     fireEvent.click(pill());
     expect(screen.queryByLabelText('Prefix')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'More options' }));
     expect(screen.getByLabelText('Prefix')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Author–year/ })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Citation Style Language project' }).getAttribute('href')).toBe('https://citationstyles.org/');
+    expect(screen.getByText(/citeproc-js, copyright © 2009–2019 Frank Bennett/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: /APA 7th edition/ }));
+    await waitFor(() => expect(harness.editor.doc.citationStyle).toBe('apa'));
   });
 
   it('opens More options when the citation already has a locator', async () => {
@@ -325,69 +278,60 @@ describe('CitationInline', () => {
   });
 
   it('offers no Sources jump outside the workspace', async () => {
-    await mount(citation('c1', { sources: [{ key: 'k1', title: 'Attention Is All You Need' }] }));
+    await mount(citation('c1', { sources: [reference('k1', { title: 'Attention Is All You Need' })] }));
     fireEvent.click(pill());
     expect(screen.queryByRole('button', { name: /in sources$/ })).toBeNull();
   });
 
-  it('adds a pasted identifier as a key instead of searching for it', async () => {
+  it('checks a pasted identifier with the resolver and attaches the record it answers', async () => {
     await mount(citation('c1', { keys: [] }));
     fireEvent.click(pill());
 
-    const field = screen.getByPlaceholderText('Search or paste DOI / arXiv ID');
-    fireEvent.change(field, { target: { value: '2103.00020' } });
+    const field = screen.getByPlaceholderText('Search papers or paste a DOI / arXiv id');
+    fireEvent.change(field, { target: { value: '2101.03961' } });
     fireEvent.keyDown(field, { key: 'Enter' });
 
+    await waitFor(() => {
+      const block = harness.editor.blocks.find((b) => b.id === 'p1');
+      expect(block?.type === 'paragraph' && block.children?.[0]).toMatchObject({ keys: [FEDUS.key], sources: [{ key: FEDUS.key, csl: FEDUS.csl }] });
+    });
+  });
+
+  it('says why a pasted identifier is refused, and offers it as a bare key', async () => {
+    server.use(http.get('/workspaces/{workspace_id}/sources/resolve', () => problem('source_mismatch', 'Mismatch', {
+      claimed_title: 'Mine', found_title: 'Theirs',
+    })));
+    await mount(citation('c1', { keys: [] }));
+    fireEvent.click(pill());
+    const field = screen.getByPlaceholderText('Search papers or paste a DOI / arXiv id');
+    fireEvent.change(field, { target: { value: '10.1234/x' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+
+    expect((await screen.findByRole('alert')).textContent).toBe('That identifier is “Theirs”, not “Mine”. Check which work you meant.');
+    fireEvent.click(screen.getByRole('button', { name: 'Add “10.1234/x” as a key without details' }));
     const block = harness.editor.blocks.find((b) => b.id === 'p1');
-    expect(block?.type === 'paragraph' && block.children?.[0]).toMatchObject({
-      keys: ['2103.00020'],
-    });
+    expect(block?.type === 'paragraph' && block.children?.[0]).toMatchObject({ keys: ['doi:10.1234/x'] });
   });
 
-  it('does not contact Semantic Scholar when that source is disabled', async () => {
-    preferenceState.semanticScholar = false;
+  it('keeps manual entry, and searches nothing, where paper search is off', async () => {
+    fixtures.assistant = { switches: { papers: false }, sources: {} };
+    const sent = recordRequests();
     await mount(citation('c1', { keys: [] }));
     fireEvent.click(pill());
 
-    const field = screen.getByPlaceholderText('Search or paste DOI / arXiv ID');
-    expect(field.getAttribute('title')).toBe('Searches arXiv');
-    fireEvent.change(field, { target: { value: 'arxiv-only query' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await act(async () => {});
-
-    expect(searchMocks.arxiv).toHaveBeenCalledWith({
-      query: 'arxiv-only query',
-      limit: 6,
-    });
-    expect(searchMocks.semanticScholar).not.toHaveBeenCalled();
-  });
-
-  it('keeps manual citation entry available when every paper source is off', async () => {
-    preferenceState.arxiv = false;
-    preferenceState.semanticScholar = false;
-    await mount(citation('c1', { keys: [] }));
-    fireEvent.click(pill());
-
-    expect(screen.getByPlaceholderText('Paste a citation key or DOI')).toBeTruthy();
-    expect(
-      (screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-
-    const field = screen.getByPlaceholderText('Paste a citation key or DOI');
+    const field = screen.getByPlaceholderText('Paste a DOI or arXiv id');
     fireEvent.change(field, { target: { value: 'smith2020' } });
+    expect((screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.keyDown(field, { key: 'Enter' });
+    expect(screen.getByRole('alert').textContent).toBe('Paper search: Papers is switched off in your settings. Paste a DOI or arXiv id instead.');
+    fireEvent.click(screen.getByRole('button', { name: 'Add “smith2020” as a key without details' }));
 
     const block = harness.editor.blocks.find((candidate) => candidate.id === 'p1');
-    expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({
-      keys: ['smith2020'],
-    });
-    expect(searchMocks.arxiv).not.toHaveBeenCalled();
-    expect(searchMocks.semanticScholar).not.toHaveBeenCalled();
+    expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({ keys: ['smith2020'] });
+    expect(sent.some((request) => pathOf(request).includes('/papers/'))).toBe(false);
   });
 
-  it('does not turn a search phrase into a citation key while preferences load', async () => {
-    preferenceState.arxiv = false;
-    preferenceState.semanticScholar = false;
+  it('does not turn a search phrase into a citation key while the catalog loads', async () => {
     preferenceState.loading = true;
     await mount(citation('c1', { keys: [], sources: [] }));
     fireEvent.click(pill());
@@ -397,185 +341,37 @@ describe('CitationInline', () => {
     fireEvent.keyDown(field, { key: 'Enter' });
 
     const block = harness.editor.blocks.find((candidate) => candidate.id === 'p1');
-    expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({
-      keys: [],
-    });
-    expect(searchMocks.arxiv).not.toHaveBeenCalled();
-    expect(searchMocks.semanticScholar).not.toHaveBeenCalled();
+    expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({ keys: [] });
   });
 
-  it('attaches Semantic Scholar results with canonical DOI and provider provenance', async () => {
-    searchMocks.semanticScholar.mockResolvedValue({
-      provider: 'semantic_scholar',
-      total: 1,
-      offset: 0,
-      next_offset: null,
-      data: [
-        {
-          provider: 'semantic_scholar',
-          paper_id: 'paper-with-doi',
-          corpus_id: 9,
-          external_ids: { DOI: 'https://doi.org/10.1000/ABC.' },
-          title: 'Semantic paper',
-          abstract: null,
-          url: 'https://www.semanticscholar.org/paper/paper-with-doi',
-          pdf_url: 'https://example.test/paper.pdf',
-          authors: [{ author_id: 'a1', name: 'A. Researcher' }],
-          year: 2024,
-          publication_date: null,
-          venue: 'Journal',
-          citation_count: 8,
-          influential_citation_count: 2,
-          reference_count: 5,
-          is_open_access: true,
-          open_access_pdf: null,
-          tldr: null,
-          publication_types: [],
-          fields_of_study: [],
-        },
-      ],
-    });
+  it('searches the paper route and attaches a result’s record as the route returned it', async () => {
     await mount(citation('c1', { keys: [], sources: [] }));
     fireEvent.click(pill());
 
-    const field = screen.getByPlaceholderText('Search or paste DOI / arXiv ID');
-    fireEvent.change(field, { target: { value: 'semantic query' } });
+    const field = screen.getByPlaceholderText('Search papers or paste a DOI / arXiv id');
+    fireEvent.change(field, { target: { value: 'trillion parameter switch' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await act(async () => {});
-    fireEvent.click(screen.getByText('Semantic paper'));
+    const add = await screen.findByRole('button', { name: `Add: ${FEDUS.csl.title}` });
+    fireEvent.click(add);
 
     const block = harness.editor.blocks.find((candidate) => candidate.id === 'p1');
+    // The search's record, unchecked, with the CSL item every entry point shares.
     expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({
-      keys: ['10.1000/abc'],
-      sources: [
-        {
-          key: '10.1000/abc',
-          provider: 'semantic_scholar',
-          providerId: 'paper-with-doi',
-          doi: '10.1000/abc',
-          citationCount: 8,
-          isOpenAccess: true,
-        },
-      ],
+      keys: [FEDUS.key],
+      sources: [{ key: FEDUS.key, state: 'unchecked', csl: FEDUS.csl }],
     });
   });
 
-  it('deduplicates federated arXiv versions under a portable arXiv key', async () => {
-    searchMocks.semanticScholar.mockResolvedValue({
-      provider: 'semantic_scholar',
-      total: 1,
-      offset: 0,
-      next_offset: null,
-      data: [
-        {
-          provider: 'semantic_scholar',
-          paper_id: 'semantic-arxiv-paper',
-          corpus_id: 10,
-          external_ids: { ArXiv: 'ARXIV:2401.01234v2' },
-          title: 'Federated paper',
-          abstract: null,
-          url: 'https://www.semanticscholar.org/paper/semantic-arxiv-paper',
-          pdf_url: null,
-          authors: [],
-          year: 2024,
-          publication_date: null,
-          venue: null,
-          citation_count: null,
-          influential_citation_count: null,
-          reference_count: null,
-          is_open_access: false,
-          open_access_pdf: null,
-          tldr: null,
-          publication_types: [],
-          fields_of_study: [],
-        },
-      ],
-    });
-    searchMocks.arxiv.mockResolvedValue([
-      {
-        id: '2401.01234v5',
-        title: 'Duplicate from arXiv',
-        url: 'https://arxiv.org/abs/2401.01234v5',
-      },
-    ]);
+  it('says so when the paper sources cannot be reached', async () => {
+    server.use(http.get('/workspaces/{workspace_id}/papers/search', () => problem('provider_failed', 'down', { provider: 'openalex' })));
     await mount(citation('c1', { keys: [], sources: [] }));
     fireEvent.click(pill());
 
-    const field = screen.getByPlaceholderText('Search or paste DOI / arXiv ID');
-    fireEvent.change(field, { target: { value: 'federated identity' } });
+    const field = screen.getByPlaceholderText('Search papers or paste a DOI / arXiv id');
+    fireEvent.change(field, { target: { value: 'anything' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await act(async () => {});
 
-    expect(screen.getByText('Federated paper')).toBeTruthy();
-    expect(screen.queryByText('Duplicate from arXiv')).toBeNull();
-    fireEvent.click(screen.getByText('Federated paper'));
-
-    const block = harness.editor.blocks.find((candidate) => candidate.id === 'p1');
-    expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({
-      keys: ['2401.01234'],
-      sources: [
-        {
-          key: '2401.01234',
-          provider: 'semantic_scholar',
-          providerId: 'semantic-arxiv-paper',
-          externalIds: { ArXiv: 'ARXIV:2401.01234v2' },
-        },
-      ],
-    });
-  });
-
-  it('keeps Semantic Scholar results when arXiv fails and falls back to an S2 key', async () => {
-    searchMocks.arxiv.mockRejectedValue(new Error('arXiv unavailable'));
-    searchMocks.semanticScholar.mockResolvedValue({
-      provider: 'semantic_scholar',
-      total: 1,
-      offset: 0,
-      next_offset: null,
-      data: [
-        {
-          provider: 'semantic_scholar',
-          paper_id: 'paper-without-doi',
-          corpus_id: null,
-          external_ids: {},
-          title: 'S2 fallback paper',
-          abstract: null,
-          url: null,
-          pdf_url: null,
-          authors: [],
-          year: null,
-          publication_date: null,
-          venue: null,
-          citation_count: null,
-          influential_citation_count: null,
-          reference_count: null,
-          is_open_access: false,
-          open_access_pdf: null,
-          tldr: null,
-          publication_types: [],
-          fields_of_study: [],
-        },
-      ],
-    });
-    await mount(citation('c1', { keys: [], sources: [] }));
-    fireEvent.click(pill());
-
-    const field = screen.getByPlaceholderText('Search or paste DOI / arXiv ID');
-    fireEvent.change(field, { target: { value: 'partial provider search' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await act(async () => {});
-
-    expect(screen.getByText('arXiv is unavailable; showing Semantic Scholar results.')).toBeTruthy();
-    fireEvent.click(screen.getByText('S2 fallback paper'));
-    const block = harness.editor.blocks.find((candidate) => candidate.id === 'p1');
-    expect(block?.type === 'paragraph' ? block.children?.[0] : null).toMatchObject({
-      keys: ['S2:paper-without-doi'],
-      sources: [
-        {
-          provider: 'semantic_scholar',
-          providerId: 'paper-without-doi',
-        },
-      ],
-    });
+    expect((await screen.findByRole('alert')).textContent).toBe('The paper sources could not be reached. Try again in a moment.');
   });
 });
 

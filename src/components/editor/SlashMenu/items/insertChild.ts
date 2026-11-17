@@ -3,6 +3,9 @@ import { uid } from '@/lib/uid';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import type { SlashContext } from '../types';
 
+/** What putting a widget in a paragraph needs: the slash menu's context, or the toolbar's. */
+export type InlineInsertContext = Pick<SlashContext, 'blockId' | 'insertionRange' | 'refs' | 'updateHtml' | 'addParagraphChild' | 'editInline'>;
+
 /**
  * Put an inline widget where the caret is.
  *
@@ -17,7 +20,7 @@ import type { SlashContext } from '../types';
  * children disagree fails validation for every later edit.
  */
 export function insertInlineChild(
-  ctx: SlashContext,
+  ctx: InlineInsertContext,
   build: (id: string) => ParagraphChild,
 ): string | null {
   const { blockId, insertionRange, refs, updateHtml, addParagraphChild } = ctx;
@@ -75,11 +78,24 @@ export function insertInlineChild(
  * the way Notion's /equation does. Left empty, it is taken back out again.
  */
 export function insertAndEditInlineChild(
-  ctx: SlashContext,
+  ctx: InlineInsertContext,
   build: (id: string) => ParagraphChild,
   isEmpty: (child: ParagraphChild) => boolean,
 ): string | null {
   const childId = insertInlineChild(ctx, build);
   if (childId) ctx.editInline?.(childId, isEmpty);
   return childId;
+}
+
+/**
+ * An empty citation at the insertion point, with its source picker open:
+ * `/citation` and the selection toolbar's Cite are the same action. Closed
+ * without a source, it is taken back out.
+ */
+export function insertEmptyCitation(ctx: InlineInsertContext): string | null {
+  return insertAndEditInlineChild(
+    ctx,
+    (id) => ({ id, type: 'citation', keys: [] }),
+    (child) => child.type === 'citation' && (child.keys ?? []).length === 0,
+  );
 }

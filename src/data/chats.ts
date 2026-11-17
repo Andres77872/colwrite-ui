@@ -3,6 +3,7 @@ import { api, unwrap } from '@/api/client';
 import type {
   ChatListResponse,
   ChatMessageChain,
+  ChatSourceResponse,
   ChatSummary,
   ChatMessage as WireChatMessage,
 } from '@/api/schema';
@@ -89,6 +90,25 @@ export const chatKeys = {
   list: (workspaceId: string, documentId: string, pageSize: number) =>
     [...workspaceScope(workspaceId), 'chats', documentId, 'list', { pageSize }] as const,
 };
+
+/** Excerpts are fetched only when the author opens a recorded passage. */
+export async function getChatSource(
+  workspaceId: string, documentId: string, chatId: string, handle: string,
+  options: ChatsRequestOptions & { passage?: string; limit?: number; cursor?: string } = {},
+): Promise<ChatSourceResponse> {
+  const { signal, ...query } = options;
+  return unwrap(api.GET('/workspaces/{workspace_id}/documents/{document_id}/chats/{chat_id}/sources/{handle}', {
+    params: { path: { workspace_id: workspaceId, document_id: documentId, chat_id: chatId, handle }, query }, signal,
+  }));
+}
+
+export function chatPassageQuery(workspaceId: string, documentId: string, chatId: string, passage: string) {
+  const handle = passage.split('.')[0] ?? '';
+  return queryOptions({
+    queryKey: [...chatKeys.ofDocument(workspaceId, documentId), chatId, 'source', handle, passage],
+    queryFn: ({ signal }) => getChatSource(workspaceId, documentId, chatId, handle, { passage, signal }),
+  });
+}
 
 /** The newest `pageSize` chats of a page, and whether there are more. */
 export function chatListQuery(workspaceId: string, documentId: string, pageSize: number) {

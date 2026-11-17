@@ -64,7 +64,7 @@ export function useAppShortcuts({
   onShowHelp: () => void;
   onOpenPalette?: () => void;
 }) {
-  const { toggle, toggleAssistant, activeTool, setTool } = usePanels();
+  const { toggle, toggleAssistant, activePanel, setPanel } = usePanels();
   const sidebar = useSidebarToggle();
   const toggleSidebar = sidebar.toggle;
   const { save } = useDocumentActions();
@@ -86,7 +86,7 @@ export function useAppShortcuts({
         if (!newPageDisabled) void newPage();
       },
       // Opens it, like the sidebar's Library row; it does not toggle.
-      library: () => setTool('library'),
+      library: () => setPanel('library'),
       save,
       undo,
       redo,
@@ -112,13 +112,13 @@ export function useAppShortcuts({
       const leavingAside =
         (shortcut.id === 'toggle-tools' || shortcut.id === 'toggle-assistant') && focusIsInAside();
       run[shortcut.id]();
-      if (leavingAside) returnFocusFromAside(activeTool);
+      if (leavingAside) returnFocusFromAside(activePanel);
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
-    activeTool,
+    activePanel,
     newPage,
     newPageDisabled,
     onShowHelp,
@@ -126,7 +126,7 @@ export function useAppShortcuts({
     save,
     undo,
     redo,
-    setTool,
+    setPanel,
     toggle,
     toggleAssistant,
     toggleSidebar,

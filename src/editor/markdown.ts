@@ -1,8 +1,10 @@
 import { uid } from '@/lib/uid';
 import { safeHttpUrl, sanitizeEditableHtml } from '@/export/sanitize';
 import { listNumbers } from './blockKinds';
+import { attributeText } from './placeholderIds';
 import type {
   Block,
+  AssistantOutput,
   CitationChild,
   EquationChild,
   ParagraphBlock,
@@ -58,7 +60,7 @@ function citationFromMarker(
   body: string,
   known: ReadonlyMap<string, CitationChild>,
 ): CitationChild | null {
-  const keys = Array.from(body.matchAll(/@([^\s;,\]]+)/g), ([, key]) => key ?? '');
+  const keys = [...new Set(Array.from(body.matchAll(/@([^\s;,\]]+)/g), ([, key]) => key ?? ''))];
   const first = keys[0] === undefined ? undefined : known.get(keys[0]);
   if (!first || keys.some((key) => !known.has(key))) return null;
   const sources = keys.flatMap((key) =>
@@ -88,6 +90,20 @@ export function citationLookup(blocks: readonly Block[]): Map<string, CitationCh
     }
   }
   return lookup;
+}
+
+/** Document-owned generated text renders through the same Markdown/citation
+ * grammar as authored text, without a conversation or a live evidence store. */
+export function assistantOutputBlocks(
+  output: AssistantOutput | null,
+  citations: ReadonlyMap<string, CitationChild> = new Map(),
+): Block[] {
+  if (!output?.text.trim()) return [];
+  const lookup = new Map(citations);
+  for (const record of output.sources) {
+    lookup.set(record.key, { id: uid(), type: 'citation', keys: [record.key], sources: [record] });
+  }
+  return markdownToBlocks(output.text, { citations: lookup });
 }
 
 /**
@@ -415,12 +431,12 @@ function hasBlockChildren(element: Element): boolean {
   return Array.from(element.children).some((child) => BLOCK_TAGS.has(child.tagName.toLowerCase()));
 }
 
+/** A pasted element's inline content: block wrappers inside it (a list item's `<p>`) are unwrapped. */
 function inlineHtml(element: Element): string {
   const clone = element.cloneNode(true) as Element;
   clone.querySelectorAll('ul, ol, input').forEach((node) => node.remove());
-  return sanitizeEditableHtml(clone.innerHTML, { placeholders: 'drop' })
-    .replace(/<\/?(?:div|p|h[1-6])>/g, '')
-    .trim();
+  clone.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6').forEach((wrapper) => wrapper.replaceWith(...Array.from(wrapper.childNodes)));
+  return sanitizeEditableHtml(clone.innerHTML, { placeholders: 'drop' }).trim();
 }
 
 /**
@@ -578,7 +594,7 @@ export function inlineHtmlToMarkdown(html: string, children: readonly ParagraphC
         case 'graph':
           return `*[Figure${child.title ? `: ${child.title}` : ''}]*`;
         case 'aiBeat':
-          return child.output ?? '';
+          return child.output?.text ?? '';
       }
     }
     switch (tag) {
@@ -600,9 +616,9 @@ export function inlineHtmlToMarkdown(html: string, children: readonly ParagraphC
       }
       case 'br':
         return '\n';
-      case 'div':
-      case 'p':
-        return `\n${inner()}`;
+      case 'span':
+        // Block markup inside a paragraph, as the API stores it: a line of its own.
+        return element.classList.contains('legacy-block') ? `\n${inner()}` : inner();
       default:
         return inner();
     }
@@ -612,7 +628,11 @@ export function inlineHtmlToMarkdown(html: string, children: readonly ParagraphC
 }
 
 /** Markdown for a list of blocks, numbering numbered lists the way the canvas does. */
-export function blocksToMarkdown(blocks: readonly Block[]): string {
+function imageMarkdownText(value: string): string {
+  return value.replace(/[\\`*{}[\]()#+.!_<>|~-]/g, '\\$&');
+}
+
+export function blocksToMarkdown(blocks: readonly Block[], imagePaths?: ReadonlyMap<string, string>): string {
   const numbers = listNumbers(blocks);
   const parts: string[] = [];
   let previousWasItem = false;
@@ -629,6 +649,11 @@ export function blocksToMarkdown(blocks: readonly Block[]): string {
         break;
       case 'code':
         text = `\`\`\`${block.language ?? ''}\n${block.text}\n\`\`\``;
+        break;
+      case 'image':
+        text = imagePaths?.has(block.assetId)
+          ? `![${imageMarkdownText(block.alt).replace(/[\r\n]/g, ' ')}](${imagePaths.get(block.assetId)})${block.caption ? `\n\n${imageMarkdownText(block.caption)}` : ''}`
+          : `[Image: ${imageMarkdownText(block.alt)}]${block.caption ? `\n\n${imageMarkdownText(block.caption)}` : ''}`;
         break;
       case 'paragraph': {
         const body = inlineHtmlToMarkdown(block.html, block.children ?? []);
@@ -670,6 +695,7 @@ export function blocksToPlainText(blocks: readonly Block[]): string {
     .map((block) => {
       if (block.type === 'code') return block.text;
       if (block.type === 'divider') return '';
+      if (block.type === 'image') return [block.alt, block.caption].filter(Boolean).join('\n');
       return inlineHtmlToMarkdown(block.html, block.type === 'paragraph' ? block.children ?? [] : [])
         .replace(/\*\*|~~|`/g, '')
         .replace(/(?<!\w)\*(?!\s)|(?<!\s)\*(?!\w)/g, '');
@@ -690,7 +716,7 @@ function portableInline(block: ParagraphBlock | { html: string; children?: undef
   return sanitizeEditableHtml(block.html, { placeholders: 'preserve' }).replace(
     /<span data-child-id="([^"]+)"[^>]*><\/span>/g,
     (_m, id: string) => {
-      const child = byId.get(id);
+      const child = byId.get(attributeText(id));
       if (!child) return '';
       switch (child.type) {
         case 'equation':
@@ -706,7 +732,7 @@ function portableInline(block: ParagraphBlock | { html: string; children?: undef
         case 'graph':
           return escapeText(`[Figure${child.title ? `: ${child.title}` : ''}]`);
         case 'aiBeat':
-          return escapeText(child.output ?? '');
+          return escapeText(child.output?.text ?? '');
       }
     },
   );
@@ -755,6 +781,9 @@ export function blocksToHtml(blocks: readonly Block[]): string {
         break;
       case 'divider':
         out.push('<hr>');
+        break;
+      case 'image':
+        out.push(`<figure><p>${escapeText(block.alt)}</p>${block.caption ? `<figcaption>${escapeText(block.caption)}</figcaption>` : ''}</figure>`);
         break;
       case 'code':
         // `language-*` is the class other editors read the fence language

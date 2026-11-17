@@ -26,13 +26,14 @@ import { displayTitle } from '@/components/layout/displayTitle';
 import { pagePlacementQuery } from '@/data/documents';
 import { useToast } from '@/components/ui/toastContext';
 import {
+  CITATION_STYLES,
   useDocumentId,
   useDocumentStatus,
   useEditorActions,
   useEditorDoc,
   useEditorView,
   usePageReadOnly,
-  type Doc,
+  type CitationStyle,
 } from '@/editor';
 import { usePageSettings } from '@/editor/pageSettings';
 import { usePanels } from '@/components/panels/panelsContextState';
@@ -41,8 +42,11 @@ import { editedLabel } from '@/components/layout/editedLabel';
 import { pageLink } from '@/lib/pageLink';
 import { useCompactMenus } from '@/components/layout/useCompactMenus';
 import { DocumentExportDialog } from './DocumentExportDialog';
+import { AiUseDialog } from './AiUseDialog';
+import { InstructionsDialog } from '../AssistantInstructions/InstructionsDialog';
+import { CitationCredits } from '@/components/editor/References';
 import { documentStats, plural } from './documentStats';
-import { PAGE_TOOLS } from './pageTools';
+import { PAGE_PANELS } from './pagePanels';
 import {
   CaseSensitive,
   Copy,
@@ -55,16 +59,16 @@ import {
   MoveHorizontal,
   Quote,
   Redo2,
+  Sparkles,
   Trash2,
   Type,
   Undo2,
 } from 'lucide-react';
 
-const CITATION_STYLES: ReadonlyArray<{ value: NonNullable<Doc['citationStyle']> | 'auto'; label: string }> = [
+/** "Auto" (what most citations name), then the CSL styles by name. */
+const CITATION_CHOICES: ReadonlyArray<{ value: CitationStyle | 'auto'; label: string; example?: string }> = [
   { value: 'auto', label: 'Auto' },
-  { value: 'numeric', label: 'Numeric [1]' },
-  { value: 'ieee', label: 'IEEE' },
-  { value: 'author-year', label: 'Author–year' },
+  ...CITATION_STYLES.map((style) => ({ value: style.id, label: style.name, example: style.example })),
 ];
 
 /**
@@ -85,7 +89,7 @@ export function PageMenu() {
   const { canUndo, canRedo } = useEditorView();
   const { undo, redo, setCitationStyle } = useEditorActions();
   const pageSettings = usePageSettings();
-  const { setTool } = usePanels();
+  const { setPanel } = usePanels();
   const { trashPage } = useTrash();
   const { toast } = useToast();
   const move = useMoveTo();
@@ -93,6 +97,8 @@ export function PageMenu() {
   const placement = useQuery({ ...pagePlacementQuery(workspaceId, documentId ?? ''), enabled: documentId !== null });
   const [open, setOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [aiUseOpen, setAiUseOpen] = useState(false);
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   const [copyOpen, setCopyOpen] = useState(false);
   // Closing the menu hands focus back to its trigger, and a focused trigger
@@ -126,10 +132,10 @@ export function PageMenu() {
     <DropdownMenuRadioGroup
       value={doc.citationStyle ?? 'auto'}
       onValueChange={(value) =>
-        setCitationStyle(value === 'auto' ? null : (value as NonNullable<Doc['citationStyle']>))
+        setCitationStyle(value === 'auto' ? null : (value as CitationStyle))
       }
     >
-      {CITATION_STYLES.map((style) => (
+      {CITATION_CHOICES.map((style) => (
         <DropdownMenuRadioItem
           key={style.value}
           value={style.value}
@@ -138,8 +144,11 @@ export function PageMenu() {
           onSelect={compact ? (event) => event.preventDefault() : undefined}
         >
           {style.label}
+          {style.example && <span className="ml-auto pl-3 text-xs text-muted-foreground">{style.example}</span>}
         </DropdownMenuRadioItem>
       ))}
+      {/* The processor's attribution notice and the styles' credit. */}
+      <CitationCredits className="max-w-64 px-2 pb-1.5 pt-1" />
     </DropdownMenuRadioGroup>
   );
 
@@ -223,18 +232,26 @@ export function PageMenu() {
             <Download aria-hidden="true" />
             Export…
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setTool('history')}>
+          <DropdownMenuItem onSelect={() => setPanel('history')}>
             <History aria-hidden="true" />
             Version history
           </DropdownMenuItem>
+          <DropdownMenuItem disabled={!documentId} onSelect={() => setAiUseOpen(true)}>
+            <Sparkles aria-hidden="true" />
+            AI use…
+          </DropdownMenuItem>
+          {!readOnly && <DropdownMenuItem onSelect={() => setInstructionsOpen(true)}>
+            <Sparkles aria-hidden="true" />
+            Assistant instructions…
+          </DropdownMenuItem>}
           {/* The topbar drops its tool buttons on a phone; they live here then. */}
-          {PAGE_TOOLS.filter((tool) => tool.id !== 'history').map(({ id, label, icon: Icon }) => (
-            <DropdownMenuItem key={id} className="sm:hidden" onSelect={() => setTool(id)}>
+          {PAGE_PANELS.filter((tool) => tool.id !== 'history').map(({ id, label, icon: Icon }) => (
+            <DropdownMenuItem key={id} className="sm:hidden" onSelect={() => setPanel(id)}>
               <Icon aria-hidden="true" />
               {label}
             </DropdownMenuItem>
           ))}
-          <DropdownMenuItem onSelect={() => setTool('json')}>
+          <DropdownMenuItem onSelect={() => setPanel('json')}>
             <FileCode aria-hidden="true" />
             Document JSON
             <DropdownMenuShortcut>Developer</DropdownMenuShortcut>
@@ -264,7 +281,7 @@ export function PageMenu() {
                     <Quote aria-hidden="true" />
                     Citation style
                   </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent className="w-48" collisionPadding={8}>
+                  <DropdownMenuSubContent className="w-72" collisionPadding={8}>
                     {citationChoices}
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
@@ -316,6 +333,8 @@ export function PageMenu() {
         onOpenChange={setExportOpen}
         returnFocus={() => triggerRef.current}
       />
+      <AiUseDialog open={aiUseOpen} onOpenChange={setAiUseOpen} returnFocus={() => triggerRef.current} />
+      <InstructionsDialog open={instructionsOpen} onOpenChange={setInstructionsOpen} returnFocus={() => triggerRef.current} />
       {moveOpen && placement.data && (
         <MoveToDialog
           open

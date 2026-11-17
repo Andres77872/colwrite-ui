@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { resetModuleState } from '@/lib/moduleState';
 import { act, cleanup, render, renderHook } from '@testing-library/react';
 import {
   MAX_FOCUS_SELECTION_CHARS,
   currentFocus,
-  forgetCaret,
   useEditorFocus,
   useRememberCaret,
 } from './citeAtCursor';
@@ -32,7 +32,7 @@ function select(range: (element: HTMLElement) => Range, element: HTMLElement) {
 
 afterEach(() => {
   cleanup();
-  forgetCaret();
+  resetModuleState();
 });
 
 describe('the author’s focus', () => {

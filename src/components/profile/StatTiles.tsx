@@ -1,8 +1,9 @@
 import type { ElementType } from 'react';
-import { formatCompact } from '@/lib/text';
+import { formatCompact, formatCost } from '@/lib/text';
 import type { UsageSummary } from '@/data/userProfile';
 import {
   Bot,
+  CircleDollarSign,
   Coins,
   FileText,
   MessagesSquare,
@@ -42,20 +43,26 @@ function tiles(summary: UsageSummary): Tile[] {
     },
     {
       label: 'Assistant runs',
-      value: formatCompact(summary.agent_runs_total),
+      value: formatCompact(summary.assistant_runs_total),
       hint:
-        summary.agent_runs_failed > 0
-          ? `${formatCompact(summary.agent_runs_failed)} did not finish`
+        summary.assistant_runs_failed > 0
+          ? `${formatCompact(summary.assistant_runs_failed)} did not finish`
           : `${formatCompact(summary.tool_calls_total)} tool calls`,
       icon: Bot,
     },
     {
       label: 'Tokens',
       value: formatCompact(tokens),
-      hint: `${formatCompact(summary.tokens_input)} in · ${formatCompact(
-        summary.tokens_output,
-      )} out`,
+      hint: `${formatCompact(summary.tokens_input)} in · ${formatCompact(summary.tokens_output)} out`
+        + (summary.tokens_cached > 0 ? ` · ${formatCompact(summary.tokens_cached)} cached` : ''),
       icon: Coins,
+    },
+    {
+      label: 'Cost',
+      value: formatCost(summary.cost),
+      // What providers reported: a CLI engine's runs report none.
+      hint: summary.llm_calls_total > 0 ? `Over ${formatCompact(summary.llm_calls_total)} model calls` : 'No model calls yet',
+      icon: CircleDollarSign,
     },
   ];
 }
@@ -63,17 +70,18 @@ function tiles(summary: UsageSummary): Tile[] {
 /**
  * StatTiles — the KPI row.
  *
- * Five headline numbers, so this is a row of tiles rather than a chart: each
- * value is a single current quantity, and a bar chart of five unrelated units
- * would say less than the numbers do. The PDF count and size are the Storage
- * section's, beside the way to the Library.
+ * Six headline numbers, so this is a row of tiles rather than a chart: each
+ * value is a single current quantity, and a bar chart of six unrelated units
+ * would say less than the numbers do. The cost is what the providers
+ * reported for the assistant's model calls. The PDF count and size are the
+ * Storage section's, beside the way to the Library.
  */
 export function StatTiles({ summary }: { summary: UsageSummary }) {
   return (
     <section aria-label="Usage summary">
-      {/* One row of five once the dialog is wide enough beside its pane
+      {/* One row of six once the dialog is wide enough beside its pane
           list; below that, three across. */}
-      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         {tiles(summary).map((tile) => (
           <li
             key={tile.label}
@@ -89,7 +97,7 @@ export function StatTiles({ summary }: { summary: UsageSummary }) {
                 like 121 read loose at this size. */}
             <p className="mt-1.5 text-2xl font-semibold leading-none">{tile.value}</p>
             {tile.hint && (
-              // Titled because it truncates: at five columns "12.9K in · 4.2M
+              // Titled because it truncates: at six columns "12.9K in · 4.2M
               // out" loses its second half with nothing to reveal it.
               <p className="mt-1.5 truncate text-2xs text-muted-foreground" title={tile.hint}>
                 {tile.hint}

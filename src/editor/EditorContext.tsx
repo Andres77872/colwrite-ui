@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { Block, Doc, ToolOperation } from './types';
 import { buildBibliography, citationFingerprint } from './citations';
 import { BibliographyContext } from './bibliographyContextState';
-import { applyPatchToBlocks, coerceBlock, replayFootprint, type ApplyPatchResult } from './docOps';
+import { useCitationProcessor } from './csl/useCitationProcessor';
+import { applyOperations, coerceBlock, replayFootprint, type ApplyPatchResult } from './docOps';
 import { createBlockActions } from './blockActions';
 import { DocumentSessionProvider } from './DocumentSession';
 import { useWorkspaceScope } from '@/components/workspace/workspaceContextState';
@@ -39,7 +40,9 @@ function journaledChange(before: Doc, next: Doc): boolean {
     next.blocks !== before.blocks ||
     next.name !== before.name ||
     next.sources !== before.sources ||
-    next.citationStyle !== before.citationStyle
+    next.citationStyle !== before.citationStyle ||
+    next.instructions !== before.instructions ||
+    next.documentType !== before.documentType
   );
 }
 
@@ -248,9 +251,10 @@ function EditorCore({ children }: { children: ReactNode }) {
   const applyPatch = useCallback((
     ops: ToolOperation[],
     options?: { persist?: boolean; base?: Block[] },
-  ): ApplyPatchResult => {
+  ): ApplyPatchResult & { doc: Doc } => {
     if (body.isLoading()) {
-      return { blocks: readDoc().blocks, desynced: ops, touched: [], stale: true };
+      const current = readDoc();
+      return { blocks: current.blocks, doc: current, desynced: ops, touched: [], stale: true };
     }
 
     // Computed against the ref rather than inside a `setState` updater. The
@@ -265,20 +269,14 @@ function EditorCore({ children }: { children: ReactNode }) {
     // could half-apply, so refuse atomically and hand back the live blocks
     // for one recompute-and-retry.
     if (options?.base !== undefined && base.blocks !== options.base) {
-      return { blocks: base.blocks, desynced: ops, touched: [], stale: true };
+      return { blocks: base.blocks, doc: base, desynced: ops, touched: [], stale: true };
     }
 
-    const outcome = applyPatchToBlocks(base.blocks, ops);
+    // The blocks, then the page's name, citation style and library.
+    const outcome = applyOperations(base, ops);
 
-    let nextDoc: Doc = { ...base, blocks: outcome.blocks };
-    for (const op of ops) {
-      if (op.op === 'update_meta' && op.meta?.name) {
-        nextDoc = { ...nextDoc, name: op.meta.name };
-      }
-    }
-
-    if (options?.persist) editDoc(() => nextDoc);
-    else commitDoc(nextDoc);
+    if (options?.persist) editDoc(() => outcome.doc);
+    else commitDoc(outcome.doc);
 
     return outcome;
   }, [body, commitDoc, editDoc, readDoc]);
@@ -391,12 +389,15 @@ function EditorCore({ children }: { children: ReactNode }) {
     () => citationFingerprint(blocks, { library, style: documentStyle }),
     [blocks, library, documentStyle],
   );
+  // A page with citations asks for the processor (`buildBibliography`); this
+  // renders them again in their style when it arrives.
+  const processorReady = useCitationProcessor(false);
   const bibliography = useMemo(
     () => buildBibliography(blocks, { library, style: documentStyle }),
     // The fingerprint stands in for `blocks`: identical fingerprint means
     // identical scan inputs, hence an identical bibliography.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bibliographyFingerprint],
+    [bibliographyFingerprint, processorReady],
   );
 
   /**

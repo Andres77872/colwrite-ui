@@ -66,9 +66,9 @@ function PanelHarness({ onClose }: { onClose: () => void }) {
               kind: 'block',
               blockIds: ['p1'],
               anchorId: 'p1',
-              markdown: 'A long paragraph.',
               text: 'A long paragraph.',
               locked: false,
+              hidden: false,
               citations: new Map(),
             }}
             onClose={() => {
@@ -293,7 +293,7 @@ describe('Ask AI progress while it works', () => {
     act(() => runHandlers?.onStatus?.('starting', 'Starting Codex…'));
     expect(screen.getByRole('status').textContent).toContain('Starting Codex…');
 
-    act(() => runHandlers?.onToolCallStart?.('web_search', 'call_1', {}));
+    act(() => runHandlers?.onToolCallStart?.('web_search', 'call_1', null));
     expect(screen.getByRole('status').textContent).toContain('Searching the web…');
     expect(screen.getByRole('status').textContent).not.toContain('……');
   });
@@ -321,5 +321,83 @@ describe('Ask AI when the author stops a reply part-way', () => {
     expect(active && document.getElementById(active)?.textContent).toMatch(/Try again/);
     // The author can still choose to use it.
     expect(screen.getAllByRole('option').some((option) => /Replace/.test(option.textContent ?? ''))).toBe(true);
+  });
+});
+
+describe('Ask AI says what happened (U-01, U-16)', () => {
+  const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  const originalExec = Object.getOwnPropertyDescriptor(document, 'execCommand');
+  afterEach(() => {
+    if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+    else Reflect.deleteProperty(navigator, 'clipboard');
+    if (originalExec) Object.defineProperty(document, 'execCommand', originalExec);
+    else Reflect.deleteProperty(document, 'execCommand');
+  });
+
+  /** A plain-HTTP page on the network: no Clipboard API, only the copy command. */
+  function withoutClipboardApi(copies: boolean) {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    const execCommand = vi.fn(() => copies);
+    Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true });
+    return execCommand;
+  }
+
+  async function explainAndFinish() {
+    mount();
+    const field = await screen.findByRole('combobox', { name: 'Ask AI' });
+    fireEvent.change(field, { target: { value: 'explain' } });
+    const options = screen.getAllByRole('option');
+    const index = options.findIndex((option) => /Explain this/.test(option.textContent ?? ''));
+    for (let i = 0; i < index; i += 1) fireEvent.keyDown(field, { key: 'ArrowDown' });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(finishRun).not.toBeNull());
+    await act(async () => finishRun?.());
+  }
+
+  const liveRegion = () => document.querySelector('.ask-ai-panel p[aria-live="polite"]');
+
+  it('announces a finished result, not the result itself', async () => {
+    await explainAndFinish();
+    expect(liveRegion()?.textContent).toBe('The result is ready.');
+  });
+
+  it('copies through the copy command where the Clipboard API is missing, and says so', async () => {
+    const execCommand = withoutClipboardApi(true);
+    await explainAndFinish();
+    fireEvent.mouseDown(screen.getByRole('option', { name: /^Copy/ }));
+
+    await waitFor(() => expect(liveRegion()?.textContent).toBe('Copied.'));
+    expect(execCommand).toHaveBeenCalledWith('copy');
+  });
+
+  it('says how to copy by hand when the browser refuses', async () => {
+    withoutClipboardApi(false);
+    await explainAndFinish();
+    fireEvent.mouseDown(screen.getByRole('option', { name: /^Copy/ }));
+
+    await waitFor(() => expect(liveRegion()?.textContent).toMatch(/Couldn’t copy\. Select the text and press (⌘C|Ctrl\+C)\./));
+    expect(liveRegion()?.className).not.toContain('sr-only');
+  });
+
+  it('shows a failure as an alert', async () => {
+    mount();
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Make shorter' }));
+    await waitFor(() => expect(runHandlers).not.toBeNull());
+    await act(async () => {
+      runHandlers?.onError?.('MODEL_CONTEXT_TOO_LARGE', 'Too large');
+      finishRun?.();
+    });
+
+    expect(screen.getByRole('alert').textContent).toBeTruthy();
+  });
+
+  it('announces a stop part-way', async () => {
+    mount();
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Make shorter' }));
+    await waitFor(() => expect(runHandlers).not.toBeNull());
+    act(() => runHandlers?.onToken?.('Half'));
+    fireEvent.click(await screen.findByRole('button', { name: /Stop/ }));
+
+    expect(liveRegion()?.textContent).toBe('Stopped before it finished. The text is incomplete.');
   });
 });

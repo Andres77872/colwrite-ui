@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { replyDetails, replySummary, type ReplyMeta } from './replyMeta';
+import { replyDetails, replyNotes, replySummary, type ReplyMeta } from './replyMeta';
 
 /**
  * When a reply was written, how long it took and what it used, in one quiet
@@ -13,6 +13,7 @@ export function ReplyDetails({ meta, className }: { meta: ReplyMeta; className?:
   const summary = replySummary(meta);
   if (summary.length === 0) return null;
   const details = replyDetails(meta);
+  const notes = replyNotes(meta);
 
   return (
     <Popover>
@@ -46,6 +47,11 @@ export function ReplyDetails({ meta, className }: { meta: ReplyMeta; className?:
             </Fragment>
           ))}
         </dl>
+        {notes.map((note) => (
+          <p key={note} className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+            {note}
+          </p>
+        ))}
       </PopoverContent>
     </Popover>
   );

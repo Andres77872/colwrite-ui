@@ -12,10 +12,9 @@ const WS = 'wsp-6f1c0f5e-8a8b-4c4d-9e2f-1a2b3c4d5e6f';
 const OTHER = 'wsp-2b7e9d10-4c3a-4f1e-8b2d-9a0c1e2f3a4b';
 
 /**
- * The browser-side record of decisions on durable change sets. It is the
- * fallback for an API that does not record a decision per operation, and the
- * waiting room for a decision that could not be sent, so the one thing it
- * must never do is get in the author's way.
+ * The browser-side record of decisions on durable change sets that could not
+ * be sent: the waiting room until the next staging sends them again, so the
+ * one thing it must never do is get in the author's way.
  */
 
 beforeEach(() => localStorage.clear());
@@ -32,10 +31,9 @@ describe('the decision record', () => {
     ]);
   });
 
-  it('overwrites fingerprints, which move when an accept rebases them', () => {
-    saveReview(WS, 'doc-1', 'cs-1', { bases: { 0: 'a', 1: 'b' } });
-    saveReview(WS, 'doc-1', 'cs-1', { bases: { 1: 'c' } });
-    expect(loadReview(WS, 'doc-1', 'cs-1')?.bases).toEqual({ 0: 'a', 1: 'c' });
+  it('writes nothing for no decisions', () => {
+    saveReview(WS, 'doc-1', 'cs-1', { decisions: [] });
+    expect(Object.keys(localStorage)).toEqual([]);
   });
 
   it('is kept per workspace, document and change set', () => {
@@ -83,31 +81,21 @@ describe('the decision record', () => {
   });
 
   it('gives up the decisions the server has taken, and keeps the rest', () => {
-    saveReview(WS, 'doc-1', 'cs-1', {
-      decisions: [[0, 'accepted'], [1, 'rejected'], [2, 'accepted']],
-      bases: { 3: 'abc' },
-    });
+    saveReview(WS, 'doc-1', 'cs-1', { decisions: [[0, 'accepted'], [1, 'rejected'], [2, 'accepted']] });
 
     forgetDecisions(WS, 'doc-1', 'cs-1', [0, 2]);
 
-    expect(loadReview(WS, 'doc-1', 'cs-1')).toMatchObject({
-      decisions: [[1, 'rejected']],
-      bases: { 3: 'abc' },
-    });
+    expect(loadReview(WS, 'doc-1', 'cs-1')).toMatchObject({ decisions: [[1, 'rejected']] });
     // Another batch's record is not this one's to change.
     saveReview(WS, 'doc-1', 'cs-2', { decisions: [[0, 'accepted']] });
     forgetDecisions(WS, 'doc-1', 'cs-1', [0]);
     expect(loadReview(WS, 'doc-1', 'cs-2')?.decisions).toEqual([[0, 'accepted']]);
   });
 
-  it('removes a record left with neither decisions nor fingerprints', () => {
+  it('removes a record left with no decisions', () => {
     saveReview(WS, 'doc-1', 'cs-1', { decisions: [[0, 'accepted']] });
     forgetDecisions(WS, 'doc-1', 'cs-1', [0]);
     expect(Object.keys(localStorage)).toEqual([]);
-
-    saveReview(WS, 'doc-1', 'cs-1', { decisions: [[0, 'accepted']], bases: { 1: 'abc' } });
-    forgetDecisions(WS, 'doc-1', 'cs-1', [0]);
-    expect(loadReview(WS, 'doc-1', 'cs-1')).toMatchObject({ decisions: [], bases: { 1: 'abc' } });
   });
 
   it('leaves the record alone when it has none of those decisions', () => {
@@ -135,7 +123,7 @@ describe('pruning', () => {
 
   it('keeps a record written after the list was requested', () => {
     // A batch proposed while the list was in flight cannot be in it.
-    saveReview(WS, 'doc-1', 'cs-new', { bases: { 0: 'a' } }, 3_000);
+    saveReview(WS, 'doc-1', 'cs-new', { decisions: [[0, 'accepted']] }, 3_000);
     pruneReviews(WS, 'doc-1', new Set(), 2_000, 3_500);
     expect(loadReview(WS, 'doc-1', 'cs-new')).not.toBeNull();
   });

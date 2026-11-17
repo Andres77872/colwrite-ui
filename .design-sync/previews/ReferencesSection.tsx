@@ -11,22 +11,41 @@ import { BibliographyContext, ReferencesSection, buildBibliography } from 'colwr
 // else is needed — unlike the editor components around it, this one reads no
 // editor context and mutates nothing.
 
+// Reference records: a CSL-JSON item with ColWrite's fields beside it. One
+// is verified (quiet), one was retracted since, so the list marks it.
 const KAPLAN = {
-  key: '10.1000/kaplan',
-  title: 'Scaling Laws for Neural Language Models',
-  authors: 'Kaplan, J., McCandlish, S.',
-  year: '2020',
-  venue: 'arXiv',
-  doi: '10.1000/kaplan',
+  key: 'doi:10.1000/kaplan',
+  kind: 'paper' as const,
+  provider: 'crossref' as const,
+  state: 'verified' as const,
+  flags: [],
+  csl: {
+    id: 'doi:10.1000/kaplan',
+    type: 'article' as const,
+    title: 'Scaling Laws for Neural Language Models',
+    author: [{ family: 'Kaplan', given: 'Jared' }, { family: 'McCandlish', given: 'Sam' }],
+    issued: { 'date-parts': [[2020]] },
+    publisher: 'arXiv',
+    DOI: '10.1000/kaplan',
+  },
 };
 
 const HOFFMANN = {
-  key: '10.1000/hoffmann',
-  title: 'Training Compute-Optimal Large Language Models',
-  authors: 'Hoffmann, J., Borgeaud, S.',
-  year: '2022',
-  venue: 'NeurIPS',
-  doi: '10.1000/hoffmann',
+  key: 'doi:10.1000/hoffmann',
+  kind: 'paper' as const,
+  provider: 'crossref' as const,
+  state: 'verified' as const,
+  flags: ['retracted' as const],
+  notices: [{ type: 'retraction' as const, date: '2025-02-01', source: 'crossref' }],
+  csl: {
+    id: 'doi:10.1000/hoffmann',
+    type: 'paper-conference' as const,
+    title: 'Training Compute-Optimal Large Language Models',
+    author: [{ family: 'Hoffmann', given: 'Jordan' }, { family: 'Borgeaud', given: 'Sebastian' }],
+    issued: { 'date-parts': [[2022]] },
+    'container-title': 'NeurIPS',
+    DOI: '10.1000/hoffmann',
+  },
 };
 
 type Blocks = Parameters<typeof buildBibliography>[0];
@@ -57,7 +76,7 @@ export function Numbered() {
               id: 'c1',
               type: 'citation',
               keys: [KAPLAN.key, HOFFMANN.key],
-              style: 'numeric',
+              style: 'nlm-citation-sequence-brackets' as const,
               sources: [KAPLAN, HOFFMANN],
             },
           ],
@@ -72,7 +91,7 @@ export function Numbered() {
               id: 'c2',
               type: 'citation',
               keys: [HOFFMANN.key],
-              style: 'numeric',
+              style: 'nlm-citation-sequence-brackets' as const,
               sources: [HOFFMANN],
             },
           ],
@@ -82,7 +101,7 @@ export function Numbered() {
   );
 }
 
-/** Author–year drops the number and sorts the list alphabetically instead. */
+/** An author-date style (APA) drops the number and sorts the list by author. */
 export function AuthorYear() {
   return (
     <Frame
@@ -96,7 +115,7 @@ export function AuthorYear() {
               id: 'c1',
               type: 'citation',
               keys: [KAPLAN.key, HOFFMANN.key],
-              style: 'author-year',
+              style: 'apa' as const,
               sources: [KAPLAN, HOFFMANN],
             },
           ],
@@ -120,7 +139,7 @@ export function Unresolved() {
               id: 'c1',
               type: 'citation',
               keys: [KAPLAN.key, 'smith2019'],
-              style: 'numeric',
+              style: 'nlm-citation-sequence-brackets' as const,
               sources: [KAPLAN],
             },
           ],

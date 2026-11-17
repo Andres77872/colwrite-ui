@@ -18,7 +18,7 @@ const tex = (headers: Record<string, string> = {}) =>
   new HttpResponse(TEX, { status: 200, headers: { 'Content-Type': 'application/x-tex', ...headers } });
 
 describe('exportDocumentLatex', () => {
-  it('reads the LaTeX body as text, with the cookie, and keeps the server’s file name', async () => {
+  it('reads the LaTeX body as binary, with the cookie, and keeps the server’s file name', async () => {
     const sent = recordRequests();
     server.use(http.get('/workspaces/{workspace_id}/documents/{document_id}/export', ({ response }) => response.untyped(tex({
       'Content-Disposition': `attachment; filename="Resume.tex"; filename*=UTF-8''R%C3%A9sum%C3%A9.tex`,
@@ -26,7 +26,9 @@ describe('exportDocumentLatex', () => {
 
     const result = await exportDocumentLatex(TEST_WORKSPACE_ID, '66f0c0ffee');
 
-    expect(result).toEqual({ source: TEX, filename: 'Résumé.tex' });
+    expect(result.filename).toBe('Résumé.tex');
+    expect(result.blob.type).toBe('application/x-tex');
+    expect(await result.blob.text()).toBe(TEX);
     expect(pathOf(sent[0])).toBe(`/api/workspaces/${TEST_WORKSPACE_ID}/documents/66f0c0ffee/export?format=tex`);
     expect(sent[0]?.credentials).toBe('include');
   });
@@ -41,7 +43,7 @@ describe('exportDocumentLatex', () => {
     const result = await exportDocumentLatex(TEST_WORKSPACE_ID, 'doc');
 
     expect(exports).toBe(2);
-    expect(result.source).toBe(TEX);
+    expect(await result.blob.text()).toBe(TEX);
   });
 
   it('raises the API’s detail as an ApiError and asks for sign-in on 403', async () => {

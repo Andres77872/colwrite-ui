@@ -30,10 +30,18 @@
 
 import { kindLabel } from './blockKinds';
 import type { Block, ParagraphChild, ToolAction, ToolOperation } from './types';
+import type { ChangeSetGroupResponse } from '@/api/schema';
 import { applyPatchToBlocks, coerceBlock } from './docOps';
+import { attributeText } from './placeholderIds';
 import { uid } from '../lib/uid';
 
-export type ChangeKind = 'insert' | 'replace' | 'delete' | 'reorder' | 'rename';
+/**
+ * What an operation does, as the review shows it: blocks added (`write_blocks`
+ * before, after or at the end), a block rewritten (`replace_text`, a
+ * `write_blocks` replace), blocks deleted, a block moved, the page's name or
+ * citation style set (`set_meta`), or its library edited.
+ */
+export type ChangeKind = 'insert' | 'replace' | 'delete' | 'move' | 'meta' | 'sources';
 
 export type ChangeStatus = 'pending' | 'accepted' | 'rejected';
 
@@ -44,14 +52,27 @@ export type ProposedChange = {
   kind: ChangeKind;
   op: ToolOperation;
   /**
-   * Existing block this change is about — where the review card renders.
-   * Null for inserts at the start or end of the document, and for renames.
+   * Existing block this change is about — where the review card renders: the
+   * block an insert goes next to, the block rewritten or moved, the first
+   * block deleted. Null for an insert at the end and for page-level changes.
    */
   anchorBlockId: string | null;
-  /** Which side of the anchor an insert belongs on. */
-  placement: 'before' | 'after' | 'start' | 'end' | null;
-  /** Block id this change brings into existence, if any. */
-  producesBlockId: string | null;
+  /** Which side of the anchor an insert belongs on; `end` for an append. */
+  placement: 'before' | 'after' | 'end' | null;
+  /**
+   * The blocks whose text this change depends on: the block it rewrites, or
+   * every block it deletes. The server fingerprints exactly these
+   * (`operation_targets`).
+   */
+  targetBlockIds: string[];
+  /**
+   * Every block the operation names: its targets, an insert's anchor, a
+   * move's block and the block it moves next to. A change naming a block an
+   * earlier change of the batch creates depends on that change.
+   */
+  references: string[];
+  /** Blocks this change brings into existence, in order. */
+  producesBlockIds: string[];
   /** Changes in the same batch that must be accepted before this one can be. */
   dependsOn: string[];
   status: ChangeStatus;
@@ -62,11 +83,11 @@ export type ProposedChange = {
    */
   opIndex?: number;
   /**
-   * Fingerprint of the block a rewrite or deletion is aimed at, taken when
-   * the change was staged. A block that no longer matches it was edited after
-   * the suggestion was written (see `isStale`).
+   * Fingerprints of the blocks a rewrite or deletion is aimed at, by block
+   * id, taken when the change was staged. A block that no longer matches was
+   * edited after the suggestion was written (see `isStale`).
    */
-  base?: string;
+  bases?: Readonly<Record<string, string>>;
   /**
    * Set when the server's fingerprints say the saved block is not the one
    * this change was written for (see `markOutdated`). It is the server's
@@ -78,7 +99,6 @@ export type ProposedChange = {
 
 export type ChangeSet = {
   id: string;
-  tool: string;
   toolCallId: string;
   documentId: string;
   message?: string;
@@ -89,12 +109,8 @@ export type ChangeSet = {
    * changes is recorded against it, by operation index.
    */
   changeSetId: string;
-  /**
-   * The server said, per operation, whether the saved document still holds
-   * the block it was written for. Without it, the staging fingerprints are
-   * kept in this browser across reloads instead.
-   */
-  targetsOnServer?: boolean;
+  /** Stored by the server, not inferred from the editor's operation kinds. */
+  groups: ChangeSetGroupResponse[];
   /**
    * A set the server stored with `apply_policy: "auto"` that the editor did
    * not apply: it arrived while the page was closed, or after Auto was
@@ -132,69 +148,47 @@ export type DocumentInvite = {
    Building
    ---------------------------------------- */
 
-function classify(op: ToolOperation): ChangeKind | null {
+const idOf = (raw: Record<string, unknown>): string | null =>
+  typeof raw.id === 'string' && raw.id ? raw.id : null;
+
+/** What an operation does to the page, as the review reads it; `null` for one it does not show. */
+function shapeOf(op: ToolOperation): Pick<
+  ProposedChange,
+  'kind' | 'anchorBlockId' | 'placement' | 'targetBlockIds' | 'references' | 'producesBlockIds'
+> | null {
   switch (op.op) {
-    case 'replace_block':
-      return 'replace';
-    case 'insert_block_after':
-    case 'insert_block_before':
-    case 'insert_block_at_start':
-    case 'append_block':
-      return 'insert';
-    case 'delete_block':
-      return 'delete';
-    case 'reorder_block':
-      return 'reorder';
-    case 'update_meta':
-      return 'rename';
-    default:
+    case 'replace_text':
+      return { kind: 'replace', anchorBlockId: op.blockId, placement: null, targetBlockIds: [op.blockId], references: [op.blockId], producesBlockIds: [] };
+    case 'write_blocks': {
+      const ids = op.blocks.map(idOf).filter((id): id is string => id !== null);
+      if (op.position === 'replace' && op.blockId !== null) {
+        // The first block keeps the replaced id; the rest are new.
+        return { kind: 'replace', anchorBlockId: op.blockId, placement: null, targetBlockIds: [op.blockId], references: [op.blockId], producesBlockIds: ids.slice(1) };
+      }
+      if (op.position === 'append') {
+        return { kind: 'insert', anchorBlockId: null, placement: 'end', targetBlockIds: [], references: [], producesBlockIds: ids };
+      }
+      if (op.blockId === null || op.position === 'replace') return null;
+      return { kind: 'insert', anchorBlockId: op.blockId, placement: op.position, targetBlockIds: [], references: [op.blockId], producesBlockIds: ids };
+    }
+    case 'delete_blocks':
+      return { kind: 'delete', anchorBlockId: op.blockIds[0] ?? null, placement: null, targetBlockIds: [...op.blockIds], references: [...op.blockIds], producesBlockIds: [] };
+    case 'move_block':
+      return { kind: 'move', anchorBlockId: op.blockId, placement: null, targetBlockIds: [], references: [op.blockId, op.targetBlockId], producesBlockIds: [] };
+    case 'set_meta':
+      return { kind: 'meta', anchorBlockId: null, placement: null, targetBlockIds: [], references: [], producesBlockIds: [] };
+    case 'add_sources':
+    case 'remove_sources':
+    case 'update_sources':
+      return { kind: 'sources', anchorBlockId: null, placement: null, targetBlockIds: [], references: [], producesBlockIds: [] };
+    case 'create_document':
       return null;
   }
-}
-
-function anchorOf(op: ToolOperation): { blockId: string | null; placement: ProposedChange['placement'] } {
-  switch (op.op) {
-    case 'replace_block':
-    case 'delete_block':
-    case 'reorder_block':
-      return { blockId: op.blockId, placement: null };
-    case 'insert_block_after':
-      return { blockId: op.referenceId, placement: 'after' };
-    case 'insert_block_before':
-      return { blockId: op.referenceId, placement: 'before' };
-    case 'insert_block_at_start':
-      return { blockId: null, placement: 'start' };
-    case 'append_block':
-      return { blockId: null, placement: 'end' };
-    default:
-      return { blockId: null, placement: null };
-  }
-}
-
-function producedBlockId(op: ToolOperation): string | null {
-  if (
-    op.op === 'insert_block_after' ||
-    op.op === 'insert_block_before' ||
-    op.op === 'insert_block_at_start' ||
-    op.op === 'append_block'
-  ) {
-    const id = (op.block as { id?: unknown } | undefined)?.id;
-    return typeof id === 'string' && id ? id : null;
-  }
-  return null;
 }
 
 /* ----------------------------------------
    Staleness
    ---------------------------------------- */
-
-/**
- * Change kinds whose effect depends on the text of their block. A rewrite
- * replaces it and a deletion removes it, so either one applied to a paragraph
- * the author has since edited throws that edit away. An insert or a move only
- * needs its block to exist.
- */
-const CONTENT_BOUND: ReadonlySet<ChangeKind> = new Set<ChangeKind>(['replace', 'delete']);
 
 /** Fields that change how a block is shown, not what it says. */
 const VIEW_ONLY_FIELDS: ReadonlySet<string> = new Set(['collapsed', 'aiHidden', 'locked']);
@@ -237,33 +231,38 @@ export function blockFingerprint(block: Block): string {
 
 /**
  * Whether a rewrite or deletion was written against text the author has
- * since changed.
+ * since changed: any of its blocks.
  *
- * Applying it anyway is what this guards against: a rewrite merges the
- * assistant's version over the block, so the author's newer sentence would
- * be replaced without a word. Such a change can still be rejected; it can no
- * longer be accepted (see `isReady`).
+ * Applying it anyway is what this guards against: a rewrite puts the
+ * assistant's version in place of the block, so the author's newer sentence
+ * would be replaced without a word. Such a change can still be rejected; it
+ * can no longer be accepted (see `isReady`). A target the author deleted is
+ * not stale: that change has nowhere to land (also `isReady`).
  */
 export function isStale(change: ProposedChange, blocks: readonly Block[]): boolean {
-  if (!CONTENT_BOUND.has(change.kind)) return false;
-  const target = blocks.find((block) => block.id === change.anchorBlockId);
-  if (target === undefined) return false;
+  const present = change.targetBlockIds
+    .map((id) => blocks.find((block) => block.id === id))
+    .filter((block): block is Block => block !== undefined);
+  if (present.length === 0) return false;
   // Changed between the proposal and the staging, by the server's account.
   if (change.outdated) return true;
   // Changed since it was staged here.
-  return change.base !== undefined && blockFingerprint(target) !== change.base;
+  return present.some((block) => {
+    const base = change.bases?.[block.id];
+    return base !== undefined && blockFingerprint(block) !== base;
+  });
 }
 
 /**
- * Mark the rewrites and deletions of a durable batch whose block changed
- * after the assistant read it, going by the server's fingerprints.
+ * Mark the rewrites and deletions of a durable batch whose blocks changed
+ * after the assistant read them, going by the server's fingerprints.
  *
- * `base` is taken when a batch is staged, so on its own it only notices an
- * edit made while the batch is on screen. A paragraph the author rewrote
+ * `bases` are taken when a batch is staged, so on their own they only notice
+ * an edit made while the batch is on screen. A paragraph the author rewrote
  * between the proposal and a reload, or on another device, looked untouched,
- * and accepting the suggestion replaced it. The server records each target as
- * its operation found it (`fingerprint`) and reports the same digest for the
- * saved document (`headFingerprint`).
+ * and accepting the suggestion replaced it. The server records each target
+ * as its operation found it (`fingerprint`) and reports the same digest for
+ * the saved document (`headFingerprint`).
  *
  * The fingerprints of the operations on one block, in order, are the stages
  * that block goes through as the review is accepted. The saved block is
@@ -271,29 +270,33 @@ export function isStale(change: ProposedChange, blocks: readonly Block[]): boole
  * the stage of an earlier operation on the block — those are still
  * undecided, or were rejected. `earlier` carries the stages recorded by the
  * batches this one was written on top of. Anything else is text the
- * suggestion was not written for.
+ * suggestion was not written for. An operation is current when every one of
+ * its targets is.
  *
- * `targets` is addressed by operation index. Changes without a target keep
- * relying on `base` alone.
+ * `targets` holds one list per operation index; an empty list is an
+ * operation with no target, which keeps relying on `bases` alone.
  */
 export function markOutdated(
   set: ChangeSet,
-  targets: ReadonlyArray<OperationTarget | null>,
+  targets: ReadonlyArray<readonly OperationTarget[]>,
   earlier?: ReadonlyMap<string, ReadonlySet<string>>,
 ): ChangeSet {
+  const stageCurrent = (target: OperationTarget, opIndex: number): boolean => {
+    if (target.headFingerprint === target.fingerprint) return true;
+    if (target.headFingerprint === null) return false;
+    const head = target.headFingerprint;
+    return earlier?.get(target.blockId)?.has(head) === true
+      || targets.slice(0, opIndex).some((before) => before.some(
+        (other) => other.blockId === target.blockId && other.fingerprint === head,
+      ));
+  };
   let changed = false;
   const changes = set.changes.map((change) => {
-    if (change.opIndex === undefined || !CONTENT_BOUND.has(change.kind)) return change;
-    const target = targets[change.opIndex];
-    if (!target || target.blockId !== change.anchorBlockId) return change;
-    let current = target.headFingerprint === target.fingerprint;
-    if (!current && target.headFingerprint !== null) {
-      current = earlier?.get(target.blockId)?.has(target.headFingerprint) === true
-        || targets.slice(0, change.opIndex).some(
-          (before) => before?.blockId === target.blockId
-            && before.fingerprint === target.headFingerprint,
-        );
-    }
+    if (change.opIndex === undefined || change.targetBlockIds.length === 0) return change;
+    const entry = (targets[change.opIndex] ?? []).filter((target) => change.targetBlockIds.includes(target.blockId));
+    if (entry.length === 0) return change;
+    const opIndex = change.opIndex;
+    const current = entry.every((target) => stageCurrent(target, opIndex));
     if (current === !change.outdated) return change;
     changed = true;
     return { ...change, outdated: !current };
@@ -334,14 +337,20 @@ export function rebaseAfterAccept(
   const rebased = sets.map((set) => {
     let setChanged = false;
     const changes = set.changes.map((change) => {
-      if (change.status !== 'pending' || !CONTENT_BOUND.has(change.kind)) return change;
-      const target = change.anchorBlockId ? fresh.get(change.anchorBlockId) : undefined;
-      if (!target || change.base === target.now) return change;
+      if (change.status !== 'pending' || change.targetBlockIds.length === 0) return change;
       // Already out of date before this accept: it stays that way.
       if (change.outdated) return change;
-      if (change.base !== undefined && change.base !== target.was) return change;
+      let bases = change.bases;
+      for (const id of change.targetBlockIds) {
+        const target = fresh.get(id);
+        const base = bases?.[id];
+        if (!target || base === target.now) continue;
+        if (base !== undefined && base !== target.was) continue;
+        bases = { ...bases, [id]: target.now };
+      }
+      if (bases === change.bases) return change;
       setChanged = true;
-      return { ...change, base: target.now };
+      return { ...change, bases };
     });
     if (!setChanged) return set;
     changed = true;
@@ -358,11 +367,11 @@ export function rebaseAfterAccept(
  * author has no way to evaluate.
  *
  * `blocks` is the document as it stands while the batch is staged. A rewrite
- * or deletion records what its block looked like then, so an edit the author
- * makes afterwards is noticed instead of silently overwritten.
+ * or deletion records what its blocks looked like then, so an edit the
+ * author makes afterwards is noticed instead of silently overwritten.
  */
 export function buildChangeSet(
-  action: ToolAction & { changeSetId: string },
+  action: Omit<ToolAction, 'tool'> & { changeSetId: string; groups?: ChangeSetGroupResponse[] },
   blocks?: readonly Block[],
 ): ChangeSet {
   const changes: ProposedChange[] = [];
@@ -370,48 +379,46 @@ export function buildChangeSet(
   const present = blocks ? new Map(blocks.map((block) => [block.id, block])) : null;
 
   for (const [opIndex, op] of action.actions.entries()) {
-    const kind = classify(op);
-    if (!kind) continue;
+    const shape = shapeOf(op);
+    if (!shape) continue;
 
-    const { blockId, placement } = anchorOf(op);
-    const produces = producedBlockId(op);
-    const dependsOn: string[] = [];
-
-    // An operation that touches a block an earlier operation created cannot be
-    // accepted on its own — the block would not be there yet.
-    for (const referenced of [blockId]) {
-      if (!referenced) continue;
-      const source = producedBy.get(referenced);
-      if (source) dependsOn.push(source);
-    }
+    // An operation that names a block an earlier operation created cannot be
+    // accepted on its own: the block would not be there yet.
+    const dependsOn = [...new Set(
+      shape.references.flatMap((referenced) => {
+        const source = producedBy.get(referenced);
+        return source ? [source] : [];
+      }),
+    )];
 
     const change: ProposedChange = {
       id: uid(),
       order: changes.length,
-      kind,
+      ...shape,
       op,
-      anchorBlockId: blockId,
-      placement,
-      producesBlockId: produces,
       dependsOn,
       status: 'pending',
       opIndex,
     };
-    const target = CONTENT_BOUND.has(kind) && blockId ? present?.get(blockId) : undefined;
-    if (target) change.base = blockFingerprint(target);
+    const bases: Record<string, string> = {};
+    for (const id of shape.targetBlockIds) {
+      const target = present?.get(id);
+      if (target) bases[id] = blockFingerprint(target);
+    }
+    if (Object.keys(bases).length > 0) change.bases = bases;
     changes.push(change);
-    if (produces) producedBy.set(produces, change.id);
+    for (const produced of shape.producesBlockIds) producedBy.set(produced, change.id);
   }
 
   return {
     id: uid(),
-    tool: action.tool,
     toolCallId: action.toolCallId,
     documentId: action.documentId,
     message: action.message,
     receivedAt: Date.now(),
     changes,
     changeSetId: action.changeSetId,
+    groups: action.groups ?? [],
   };
 }
 
@@ -427,6 +434,18 @@ export function pendingCount(sets: ChangeSet[]): number {
   return pendingChanges(sets).length;
 }
 
+/** A stored group's still-undecided operations; order stays the author's. */
+export function groupChanges(set: ChangeSet, kind: ChangeSetGroupResponse['kind']): ProposedChange[] {
+  const indices = new Set(set.groups.find((group) => group.kind === kind)?.operations ?? []);
+  return orderedChanges([set]).filter((change) =>
+    change.status === 'pending' && change.opIndex !== undefined && indices.has(change.opIndex));
+}
+
+export function wordingChanges(sets: ChangeSet[]): ProposedChange[] {
+  const ids = new Set(sets.flatMap((set) => groupChanges(set, 'wording')).map((change) => change.id));
+  return orderedChanges(sets).filter((change) => ids.has(change.id) && !change.op.newInformation);
+}
+
 /**
  * Whether this change can be accepted right now.
  *
@@ -440,11 +459,12 @@ export function pendingCount(sets: ChangeSet[]): number {
  *    have been *decided*, either way, because accepting them in the other
  *    order changes the document. `dependsOn` cannot express this: it means
  *    "needs that to have happened", not "cannot be commuted with that".
- * 3. **Somewhere to land.** A change whose anchor the author has deleted has
- *    no position to take. Offering Accept for it meant the only thing the
+ * 3. **Somewhere to land.** A change naming a block the author has deleted
+ *    has no position to take. Offering Accept for it meant the only thing the
  *    button could do was raise an error, which reads as the app losing the
  *    change rather than as the document having moved on. That holds for a
- *    rewrite, deletion or move of a deleted block as much as for an insert.
+ *    rewrite, deletion or move of a deleted block (or a move next to one) as
+ *    much as for an insert.
  * 4. **Still current.** A rewrite or deletion of a block the author has
  *    edited since would throw that edit away (see `isStale`).
  *
@@ -466,10 +486,14 @@ export function isReady(
   }
 
   if (!blocks) return true;
+  const affected = change.kind === 'move' && change.anchorBlockId !== null ? [change.anchorBlockId] : change.targetBlockIds;
+  if (affected.some((id) => {
+    const target = blocks.find((block) => block.id === id);
+    return target?.locked === true || target?.aiHidden === true;
+  })) return false;
   if (
     change.placement === null
-    && change.anchorBlockId !== null
-    && !blocks.some((block) => block.id === change.anchorBlockId)
+    && change.references.some((id) => !blocks.some((block) => block.id === id))
   ) {
     return false;
   }
@@ -481,7 +505,7 @@ export function isReady(
 const POSITIONAL: ReadonlySet<ChangeKind> = new Set<ChangeKind>([
   'insert',
   'delete',
-  'reorder',
+  'move',
 ]);
 
 /**
@@ -491,16 +515,15 @@ const POSITIONAL: ReadonlySet<ChangeKind> = new Set<ChangeKind>([
  * landed siblings. Two kinds of operation cannot be made to commute that way,
  * so they are serialised instead:
  *
- * - **A reorder** addresses an absolute index, so it moves every block after
- *   it. `insert_at_start(X)` then `reorder(A, 2)` gives one document in
- *   authoring order and a different one reversed, and no amount of
- *   re-anchoring fixes that — the index means different things in the two
- *   documents. A reorder is therefore ordered against every positional
- *   sibling.
- * - **A delete** removes the very block other changes are addressed to.
- *   Accepting `delete(B)` before `insert_after(B, X)` leaves the insert with
- *   no anchor, so the paragraph the author wanted to keep is the one that is
- *   lost. Changes sharing an anchor with a delete are ordered against it.
+ * - **A move** puts a block next to another, which changes what is next to
+ *   what for every insert addressed to either: `after(A, X)` then `move(B
+ *   after A)` leaves `A, B, X`, the other order `A, X, B`. A move is
+ *   therefore ordered against every positional sibling.
+ * - **A delete** removes the very blocks other changes are addressed to.
+ *   Accepting `delete(B)` before `write_blocks(after B, X)` leaves the insert
+ *   with no anchor, so the paragraph the author wanted to keep is the one
+ *   that is lost. Changes naming a block a delete removes are ordered
+ *   against it.
  *
  * Edges always point from the later change to the earlier one, so the result
  * is acyclic by construction.
@@ -512,13 +535,12 @@ export function linkPrecedence(sets: ChangeSet[]): Map<string, string[]> {
   all.forEach((later, i) => {
     for (const earlier of all.slice(0, i)) {
       const bothPositional = POSITIONAL.has(later.kind) && POSITIONAL.has(earlier.kind);
-      const reorderInvolved = later.kind === 'reorder' || earlier.kind === 'reorder';
+      const moveInvolved = later.kind === 'move' || earlier.kind === 'move';
       const deleteInvolved = later.kind === 'delete' || earlier.kind === 'delete';
-      const sharesAnchor =
-        later.anchorBlockId !== null && later.anchorBlockId === earlier.anchorBlockId;
+      const sharesBlock = later.references.some((id) => earlier.references.includes(id));
 
-      if ((reorderInvolved && bothPositional) || (deleteInvolved && sharesAnchor)) {
-        after.get(later.id)!.push(earlier.id);
+      if ((moveInvolved && bothPositional) || (deleteInvolved && sharesBlock)) {
+        after.get(later.id)?.push(earlier.id);
       }
     }
   });
@@ -529,14 +551,18 @@ export function linkPrecedence(sets: ChangeSet[]): Map<string, string[]> {
  * Whether Auto must leave this change to the author (D18): it was written
  * against text that has changed since, or it rewrites, deletes or moves the
  * block the author is typing in, or a block they locked or hid from the AI.
- * An insert next to such a block leaves the block itself alone.
+ * An insert next to such a block leaves the block itself alone, and so does
+ * a move of another block next to it.
  */
 function needsAuthor(change: ProposedChange, blocks: readonly Block[], caretBlockId: string | null): boolean {
+  if (change.op.newInformation) return true;
   if (isStale(change, blocks)) return true;
-  if (change.placement !== null || change.anchorBlockId === null) return false;
-  if (change.anchorBlockId === caretBlockId) return true;
-  const target = blocks.find((block) => block.id === change.anchorBlockId);
-  return target?.locked === true || target?.aiHidden === true;
+  const affected = change.kind === 'move' && change.anchorBlockId !== null ? [change.anchorBlockId] : change.targetBlockIds;
+  return affected.some((id) => {
+    if (id === caretBlockId) return true;
+    const target = blocks.find((block) => block.id === id);
+    return target?.locked === true || target?.aiHidden === true;
+  });
 }
 
 /**
@@ -614,9 +640,9 @@ export function caretHeldBlock(
  * caller reintroduces the bug.
  */
 
-/** Renames and other document-level changes, which the header reviews. */
+/** The page's name, citation style and library: changes the header reviews. */
 export function documentChanges(sets: ChangeSet[]): ProposedChange[] {
-  return pendingChanges(sets).filter((c) => c.kind === 'rename');
+  return pendingChanges(sets).filter((c) => c.kind === 'meta' || c.kind === 'sources');
 }
 
 /* ----------------------------------------
@@ -654,17 +680,18 @@ export function slotKey(change: ProposedChange): string | null {
 /**
  * Whether a slot replays back-to-front.
  *
- * `insert_block_after` and `insert_block_at_start` each land immediately next
- * to a fixed point, so replaying them in order pushes every earlier one
- * further away: three inserts after `A`, authored X then Y then Z, end up as
- * `A, Z, Y, X`. `insert_block_before` and `append_block` land against a point
- * that moves with them, so they keep their authored order.
+ * `write_blocks` after a block lands immediately next to a fixed point, so
+ * replaying several in order pushes every earlier one further away: three
+ * writes after `A`, authored X then Y then Z, end up as `A, Z, Y, X`. Before a
+ * block and at the end, each lands against a point that moves with them, so
+ * they keep their authored order. Within one operation the blocks keep
+ * theirs.
  *
  * This is the server's replay semantics, not a preference — it is what the
  * stored document will look like, so it is what the review has to show.
  */
 function slotIsReversed(placement: ProposedChange['placement']): boolean {
-  return placement === 'after' || placement === 'start';
+  return placement === 'after';
 }
 
 /* ----------------------------------------
@@ -676,10 +703,16 @@ export type DocumentRow =
   | {
       kind: 'block';
       block: Block;
-      /** Rewrites, deletions and moves, which are about this block. */
+      /** Rewrites, deletions and moves, which are about this block: their cards go under it. */
       changes: ProposedChange[];
+      /**
+       * Deletions of several blocks whose card sits on another of them: this
+       * block is shown struck through in place.
+       */
+      struck: ProposedChange[];
     }
-  | { kind: 'insert'; change: ProposedChange; block: Block | null };
+  /** An addition, with every block it adds, where they would land. */
+  | { kind: 'insert'; change: ProposedChange };
 
 export type DocumentProjection = {
   rows: DocumentRow[];
@@ -701,10 +734,15 @@ export type DocumentProjection = {
  *
  * - Stacked inserts read top-to-bottom in the order they will end up in, so
  *   `Accept all` can no longer rearrange what the author was looking at.
- * - A chained insert (`insert_after(A,X)` then `insert_after(X,Y)` — how an
+ * - A chained insert (`write_blocks after A [X]` then `after X [Y]` — how an
  *   agent adds consecutive paragraphs) resolves against the pending `X` and
  *   renders under it. It used to count as an orphan, land at the very bottom
  *   of the page, and claim its block had been deleted.
+ *
+ * An insert is one row with all of its blocks; one addressed to a block in
+ * the middle of another pending insert's blocks is shown after that row (the
+ * accept itself lands exactly). A deletion of several blocks has its card on
+ * the first one still on the page, and strikes the others where they are.
  *
  * A change is only an orphan when its anchor is in neither the document nor
  * the batch.
@@ -715,48 +753,53 @@ export function projectDocument(blocks: Block[], sets: ChangeSet[]): DocumentPro
   const orphans: ProposedChange[] = [];
 
   const onBlock = new Map<string, ProposedChange[]>();
+  const struck = new Map<string, ProposedChange[]>();
+  const add = (map: Map<string, ProposedChange[]>, id: string, change: ProposedChange) => {
+    const list = map.get(id);
+    if (list) list.push(change);
+    else map.set(id, [change]);
+  };
   for (const change of pending) {
-    if (change.kind === 'rename' || change.placement !== null) continue;
-    if (change.anchorBlockId === null) continue;
-    // A rewrite, deletion or move of a block the author has since deleted has
-    // no row to sit on. Without this it was dropped from the projection
-    // entirely while the review bar went on counting it — a change the author
-    // could neither see nor dismiss.
-    if (!present.has(change.anchorBlockId)) {
+    if (change.kind === 'meta' || change.kind === 'sources' || change.placement !== null) continue;
+    // The row a rewrite, deletion or move sits on: its block, or for a
+    // deletion the first of its blocks still on the page. One whose blocks
+    // the author has since deleted has no row; without this it was dropped
+    // from the projection entirely while the review bar went on counting it,
+    // a change the author could neither see nor dismiss.
+    const rows = change.kind === 'delete' ? change.targetBlockIds.filter((id) => present.has(id)) : [change.anchorBlockId];
+    const [row, ...others] = rows;
+    if (row === null || row === undefined || !present.has(row)) {
       orphans.push(change);
       continue;
     }
-    const list = onBlock.get(change.anchorBlockId);
-    if (list) list.push(change);
-    else onBlock.set(change.anchorBlockId, [change]);
+    add(onBlock, row, change);
+    for (const other of others) if (other !== null) add(struck, other, change);
   }
 
   const rows: DocumentRow[] = blocks.map((block) => ({
     kind: 'block',
     block,
     changes: onBlock.get(block.id) ?? [],
+    struck: struck.get(block.id) ?? [],
   }));
 
-  /** Row identity, so a pending insert can anchor another pending insert. */
-  const idOf = (row: DocumentRow): string | null =>
-    row.kind === 'block' ? row.block.id : row.change.producesBlockId;
+  /** The ids a row stands for, so a pending insert can anchor another pending insert. */
+  const idsOf = (row: DocumentRow): string[] =>
+    row.kind === 'insert'
+      ? row.change.producesBlockIds
+      : [row.block.id, ...row.changes.flatMap((change) => (change.kind === 'replace' ? change.producesBlockIds : []))];
 
   for (const change of pending) {
     if (change.kind !== 'insert' || !change.placement) continue;
 
-    const row: DocumentRow = { kind: 'insert', change, block: proposedBlock(change) };
-    const anchor = change.anchorBlockId;
-
-    if (change.placement === 'start') {
-      rows.unshift(row);
-      continue;
-    }
+    const row: DocumentRow = { kind: 'insert', change };
     if (change.placement === 'end') {
       rows.push(row);
       continue;
     }
 
-    const at = rows.findIndex((candidate) => idOf(candidate) === anchor);
+    const anchor = change.anchorBlockId;
+    const at = rows.findIndex((candidate) => anchor !== null && idsOf(candidate).includes(anchor));
     if (at === -1) {
       orphans.push(change);
       continue;
@@ -773,16 +816,16 @@ export function projectDocument(blocks: Block[], sets: ChangeSet[]): DocumentPro
  *
  * An insert is addressed relative to a fixed point — "after A", "at the end" —
  * and the previous accept path applied that address literally, against the
- * document as it stood at the moment of the click. So `append X`, `append Y`,
- * `append Z` accepted as Z, X, Y produced `Z, X, Y`, and `Accept all` on the
- * same batch produced `X, Y, Z`. Same decisions, different document.
+ * document as it stood at the moment of the click. So three appends X, Y, Z
+ * accepted as Z, X, Y produced `Z, X, Y`, and `Accept all` on the same batch
+ * produced `X, Y, Z`. Same decisions, different document.
  *
- * The fix is to position the block against the batch siblings that are already
- * in the document rather than against the raw address: everything authored
- * ahead of it in the same slot goes before, everything authored behind it goes
- * after, and where the slot replays back-to-front (see `slotIsReversed`) those
- * two are swapped. Siblings the author has since deleted are simply not there
- * to constrain it.
+ * The fix is to position the blocks against the batch siblings that are
+ * already in the document rather than against the raw address: everything
+ * authored ahead of it in the same slot goes before, everything authored
+ * behind it goes after, and where the slot replays back-to-front (see
+ * `slotIsReversed`) those two are swapped. Siblings the author has since
+ * deleted are simply not there to constrain it.
  *
  * Returns `null` when the change genuinely cannot be placed — its anchor is
  * gone — which the caller reports as a desync rather than guessing at.
@@ -792,7 +835,7 @@ export function resolveAcceptOp(
   sets: ChangeSet[],
   blocks: Block[],
 ): ToolOperation | null {
-  if (change.kind !== 'insert' || !change.placement) return change.op;
+  if (change.kind !== 'insert' || !change.placement || change.op.op !== 'write_blocks') return change.op;
 
   const slot = slotKey(change);
   const sequence = changeSequence(sets);
@@ -804,12 +847,15 @@ export function resolveAcceptOp(
   const follow: number[] = [];
   for (const sibling of orderedChanges(sets)) {
     if (sibling.id === change.id || sibling.status !== 'accepted') continue;
-    if (slotKey(sibling) !== slot || !sibling.producesBlockId) continue;
-    const at = blocks.findIndex((block) => block.id === sibling.producesBlockId);
-    if (at === -1) continue;
+    if (slotKey(sibling) !== slot) continue;
+    const landed = sibling.producesBlockIds
+      .map((id) => blocks.findIndex((block) => block.id === id))
+      .filter((at) => at !== -1);
+    if (landed.length === 0) continue;
     const rank = sequence.get(sibling.id) ?? sibling.order;
     const isEarlier = reversed ? rank > own : rank < own;
-    (isEarlier ? precede : follow).push(at);
+    if (isEarlier) precede.push(Math.max(...landed));
+    else follow.push(Math.min(...landed));
   }
 
   let anchorIndex = -1;
@@ -818,24 +864,26 @@ export function resolveAcceptOp(
     if (anchorIndex === -1) return null;
   }
 
-  // Where the slot puts this block when no sibling has landed yet.
+  // Where the slot puts these blocks when no sibling has landed yet.
   const alone =
     change.placement === 'after'
       ? anchorIndex + 1
       : change.placement === 'before'
         ? anchorIndex
-        : change.placement === 'start'
-          ? 0
-          : blocks.length;
+        : blocks.length;
 
   const lower = precede.length > 0 ? Math.max(...precede) + 1 : alone;
   const upper = follow.length > 0 ? Math.min(...follow) : blocks.length;
   const index = Math.max(0, Math.min(lower, upper, blocks.length));
 
-  const block = (change.op as { block?: Record<string, unknown> }).block ?? {};
+  const { basis, newInformation, blocks: written } = change.op;
+  const review = { ...(basis ? { basis } : {}), ...(newInformation !== undefined ? { newInformation } : {}) };
   const previous = index > 0 ? blocks[index - 1] : undefined;
-  if (!previous) return { op: 'insert_block_at_start', block };
-  return { op: 'insert_block_after', referenceId: previous.id, block };
+  if (previous) return { op: 'write_blocks', position: 'after', blockId: previous.id, blocks: written, ...review };
+  const first = blocks[0];
+  return first
+    ? { op: 'write_blocks', position: 'before', blockId: first.id, blocks: written, ...review }
+    : { op: 'write_blocks', position: 'append', blockId: null, blocks: written, ...review };
 }
 
 /* ----------------------------------------
@@ -859,15 +907,15 @@ export type RejectionPlan = {
 
 const byOrder = (a: ProposedChange, b: ProposedChange) => a.order - b.order;
 
-/** Whether `change` continues from the block `rejected` would have added. */
+/** Whether `change` continues from a block `rejected` would have added. */
 function continuesFrom(change: ProposedChange, rejected: ProposedChange): boolean {
   return (
     change.kind === 'insert'
     && (change.placement === 'after' || change.placement === 'before')
     && rejected.kind === 'insert'
     && rejected.placement !== null
-    && rejected.producesBlockId !== null
-    && change.anchorBlockId === rejected.producesBlockId
+    && change.anchorBlockId !== null
+    && rejected.producesBlockIds.includes(change.anchorBlockId)
   );
 }
 
@@ -910,18 +958,11 @@ export function planRejection(changeId: string, sets: ChangeSet[]): RejectionPla
 
 /** The rejected insert's own address, given to a change that continued from it. */
 function readdress(change: ProposedChange, rejected: ProposedChange): ToolOperation {
-  const block = (change.op as { block?: Record<string, unknown> }).block ?? {};
-  const anchor = rejected.anchorBlockId ?? '';
-  switch (rejected.placement) {
-    case 'before':
-      return { op: 'insert_block_before', referenceId: anchor, block };
-    case 'start':
-      return { op: 'insert_block_at_start', block };
-    case 'end':
-      return { op: 'append_block', block };
-    default:
-      return { op: 'insert_block_after', referenceId: anchor, block };
-  }
+  if (change.op.op !== 'write_blocks') return change.op;
+  const op = change.op;
+  return rejected.placement === 'end' || rejected.anchorBlockId === null
+    ? { ...op, position: 'append', blockId: null }
+    : { ...op, position: rejected.placement === 'before' ? 'before' : 'after', blockId: rejected.anchorBlockId };
 }
 
 /**
@@ -960,6 +1001,7 @@ export function rejectChange(
         op: readdress(change, target),
         anchorBlockId: target.anchorBlockId,
         placement: target.placement,
+        references: target.references,
         // Its anchor is now the rejected insert's anchor, which may itself be
         // a pending insert of this batch.
         dependsOn: [...target.dependsOn],
@@ -1029,31 +1071,42 @@ export type ReviewDecision = [opIndex: number, status: 'accepted' | 'rejected'];
  *
  * Only meaningful when a durable batch is staged again: this browser may
  * have lost its record of the decision, or it was made in another one. An
- * insert whose block is there has landed — accepting it again is refused as
- * a duplicate id, which read as the change having lost its place. A rewrite
- * that leaves its block exactly as it is, and a deletion of a block that is
- * gone, have nothing left to do either.
+ * insert whose blocks are there has landed — accepting it again is refused
+ * as a duplicate id, which read as the change having lost its place. A
+ * rewrite that leaves its block exactly as it is (and whose new blocks are
+ * there), a deletion of blocks that are all gone, and a move whose block
+ * already sits there, have nothing left to do either.
  *
  * The caller checks prerequisites first: a deletion of a block the batch has
  * not created yet is not "already done".
  */
 export function alreadyInDocument(change: ProposedChange, blocks: readonly Block[]): boolean {
-  if (change.kind === 'insert') {
-    return change.producesBlockId !== null
-      && blocks.some((block) => block.id === change.producesBlockId);
+  const has = (id: string) => blocks.some((block) => block.id === id);
+  switch (change.kind) {
+    case 'insert':
+      return change.producesBlockIds.length > 0 && change.producesBlockIds.every(has);
+    case 'delete':
+      return change.targetBlockIds.every((id) => !has(id));
+    case 'replace': {
+      const current = blocks.find((block) => block.id === change.anchorBlockId);
+      const merged = mergedBlock(change, current);
+      // Every field, view-only ones included: this asks whether applying it
+      // would change anything at all.
+      return current !== undefined && merged !== null
+        && stableStringify(merged) === stableStringify(current)
+        && change.producesBlockIds.every(has);
+    }
+    case 'move': {
+      if (change.op.op !== 'move_block') return false;
+      const { blockId, targetBlockId, position } = change.op;
+      const at = blocks.findIndex((block) => block.id === blockId);
+      const target = blocks.findIndex((block) => block.id === targetBlockId);
+      return at !== -1 && target !== -1 && at === target + (position === 'after' ? 1 : -1);
+    }
+    case 'meta':
+    case 'sources':
+      return false;
   }
-  if (change.kind === 'delete') {
-    return !blocks.some((block) => block.id === change.anchorBlockId);
-  }
-  if (change.kind === 'replace') {
-    const current = blocks.find((block) => block.id === change.anchorBlockId);
-    const merged = mergedBlock(change, current);
-    // Every field, view-only ones included: this asks whether applying it
-    // would change anything at all.
-    return current !== undefined && merged !== null
-      && stableStringify(merged) === stableStringify(current);
-  }
-  return false;
 }
 
 /**
@@ -1065,30 +1118,19 @@ export function alreadyInDocument(change: ProposedChange, blocks: readonly Block
  * again, and accepting an insert that had already landed failed.
  *
  * Decisions replay in the order they were made, so a rejection re-anchors
- * its continuations exactly as it did the first time. `bases` restores the
- * staging fingerprints, so an edit made before the reload still marks its
- * suggestion stale. With `blocks`, changes the document already holds are
+ * its continuations exactly as it did the first time. With `blocks`, changes
+ * the document already holds are
  * marked accepted too (see `alreadyInDocument`); without, nothing is decided
  * beyond what was stored. Returns the batch and the operations found already
  * in the document, which the caller records as accepted.
  */
 export function resumeReview(
   set: ChangeSet,
-  stored: { decisions: readonly ReviewDecision[]; bases: Readonly<Record<string, string>> } | null,
+  stored: { decisions: readonly ReviewDecision[] } | null,
   blocks: readonly Block[] | null,
 ): { set: ChangeSet; landed: number[] } {
   // The helpers below work on lists of batches; this one is the only one.
-  let current: ChangeSet = (
-    stored
-      ? {
-          ...set,
-          changes: set.changes.map((change) => {
-            const base = change.opIndex === undefined ? undefined : stored.bases[change.opIndex];
-            return base === undefined ? change : { ...change, base };
-          }),
-        }
-      : set
-  );
+  let current: ChangeSet = set;
   const update = ([next]: ChangeSet[]) => {
     if (next) current = next;
   };
@@ -1200,8 +1242,16 @@ export function resolveAcceptPlan(
   // Statuses advance as the plan is built, so each change is positioned
   // against the siblings the ones before it have just put in the document.
   let projectedSets = sets;
+  const after = linkPrecedence(sets);
 
   for (const change of queue) {
+    // A filtered group may omit a pending prerequisite or a positional
+    // predecessor. The presence of its target alone is not permission to
+    // skip that decision. Simulate statuses and bases together as we proceed.
+    if (!isReady(change, projectedSets, projected, after)) {
+      desynced.push(change);
+      continue;
+    }
     const op = resolveAcceptOp(change, projectedSets, projected);
     if (!op) {
       desynced.push(change);
@@ -1216,6 +1266,7 @@ export function resolveAcceptPlan(
 
     ops.push(op);
     applied.push(change);
+    const before = projected;
     projected = outcome.blocks;
     projectedSets = projectedSets.map((set) => ({
       ...set,
@@ -1223,6 +1274,7 @@ export function resolveAcceptPlan(
         candidate.id === change.id ? { ...candidate, status: 'accepted' as const } : candidate,
       ),
     }));
+    projectedSets = rebaseAfterAccept(projectedSets, before, projected, outcome.touched);
   }
 
   return { ops, applied, desynced };
@@ -1232,30 +1284,25 @@ export function resolveAcceptPlan(
    Rendering helpers
    ---------------------------------------- */
 
-/** The block a change would produce, validated the same way a patch is. */
-export function proposedBlock(change: ProposedChange): Block | null {
+/**
+ * The blocks an insert would add, or a rewrite would add after its own,
+ * validated the same way a patch is.
+ */
+export function proposedBlocks(change: ProposedChange): Block[] {
   const op = change.op;
-  if (
-    op.op === 'insert_block_after' ||
-    op.op === 'insert_block_before' ||
-    op.op === 'insert_block_at_start' ||
-    op.op === 'append_block'
-  ) {
-    return coerceBlock(op.block);
-  }
-  return null;
+  if (op.op !== 'write_blocks') return [];
+  const written = op.blocks.map(coerceBlock).filter((block): block is Block => block !== null);
+  return op.position === 'replace' ? written.slice(1) : written;
 }
 
 /**
- * The block as it would look after a replace.
- *
- * Mirrors the server's merge semantics: fields the agent did not mention keep
- * their current value, so a change to `html` alone must not blank the
- * paragraph's inline widgets in the preview.
+ * The block as it would look after a rewrite: exactly what accepting it
+ * applies (`applyPatchToBlocks`), the author's view flags kept.
  */
 export function mergedBlock(change: ProposedChange, current: Block | undefined): Block | null {
-  if (change.op.op !== 'replace_block' || !current) return null;
-  return coerceBlock({ ...current, ...change.op.block });
+  if (!current || change.kind !== 'replace') return null;
+  const outcome = applyPatchToBlocks([current], [change.op]);
+  return outcome.desynced.length === 0 ? outcome.blocks[0] ?? null : null;
 }
 
 /**
@@ -1289,7 +1336,7 @@ export function blockText(block: Block | null | undefined): string {
   const children = block.type === 'paragraph' ? block.children ?? [] : [];
   return block.html
     .replace(/<span[^>]*data-child-id="([^"]*)"[^>]*><\/span>/g, (_match, id: string) =>
-      ` ${widgetStandIn(children.find((child) => child.id === id))} `,
+      ` ${widgetStandIn(children.find((child) => child.id === attributeText(id)))} `,
     )
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<[^>]*>/g, '')
@@ -1321,18 +1368,44 @@ export function describeChange(change: ProposedChange, blocks: Block[]): string 
     return ` “${short}”`;
   };
 
+  const blocksWord = (count: number) => (count === 1 ? 'block' : `${count} blocks`);
+
   switch (change.kind) {
     case 'insert': {
-      const block = proposedBlock(change);
-      return `Add ${label(block)}${quoted(block)}`;
+      const added = proposedBlocks(change);
+      const [first] = added;
+      return added.length > 1 ? `Add ${added.length} blocks${quoted(first)}` : `Add ${label(first)}${quoted(first)}`;
     }
-    case 'replace':
-      return `Rewrite ${label(target)}${quoted(target)}`;
-    case 'delete':
-      return `Delete ${label(target)}${quoted(target)}`;
-    case 'reorder':
+    case 'replace': {
+      const extra = change.producesBlockIds.length;
+      return extra > 0
+        ? `Rewrite ${label(target)}${quoted(target)} as ${extra + 1} blocks`
+        : `Rewrite ${label(target)}${quoted(target)}`;
+    }
+    case 'delete': {
+      const count = change.targetBlockIds.length;
+      return count > 1 ? `Delete ${blocksWord(count)}${quoted(target)}` : `Delete ${label(target)}${quoted(target)}`;
+    }
+    case 'move':
       return `Move ${label(target)}${quoted(target)}`;
-    case 'rename':
-      return 'Rename page';
+    case 'meta': {
+      if (change.op.op !== 'set_meta') return 'Change the page';
+      const { name, citationStyle } = change.op;
+      if (name !== undefined && citationStyle !== undefined) return 'Rename page and change citation style';
+      return name !== undefined ? 'Rename page' : 'Change citation style';
+    }
+    case 'sources': {
+      const op = change.op;
+      if (op.op === 'add_sources') {
+        return `Add ${op.sources.length === 1 ? 'a source' : `${op.sources.length} sources`} to the page’s sources`;
+      }
+      if (op.op === 'remove_sources') {
+        return `Remove ${op.keys.length === 1 ? 'a source' : `${op.keys.length} sources`} from the page’s sources`;
+      }
+      if (op.op === 'update_sources') {
+        return `Refresh ${op.sources.length === 1 ? 'a reference' : `${op.sources.length} references`} from the registries`;
+      }
+      return 'Change the page’s sources';
+    }
   }
 }

@@ -231,6 +231,8 @@ describe('BlockControls menu commands', () => {
 
   it('protects a locked block from delete, move and turn into', () => {
     renderControls('locked', { open: true });
+    // One rule with Mod+J (U-12): asking about it is fine; replacing it is not, which the prompt enforces.
+    expect(screen.getByRole('menuitem', { name: /Ask AI/ }).getAttribute('aria-disabled')).toBeNull();
     expect(screen.getByRole('menuitem', { name: /Delete/ }).getAttribute('aria-disabled')).toBe('true');
     expect(screen.getByRole('menuitem', { name: /Move up/ }).getAttribute('aria-disabled')).toBe('true');
     expect(screen.getByRole('menuitem', { name: /Turn into/ }).getAttribute('aria-disabled')).toBe('true');

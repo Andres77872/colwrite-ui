@@ -1,8 +1,9 @@
 import { takeItems } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import type { ParagraphBlock } from '@/editor';
-import type { AgentSource } from '@/api/assistant/streamParser';
-import { presetGroupsFor, presetsFor } from './presets';
+import { agentSource } from '@/__tests__/agentSource';
+import { presetGroupsFor, askAiPresets, presetsFor } from './presets';
+import { PERSONAL_WORKSPACE_ID, catalogOf } from '@/dev/msw/fixtures';
 import { resultBlocks } from './result';
 
 const NONE = new Map();
@@ -21,44 +22,16 @@ function expectConsistent(block: ParagraphBlock) {
 }
 
 describe('Ask AI results', () => {
-  it('turns citation tags into citation widgets, placeholder and child together', () => {
-    const block = onlyParagraph(
-      resultBlocks({
-        text: 'Supported <citation title="A Study" key="a" url="https://example.test/a" /> here.',
-        citationTags: true,
-        citations: NONE,
-        sources: [],
-      }),
-    );
-    expect(block.children).toEqual([expect.objectContaining({ type: 'citation', keys: ['a'] })]);
-    expectConsistent(block);
-  });
-
-  it('never lets unreadable citation markup reach the document as text', () => {
-    const block = onlyParagraph(
-      resultBlocks({
-        text: 'Claim <citation title="unreadable" onclick="x" /> end.',
-        citationTags: true,
-        citations: NONE,
-        sources: [],
-      }),
-    );
-    expect(block.html).not.toContain('citation');
-    expect(block.children ?? []).toEqual([]);
-  });
-
   it('resolves [S#] handles to the sources the run returned, and leaves unknown ones as text', () => {
-    const sources: AgentSource[] = [
-      { id: 'S1', key: '2101.03961', title: 'Switch Transformers', provider: 'semantic_scholar' },
-    ];
+    const sources = [agentSource('S1', { key: 'arxiv:2101.03961', title: 'Switch Transformers', provider: 'semantic_scholar' })];
     const block = onlyParagraph(
-      resultBlocks({ text: 'Compute stays flat [S1] but not [S9].', citationTags: false, citations: NONE, sources }),
+      resultBlocks({ text: 'Compute stays flat [S1] but not [S9].', citations: NONE, sources }),
     );
     expect(block.children).toEqual([
       expect.objectContaining({
         type: 'citation',
-        keys: ['2101.03961'],
-        sources: [expect.objectContaining({ title: 'Switch Transformers' })],
+        keys: ['arxiv:2101.03961'],
+        sources: [sources[0]?.record],
       }),
     ]);
     expect(block.html).toContain('[S9]');
@@ -79,7 +52,8 @@ describe('Ask AI suggestions', () => {
   });
 
   it('does not offer "Continue writing" for a selection', () => {
-    expect(presetsFor('selection', '').some((preset) => preset.id === 'continue')).toBe(false);
-    expect(presetsFor('block', '').some((preset) => preset.id === 'continue')).toBe(true);
+    const presets = askAiPresets(catalogOf(PERSONAL_WORKSPACE_ID).presets);
+    expect(presetsFor(presets, 'selection', '').some((preset) => preset.id === 'continue')).toBe(false);
+    expect(presetsFor(presets, 'block', '').some((preset) => preset.id === 'continue')).toBe(true);
   });
 });
