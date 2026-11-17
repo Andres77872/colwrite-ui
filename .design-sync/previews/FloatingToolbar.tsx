@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { AgentToolsContext, EditorContext, FloatingToolbar, LiteralEditor, agentToolsAllEnabled } from 'colwrite-ui';
+import { AssistantCatalogContext, EditorContext, FloatingToolbar, LiteralEditor, assistantCatalogAllOn } from 'colwrite-ui';
 
 // FloatingToolbar is the selection toolbar: Ask AI | Turn into | B I U S code
 // link | Cite | ⋯. It appears only while there is a non-collapsed
@@ -16,7 +16,7 @@ import { AgentToolsContext, EditorContext, FloatingToolbar, LiteralEditor, agent
 // The toolbar positions itself from the selection rect, so each cell reserves
 // vertical room above the text for it to land in.
 //
-// Its Cite and Ask AI entries read useAgentTools(), so the literal
+// Its Cite and Ask AI entries read the assistant catalog, so the literal
 // all-enabled value is supplied alongside the editor one.
 
 type Ctx = React.ContextType<typeof EditorContext>;
@@ -65,7 +65,7 @@ function Selected({ text, select }: { text: string; select: 'all' | 'phrase' }) 
 
   return (
     <LiteralEditor value={editor as unknown as Ctx}>
-      <AgentToolsContext.Provider value={agentToolsAllEnabled}>
+      <AssistantCatalogContext.Provider value={assistantCatalogAllOn}>
         <div className="relative min-h-[13rem] w-[40rem] pt-24">
           <p
             ref={hostRef}
@@ -77,7 +77,7 @@ function Selected({ text, select }: { text: string; select: 'all' | 'phrase' }) 
           </p>
           <FloatingToolbar />
         </div>
-      </AgentToolsContext.Provider>
+      </AssistantCatalogContext.Provider>
     </LiteralEditor>
   );
 }

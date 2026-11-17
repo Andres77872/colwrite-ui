@@ -1,5 +1,6 @@
 import { BLOCK_KINDS } from '@/editor';
 import type { SlashItem } from '../types';
+import { openImageUpload } from '../../blocks/ImageBlock/imageUpload';
 
 /**
  * The "Basic blocks" group, one item per block kind.
@@ -17,6 +18,7 @@ export const basicBlockItems: readonly SlashItem[] = BLOCK_KINDS.map((kind) => (
   keywords: kind.keywords,
   group: 'basic',
   onSelect: (ctx) => {
+    if (kind.id === 'image') { openImageUpload(ctx.blockId); return; }
     const target = ctx.applyKind(kind.id);
     ctx.focusBlock(target);
   },

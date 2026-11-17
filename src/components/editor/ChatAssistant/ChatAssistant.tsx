@@ -1,27 +1,44 @@
-import { useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useEffectEvent, useId, useMemo, useRef, useState } from 'react';
+import { useInfiniteQuery } from '@tanstack/react-query';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useEditor } from '@/editor';
+import { useDocumentActions, useDocumentSession, useEditorDoc, usePageReadOnly } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
-import type { ChatItem } from '@/services/chats';
+import type { ChatItem } from '@/data/chats';
 import { useChatSessions } from '../../chat/chatSessionsState';
 import { useChatHistory } from '@/components/panels/ChatsPanel';
-import { PanelsContext } from '@/components/panels/panelsContextState';
+import { PanelsContext, type PanelsContextValue } from '@/components/panels/panelsContextState';
 import { PANEL_CONFIG } from '@/components/panels/panelConfig';
 import type { ChatRefPickerHandle } from './ChatRefPicker';
 import type { ChatTaggedInputHandle } from './ChatTaggedInput';
 import { useAgentTurn } from './useAgentTurn';
+import { useAutoMode } from './useAutoMode';
+import { useRunChoices } from './useRunChoices';
+import { questionAnswerText } from '@/lib/questionAnswers';
+import { AssistantCatalogContext } from '@/components/preferences/assistantCatalogContextState';
+import { useAgentEngine } from '@/components/preferences/agentEngineContextState';
 import { useConversationLoader } from './useConversationLoader';
 import { currentFocus, useEditorFocus, type EditorFocus } from '@/components/editor/References';
 import { MessageRow } from './MessageRow';
+import { LiveTaskBar } from './TaskList';
+import { PlanCard } from './PlanCard';
+import { PlanProgress } from './PlanProgress';
 import { AssistantHome } from './AssistantHome';
 import { useChatAttachments } from './useChatAttachments';
 import { ChatComposer, MAX_MESSAGE_LENGTH } from './ChatComposer';
 import { ChatSwitcher } from './ChatSwitcher';
 import { agentContext } from './chatUtils';
+import { conversationPlans, conversationSources } from './transcript';
+import { useStableItems } from '@/hooks/useStableItems';
 import { useChatContextHighlight } from './chatContextHighlight';
 import { scrollBehavior } from '@/lib/motion';
-import { AlertCircle, ArrowDown, Maximize2, Minimize2, RotateCcw, SquarePen } from 'lucide-react';
+import { uid } from '@/lib/uid';
+import { describeApiError } from '@/api/errors';
+import { assistantRunsQuery, type AssistantRun } from '@/data/assistantRuns';
+import { RunsDialog } from './RunsDialog';
+import { useRunInbox } from './useRunInbox';
+import { AlertCircle, ArrowDown, History, Maximize2, Minimize2, RotateCcw, SquarePen } from 'lucide-react';
 
 /**
  * A phone's on-screen keyboard covers the suggestions and the empty state, so
@@ -36,6 +53,38 @@ function focusComposer(host: ChatTaggedInputHandle | null) {
 const AUTOSCROLL_THRESHOLD_PX = 64;
 
 /** A chat with no stored title is named by what it first asked. */
+/** The newest assistant message in a transcript. */
+function lastAssistantMessage<T extends { role: string }>(messages: readonly T[]): T | undefined {
+  return [...messages].reverse().find((message) => message.role === 'assistant');
+}
+
+/**
+ * Show something in the page from the chat. On a phone the AI sheet covers
+ * the page, so it closes first; `reveal` runs once the sheet is gone and has
+ * handed focus back, or that would pull focus away again. `host` is the
+ * transcript, which leaves the page with the sheet.
+ */
+function showInPage(
+  panels: PanelsContextValue | null | undefined,
+  host: HTMLElement | null,
+  reveal: () => void,
+): void {
+  if (!panels || panels.panelsDocked) {
+    reveal();
+    return;
+  }
+  const started = performance.now();
+  panels.setAssistantOpen(false);
+  const whenClosed = () => {
+    if (host?.isConnected && performance.now() - started < 1000) {
+      requestAnimationFrame(whenClosed);
+      return;
+    }
+    setTimeout(reveal, 0);
+  };
+  requestAnimationFrame(whenClosed);
+}
+
 function titleFromPrompt(prompt: string): string {
   const line = prompt.replace(/#(?:this|doc)\/[\w/-]+/g, '').replace(/\s+/g, ' ').trim();
   return line.length > 48 ? `${line.slice(0, 47)}…` : line;
@@ -54,27 +103,103 @@ export function ChatAssistant() {
   // starts a new session and so a new transcript; saving the draft that is
   // already open only gives it an id, and must not throw away the conversation
   // that asked for it to be saved in the first place.
-  const { documentSessionId } = useEditor();
-  return <DocumentChatAssistant key={documentSessionId} />;
+  const { documentSessionId, documentId } = useDocumentSession();
+  const { switchTo } = useDocumentActions();
+  const workspaceId = useWorkspaceId();
+  const query = useInfiniteQuery(assistantRunsQuery(workspaceId));
+  const runs = useMemo(() => {
+    const byId = new Map<string, AssistantRun>();
+    for (const page of query.data?.pages ?? []) for (const run of page.items) if (!byId.has(run.id)) byId.set(run.id, run);
+    return [...byId.values()];
+  }, [query.data]);
+  const inbox = useRunInbox(workspaceId, runs);
+  const [open, setOpen] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const openingRef = useRef(false);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
+  const [target, setTarget] = useState<RunTarget | null>(null);
+  const openRun = async (run: AssistantRun, resume: boolean) => {
+    if (openingRef.current) return;
+    openingRef.current = true;
+    setOpening(true);
+    setNavigationError(null);
+    try {
+      if (run.document_id !== documentId && !await switchTo(run.document_id)) {
+        setNavigationError('This page could not be opened. Your current page has been kept.');
+        return;
+      }
+      if (run.chat_id) setTarget({ run, resume, requestId: uid() });
+      setOpen(false);
+    } catch (error) {
+      setNavigationError(describeApiError(error, 'This run could not be opened.'));
+    } finally {
+      openingRef.current = false;
+      setOpening(false);
+    }
+  };
+  return <>
+    <DocumentChatAssistant key={documentSessionId} target={target} onTargetConsumed={() => setTarget(null)}
+      runs={runs} unreadChats={inbox.unreadChats} markRunsSeen={inbox.markSeen} onRunsOpen={() => setOpen(true)} />
+    <RunsDialog open={open} onOpenChange={setOpen} query={query} runs={runs} onOpen={(run, resume) => void openRun(run, resume)}
+      opening={opening} error={navigationError} />
+  </>;
 }
 
-function DocumentChatAssistant() {
-  const editor = useEditor();
-  const {
-    documentId,
-    loadingDocumentId,
-    ensureRemoteDocument,
-    hasPendingEdits,
-    saveRemote,
-    restoreEpoch,
-  } = editor;
+type RunTarget = { run: AssistantRun; resume: boolean; requestId: string };
+
+function DocumentChatAssistant({ target, onTargetConsumed, runs, unreadChats, markRunsSeen, onRunsOpen }: {
+  target: RunTarget | null;
+  onTargetConsumed: () => void;
+  runs: readonly AssistantRun[];
+  unreadChats: ReadonlySet<string>;
+  markRunsSeen: (ids: readonly string[]) => void;
+  onRunsOpen: () => void;
+}) {
+  const { doc } = useEditorDoc();
+  const { documentId, documentSessionId, loadingDocumentId, restoreEpoch } = useDocumentSession();
+  const workspaceId = useWorkspaceId();
+  const { ensureRemoteDocument, hasPendingEdits, saveRemote } = useDocumentActions();
   const proposals = useProposals();
-  const { selectedChatId, selectedThreadId, setSelectedChatId, setSelectedThreadId } =
+  const { selectedChatId, selectedLeafId, setSelectedChatId, setSelectedLeafId } =
     useChatSessions();
   const history = useChatHistory();
+  /** Bumped when the author starts or picks a chat: Auto belongs to one chat. */
+  const [chatEpoch, setChatEpoch] = useState(0);
+  const auto = useAutoMode({ workspace: workspaceId, page: documentSessionId, chat: selectedChatId, chatEpoch });
+  // The workspace's policy, as its catalog says it, can take Auto away (D7):
+  // the switch says so before anything is sent, and a policy changed while
+  // Auto is on turns it off. The toolsets the workspace blocks, with the
+  // server's reasons, are marked beside it.
+  const catalogContext = useContext(AssistantCatalogContext);
+  const catalog = catalogContext?.catalog ?? null;
+  const webAvailable = catalogContext?.toolset('web')?.state === 'on';
+  const { prefs } = useAgentEngine();
+  const choices = useRunChoices(
+    { workspace: workspaceId, page: documentSessionId, chat: selectedChatId, chatEpoch },
+    catalogContext?.profileEfforts('chat'),
+    webAvailable,
+    prefs.chatEffort,
+  );
+  const policy = catalog?.policy ?? null;
+  // The server's chat presets, offered on an empty conversation.
+  const chatPresets = useMemo(() => (catalog?.presets ?? []).filter((preset) => preset.profile === 'chat'), [catalog]);
+  // A viewer never uses Auto (D18): the switch says so before anything is sent.
+  const readOnly = usePageReadOnly();
+  const autoUnavailable: 'policy' | 'role' | null = readOnly ? 'role' : policy?.auto === false ? 'policy' : null;
+  const autoAllowed = autoUnavailable === null;
+  const { on: autoOn, turnOff: turnAutoOff } = auto;
+  useEffect(() => {
+    if (!autoAllowed && autoOn) turnAutoOff();
+  }, [autoAllowed, autoOn, turnAutoOff]);
+  const policyOff = useMemo(
+    () => [...new Set((catalog?.toolsets ?? [])
+      .filter((toolset) => toolset.switch !== null && toolset.state === 'blocked' && toolset.reason)
+      .map((toolset) => toolset.reason as string))],
+    [catalog],
+  );
 
   const [input, setInput] = useState('');
-  const files = useChatAttachments(selectedChatId);
+  const files = useChatAttachments(selectedChatId, ensureRemoteDocument);
   const [atBottom, setAtBottom] = useState(true);
 
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -96,6 +221,7 @@ function DocumentChatAssistant() {
     messages,
     isStreaming,
     resumeRun,
+    resumeCheckpoint,
     error,
     agentStatus,
     activeMessageId,
@@ -104,10 +230,8 @@ function DocumentChatAssistant() {
     onStop,
     onRetry,
     resetChatUI,
-    abortRef,
+    detach,
     setMessages,
-    setIsStreaming,
-    setAgentStatus,
   } = useAgentTurn({
     documentId,
     loadingDocumentId,
@@ -116,27 +240,50 @@ function DocumentChatAssistant() {
     hasPendingEdits,
     saveRemote,
     selectedChatId,
-    selectedThreadId,
+    selectedLeafId,
     setSelectedChatId,
-    setSelectedThreadId,
+    setSelectedLeafId,
     proposals,
     setInput,
     setAtBottom,
-    pinnedToBottom,
+    pinnedToBottomRef: pinnedToBottom,
     refPickerRef,
     loadedConversationRef,
     // The API keeps no title of its own, so a new conversation is named by
     // the question that started it — in the list as well as in the header.
     onChatCreated: (chatId, prompt) => {
+      // Still the chat the author turned Auto on in, now with an id.
+      auto.adoptChat(chatId);
+      choices.adoptChat(chatId);
       const title = titleFromPrompt(prompt);
       if (title) void history.rename(chatId, title);
     },
+    autoMode: auto,
   });
 
   const visibleMessages = useMemo(
     () => messages.filter((m) => m.role !== 'system'),
     [messages],
   );
+  // Every reply's sources: a handle lasts for the conversation, so each
+  // reply's markers are read against them all. The same list while no
+  // source changes, which a streamed token does not.
+  const knownSources = useStableItems(useMemo(() => conversationSources(visibleMessages), [visibleMessages]));
+  const planRows = useMemo(() => conversationPlans(visibleMessages), [visibleMessages]);
+  const runningPlan = isStreaming ? visibleMessages.find((message) => message.id === activeMessageId)?.plan : undefined;
+  const [scrollRunId, setScrollRunId] = useState<string | null>(null);
+  useEffect(() => {
+    const read = new Set(visibleMessages.filter((message) => message.role === 'assistant' && message.runId
+      && (!isStreaming || message.id !== activeMessageId)).map((message) => message.runId));
+    markRunsSeen(runs.filter((run) => run.status === 'completed' && read.has(run.id)).map((run) => run.id));
+  }, [runs, visibleMessages, isStreaming, activeMessageId, markRunsSeen]);
+  useEffect(() => {
+    if (!scrollRunId) return;
+    const row = listRef.current?.querySelector<HTMLElement>(`[data-run-id="${CSS.escape(scrollRunId)}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: 'center', behavior: scrollBehavior() });
+    row.focus({ preventScroll: true });
+  }, [scrollRunId, visibleMessages]);
 
   /**
    * What this session is attached to.
@@ -151,47 +298,45 @@ function DocumentChatAssistant() {
    * name: nothing is attached to it yet, and saying so is the point.
    */
   const attachment = useMemo(() => {
-    const name = editor.doc.name?.trim() || 'Untitled document';
+    const name = doc.name?.trim() || 'Untitled page';
     return documentId
       ? {
           attached: true as const,
           name,
           label: name,
-          hint: `This conversation is kept with “${name}”, and every edit in it is made to that document.`,
+          hint: `This conversation is kept with “${name}”, and every edit in it is made to that page.`,
           regionLabel: `Writing assistant for ${name}`,
         }
       : {
           attached: false as const,
           name,
           label: 'Not saved yet',
-          hint: 'Asking saves this document and keeps the conversation with it from then on.',
-          regionLabel: 'Writing assistant for a document that has not been saved yet',
+          hint: 'Asking saves this page and keeps the conversation with it from then on.',
+          regionLabel: 'Writing assistant for a page that has not been saved yet',
         };
-  }, [documentId, editor.doc.name]);
+  }, [documentId, doc.name]);
 
   const chatTitle = useMemo(() => {
-    const stored = history.items.find((chat) => chat.chat_id === selectedChatId)?.title?.trim();
+    const stored = history.items.find((chat) => chat.id === selectedChatId)?.title?.trim();
     if (stored) return stored;
     const firstPrompt = visibleMessages.find((m) => m.role === 'user')?.content;
     if (firstPrompt) return titleFromPrompt(firstPrompt) || 'Untitled chat';
     return selectedChatId ? 'Untitled chat' : 'New chat';
   }, [history.items, selectedChatId, visibleMessages]);
 
-  // The finished reply, announced once. Empty while streaming so the live
-  // region stays silent until there is something whole to read out.
-  const completedReply = useMemo(() => {
-    if (isStreaming) return '';
-    for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
-      if (visibleMessages[i].role === 'assistant') return visibleMessages[i].content;
-    }
-    return '';
-  }, [isStreaming, visibleMessages]);
+  // "Reply finished", said once when a turn ends here. Never the reply itself:
+  // read out raw it was markdown, handles and LaTeX source; the reader moves
+  // to the reply to hear it. A conversation that loads announces nothing.
+  const [streamedBefore, setStreamedBefore] = useState(isStreaming);
+  const [finishedHere, setFinishedHere] = useState(false);
+  if (streamedBefore !== isStreaming) {
+    setStreamedBefore(isStreaming);
+    setFinishedHere(!isStreaming);
+  }
+  const replyNotice = finishedHere && !isStreaming && !error ? 'Reply finished.' : '';
 
   const latestAnswerId = useMemo(() => {
-    for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
-      if (visibleMessages[i].role === 'assistant') return visibleMessages[i].id;
-    }
-    return null;
+    return lastAssistantMessage(visibleMessages)?.id ?? null;
   }, [visibleMessages]);
 
   // Follow new output only while the reader is already at the bottom, so
@@ -227,16 +372,46 @@ function DocumentChatAssistant() {
 
   const { conversationNotice, reloadConversation } = useConversationLoader({
     onResumeRun: resumeRun,
+    onLoaded: () => {
+      if (!target || target.run.document_id !== documentId || target.run.chat_id !== selectedChatId) return false;
+      setScrollRunId(target.run.id);
+      if (target.resume) void resumeCheckpoint(target.run, target.requestId);
+      onTargetConsumed();
+      return target.resume;
+    },
+    onChatGone: () => {
+      resetChatUI(true);
+      loadedConversationRef.current = null;
+      setChatEpoch((epoch) => epoch + 1);
+      setSelectedChatId(null);
+      setSelectedLeafId(null);
+    },
+    workspaceId,
     documentId,
     selectedChatId,
-    selectedThreadId,
-    setSelectedThreadId,
-    abortRef,
+    selectedLeafId,
+    setSelectedLeafId,
+    detachRun: detach,
     loadedConversationRef,
     setMessages,
-    setIsStreaming,
-    setAgentStatus,
   });
+  const targetHandled = useRef<string | null>(null);
+  const selectRunTarget = useEffectEvent((next: RunTarget) => {
+    files.clear();
+    resetChatUI(true);
+    loadedConversationRef.current = null;
+    setChatEpoch((epoch) => epoch + 1);
+    pinnedToBottom.current = false;
+    setAtBottom(false);
+    setSelectedChatId(next.run.chat_id);
+    setSelectedLeafId(next.run.leaf_id);
+    reloadConversation();
+  });
+  useEffect(() => {
+    if (!target || loadingDocumentId || target.run.document_id !== documentId || targetHandled.current === target.requestId) return;
+    targetHandled.current = target.requestId;
+    selectRunTarget(target);
+  }, [target, documentId, loadingDocumentId]);
 
   /** Clear the transcript; the next message starts a conversation. */
   const onNewChat = () => {
@@ -244,22 +419,25 @@ function DocumentChatAssistant() {
     resetChatUI(true);
     // Reopening the same conversation later has to fetch it again.
     loadedConversationRef.current = null;
+    setChatEpoch((epoch) => epoch + 1);
     setSelectedChatId(null);
-    setSelectedThreadId(null);
+    setSelectedLeafId(null);
     requestAnimationFrame(() => focusComposer(inputHostRef.current));
   };
 
   const onPickChat = (chat: ChatItem) => {
-    if (chat.chat_id === selectedChatId) return;
+    if (chat.id === selectedChatId && !unreadChats.has(chat.id)) return;
     files.clear();
     resetChatUI(true);
     loadedConversationRef.current = null;
-    setSelectedChatId(chat.chat_id);
-    setSelectedThreadId(typeof chat.last_thread_id === 'number' ? chat.last_thread_id : null);
+    setChatEpoch((epoch) => epoch + 1);
+    setSelectedChatId(chat.id);
+    setSelectedLeafId(chat.last_message_id);
+    reloadConversation();
   };
 
   const onChatDeleted = (chat: ChatItem) => {
-    if (chat.chat_id === selectedChatId) onNewChat();
+    if (chat.id === selectedChatId) onNewChat();
   };
 
   /**
@@ -279,7 +457,7 @@ function DocumentChatAssistant() {
     if (turnFocus?.selection) setDismissedFocus(focus);
     const attachments = files.attachments;
     files.clear();
-    return send(text, agentContext(text, turnFocus), attachments);
+    return send(text, { context: agentContext(text, turnFocus), attachments, effort: choices.effort, web: choices.web });
   };
 
   const onSend = () => sendWithContext(input.trim());
@@ -287,6 +465,13 @@ function DocumentChatAssistant() {
   const onSuggestion = (prompt: string) => {
     focusComposer(inputHostRef.current);
     sendWithContext(prompt);
+  };
+
+  /** A server chat preset: the conversation shows its label, the server holds its instruction. */
+  const onChatPreset = (preset: { id: string; label: string }) => {
+    if (isStreaming || loadingDocumentId) return;
+    focusComposer(inputHostRef.current);
+    void send(preset.label, { preset: preset.id, effort: choices.effort, web: choices.web });
   };
 
   /** Ask the question behind an answer again, as it was asked. */
@@ -299,31 +484,32 @@ function DocumentChatAssistant() {
     if (!prompt) return;
     const context =
       lastExchange?.assistantMessageId === answerId ? lastExchange.context : undefined;
-    send(prompt.content, context, prompt.attachments);
+    const previous = lastExchange?.assistantMessageId === answerId ? lastExchange : undefined;
+    void send(previous?.text ?? prompt.content, {
+      context, attachments: prompt.attachments, preset: prompt.preset, effort: prompt.effort, web: prompt.web,
+      plan_id: prompt.planId, plan: previous?.plan, answers: previous?.answers,
+      displayText: previous?.displayText,
+    });
   };
 
   /**
-   * Show the first of a reply's changes in the page. On a phone the AI
-   * sheet covers the page, so it closes first; the change is revealed once
-   * the sheet is gone and has handed focus back, or that would pull focus
-   * away from the card again. The suggestions pill brings the author back.
+   * Show the first of a reply's changes in the page (see `showInPage`). The
+   * suggestions pill brings the author back.
    */
-  const reviewChange = (changeId: string) => {
-    if (!panels || panels.isDesktop) {
-      proposals.focusChange(changeId);
-      return;
-    }
-    const host = listRef.current;
-    const started = performance.now();
-    panels.setAssistantOpen(false);
-    const whenClosed = () => {
-      if (host?.isConnected && performance.now() - started < 1000) {
-        requestAnimationFrame(whenClosed);
-        return;
-      }
-      setTimeout(() => proposals.focusChange(changeId), 0);
-    };
-    requestAnimationFrame(whenClosed);
+  /** A reply's changes still open for review, from the change sets its edits went into. */
+  const openChangeIdsOf = (changeSetIds: readonly string[]): string[] =>
+    changeSetIds.length === 0
+      ? []
+      : proposals.sets
+        .filter((set) => changeSetIds.includes(set.changeSetId))
+        .flatMap((set) => set.changes.filter((change) => change.status === 'pending').map((change) => change.id));
+  const reviewChange = (changeId: string) =>
+    showInPage(panels, listRef.current, () => proposals.focusChange(changeId));
+  /** Under an Auto turn's reply: Review shows its set in the page. */
+  const reviewAutoApplied = (id: string) =>
+    showInPage(panels, listRef.current, () => proposals.revealAutoApplied(id));
+  const undoAutoApplied = (id: string) => {
+    proposals.undoAutoApplied(id);
   };
 
   const scrollToLatest = () => {
@@ -340,6 +526,9 @@ function DocumentChatAssistant() {
    */
   const onPanelKeyDown = (event: React.KeyboardEvent) => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
+    // A dialog the panel opened (the Auto warning) is in a portal: its
+    // Escape closes the dialog, not the run.
+    if (!event.currentTarget.contains(event.target as Node)) return;
     if (refPickerRef.current?.isOpen()) return;
     if (isStreaming) {
       event.preventDefault();
@@ -348,6 +537,11 @@ function DocumentChatAssistant() {
   };
 
   const progress = isStreaming ? agentStatus : null;
+  // The running turn's task list, pinned where a growing reply cannot push it
+  // out of view.
+  const liveTasks = isStreaming
+    ? visibleMessages.find((message) => message.id === activeMessageId)?.todos
+    : undefined;
 
   return (
     <section
@@ -364,8 +558,17 @@ function DocumentChatAssistant() {
           onNewChat={onNewChat}
           onSelect={onPickChat}
           onDeleted={onChatDeleted}
+          unreadChats={unreadChats}
         />
         <span className="flex-1" />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="icon" size="icon-sm" onClick={onRunsOpen} aria-label="Runs">
+              <History />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Runs</TooltipContent>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="icon" size="icon-sm" onClick={onNewChat} aria-label="Start a new chat">
@@ -426,34 +629,63 @@ function DocumentChatAssistant() {
               saved={Boolean(documentId)}
               unsavedNoticeId={unsavedNoticeId}
               onPick={onSuggestion}
+              presets={chatPresets}
+              onPreset={onChatPreset}
+              readOnly={readOnly}
             />
           )}
 
           {visibleMessages.map((message) => {
             const live = isStreaming && message.id === activeMessageId;
+            const plan = planRows.get(message.id);
             return (
               <MessageRow
                 key={message.id}
                 message={message}
+                knownSources={knownSources}
                 live={live}
                 progress={live ? progress : null}
                 latest={message.id === latestAnswerId}
                 // This reply's own changes, minus the ones already decided on.
-                openChangeIds={message.proposedIds.filter((id) =>
-                  proposals.pending.some((change) => change.id === id),
-                )}
+                openChangeIds={openChangeIdsOf(message.changeSetIds)}
                 onFocusChange={reviewChange}
                 onRetry={
                   message.id === latestAnswerId && !isStreaming && !error
                     ? () => regenerate(message.id)
                     : undefined
                 }
+                onAnswerQuestion={
+                  message.question && message.id === visibleMessages.at(-1)?.id && !isStreaming && !error
+                    ? (answers) => { void send('', {
+                        answers, displayText: questionAnswerText(message.question, answers),
+                        effort: choices.effort, web: choices.web,
+                      }); }
+                    : undefined
+                }
+                planCard={plan && documentId && selectedChatId ? (
+                  <PlanCard
+                    key={plan.plan_id}
+                    plan={plan}
+                    location={{ workspaceId, documentId, chatId: selectedChatId, planId: plan.plan_id }}
+                    canEdit={!readOnly}
+                    busy={isStreaming || Boolean(loadingDocumentId)}
+                    onStart={(approved, edit) => { void send('', {
+                      effort: 'deep', plan_id: approved.plan_id, plan: edit, web: choices.web,
+                      displayText: 'Write the approved plan, section by section.',
+                    }); }}
+                  />
+                ) : undefined}
+                autoApplied={{
+                  sets: proposals.autoApplied.filter((set) => message.changeSetIds.includes(set.changeSetId)),
+                  onUndo: undoAutoApplied,
+                  onReview: reviewAutoApplied,
+                }}
               />
             );
           })}
 
           <p role="status" aria-live="polite" className="sr-only">
-            {completedReply}
+            {replyNotice}
           </p>
 
           {error && (
@@ -489,6 +721,7 @@ function DocumentChatAssistant() {
           </button>
         )}
         <div className="mx-auto w-full max-w-[44rem]">
+          {runningPlan ? <PlanProgress plan={runningPlan} /> : liveTasks && liveTasks.length > 0 && <LiveTaskBar items={liveTasks} />}
           <ChatComposer
             value={input}
             onChange={setInput}
@@ -501,6 +734,11 @@ function DocumentChatAssistant() {
             onDismissSelection={() => setDismissedFocus(focus)}
             inputRef={inputHostRef}
             pickerRef={refPickerRef}
+            auto={{ on: auto.on, blocked: auto.blocked, onTurnOn: auto.turnOn, onTurnOff: auto.turnOff, unavailable: autoUnavailable }}
+            switchedOff={policyOff}
+            canUpload={!readOnly}
+            effort={{ value: choices.effort, choices: choices.efforts, onChange: choices.setEffort }}
+            web={webAvailable ? { on: choices.web, onChange: choices.setWeb } : undefined}
           />
         </div>
       </div>

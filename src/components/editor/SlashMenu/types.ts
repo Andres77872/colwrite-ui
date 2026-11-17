@@ -27,8 +27,6 @@ export type SlashContext = {
   applyKind: (kind: BlockKindId) => string;
   /** Put the caret in a block once React has rendered it. */
   focusBlock: (id: string) => void;
-  documentId: string | null;
-  createRemote: () => Promise<string>;
 };
 
 export type SlashItem = {
@@ -56,7 +54,7 @@ export type SlashItem = {
   hint?: string;
   /** An AI command: its icon takes the AI colour, as AI does everywhere. */
   ai?: boolean;
+  disabledReason?: string;
   group: 'ai' | 'basic' | 'insert';
   onSelect: (ctx: SlashContext) => Promise<void> | void;
 };
-

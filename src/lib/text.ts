@@ -35,6 +35,16 @@ export function matchOffsets(text: string, needle: string): number[] {
   return found;
 }
 
+/**
+ * An amount in US dollars as the assistant's costs are reported: "$1.20",
+ * "$0.42", and under ten cents to four places ("$0.0168"), so a small cost
+ * does not read as nothing.
+ */
+export function formatCost(cost: number): string {
+  if (!Number.isFinite(cost) || cost <= 0) return '$0.00';
+  return `$${cost >= 0.1 ? cost.toFixed(2) : cost.toFixed(4)}`;
+}
+
 /** Human-readable file size, e.g. `1.4 MB`. */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';

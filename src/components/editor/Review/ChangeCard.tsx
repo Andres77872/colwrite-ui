@@ -1,17 +1,28 @@
+import type { KeyboardEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { useEditor } from '@/editor';
+import { Kbd } from '@/components/ui/kbd';
+import { useConfirm } from '@/components/ui/confirmContext';
+import { modifierLabel } from '@/components/layout/Shortcuts/shortcuts';
+import { useEditorDoc, usePageReadOnly } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
 import {
   blockText,
   describeChange,
+  isStale,
   mergedBlock,
-  proposedBlock,
+  planRejection,
+  proposedBlocks,
   type ProposedChange,
 } from '@/editor/proposals';
+import type { Block, ReferenceRecord } from '@/editor/types';
+import { coerceBlock } from '@/editor/docOps';
+import { RecordedPassage } from './RecordedPassage';
+import { citationStyleInfo } from '@/editor/csl/styles';
+import { referenceChanges, type ReferenceChange } from '@/editor/referenceRecords';
 import { ProposedBlockView, ProposedRewriteView, STRIKE_WIDGETS } from './ProposedBlockView';
 import { previewBibliography } from './diffText';
-import { ArrowDownUp, Check, Lock, Pencil, Plus, TextCursorInput, Trash2, X } from 'lucide-react';
+import { ArrowDownUp, BookMarked, Check, CircleAlert, Eye, History, Lock, Pencil, Plus, TextCursorInput, Trash2, X } from 'lucide-react';
 
 /**
  * One proposed change, rendered in the document at the position it would take.
@@ -35,9 +46,29 @@ const KIND: Record<
     tint: 'bg-diff-remove/60',
     icon: Trash2,
   },
-  reorder: { label: 'Suggested move', rail: 'bg-ai/60', icon: ArrowDownUp },
-  rename: { label: 'Suggested title', rail: 'bg-ai/60', icon: TextCursorInput },
+  move: { label: 'Suggested move', rail: 'bg-ai/60', icon: ArrowDownUp },
+  meta: { label: 'Suggested title', rail: 'bg-ai/60', icon: TextCursorInput },
+  sources: { label: 'Suggested sources', rail: 'bg-ai/60', icon: BookMarked },
 };
+
+/** The kind's label; a `set_meta` that leaves the title alone sets the citation style. */
+function kindLabel(change: ProposedChange): string {
+  if (change.op.op === 'set_meta' && change.op.name === undefined) return 'Suggested citation style';
+  return KIND[change.kind].label;
+}
+
+const CHANGE_FIELDS: Record<ReferenceChange['field'], string> = {
+  title: 'Title',
+  authors: 'Authors',
+  year: 'Year',
+  state: 'State',
+  flags: 'Marks',
+};
+
+/** A library entry as a reader names it: its title, else its key. */
+function sourceName(source: ReferenceRecord | undefined, key: string): string {
+  return source?.csl.title?.trim() || key;
+}
 
 /** One-line preview of a block, for naming a move's destination. */
 function shortText(text: string, max = 42): string {
@@ -47,41 +78,94 @@ function shortText(text: string, max = 42): string {
 }
 
 function ChangeBody({ change }: { change: ProposedChange }) {
-  const { blocks, doc } = useEditor();
+  const { blocks, doc } = useEditorDoc();
+  const op = change.op;
 
-  if (change.kind === 'rename') {
-    const next = change.op.op === 'update_meta' ? change.op.meta?.name?.trim() : undefined;
-    if (!next) {
-      return (
-        <p className="text-sm text-muted-foreground">
-          The assistant proposed a title with no text, so there is nothing to apply.
-        </p>
-      );
-    }
-    return <p className="text-xl font-semibold">{next}</p>;
+  if (op.op === 'set_meta') {
+    const name = op.name?.trim();
+    return (
+      <div className="space-y-0.5">
+        {op.name !== undefined && (name
+          ? <p className="text-xl font-semibold">{name}</p>
+          : <p className="text-sm text-muted-foreground">The assistant proposed a title with no text.</p>)}
+        {op.citationStyle && (
+          <p className="text-sm">Citation style: {citationStyleInfo(op.citationStyle).name}</p>
+        )}
+      </div>
+    );
   }
 
-  if (change.kind === 'reorder') {
-    // Naming the neighbour survives other changes being accepted first; a raw
-    // index goes stale the moment anything above it moves.
-    const toIndex = change.op.op === 'reorder_block' ? change.op.toIndex : 0;
-    const others = blocks.filter((block) => block.id !== change.anchorBlockId);
-    const above = others[toIndex - 1];
+  if (op.op === 'update_sources') {
+    // Each work as the registries now give it, with what changed in it.
+    const library = new Map((doc?.sources ?? []).map((source) => [source.key, source]));
+    return (
+      <div className="space-y-2 text-sm">
+        <p className="text-muted-foreground">Refreshes these references from the registries:</p>
+        <ul className="ml-4 list-disc space-y-1">
+          {op.sources.map((source) => {
+            const changes = referenceChanges(library.get(source.key), source);
+            return (
+              <li key={source.key}>
+                <span className="font-medium">{sourceName(library.get(source.key) ?? source, source.key)}</span>
+                {changes.length === 0 ? (
+                  <span className="text-muted-foreground"> — no visible change</span>
+                ) : (
+                  <ul className="mt-0.5 space-y-0.5 text-xs text-muted-foreground">
+                    {changes.map((change) => (
+                      <li key={change.field}>
+                        {CHANGE_FIELDS[change.field]}: <span className="text-diff-remove-fg line-through decoration-1">{change.from}</span>
+                        {' → '}
+                        <span className="text-foreground">{change.to}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
+  }
+
+  if (op.op === 'add_sources' || op.op === 'remove_sources') {
+    const library = new Map((doc?.sources ?? []).map((source) => [source.key, source]));
+    const names = op.op === 'add_sources'
+      ? op.sources.map((source) => sourceName(source, source.key))
+      : op.keys.map((key) => sourceName(library.get(key), key));
+    return (
+      <div className="text-sm">
+        <p className="text-muted-foreground">
+          {op.op === 'add_sources' ? 'Adds to the page’s sources, without citing them:' : 'Removes from the page’s sources:'}
+        </p>
+        <ul className={cn('ml-4 list-disc', op.op === 'remove_sources' && 'text-diff-remove-fg line-through decoration-1')}>
+          {names.map((name, index) => <li key={`${index}:${name}`}>{name}</li>)}
+        </ul>
+      </div>
+    );
+  }
+
+  if (op.op === 'move_block') {
+    // Naming the neighbour survives other changes being accepted first.
+    const target = blocks.find((block) => block.id === op.targetBlockId);
     return (
       <p className="text-sm text-muted-foreground">
-        {above
-          ? <>Move below “{shortText(blockText(above))}”.</>
-          : 'Move to the top of the document.'}
+        {target
+          ? <>Move {op.position === 'before' ? 'above' : 'below'} “{shortText(blockText(target))}”.</>
+          : 'The block it would move next to is no longer on the page.'}
       </p>
     );
   }
 
-  const current = blocks.find((block) => block.id === change.anchorBlockId);
+  // A deletion's card sits on the first of its blocks still on the page.
+  const current = change.kind === 'delete'
+    ? change.targetBlockIds.map((id) => blocks.find((block) => block.id === id)).find((block): block is Block => block !== undefined)
+    : blocks.find((block) => block.id === change.anchorBlockId);
 
-  if (!current && change.anchorBlockId) {
+  if (!current && change.anchorBlockId && change.kind !== 'insert') {
     return (
       <p className="text-sm text-muted-foreground">
-        The block this was written for is no longer in the document, so it cannot be applied.
+        The block this was written for is no longer on the page, so it cannot be applied.
       </p>
     );
   }
@@ -91,6 +175,7 @@ function ChangeBody({ change }: { change: ProposedChange }) {
     // other suggestion: the block row itself is hidden while the deletion is
     // pending (see `.review-change` in globals.css), so the label sits above
     // the text it names rather than under it, next to the following block.
+    // The deletion's other blocks are struck where they stand.
     return (
       <ProposedBlockView
         block={current ?? null}
@@ -100,35 +185,80 @@ function ChangeBody({ change }: { change: ProposedChange }) {
   }
 
   const options = { library: doc?.sources, style: doc?.citationStyle ?? null };
+  const added = proposedBlocks(change);
 
   if (change.kind === 'insert') {
-    const block = proposedBlock(change);
-    // Where the block would land, as "after this id" (null: the very top).
+    // Where the blocks would land, as "after this id" (null: the very top).
     const anchorIndex = blocks.findIndex((candidate) => candidate.id === change.anchorBlockId);
     const after =
-      change.placement === 'start'
-        ? null
-        : change.placement === 'end'
-          ? blocks[blocks.length - 1]?.id ?? null
-          : change.placement === 'before'
-            ? blocks[anchorIndex - 1]?.id ?? null
-            : change.anchorBlockId;
+      change.placement === 'end'
+        ? blocks[blocks.length - 1]?.id ?? null
+        : change.placement === 'before'
+          ? blocks[anchorIndex - 1]?.id ?? null
+          : change.anchorBlockId;
+    const bibliography = previewBibliography(blocks, added, { after }, options);
     return (
-      <ProposedBlockView
-        block={block}
-        bibliography={previewBibliography(blocks, [block], { after }, options)}
-      />
+      <div>
+        {added.map((block) => <ProposedBlockView key={block.id} block={block} bibliography={bibliography} />)}
+      </div>
     );
   }
 
   const merged = mergedBlock(change, current);
+  const bibliography = previewBibliography(blocks, [merged, ...added], { replace: current ? [current.id] : [] }, options);
   return (
-    <ProposedRewriteView
-      before={current ?? null}
-      after={merged}
-      block={merged}
-      bibliography={previewBibliography(blocks, [merged], { replace: current ? [current.id] : [] }, options)}
-    />
+    <div>
+      <ProposedRewriteView before={current ?? null} after={merged} block={merged} bibliography={bibliography} />
+      {/* A rewrite written as several blocks: the first takes the block's place, the rest follow it. */}
+      {added.map((block) => (
+        <ProposedBlockView key={block.id} block={block} bibliography={bibliography} className="rounded-sm bg-diff-add/60" />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * What a change rests on, in plain words (TD18): the server flags one that
+ * adds a number, source or named term the page does not hold
+ * (`new_information`), and names the sources one draws on
+ * (`basis`). An operation that only rewords the author's text says nothing.
+ */
+function EvidenceNote({ change }: { change: ProposedChange }) {
+  const { doc } = useEditorDoc();
+  const keys = (change.op.basis ?? []).filter((entry) => entry !== 'author');
+  if (!change.op.newInformation && keys.length === 0) return null;
+  const library = new Map((doc?.sources ?? []).map((source) => [source.key, source]));
+  const op = change.op;
+  const written = op.op === 'write_blocks' ? op.blocks : op.op === 'replace_text' ? [op.block] : [];
+  const citations = written.flatMap((raw) => {
+    const block = coerceBlock(raw);
+    return block?.type === 'paragraph' ? block.children?.filter((child) => child.type === 'citation') ?? [] : [];
+  });
+  for (const citation of citations) for (const record of citation.sources ?? []) {
+    if (!library.has(record.key)) library.set(record.key, record);
+  }
+  const passages = [...new Map(citations.flatMap((citation) => citation.passage
+    ? [[`${citation.passage.chat_id ?? ''}:${citation.passage.id}`, citation.passage] as const] : [])).values()];
+  return (
+    <div className="mt-0.5 space-y-0.5 text-xs text-muted-foreground">
+      {change.op.newInformation && (
+        <p className="flex items-start gap-1">
+          <CircleAlert aria-hidden="true" className="mt-px h-3 w-3 shrink-0 text-warning" />
+          <span>Adds a number or a claim the page doesn’t have yet. Check it before accepting.</span>
+        </p>
+      )}
+      {keys.length > 0 && (
+        <p className="flex items-start gap-1">
+          <BookMarked aria-hidden="true" className="mt-px h-3 w-3 shrink-0" />
+          <span>Based on {keys.map((key) => sourceName(library.get(key), key)).join('; ')}</span>
+        </p>
+      )}
+      {change.op.newInformation && keys.length === 0 && citations.length === 0 && <p>No source recorded.</p>}
+      {passages.length > 0
+        ? <ul aria-label="Recorded passages">{passages.map((passage) =>
+          <li key={`${passage.chat_id ?? ''}:${passage.id}`}><RecordedPassage passage={passage} /></li>)}</ul>
+        : change.op.newInformation && <p>Passage not recorded.</p>}
+    </div>
   );
 }
 
@@ -140,32 +270,124 @@ function HoverLabel({ children }: { children: string }) {
   return <span className="hidden group-hover/change:inline group-focus-within/change:inline">{children}</span>;
 }
 
+/**
+ * The card's own shortcut, shown while the card holds focus — the only time
+ * it works. Hidden on narrow screens, where there is rarely a keyboard and
+ * never the room. `aria-keyshortcuts` on the button carries it for screen
+ * readers, so this copy is not read twice.
+ */
+function KeyHint({ keys }: { keys: readonly string[] }) {
+  return (
+    <span aria-hidden="true" className="hidden items-center gap-0.5 sm:group-focus-within/change:inline-flex">
+      {keys.map((key) => (
+        <Kbd key={key}>{key}</Kbd>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * Accept and reject from the keyboard while a card has focus.
+ *
+ * Both carry the platform modifier, like every app shortcut, and neither is
+ * one the app or the browser already uses: Mod+Enter is "apply" in Ask AI
+ * too, and Mod+Backspace does nothing outside text. They are handled on the
+ * card, so they never fire from the document's own text.
+ */
+function reviewKeys() {
+  const shown = modifierLabel();
+  const aria = shown === '⌘' ? 'Meta' : 'Control';
+  return {
+    accept: { aria: `${aria}+Enter`, keys: [shown, 'Enter'], hint: `${shown}+Enter` },
+    reject: {
+      aria: `${aria}+Backspace ${aria}+Delete`,
+      keys: [shown, 'Backspace'],
+      hint: `${shown}+Backspace`,
+    },
+  };
+}
+
 export function ChangeCard({ change }: { change: ProposedChange }) {
-  const { blocks } = useEditor();
-  const { accept, reject, ready, focusedChangeId } = useProposals();
+  const { blocks } = useEditorDoc();
+  const { accept, reject, ready, focusedChangeId, sets, pending } = useProposals();
+  const confirm = useConfirm();
+  // A viewer sees the suggestion and decides nothing: deciding is an edit (D6).
+  const readOnly = usePageReadOnly();
+  const viewOnlyNote = 'Viewers can’t accept or reject changes';
 
   const style = KIND[change.kind];
   const isReady = ready(change);
   const isFocused = focusedChangeId === change.id;
   const Icon = style.icon;
   const summary = describeChange(change, blocks);
+  const stale = isStale(change, blocks);
+  const keys = reviewKeys();
 
   /**
    * Why Accept is not offered.
    *
    * A lock with no explanation is worse than no lock: the author cannot tell
    * whether the app is broken, whether they are meant to wait, or whether the
-   * change is dead. Each of the three reasons has a different answer.
+   * change is dead. Each of the reasons has a different answer.
    */
   const blockedReason = (() => {
-    if (change.dependsOn.length > 0) {
-      return 'This continues the addition above — accept that one first.';
+    if (change.dependsOn.some((id) => pending.some((candidate) => candidate.id === id))) {
+      // Rejecting that one moves this one onto its place, so either decision
+      // unlocks it.
+      return 'This continues the addition above. Accept or reject that one first.';
     }
     if (change.anchorBlockId && !blocks.some((block) => block.id === change.anchorBlockId)) {
-      return 'The block this was written for is no longer in the document.';
+      return 'The block this was written for is no longer on the page.';
     }
+    if (stale) return 'The text changed after this was suggested.';
     return 'Decide the change above it first — the two would not combine cleanly.';
   })();
+  const BlockedIcon = stale && !isReady ? History : Lock;
+
+  /**
+   * Reject, saying first what goes with it.
+   *
+   * The paragraphs that continue from a rejected addition move onto its
+   * place and stay to be decided. A rewrite or deletion of the block it would
+   * have added has nothing left to apply to, so it goes too — and the author
+   * is told before rather than finding it gone.
+   */
+  const onReject = async () => {
+    const { cascaded } = planRejection(change.id, sets);
+    const count = cascaded.length;
+    if (count > 0) {
+      const ok = await confirm({
+        title: count === 1
+          ? 'Reject this addition and the change to it?'
+          : `Reject this addition and the ${count} changes to it?`,
+        description: count === 1
+          ? 'Another suggestion edits the block this would add, so it is rejected too. This cannot be undone.'
+          : `${count} other suggestions edit the block this would add, so they are rejected too. This cannot be undone.`,
+        confirmLabel: count === 1 ? 'Reject both' : `Reject all ${count + 1}`,
+        destructive: true,
+      });
+      if (!ok) return;
+    }
+    reject(change.id);
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (readOnly) return;
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (isReady) accept(change.id);
+      return;
+    }
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      event.preventDefault();
+      event.stopPropagation();
+      void onReject();
+    }
+  };
 
   return (
     <div
@@ -173,9 +395,11 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
       // A pending rewrite takes its block's place on the page (see
       // `.review-change` in globals.css), so the text appears once, as a diff.
       data-change-kind={change.kind}
+      data-stale={stale || undefined}
       // The review menu's Next/Previous puts DOM focus here (see `focusChange`), so
       // the card must be focusable — but as a target only, never a tab stop.
       tabIndex={-1}
+      onKeyDown={onKeyDown}
       // Deliberately not `.block-row`: the canvas measures those to place the
       // drag indicator, and a proposal is not a drop target.
       className={cn(
@@ -196,27 +420,38 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
       />
       <div className="flex min-h-6 min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
         <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-        <span className="shrink-0">{style.label}</span>
-        {!isReady && (
+        <span className="shrink-0">{kindLabel(change)}</span>
+        {!isReady && !readOnly && (
           <span className="flex min-w-0 items-center gap-1 truncate">
             <span aria-hidden="true">·</span>
-            <Lock aria-hidden="true" className="h-3 w-3 shrink-0" />
+            <BlockedIcon aria-hidden="true" className="h-3 w-3 shrink-0" />
             <span className="truncate">{blockedReason}</span>
           </span>
         )}
 
+        {readOnly && (
+          <span className="flex min-w-0 items-center gap-1 truncate">
+            <span aria-hidden="true">·</span>
+            <Eye aria-hidden="true" className="h-3 w-3 shrink-0" />
+            <span className="truncate">{viewOnlyNote}</span>
+          </span>
+        )}
+
         <span className="ml-auto flex shrink-0 items-center gap-0.5">
-          {isReady && (
+          {(isReady || readOnly) && (
             <Button
               size="xs"
               variant="ghost"
               className="font-normal text-diff-add-fg hover:bg-diff-add hover:text-diff-add-fg"
               onClick={() => accept(change.id)}
+              disabled={readOnly}
               aria-label={`Accept: ${summary}`}
-              title="Accept"
+              aria-keyshortcuts={readOnly ? undefined : keys.accept.aria}
+              title={readOnly ? viewOnlyNote : `Accept (${keys.accept.hint})`}
             >
               <Check />
               <HoverLabel>Accept</HoverLabel>
+              <KeyHint keys={keys.accept.keys} />
             </Button>
           )}
           {/* Always available. A blocked change previously offered neither
@@ -226,17 +461,21 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
             size="xs"
             variant="ghost"
             className="font-normal text-muted-foreground hover:text-foreground"
-            onClick={() => reject(change.id)}
+            onClick={() => void onReject()}
+            disabled={readOnly}
             aria-label={`Reject: ${summary}`}
-            title="Reject"
+            aria-keyshortcuts={readOnly ? undefined : keys.reject.aria}
+            title={readOnly ? viewOnlyNote : `Reject (${keys.reject.hint})`}
           >
             <X />
             <HoverLabel>Reject</HoverLabel>
+            <KeyHint keys={keys.reject.keys} />
           </Button>
         </span>
       </div>
 
       <ChangeBody change={change} />
+      <EvidenceNote change={change} />
     </div>
   );
 }

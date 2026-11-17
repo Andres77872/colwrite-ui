@@ -16,12 +16,16 @@ import type {
 import {
   buildBibliography,
   citationAnchorId,
-  citationLabelParts,
-  formatReference,
+  citationEntries,
+  citationLabel,
+  isParenthetical,
   referenceAnchorId,
-  referenceMarker,
   type Bibliography,
 } from '@/editor/citations';
+import { markupHtml } from '@/editor/csl/markup';
+import { referenceMarks } from '@/editor/referenceRecords';
+import { assistantOutputBlocks } from '@/editor/markdown';
+import { CslText } from '@/components/editor/References/CslText';
 import { ChartFigure } from '@/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/ChartFigure';
 import { cn } from '@/lib/utils';
 import { exportStyles } from './styles';
@@ -29,7 +33,6 @@ import {
   materializedParts,
   safeChartColors,
   safeDiagramSvg,
-  safeHttpUrl,
   sanitizeInlineFragment,
 } from './sanitize';
 import { figureNumbers, isDiagramBlock, isFigureBlock } from '@/editor/blockKinds';
@@ -37,6 +40,7 @@ import { StaticFigure } from '@/components/common/StructuredFigure/StaticFigure'
 import { compileFigure, figureMeta } from '@/lib/figure/compile';
 import { getFigureMeasurer } from '@/lib/figure/measure';
 import type { RenderedDiagrams } from './diagrams';
+import type { ExportImages } from './images';
 import type {
   DocumentExportOptions,
   DocumentExportSnapshot,
@@ -80,13 +84,10 @@ function numberingFor(doc: Doc): Numbering {
 }
 
 /**
- * A citation, with every number linked to the entry it stands for.
- *
- * It used to link the whole label to the publisher instead — the one
- * destination the reader can reach unaided, and the one that is unreachable
- * offline or on paper. `[1, 4]` now resolves inside the document as two
- * separate links, and the reference entry carries the outbound link, which is
- * the direction every published paper uses.
+ * A citation as the page's CSL style prints it, linked to the entry it
+ * stands for (its first, for a citation of several), so it resolves inside
+ * the document offline and on paper; the reference entry carries the
+ * outbound link, the direction every published paper uses.
  */
 function CitationView({
   child,
@@ -97,26 +98,25 @@ function CitationView({
   bibliography: Bibliography;
   hasReferences: boolean;
 }) {
-  const parts = citationLabelParts(child, bibliography);
-  if (!hasReferences || !parts.some((part) => part.entry)) {
-    return <span className="citation">{parts.map((part) => part.text).join('')}</span>;
+  // The processor's markup, re-escaped by `markupHtml`: only its own tags, no links.
+  const html = markupHtml(citationLabel(child, bibliography), { links: false });
+  const target = citationEntries(child, bibliography).find((entry) => entry !== null);
+  if (!hasReferences || !target) {
+    return <span className="citation" dangerouslySetInnerHTML={{ __html: html }} />;
   }
   return (
     // The anchor sits on the wrapper: one id per citation, whatever it links to.
     <span className="citation" id={citationAnchorId(child.id)}>
-      {parts.map((part, index) =>
-        part.entry ? (
-          <a href={`#${referenceAnchorId(part.entry)}`} key={index}>
-            {part.text}
-          </a>
-        ) : (
-          <span key={index}>{part.text}</span>
-        ),
-      )}
+      <a href={`#${referenceAnchorId(target)}`} dangerouslySetInnerHTML={{ __html: html }} />
     </span>
   );
 }
 
+/**
+ * The reference list in the page's style. A retraction, a work no registry
+ * found and one that needs review are said in the entry itself, so a reader
+ * of the file sees them (09 §5).
+ */
 function ReferencesView({
   bibliography,
   options,
@@ -124,31 +124,27 @@ function ReferencesView({
   bibliography: Bibliography;
   options: DocumentExportOptions;
 }) {
-  const { entries, style } = bibliography;
+  const { entries, hangingIndent } = bibliography;
   if (!options.include_references || entries.length === 0) return null;
 
   return (
-    <section className="references" aria-labelledby="references-heading">
+    <section className={cn('references', hangingIndent && 'hanging-indent')} aria-labelledby="references-heading">
       <h2 className="export-heading level-2" id="references-heading">
         References
       </h2>
       <ol className="reference-list">
         {entries.map((entry) => {
-          const parts = formatReference(entry, style);
-          const href = safeHttpUrl(parts.href);
+          const marks = referenceMarks(entry.record).filter((mark) => mark.tone !== 'neutral');
           return (
             <li className="reference-item" id={referenceAnchorId(entry)} key={entry.key}>
-              <span className="reference-marker">{referenceMarker(entry, style)}</span>
+              <span className="reference-marker">{entry.marker ?? ''}</span>
               <span className="reference-body">
-                {parts.text}
-                {href && (
-                  <>
-                    {' '}
-                    <a className="reference-link" href={href} rel="noopener noreferrer">
-                      {parts.linkLabel}
-                    </a>
-                  </>
-                )}
+                <span dangerouslySetInnerHTML={{ __html: markupHtml(entry.formatted) }} />
+                {marks.map((mark) => (
+                  <span className={`reference-mark mark-${mark.kind}`} key={mark.kind}>
+                    {' '}[{mark.label}: {mark.detail}]
+                  </span>
+                ))}
                 {/* Back-links, the way a printed index reads: one target per
                     place the source is used, so a reader can walk from the
                     bibliography into the argument. */}
@@ -258,12 +254,21 @@ function GraphView({ child }: { child: GraphChild }) {
   );
 }
 
-function AiBeatView({ child }: { child: Extract<ParagraphChild, { type: 'aiBeat' }> }) {
+function AiBeatView({ child, options }: { child: Extract<ParagraphChild, { type: 'aiBeat' }>; options: DocumentExportOptions }) {
+  const blocks = assistantOutputBlocks(child.output);
+  const bibliography = buildBibliography(blocks);
+  const numbering: Numbering = { bibliography, equations: new Map(), figures: new Map() };
   return (
     <aside className="ai-beat-card">
       <div className="ai-beat-label">AI Beat draft</div>
       {child.message && <p className="ai-beat-message">{child.message}</p>}
-      {child.output && <p>{child.output}</p>}
+      <DocumentBlocks doc={{ blocks }} numbering={numbering} options={{ ...options, include_references: false }} />
+      {!!bibliography.entries.length && (
+        <div className="ai-beat-references">
+          <p>Draft sources</p>
+          <ol>{bibliography.entries.map((entry) => <li key={entry.key}><CslText markup={entry.formatted} /></li>)}</ol>
+        </div>
+      )}
     </aside>
   );
 }
@@ -290,7 +295,7 @@ function BlockChildView({
     return <DisplayEquationView child={child} number={numbering.equations.get(child.id)} />;
   }
   if (child.type === 'aiBeat' && options.ai_beat === 'draft-card') {
-    return <AiBeatView child={child} />;
+    return <AiBeatView child={child} options={options} />;
   }
   return null;
 }
@@ -318,7 +323,7 @@ function InlineChildView({
 }
 
 /**
- * Characters an author–year citation may sit flush against — the same rule
+ * Characters a parenthetical citation may sit flush against — the same rule
  * the editor's CitationInline applies, so "lengths (Vaswani, 2017)" exports
  * the way it reads on the page instead of "lengths(Vaswani, 2017)".
  */
@@ -394,10 +399,9 @@ function paragraphOutput(
         />,
       );
     } else {
-      const style = numbering.bibliography.documentStyle ?? (child.type === 'citation' ? child.style : undefined);
       if (
         child.type === 'citation'
-        && style === 'author-year'
+        && isParenthetical(citationLabel(child, numbering.bibliography))
         && previousCharacter
         && !OPENS_OR_SPACE.test(previousCharacter)
       ) {
@@ -522,17 +526,17 @@ function ListRun({
   options: DocumentExportOptions;
 }) {
   const lists: React.ReactNode[] = [];
+  const nestedAt = (at: number) => (items[at]?.indent ?? 0) > depth;
   let index = 0;
-  while (index < items.length) {
-    const tag = listTag(items[index]);
+  for (let head = items[index]; head; head = items[index]) {
+    const tag = listTag(head);
     const entries: React.ReactNode[] = [];
-    while (index < items.length) {
-      const item = items[index];
+    for (let item = items[index]; item; item = items[index]) {
       const itemDepth = item.indent ?? 0;
       let end = index + 1;
       if (itemDepth === depth) {
         if (listTag(item) !== tag) break;
-        while (end < items.length && (items[end].indent ?? 0) > depth) end += 1;
+        while (end < items.length && nestedAt(end)) end += 1;
         const nested = items.slice(index + 1, end);
         entries.push(
           <li
@@ -550,7 +554,7 @@ function ListRun({
         );
       } else {
         end = index;
-        while (end < items.length && (items[end].indent ?? 0) > depth) end += 1;
+        while (end < items.length && nestedAt(end)) end += 1;
         entries.push(
           <li key={`spacer-${item.id}`} className="list-spacer">
             <ListRun items={items.slice(index, end)} depth={depth + 1} numbering={numbering} options={options} />
@@ -559,7 +563,7 @@ function ListRun({
       }
       index = end;
     }
-    const key = `list-${lists.length}-${items[0].id}`;
+    const key = `list-${lists.length}-${head.id}`;
     if (tag === 'ol') lists.push(<ol key={key} className="export-list">{entries}</ol>);
     else lists.push(<ul key={key} className={cn('export-list', tag === 'todo' && 'todo-list')}>{entries}</ul>);
   }
@@ -575,20 +579,22 @@ function isListBlock(block: Block | undefined): boolean {
   );
 }
 
-function DocumentView({
+function DocumentBlocks({
   doc,
   options,
   diagrams,
+  numbering,
+  images,
 }: {
   doc: Doc;
   options: DocumentExportOptions;
   diagrams?: RenderedDiagrams;
+  numbering: Numbering;
+  images?: ExportImages;
 }) {
-  const numbering = numberingFor(doc);
   const blockIds = new Set<string>();
   return (
-    <main className={`document-export profile-${options.profile}`}>
-      {options.include_title && <h1 className="document-title">{doc.name?.trim() || 'Untitled document'}</h1>}
+    <>
       {doc.blocks.map((block, index) => {
         if (blockIds.has(block.id)) throw new ExportValidationError(`Duplicate block ID: ${block.id}`);
         blockIds.add(block.id);
@@ -610,6 +616,20 @@ function DocumentView({
           );
         }
         if (block.type === 'divider') return <hr className="export-divider" key={block.id} />;
+        if (block.type === 'image') {
+          const image = images?.get(block.assetId);
+          if (!image?.dataUrl || !/^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(image.dataUrl)) {
+            throw new ExportValidationError('Image assets must be embedded before exporting this page.');
+          }
+          const number = numbering.figures.get(block.id);
+          return <figure className="export-block" key={block.id} data-image-origin={block.origin.kind}>
+            <div style={{ width: `${(block.width ?? 1) * 100}%`, margin: '0 auto', textAlign: 'center' }}>
+              <img src={image.dataUrl} alt={block.alt} width={image.info.width} height={image.info.height} style={{ width: '100%', maxWidth: '100%', height: 'auto' }} />
+            </div>
+            {block.caption && <figcaption>{number !== undefined && <strong>Figure {number}. </strong>}{block.caption}</figcaption>}
+            {block.origin.kind === 'generated' && <p>AI-generated image</p>}
+          </figure>;
+        }
         if (block.type === 'code') {
           return (
             <CodeView
@@ -637,6 +657,16 @@ function DocumentView({
         }
         return <ParagraphView key={block.id} block={block} numbering={numbering} options={options} />;
       })}
+    </>
+  );
+}
+
+function DocumentView({ doc, options, diagrams, images }: { doc: Doc; options: DocumentExportOptions; diagrams?: RenderedDiagrams; images?: ExportImages }) {
+  const numbering = numberingFor(doc);
+  return (
+    <main className={`document-export profile-${options.profile}`}>
+      {options.include_title && <h1 className="document-title">{doc.name?.trim() || 'Untitled page'}</h1>}
+      <DocumentBlocks doc={doc} options={options} diagrams={diagrams} numbering={numbering} images={images} />
       <ReferencesView bibliography={numbering.bibliography} options={options} />
     </main>
   );
@@ -648,15 +678,13 @@ export function renderStandaloneHtml(
   snapshot: DocumentExportSnapshot,
   /** Diagram blocks already drawn to SVG, by block id (`renderDocumentDiagrams`). */
   diagrams?: RenderedDiagrams,
+  images?: ExportImages,
 ): string {
-  if (!Number.isInteger(doc.version) || doc.version < 1) {
-    throw new ExportValidationError('Document version must be a positive integer');
-  }
   if (!Array.isArray(doc.blocks) || doc.blocks.length > 2000) {
     throw new ExportValidationError('Document contains too many blocks');
   }
-  const body = renderToStaticMarkup(<DocumentView doc={doc} options={options} diagrams={diagrams} />);
-  const title = escapeAttribute(doc.name?.trim() || 'Untitled document');
+  const body = renderToStaticMarkup(<DocumentView doc={doc} options={options} diagrams={diagrams} images={images} />);
+  const title = escapeAttribute(doc.name?.trim() || 'Untitled page');
   const styles = exportStyles(options);
   return `<!doctype html>
 <html lang="en" dir="ltr">
@@ -665,7 +693,6 @@ export function renderStandaloneHtml(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:; base-uri 'none'; form-action 'none'">
 <meta name="generator" content="ColWrite document-renderer/${DOCUMENT_RENDERER_VERSION}">
-<meta name="colwrite-document-version" content="${doc.version}">
 <meta name="colwrite-local-revision" content="${snapshot.local_revision}">
 <meta name="colwrite-export-profile" content="${options.profile}">
 <title>${title}</title>

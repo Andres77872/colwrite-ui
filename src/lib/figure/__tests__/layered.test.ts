@@ -1,3 +1,4 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import { layeredLayout, type LayeredEdge, type LayeredItem, type LayeredOptions, type LayeredResult } from '../layered';
 
@@ -26,7 +27,7 @@ function items(...ids: string[]): LayeredItem[] {
 }
 
 function edge(spec: string, extra: Partial<LayeredEdge> = {}): LayeredEdge {
-  const [from, to] = spec.split('->').map((s) => s.trim());
+  const [from, to] = takeItems(spec.split('->').map((s) => s.trim()), 2);
   return { from, to, weight: 1, constraint: true, labelMain: 0, ...extra };
 }
 
@@ -62,8 +63,8 @@ function expectNoOverlap(result: LayeredResult, list: LayeredItem[], gap = OPTIO
   for (const ids of layers.values()) {
     const sorted = ids.sort((a, b) => crossOf(result, a) - crossOf(result, b));
     for (let k = 1; k < sorted.length; k += 1) {
-      const a = byId.get(sorted[k - 1])!;
-      const b = byId.get(sorted[k])!;
+      const a = byId.get(itemAt(sorted, k - 1))!;
+      const b = byId.get(itemAt(sorted, k))!;
       const space = crossOf(result, b.id) - b.before - (crossOf(result, a.id) + a.after);
       expect(space).toBeGreaterThanOrEqual(gap - 1e-6);
     }
@@ -271,7 +272,7 @@ describe('layeredLayout — ranks', () => {
     }
     // Every edge between steps runs with the flow; the ones inside a step are flat.
     for (const spec of specs) {
-      const [from, to] = spec.split(' -> ');
+      const [from, to] = takeItems(spec.split(' -> '), 2);
       const step = (id: string) => Number(id.slice(1));
       expect(rankOf(result, to) - rankOf(result, from)).toBe(step(to) === step(from) ? 0 : 1);
     }
@@ -327,7 +328,7 @@ describe('layeredLayout — positions', () => {
     ];
     const result = layeredLayout(list, edges('a -> b', 'b -> c', 'c -> d'), OPTIONS);
     const xs = list.map((i) => crossOf(result, i.id));
-    for (const x of xs) expect(x).toBeCloseTo(xs[0], 9);
+    for (const x of xs) expect(x).toBeCloseTo(itemAt(xs, 0), 9);
     // The widest `before` and `after` set the extent.
     expect(Math.min(...list.map((i) => crossOf(result, i.id) - i.before))).toBeCloseTo(0, 9);
     expect(result.crossExtent).toBeCloseTo(60 + 70, 9);
@@ -337,7 +338,7 @@ describe('layeredLayout — positions', () => {
     const list = items('x', 'attn', 'norm', 'add');
     const result = layeredLayout(list, edges('x -> attn', 'attn -> norm', 'norm -> add', 'x -> add'), OPTIONS);
     const xs = ['x', 'attn', 'norm', 'add'].map((id) => crossOf(result, id));
-    for (const x of xs) expect(x).toBeCloseTo(xs[0], 6);
+    for (const x of xs) expect(x).toBeCloseTo(itemAt(xs, 0), 6);
   });
 
   it('centres a node between its two inputs', () => {
@@ -438,7 +439,7 @@ describe('layeredLayout — positions', () => {
     const list = items('a', 'b', 'c', 'd');
     const e = edges('a -> c', 'b -> c', 'c -> d');
     const forward = layeredLayout(list, e, OPTIONS);
-    const shuffled = layeredLayout([list[2], list[0], list[3], list[1]], e, OPTIONS);
+    const shuffled = layeredLayout([itemAt(list, 2), itemAt(list, 0), itemAt(list, 3), itemAt(list, 1)], e, OPTIONS);
     expect([...shuffled.cross.entries()].sort()).toEqual([...forward.cross.entries()].sort());
   });
 });
@@ -460,14 +461,14 @@ describe('layeredLayout — main axis', () => {
   it('widens the gaps a labelled edge crosses', () => {
     const list = items('a', 'b', 'c');
     const result = layeredLayout(list, [edge('a -> b'), edge('b -> c'), edge('a -> c', { labelMain: 40 })], OPTIONS);
-    const [b0, b1, b2] = result.bands;
+    const [b0, b1, b2] = takeItems(result.bands, 3);
     expect(b1[0] - b0[1]).toBe(52);
     expect(b2[0] - b1[1]).toBe(52);
   });
 
   it('keeps the rank gap when the label is small', () => {
     const result = layeredLayout(items('a', 'b'), [edge('a -> b', { labelMain: 12 })], OPTIONS);
-    expect(result.bands[1][0] - result.bands[0][1]).toBe(30);
+    expect(itemAt(itemAt(result.bands, 1), 0) - itemAt(itemAt(result.bands, 0), 1)).toBe(30);
   });
 
   it('sanitises negative sizes and weights', () => {
@@ -475,6 +476,6 @@ describe('layeredLayout — main axis', () => {
     const result = layeredLayout(list, [edge('a -> b', { weight: -3, labelMain: -1 })], OPTIONS);
     expect(result.main.get('a')).toBe(0);
     expect(Number.isFinite(crossOf(result, 'a'))).toBe(true);
-    expect(result.bands[1][0]).toBe(30);
+    expect(result.bands[1]?.[0]).toBe(30);
   });
 });

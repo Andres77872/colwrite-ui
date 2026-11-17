@@ -1,20 +1,19 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, screen, waitFor } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEngineCatalog, AgentEngineStatus } from '@/services/agentEngines';
+import { mockAgentEngines } from '@/data/__tests__/agentEngineFixtures';
+import { fixtures } from '@/dev/msw/fixtures';
+import type { AgentEngineCatalog, AgentEngineStatus } from '@/data/agentEngines';
 import {
   DEFAULT_ENGINE_PREFS,
-  isAgentEnginePrefs,
+  preferencesOf,
   resolveEngineRequest,
   useAgentEngine,
   type AgentEngineContextValue,
 } from './agentEngineContextState';
 
-const api = vi.hoisted(() => ({ list: vi.fn(), check: vi.fn() }));
-
-vi.mock('@/services/agentEngines', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/services/agentEngines')>();
-  return { ...actual, getAgentEngines: api.list, checkAgentEngine: api.check };
-});
+/** The server's engine routes. */
+const api = { list: vi.fn(), check: vi.fn() };
 
 const { AgentEngineProvider } = await import('./AgentEngineContext');
 
@@ -32,12 +31,16 @@ function status(engine: AgentEngineStatus['engine'], state: AgentEngineStatus['s
 function catalog(runtime: 'local' | 'deployed', codex: AgentEngineStatus['state'] = 'unauthenticated'): AgentEngineCatalog {
   return {
     runtime,
-    default_engine: 'legacy',
+    default_engine: 'gateway',
     engines: [
-      status('legacy', 'ready'),
+      status('gateway', 'ready'),
       status('claude', runtime === 'local' ? 'ready' : 'disabled'),
       status('codex', runtime === 'local' ? codex : 'disabled'),
     ],
+    gateway_models: {
+      main: ['openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5', 'google/gemini-4-hydrogen'],
+      lite: ['openai/gpt-6-luna', 'anthropic/claude-haiku-5.5', 'google/gemini-4-hydrogen'],
+    },
   };
 }
 
@@ -55,7 +58,7 @@ describe('resolveEngineRequest', () => {
     // Inline AI follows the assistant unless told otherwise.
     expect(resolveEngineRequest(prefs, local, 'inline')).toEqual({ engine: 'claude', model: 'sonnet' });
     expect(
-      resolveEngineRequest({ ...prefs, inline: 'legacy' }, local, 'inline'),
+      resolveEngineRequest({ ...prefs, inline: 'gateway' }, local, 'inline'),
     ).toEqual({});
   });
 
@@ -63,6 +66,14 @@ describe('resolveEngineRequest', () => {
     const prefs = { chat: 'codex' as const, inline: 'claude' as const, models: {} };
     expect(resolveEngineRequest(prefs, catalog('deployed'), 'chat')).toEqual({});
     expect(resolveEngineRequest(prefs, catalog('deployed'), 'inline')).toEqual({});
+  });
+
+  it('names the gateway until the server has said it is local (U-37)', () => {
+    const prefs = { chat: 'claude' as const, inline: 'codex' as const, models: { claude: 'sonnet' } };
+    // The catalog has not answered: the runtime is unknown, so no local engine.
+    expect(resolveEngineRequest(prefs, null, 'chat')).toEqual({});
+    expect(resolveEngineRequest(prefs, null, 'inline')).toEqual({});
+    expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({ engine: 'claude', model: 'sonnet' });
   });
 
   it('keeps an engine that is not signed in, so the server says why', () => {
@@ -73,15 +84,38 @@ describe('resolveEngineRequest', () => {
   it('drops a stored model the engine could not accept', () => {
     const prefs = { chat: 'claude' as const, inline: 'chat' as const, models: { claude: '~gateway/id' } };
     expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({ engine: 'claude' });
-    const legacy = { chat: 'legacy' as const, inline: 'chat' as const, models: { legacy: '~anthropic/x' } };
-    expect(resolveEngineRequest(legacy, local, 'chat')).toEqual({ engine: 'legacy', model: '~anthropic/x' });
+    const gatewayPrefs = { chat: 'gateway' as const, inline: 'chat' as const, models: { gateway: '~anthropic/x' } };
+    expect(resolveEngineRequest(gatewayPrefs, local, 'chat')).toEqual({});
   });
 
-  it('validates persisted preferences', () => {
-    expect(isAgentEnginePrefs(DEFAULT_ENGINE_PREFS)).toBe(true);
-    expect(isAgentEnginePrefs({ chat: 'gpt', inline: 'chat', models: {} })).toBe(false);
-    expect(isAgentEnginePrefs({ chat: 'claude', inline: 'claude', models: { claude: 3 } })).toBe(false);
-    expect(isAgentEnginePrefs(null)).toBe(false);
+  it('sends tier choices to gateway and CLI runs on both surfaces', () => {
+    const prefs = {
+      chat: 'claude' as const, inline: 'gateway' as const,
+      models: { gateway: 'anthropic/claude-sonnet-5.5', claude: 'sonnet' },
+      liteModel: 'anthropic/claude-haiku-5.5',
+    };
+    const gateway_models = { main: 'anthropic/claude-sonnet-5.5', lite: 'anthropic/claude-haiku-5.5' };
+    expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({ engine: 'claude', model: 'sonnet', gateway_models });
+    expect(resolveEngineRequest(prefs, local, 'inline')).toEqual({ gateway_models });
+    expect(resolveEngineRequest(prefs, catalog('deployed'), 'chat')).toEqual({ gateway_models });
+  });
+
+  it('does not send unknown, cross-tier, or unverified stored choices', () => {
+    const prefs = {
+      ...DEFAULT_ENGINE_PREFS,
+      models: { gateway: 'openai/gpt-6-luna' },
+      liteModel: 'openai/gpt-6.1-sol',
+    };
+    expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({});
+    const valid = { ...prefs, models: { gateway: 'openai/gpt-6.1-sol' }, liteModel: 'openai/gpt-6-luna' };
+    expect(resolveEngineRequest(valid, null, 'chat')).toEqual({});
+  });
+
+  it('uses account defaults and resolves a separate review engine', () => {
+    const prefs = preferencesOf({ chat_engine: 'claude', review_engine: 'gateway', chat_effort: 'quick' });
+    expect(prefs.chatEffort).toBe('quick');
+    expect(resolveEngineRequest(prefs, local, 'chat')).toEqual({ engine: 'claude' });
+    expect(resolveEngineRequest(prefs, local, 'review')).toEqual({});
   });
 });
 
@@ -90,21 +124,25 @@ describe('AgentEngineProvider', () => {
 
   function Probe() {
     latest = useAgentEngine();
-    return <span data-testid="engine">{latest.engineFor('chat')}</span>;
+    return <span data-testid="engine">{latest.requestFor('chat').engine ?? 'gateway'}</span>;
   }
 
   beforeEach(() => {
     window.localStorage.clear();
     api.list.mockReset();
     api.check.mockReset();
+    mockAgentEngines(api);
     latest = null;
   });
 
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it('works on the default engine outside a provider', () => {
     render(<Probe />);
-    expect(screen.getByTestId('engine').textContent).toBe('legacy');
+    expect(screen.getByTestId('engine').textContent).toBe('gateway');
     expect(latest?.selectable).toBe(false);
     expect(latest?.requestFor('chat')).toEqual({});
   });
@@ -116,19 +154,16 @@ describe('AgentEngineProvider', () => {
         <Probe />
       </AgentEngineProvider>,
     );
-    await waitFor(() => expect(latest?.selectable).toBe(true));
+    await waitFor(() => expect(latest?.selectable && latest.preferencesReady).toBe(true));
     expect(latest?.statusOf('claude')?.state).toBe('ready');
 
     act(() => latest?.setChatEngine('claude'));
-    expect(screen.getByTestId('engine').textContent).toBe('claude');
+    await waitFor(() => expect(screen.getByTestId('engine').textContent).toBe('claude'));
     expect(latest?.requestFor('chat')).toEqual({ engine: 'claude' });
   });
 
   it('ignores a remembered local engine on a deployed server', async () => {
-    window.localStorage.setItem(
-      'colwrite:agent-engine:v1',
-      JSON.stringify({ chat: 'claude', inline: 'chat', models: {} }),
-    );
+    fixtures.assistant.defaults = { chat_engine: 'claude' };
     api.list.mockResolvedValue(catalog('deployed'));
     render(
       <AgentEngineProvider>
@@ -138,7 +173,23 @@ describe('AgentEngineProvider', () => {
     await waitFor(() => expect(api.list).toHaveBeenCalled());
     await waitFor(() => expect(latest?.catalog?.runtime).toBe('deployed'));
     expect(latest?.selectable).toBe(false);
-    expect(screen.getByTestId('engine').textContent).toBe('legacy');
+    await waitFor(() => expect(latest?.prefs.chat).toBe('claude'));
+    expect(screen.getByTestId('engine').textContent).toBe('gateway');
+    expect(latest?.requestFor('chat')).toEqual({});
+  });
+
+  it('does not inherit the previous account or the old device-wide engine on the same browser', async () => {
+    window.localStorage.setItem('colwrite:device:agent-engine', JSON.stringify({
+      chat: 'codex', inline: 'chat', models: { gateway: 'google/gemini-4-hydrogen' },
+    }));
+    api.list.mockResolvedValue(catalog('local'));
+    fixtures.assistant.defaults = { chat_engine: 'claude', claude_model: 'opus' };
+    const first = render(<AgentEngineProvider><Probe /></AgentEngineProvider>);
+    await waitFor(() => expect(latest?.requestFor('chat')).toEqual({ engine: 'claude', model: 'opus' }));
+    first.unmount();
+    fixtures.assistant.defaults = {};
+    render(<AgentEngineProvider><Probe /></AgentEngineProvider>);
+    await waitFor(() => expect(latest?.selectable && latest.preferencesReady).toBe(true));
     expect(latest?.requestFor('chat')).toEqual({});
   });
 
@@ -167,7 +218,7 @@ describe('AgentEngineProvider', () => {
         <Probe />
       </AgentEngineProvider>,
     );
-    await waitFor(() => expect(latest?.selectable).toBe(true));
+    await waitFor(() => expect(latest?.selectable && latest.preferencesReady).toBe(true));
 
     let problem: string | null = null;
     act(() => {
@@ -180,12 +231,12 @@ describe('AgentEngineProvider', () => {
       problem = latest?.setModel('claude', ' opus ') ?? null;
     });
     expect(problem).toBeNull();
-    expect(latest?.prefs.models.claude).toBe('opus');
+    await waitFor(() => expect(latest?.prefs.models.claude).toBe('opus'));
 
     act(() => {
       latest?.setModel('claude', '');
     });
-    expect(latest?.prefs.models.claude).toBeUndefined();
+    await waitFor(() => expect(latest?.prefs.models.claude).toBeUndefined());
   });
 
   it('re-reads the statuses after an engine error, not after other errors', async () => {
@@ -200,6 +251,35 @@ describe('AgentEngineProvider', () => {
     act(() => latest?.noteRunError('STREAM_ERROR'));
     act(() => latest?.noteRunError('ENGINE_AUTH_REQUIRED'));
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
+    act(() => latest?.noteRunError('MODEL_NOT_CONFIGURED'));
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(3));
+    // A CLI failure that is not a sign-in: the probe says whether the login still holds.
+    act(() => latest?.noteRunError('ENGINE_FAILED'));
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(4));
+  });
+
+  it('validates each gateway tier against its own catalog and keeps existing preferences intact', async () => {
+    api.list.mockResolvedValue(catalog('deployed'));
+    render(<AgentEngineProvider><Probe /></AgentEngineProvider>);
+    await waitFor(() => expect(latest?.catalog?.gateway_models && latest.preferencesReady).toBeTruthy());
+    let problem: string | null = null;
+    act(() => { problem = latest?.setGatewayModel('main', 'openai/gpt-6-luna') ?? null; });
+    expect(problem).toMatch(/configured/);
+    act(() => { problem = latest?.setGatewayModel('lite', 'openai/gpt-6.1-sol') ?? null; });
+    expect(problem).toMatch(/configured/);
+    expect(latest?.requestFor('chat')).toEqual({});
+
+    act(() => { latest?.setModel('gateway', ' anthropic/claude-sonnet-5.5 '); });
+    act(() => { latest?.setGatewayModel('lite', 'google/gemini-4-hydrogen'); });
+    await waitFor(() => expect(latest?.requestFor('chat')).toEqual({
+      gateway_models: { main: 'anthropic/claude-sonnet-5.5', lite: 'google/gemini-4-hydrogen' },
+    }));
+    act(() => { latest?.setGatewayModel('main', 'unknown/model'); });
+    expect(latest?.prefs.models.gateway).toBe('anthropic/claude-sonnet-5.5');
+    act(() => { latest?.setGatewayModel('lite', ''); });
+    await waitFor(() => expect(latest?.requestFor('inline')).toEqual({ gateway_models: { main: 'anthropic/claude-sonnet-5.5' } }));
+    act(() => { latest?.setGatewayModel('main', ''); });
+    await waitFor(() => expect(latest?.requestFor('chat')).toEqual({}));
   });
 
   it('keeps working on the default engine when an older API has no engines route', async () => {

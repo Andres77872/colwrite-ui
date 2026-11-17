@@ -1,12 +1,21 @@
-import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { insertEmptyCitation } from '../SlashMenu/items/insertChild';
+import { openInlineEditor } from '../SlashMenu/items/editInline';
+import { modKeyLabel } from '@/components/layout/Shortcuts/shortcuts';
 import { cn } from '@/lib/utils';
-import { uid } from '@/lib/uid';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { menuItem, menuLabel, menuSeparator } from '@/components/ui/menuStyles';
-import { TURN_INTO_KINDS, blockKind, kindOf, useEditor, type BlockKindId } from '@/editor';
-import { AgentToolsContext } from '@/components/preferences/agentToolsContextState';
+import {
+  TURN_INTO_KINDS,
+  blockKind,
+  kindOf,
+  useDocumentId,
+  useDocumentSession,
+  useEditorActions,
+  type BlockKindId,
+} from '@/editor';
 import { PanelsContext } from '@/components/panels/panelsContextState';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import {
@@ -20,16 +29,20 @@ import {
   Link2,
   MoreHorizontal,
   Quote,
+  SearchCheck,
   Sparkles,
   Strikethrough,
   Telescope,
   Underline,
 } from 'lucide-react';
 import { openAskAi } from '../AskAi/askAiEvents';
-import { ASK_AI_PRESETS, type AskAiPreset } from '../AskAi/presets';
+import { askAiPresets, type AskAiPreset } from '../AskAi/presets';
+import { AssistantCatalogContext } from '@/components/preferences/assistantCatalogContextState';
 import { ToolbarMenu } from './ToolbarMenu';
 import { EDIT_LINK_EVENT, normalizeHref } from './linkHref';
 import { LinkHoverCard } from './LinkHoverCard';
+import { openFindCitations, planSentences } from '../FindCitations';
+import { proseOffset, proseText } from '../References/citeAtCursor';
 
 const TOOLBAR_HEIGHT = 36;
 const VIEWPORT_MARGIN = 8;
@@ -39,14 +52,6 @@ const GAP = 8;
 const ESTIMATED_WIDTH = 460;
 /** Tall enough for either menu; decides whether a menu opens up or down. */
 const MENU_ROOM = 480;
-
-/** `⌘X` on Apple platforms, `Ctrl+X` everywhere else. */
-function modKeyLabel(key: string): string {
-  const apple =
-    typeof navigator !== 'undefined' &&
-    /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent);
-  return apple ? `⌘${key}` : `Ctrl+${key}`;
-}
 
 /**
  * The top of the room the toolbar may use: just under the page's topbar (the
@@ -88,12 +93,8 @@ const EMPTY_STATE: FormatState = { bold: false, italic: false, underline: false,
  */
 const MORE_AI_GROUPS: ReadonlyArray<{ label: string; ids: readonly string[] }> = [
   { label: 'Edit', ids: ['improve', 'grammar', 'shorter', 'longer', 'simplify', 'tone', 'translate'] },
-  { label: 'Research', ids: ['explain', 'cite', 'check', 'counter'] },
+  { label: 'Research', ids: ['explain', 'check', 'counter'] },
 ];
-
-function presetById(id: string): AskAiPreset | undefined {
-  return ASK_AI_PRESETS.find((preset) => preset.id === id);
-}
 
 /** The `<code>` element the selection sits inside, if any. */
 function codeAncestor(node: Node | null): HTMLElement | null {
@@ -139,7 +140,8 @@ function toggleInlineCode(range: Range): void {
  * class, which `Editable` renders on every prose block.
  */
 function useFloatingToolbar() {
-  const { exec, refs, updateHtml, addParagraphChild, getBlock, setBlockKind, documentId } = useEditor();
+  const { exec, refs, updateHtml, addParagraphChild, removeParagraphChild, getBlock, setBlockKind } = useEditorActions();
+  const documentId = useDocumentId();
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0, below: false });
   const [states, setStates] = useState<FormatState>(EMPTY_STATE);
@@ -238,58 +240,64 @@ function useFloatingToolbar() {
     return { el, id: entry?.[0] ?? null };
   }, [refs]);
 
+  /**
+   * Show, place or hide the toolbar for the document's current selection.
+   * Returns whether it is showing for that selection afterwards.
+   */
+  const syncWithSelection = useCallback((): boolean => {
+    // Moving focus onto a toolbar button greys the selection out, which used
+    // to dismiss the toolbar the moment a keyboard user reached it. While
+    // focus is inside the toolbar the selection it acts on is `savedRangeRef`.
+    if (toolbarRef.current?.contains(document.activeElement)) return true;
+
+    const selection = document.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed || slashOpenRef.current) {
+      // A collapsed selection ends the dismissal: the next one is a fresh
+      // selection and gets the toolbar back.
+      dismissedRef.current = false;
+      setVisible(false);
+      return false;
+    }
+
+    const { el: editable, id } = findBlockId(selection.anchorNode);
+    if (!editable) {
+      setVisible(false);
+      return false;
+    }
+
+    if (dismissedRef.current) return false;
+
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) {
+      setVisible(false);
+      return false;
+    }
+
+    savedRangeRef.current = range.cloneRange();
+    selectionRectRef.current = rect;
+
+    setBlockId(id);
+    setPos(positionFor(rect, editable.closest('[data-block-id]')));
+    try {
+      setStates({
+        bold: document.queryCommandState('bold'),
+        italic: document.queryCommandState('italic'),
+        underline: document.queryCommandState('underline'),
+        strike: document.queryCommandState('strikeThrough'),
+        code: codeAncestor(range.commonAncestorContainer) !== null,
+      });
+    } catch {
+      setStates(EMPTY_STATE);
+    }
+    setLinkHref(linkAncestor(range.commonAncestorContainer)?.getAttribute('href') ?? null);
+    setLinkOpen(pendingLinkEditRef.current);
+    setVisible(true);
+    return true;
+  }, [findBlockId, positionFor]);
+
   useEffect(() => {
-    const onSelectionChange = () => {
-      // Moving focus onto a toolbar button greys the selection out, which used
-      // to dismiss the toolbar the moment a keyboard user reached it. While
-      // focus is inside the toolbar the selection it acts on is `savedRangeRef`.
-      if (toolbarRef.current?.contains(document.activeElement)) return;
-
-      const selection = document.getSelection();
-      if (!selection || selection.rangeCount === 0 || selection.isCollapsed || slashOpenRef.current) {
-        // A collapsed selection ends the dismissal: the next one is a fresh
-        // selection and gets the toolbar back.
-        dismissedRef.current = false;
-        setVisible(false);
-        return;
-      }
-
-      const { el: editable, id } = findBlockId(selection.anchorNode);
-      if (!editable) {
-        setVisible(false);
-        return;
-      }
-
-      if (dismissedRef.current) return;
-
-      const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      if (!rect || (rect.width === 0 && rect.height === 0)) {
-        setVisible(false);
-        return;
-      }
-
-      savedRangeRef.current = range.cloneRange();
-      selectionRectRef.current = rect;
-
-      setBlockId(id);
-      setPos(positionFor(rect, editable.closest('[data-block-id]')));
-      try {
-        setStates({
-          bold: document.queryCommandState('bold'),
-          italic: document.queryCommandState('italic'),
-          underline: document.queryCommandState('underline'),
-          strike: document.queryCommandState('strikeThrough'),
-          code: codeAncestor(range.commonAncestorContainer) !== null,
-        });
-      } catch {
-        setStates(EMPTY_STATE);
-      }
-      setLinkHref(linkAncestor(range.commonAncestorContainer)?.getAttribute('href') ?? null);
-      setLinkOpen(pendingLinkEditRef.current);
-      setVisible(true);
-    };
-
+    const onSelectionChange = () => void syncWithSelection();
     document.addEventListener('selectionchange', onSelectionChange);
     window.addEventListener('scroll', onSelectionChange, true);
     window.addEventListener('resize', onSelectionChange);
@@ -298,7 +306,18 @@ function useFloatingToolbar() {
       window.removeEventListener('scroll', onSelectionChange, true);
       window.removeEventListener('resize', onSelectionChange);
     };
-  }, [findBlockId, positionFor]);
+  }, [syncWithSelection]);
+
+  /**
+   * Alt+F10 with text selected: bring the toolbar up for the selection, even
+   * one an earlier Escape dismissed it for. Returns false when there is no
+   * selection in the document text for it to act on.
+   */
+  const summon = useCallback((): boolean => {
+    if (toolbarRef.current?.contains(document.activeElement)) return true;
+    dismissedRef.current = false;
+    return syncWithSelection();
+  }, [syncWithSelection]);
 
   // The first position of an opening is computed against the size estimates;
   // measure the rendered toolbar and refine it before the browser paints.
@@ -370,6 +389,16 @@ function useFloatingToolbar() {
     [],
   );
 
+  /** The selection as prose offsets in its block, the part inside the block only. */
+  const selectedProse = useCallback((): { blockId: string; element: HTMLElement; start: number; end: number } | null => {
+    const range = savedRangeRef.current;
+    const el = blockId ? refs.current[blockId] : null;
+    if (!range || !el || !blockId) return null;
+    const start = el.contains(range.startContainer) ? proseOffset(el, range.startContainer, range.startOffset) : 0;
+    const end = el.contains(range.endContainer) ? proseOffset(el, range.endContainer, range.endOffset) : proseText(el).length;
+    return { blockId, element: el, start: Math.min(start, end), end: Math.max(start, end) };
+  }, [blockId, refs]);
+
   /** Write the block's DOM back to document state after a hand-made edit. */
   const commitActiveBlock = useCallback(() => {
     const { el, id } = findBlockId(document.getSelection()?.anchorNode ?? null);
@@ -434,40 +463,26 @@ function useFloatingToolbar() {
 
   /**
    * Put an empty citation straight after the selection and open its source
-   * picker — the selected words are the claim being cited.
-   *
-   * The placeholder and the child are committed together: a paragraph whose
-   * html and children disagree fails validation for every later edit.
+   * picker — the selected words are the claim being cited. The same action
+   * as `/citation`, at the selection's end.
    */
   const cite = useCallback(() => {
     const range = savedRangeRef.current;
     if (!range || !blockId) return;
-    const el = refs.current[blockId];
-    if (!el || !range.endContainer.isConnected || !el.contains(range.endContainer)) return;
-
     const at = range.cloneRange();
     at.collapse(false);
-    const childId = uid();
-    const placeholder = document.createElement('span');
-    placeholder.setAttribute('data-child-id', childId);
-    placeholder.contentEditable = 'false';
-    at.insertNode(placeholder);
-
     dismissedRef.current = true;
     setVisible(false);
-    addParagraphChild(blockId, { id: childId, type: 'citation', keys: [], style: 'numeric' });
-    updateHtml(blockId, serializeEditableHtml(el));
-
-    // The widget mounts into the placeholder on the next render; open it
-    // then, so the author lands in the search field rather than on a red pill.
-    let attempts = 0;
-    const open = () => {
-      const pill = document.querySelector<HTMLElement>(`[data-child-id="${childId}"] button`);
-      if (pill) pill.click();
-      else if (++attempts < 10) requestAnimationFrame(open);
-    };
-    requestAnimationFrame(open);
-  }, [addParagraphChild, blockId, refs, updateHtml]);
+    insertEmptyCitation({
+      blockId,
+      insertionRange: at,
+      refs,
+      updateHtml,
+      addParagraphChild,
+      editInline: (childId, isEmpty) =>
+        openInlineEditor({ blockId, childId, isEmpty, refs, getBlock, removeParagraphChild, updateHtml }),
+    });
+  }, [addParagraphChild, blockId, getBlock, refs, removeParagraphChild, updateHtml]);
 
   const block = blockId ? getBlock(blockId) : undefined;
 
@@ -482,9 +497,11 @@ function useFloatingToolbar() {
     onFormat,
     onAskAi,
     selectedText,
+    selectedProse,
     turnInto,
     cite,
     dismiss,
+    summon,
     restoreSelection: focusSavedRange,
     linkHref,
     linkOpen,
@@ -609,6 +626,26 @@ function useRovingTabIndex(
 }
 
 /**
+ * Alt+F10, the APG convention for moving focus from the text to its toolbar.
+ * Listed in the shortcuts dialog through `EDITOR_SHORTCUTS`.
+ */
+const TOOLBAR_FOCUS_KEYS = 'Alt+F10';
+
+function isToolbarFocusKey(event: KeyboardEvent): boolean {
+  return event.key === 'F10' && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+}
+
+/**
+ * The item a keyboard user lands on: the one they were on last time, or the
+ * first that is enabled. Returns its index, or -1 when every item is
+ * disabled.
+ */
+function landingIndex(items: HTMLButtonElement[], preferred: number): number {
+  if (items[preferred] && !items[preferred].disabled) return preferred;
+  return items.findIndex((item) => !item.disabled);
+}
+
+/**
  * A toolbar button's name and shortcut, in the styled tooltip the rest of the
  * chrome uses (the native `title` took a second to appear, unstyled). Placed
  * away from the selection: above the toolbar, or below it when the toolbar
@@ -662,10 +699,18 @@ export function FloatingToolbar() {
 }
 
 function SelectionToolbar() {
-  const { loadingDocumentId } = useEditor();
-  const agentTools = useContext(AgentToolsContext);
+  // A read-only page (a viewer) gets no formatting toolbar: the text can still
+  // be selected and copied, and Mod+J asks the assistant about it.
+  const { loadingDocumentId, readOnly } = useDocumentSession();
   // Optional, like the agent tools: outside the workspace there is no sidebar.
   const panels = useContext(PanelsContext);
+  // The Ask AI presets the "…" menu offers: the catalog's labels, and only those it would run here.
+  const catalogPresets = useContext(AssistantCatalogContext)?.presets;
+  // Find citations and the claim check search papers: only where paper search runs.
+  const papersOn = useContext(AssistantCatalogContext)?.papers.on === true;
+  const aiPresets = useMemo(() => new Map(
+    askAiPresets(catalogPresets ?? []).filter((preset) => !preset.unavailable).map((preset) => [preset.id, preset]),
+  ), [catalogPresets]);
   const {
     visible,
     pos,
@@ -677,9 +722,11 @@ function SelectionToolbar() {
     onFormat,
     onAskAi,
     selectedText,
+    selectedProse,
     turnInto,
     cite,
     dismiss,
+    summon,
     restoreSelection,
     linkHref,
     linkOpen,
@@ -689,8 +736,59 @@ function SelectionToolbar() {
   const [menu, setMenu] = useState<OpenMenu>(null);
   const kindButtonRef = useRef<HTMLButtonElement | null>(null);
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
+  // Alt+F10 on a selection the toolbar was not showing for: focus moves in
+  // once it has rendered.
+  const focusPendingRef = useRef(false);
 
   useRovingTabIndex(toolbarRef, visible && !linkOpen, activeIndex);
+
+  /**
+   * Put keyboard focus in the toolbar: on the item used last, or the first
+   * enabled one; in the link field when that has replaced the row. Returns
+   * false when the toolbar is not rendered yet.
+   */
+  const focusToolbar = useCallback((): boolean => {
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return false;
+    const items = toolbarItems(toolbar);
+    if (items.length === 0) {
+      const field = toolbar.querySelector<HTMLElement>('input, button:not(:disabled)');
+      field?.focus();
+      return Boolean(field);
+    }
+    const index = landingIndex(items, activeIndex);
+    const item = items[index];
+    if (!item) return false;
+    setActiveIndex(index);
+    item.focus();
+    return true;
+  }, [activeIndex, setActiveIndex, toolbarRef]);
+
+  // Alt+F10 from the text: the only way to the toolbar from the keyboard. It
+  // is mounted after the page, so Tab would cross every block to reach it,
+  // and Tab inside a list or code indents instead. Escape (handled below)
+  // brings focus back to the text with the selection as it was.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isToolbarFocusKey(event) || event.defaultPrevented || loadingDocumentId) return;
+      if (toolbarRef.current?.contains(document.activeElement)) {
+        event.preventDefault();
+        return;
+      }
+      if (!summon()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!focusToolbar()) focusPendingRef.current = true;
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, [focusToolbar, loadingDocumentId, summon, toolbarRef]);
+
+  useLayoutEffect(() => {
+    if (!focusPendingRef.current) return;
+    focusPendingRef.current = false;
+    if (visible) focusToolbar();
+  }, [visible, focusToolbar]);
 
   // A menu belongs to the showing of the toolbar it was opened in.
   if (!visible && menu) setMenu(null);
@@ -752,6 +850,27 @@ function SelectionToolbar() {
     });
   }, []);
 
+  /**
+   * Find citations for the selected sentences (P2.UI-3): the selection as
+   * prose offsets in its paragraph, for the dialog to search and cite.
+   */
+  const findCitations = () => {
+    const selection = selectedProse();
+    if (!selection) return;
+    const el = selection.element;
+    const sentences = planSentences(el, block, selection.start, selection.end);
+    dismiss();
+    openFindCitations(selection.blockId, sentences);
+  };
+
+  /** Check the selection as a claim in the Research panel (P2.UI-3). */
+  const checkClaim = () => {
+    const claim = selectedText();
+    if (!panels || !claim) return;
+    dismiss();
+    panels.openSidebar('research', { tab: 'research', claim });
+  };
+
   /** Runs the selection as a Research query in the right sidebar. */
   const searchPapers = () => {
     const query = selectedText();
@@ -776,21 +895,21 @@ function SelectionToolbar() {
     else if (event.key === 'ArrowLeft') next = current === 0 ? items.length - 1 : current - 1;
     else if (event.key === 'Home') next = 0;
     else if (event.key === 'End') next = items.length - 1;
-    if (next === null) return;
+    const item = next === null ? undefined : items[next];
+    if (next === null || !item) return;
 
     event.preventDefault();
     setMenu(null);
     setActiveIndex(next);
-    items[next].focus();
+    item.focus();
   };
 
-  if (!visible || Boolean(loadingDocumentId)) return null;
+  if (!visible || Boolean(loadingDocumentId) || readOnly) return null;
 
   const locked = block?.locked === true;
   const kind = block && (block.type === 'paragraph' || block.type === 'heading') ? kindOf(block) : null;
   const KindIcon = kind ? blockKind(kind).icon : Sparkles;
   const canCite = block?.type === 'paragraph' && !locked;
-  const citationsEnabled = agentTools?.isToolEnabled('search_citations') ?? false;
   // Open menus upwards when the toolbar sits low on the screen.
   const menuAbove = pos.top + TOOLBAR_HEIGHT + MENU_ROOM > window.innerHeight && pos.top > MENU_ROOM;
 
@@ -813,6 +932,7 @@ function SelectionToolbar() {
         ref={toolbarRef}
         role="toolbar"
         aria-label="Text formatting"
+        aria-keyshortcuts={TOOLBAR_FOCUS_KEYS}
         onKeyDown={onToolbarKeyDown}
         className={cn(
           'floating-toolbar fixed flex h-9 -translate-x-1/2 items-center gap-0.5 rounded-lg bg-popover p-1 text-popover-foreground shadow-lg',
@@ -823,7 +943,16 @@ function SelectionToolbar() {
         onMouseDown={(event) => event.preventDefault()}
       >
         {linkOpen ? (
-          <LinkEditor href={linkHref} onApply={applyLink} onCancel={() => setLinkOpen(false)} />
+          <LinkEditor
+            href={linkHref}
+            onApply={applyLink}
+            // The field unmounts with the editor; without this, Escape in it
+            // left focus on <body> with the selection gone.
+            onCancel={() => {
+              setLinkOpen(false);
+              restoreSelection();
+            }}
+          />
         ) : (
           <>
             <ToolbarTip label="Ask AI" shortcut={modKeyLabel('J')} below={pos.below}>
@@ -991,8 +1120,8 @@ function SelectionToolbar() {
                     {groupIndex > 0 && <div role="separator" className={menuSeparator} />}
                     <div className={menuLabel}>{group.label}</div>
                     {group.ids
-                      .map(presetById)
-                      .filter((preset): preset is AskAiPreset => !!preset && (!preset.citations || citationsEnabled))
+                      .map((id) => aiPresets.get(id))
+                      .filter((preset): preset is AskAiPreset => Boolean(preset))
                       .map((preset) => (
                         <button
                           key={preset.id}
@@ -1019,6 +1148,31 @@ function SelectionToolbar() {
                       >
                         <Telescope aria-hidden="true" />
                         <span className="min-w-0 flex-1 truncate">Search papers for this</span>
+                      </button>
+                    )}
+                    {/* Paper search runs here: find sources for the sentences, or judge the claim. */}
+                    {group.label === 'Research' && papersOn && canCite && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        tabIndex={-1}
+                        className={cn(menuItem, 'w-full text-left')}
+                        onClick={findCitations}
+                      >
+                        <Quote aria-hidden="true" />
+                        <span className="min-w-0 flex-1 truncate">Find citations</span>
+                      </button>
+                    )}
+                    {group.label === 'Research' && panels && papersOn && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        tabIndex={-1}
+                        className={cn(menuItem, 'w-full text-left')}
+                        onClick={checkClaim}
+                      >
+                        <SearchCheck aria-hidden="true" />
+                        <span className="min-w-0 flex-1 truncate">Check this claim</span>
                       </button>
                     )}
                   </div>

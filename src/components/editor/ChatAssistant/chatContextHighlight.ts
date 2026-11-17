@@ -1,17 +1,9 @@
 import { useEffect } from 'react';
 import type { EditorFocus } from '@/components/editor/References';
 import { proseOffset, proseRange } from '@/components/editor/References/citeAtCursor';
+import { canHighlight, clearHighlight, setHighlight } from '@/lib/highlights';
 
 const NAME = 'chat-context';
-
-type HighlightRegistry = { set: (name: string, highlight: unknown) => void; delete: (name: string) => void };
-type HighlightCtor = new (...ranges: Range[]) => unknown;
-
-function registry(): { highlights: HighlightRegistry; Highlight: HighlightCtor } | null {
-  const highlights = (globalThis.CSS as unknown as { highlights?: HighlightRegistry } | undefined)?.highlights;
-  const Highlight = (globalThis as unknown as { Highlight?: HighlightCtor }).Highlight;
-  return highlights && Highlight ? { highlights, Highlight } : null;
-}
 
 /**
  * Where the attached selection lives, as prose offsets into one editable of
@@ -72,9 +64,7 @@ function findAnchor(focus: EditorFocus): ContextAnchor | null {
   const wanted = focus.selection?.trim();
   const block = blockElement(focus.blockId);
   if (!wanted || !block) return null;
-  const editables = editablesOf(block);
-  for (let index = 0; index < editables.length; index++) {
-    const editable = editables[index];
+  for (const [index, editable] of editablesOf(block).entries()) {
     const whole = document.createRange();
     whole.selectNodeContents(editable);
     const text = plainText(whole);
@@ -108,24 +98,23 @@ export function resolveAnchor(anchor: ContextAnchor): Range | null {
  */
 export function useChatContextHighlight(focus: EditorFocus | null): void {
   useEffect(() => {
-    const api = registry();
-    if (!api) return;
+    if (!canHighlight()) return;
     if (!focus?.selection) {
-      api.highlights.delete(NAME);
+      clearHighlight(NAME);
       return;
     }
     // The effect runs as the selection is published, while the page still
     // holds it; failing that, the selected text is looked up in the block.
     const anchor = captureAnchor(focus) ?? findAnchor(focus);
     if (!anchor) {
-      api.highlights.delete(NAME);
+      clearHighlight(NAME);
       return;
     }
 
     const paint = () => {
       const range = resolveAnchor(anchor);
-      if (range) api.highlights.set(NAME, new api.Highlight(range));
-      else api.highlights.delete(NAME);
+      if (range) setHighlight(NAME, range);
+      else clearHighlight(NAME);
     };
     paint();
 
@@ -138,7 +127,7 @@ export function useChatContextHighlight(focus: EditorFocus | null): void {
 
     return () => {
       observer?.disconnect();
-      api.highlights.delete(NAME);
+      clearHighlight(NAME);
     };
   }, [focus]);
 }

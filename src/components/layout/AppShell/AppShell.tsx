@@ -1,16 +1,21 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
-import { usePanels } from '@/components/panels/panelsContextState';
+import { usePanels, type SidebarTab } from '@/components/panels/panelsContextState';
 import { PANEL_CONFIG } from '@/components/panels/panelConfig';
 import { ResizeHandle } from '@/components/ui/resizable-panel';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { focusPageTitle } from '@/editor';
 import { captureFocus, restoreFocus, useReturnFocus, type FocusSnapshot } from '@/hooks/useReturnFocus';
+import { lastInputWasPointer } from '@/lib/inputModality';
+import { returnFocusFromAside } from '../Shortcuts/asideFocus';
 import {
   setLeftSidebarOverride,
   useLeftSidebarAutoHidden,
   useSidebarDocked,
 } from '../useShellLayout';
+
+/** The docked right sidebar; asideFocus.ts and the topbar find it by this. */
+const ASIDE_SELECTOR = 'aside[aria-label="Tools"]';
 
 interface AppShellProps {
   /** The page: its topbar and scroll area. */
@@ -33,9 +38,11 @@ const EDGE_HANDLE = 'absolute inset-y-0 z-[var(--z-sticky)]';
  * workspace read as a dashboard of five tiles rather than one page.
  *
  * Narrower windows move the side regions into sheets: the sidebar below
- * 900px, the right sidebar below 1024px (`isDesktop`). Between 1024px and
- * the width where both sidebars fit beside a readable page, the left one
- * steps aside (and peeks on the left edge) while the right one is open.
+ * 900px, the right sidebar below 768px. From 768px to 1024px (`isDesktop`)
+ * the right sidebar docks at a narrower, fixed width (`tabletDock`). Between
+ * 1024px and the width where both sidebars fit beside a readable page, the
+ * left one steps aside (and peeks on the left edge) while the right one is
+ * open.
  */
 export function AppShell({ main, left, aside }: AppShellProps) {
   const {
@@ -49,10 +56,18 @@ export function AppShell({ main, left, aside }: AppShellProps) {
     isDesktop,
     mobileNavOpen,
     setMobileNavOpen,
+    activePanel,
+    panelsDocked,
   } = usePanels();
   const sidebarDocked = useSidebarDocked();
   const leftAutoHidden = useLeftSidebarAutoHidden();
   const leftHidden = leftCollapsed || leftAutoHidden;
+  // Between the tablet and the desktop widths the right sidebar docks
+  // narrower and fixed, so a tablet in portrait keeps the page in view next
+  // to Research, Sources or History: where a citation lands, what a History
+  // diff is compared with.
+  const tabletDock = Boolean(aside) && !isDesktop && panelsDocked;
+  useTabletDockFocus(tabletDock, isOpen, activePanel);
   // Both sheets open from code ("Open sidebar", Ask AI, a page-menu item),
   // never a Radix trigger, so Radix has nothing to give focus back to on
   // close. Each remembers its opener instead (a menu item resolves to the
@@ -64,7 +79,7 @@ export function AppShell({ main, left, aside }: AppShellProps) {
   // first crosses into it.
   const toolsOpener = useRef<FocusSnapshot | null>(null);
   useEffect(() => {
-    if (isDesktop) return;
+    if (isDesktop || tabletDock) return;
     const onFocusOut = (event: FocusEvent) => {
       const sheet = document.querySelector('[data-tools-sheet]');
       const { target, relatedTarget } = event;
@@ -76,7 +91,7 @@ export function AppShell({ main, left, aside }: AppShellProps) {
     };
     document.addEventListener('focusout', onFocusOut, true);
     return () => document.removeEventListener('focusout', onFocusOut, true);
-  }, [isDesktop]);
+  }, [isDesktop, tabletDock]);
 
   // "Show the sidebar anyway" lasts while the right sidebar stays open.
   useEffect(() => {
@@ -99,6 +114,34 @@ export function AppShell({ main, left, aside }: AppShellProps) {
     '--left-width': `${leftWidth}px`,
     '--right-width': `${rightWidth}px`,
   } as CSSProperties;
+
+  // Docked on a tablet: two fifths of what the docked left sidebar leaves,
+  // within 18–24rem, and not resizable (a drag there would also rewrite the
+  // desktop width the author chose).
+  const leftDocked = Boolean(left) && sidebarDocked && !leftHidden;
+  const tabletStyle = {
+    '--tools-dock-width': `clamp(18rem, calc((100% - ${leftDocked ? leftWidth : 0}px) * 0.4), 24rem)`,
+    width: 'var(--tools-dock-width)',
+  } as CSSProperties;
+
+  /**
+   * Escape in the tablet dock closes it, as it closed the sheet this
+   * replaced, once nothing inside has used the key: a run to stop, a picker
+   * or menu to dismiss, a field with an open list. Focus then goes back to
+   * where it was before it entered the panel (`useTabletDockFocus`).
+   */
+  const onTabletKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Escape' || event.isDefaultPrevented() || event.nativeEvent.defaultPrevented) return;
+    const panel = event.currentTarget;
+    const target = event.target;
+    // A portalled menu or popover bubbles here through React; it is not
+    // inside the panel's DOM, and its Escape is its own.
+    if (!(target instanceof Element) || !panel.contains(target)) return;
+    if (target.getAttribute('aria-expanded') === 'true') return;
+    if (panel.querySelector('[role="listbox"], [role="menu"], [role="dialog"]')) return;
+    event.preventDefault();
+    close();
+  };
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background" style={shellStyle}>
@@ -125,21 +168,29 @@ export function AppShell({ main, left, aside }: AppShellProps) {
 
       <main className="relative flex min-w-0 flex-1 flex-col bg-background">{main}</main>
 
-      {aside && isDesktop && isOpen && (
+      {/* One region on a desktop and on a tablet, so the shortcuts' focus
+          return and the `main:has(+ aside)` page geometry treat both as the
+          docked column they are. No backdrop and no focus trap on either:
+          the page stays usable beside it. */}
+      {aside && (isDesktop || tabletDock) && isOpen && (
         <aside
           aria-label="Tools"
+          data-dock={tabletDock ? 'tablet' : undefined}
           className="relative flex h-full shrink-0 flex-col border-l border-border bg-sidebar"
-          style={{ width: 'var(--right-width)', minWidth: PANEL_CONFIG.right.min }}
+          style={tabletDock ? tabletStyle : { width: 'var(--right-width)', minWidth: PANEL_CONFIG.right.min }}
+          onKeyDown={tabletDock ? onTabletKeyDown : undefined}
         >
-          <ResizeHandle
-            direction="horizontal"
-            onResize={handleRightResize}
-            label="Resize right sidebar"
-            value={rightWidth}
-            min={PANEL_CONFIG.right.min}
-            max={PANEL_CONFIG.right.max}
-            className={cn(EDGE_HANDLE, '-left-1')}
-          />
+          {!tabletDock && (
+            <ResizeHandle
+              direction="horizontal"
+              onResize={handleRightResize}
+              label="Resize right sidebar"
+              value={rightWidth}
+              min={PANEL_CONFIG.right.min}
+              max={PANEL_CONFIG.right.max}
+              className={cn(EDGE_HANDLE, '-left-1')}
+            />
+          )}
           {aside}
         </aside>
       )}
@@ -160,7 +211,7 @@ export function AppShell({ main, left, aside }: AppShellProps) {
         </Sheet>
       )}
 
-      {aside && !isDesktop && (
+      {aside && !isDesktop && !tabletDock && (
         <Sheet open={isOpen} onOpenChange={(next) => !next && close()}>
           <SheetContent
             side="right"
@@ -192,6 +243,74 @@ export function AppShell({ main, left, aside }: AppShellProps) {
       )}
     </div>
   );
+}
+
+/** Text fields a panel opens on: the Research search, the Sources filter. */
+const PANEL_FIELD = 'input:not([type=hidden]):not([disabled]), textarea:not([disabled])';
+
+/**
+ * Keyboard focus into the tablet dock once it has mounted: the active tab's
+ * first text field, or else the tab itself (History). Left alone when focus
+ * already went somewhere on purpose: into the panel (Ask AI's composer), into
+ * the page (a shortcut pressed while writing keeps the caret), or into a
+ * dialog (the command palette, which returns focus itself).
+ */
+function focusIntoTabletDock(attempt = 0) {
+  requestAnimationFrame(() => {
+    const panel = document.querySelector<HTMLElement>(ASIDE_SELECTOR);
+    if (!panel) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && (panel.contains(active) || active.closest('.canvas, [role="dialog"]'))) {
+      return;
+    }
+    const tabPanel = panel.querySelector<HTMLElement>('[role="tabpanel"][data-state="active"]');
+    const field = tabPanel?.querySelector<HTMLElement>(PANEL_FIELD);
+    if (!field && attempt < 6) {
+      focusIntoTabletDock(attempt + 1);
+      return;
+    }
+    const target = field ?? panel.querySelector<HTMLElement>('[role="tab"][data-state="active"]');
+    target?.focus({ preventScroll: true });
+  });
+}
+
+/**
+ * Focus across the tablet dock's opening and closing.
+ *
+ * The sheet it replaces brought focus in and gave it back; a docked column
+ * does neither by itself. Opened from the keyboard (a topbar button, which
+ * stays on screen beside the dock), focus moves in, as the desktop topbar
+ * does for its docked column. Closed while it held focus (its close button,
+ * Escape), the column unmounts and focus would fall to <body>; it goes back
+ * to where it was before it entered the panel, or to the topbar button for
+ * the tab that was showing.
+ */
+function useTabletDockFocus(active: boolean, isOpen: boolean, tab: SidebarTab) {
+  // Tracked on `focusin` only: the element that held focus is removed with
+  // the column, and no event says focus left it.
+  const focusInside = useRef(false);
+  useEffect(() => {
+    if (!active) return;
+    const onFocusIn = (event: FocusEvent) => {
+      const panel = document.querySelector(ASIDE_SELECTOR);
+      focusInside.current = Boolean(panel && event.target instanceof Node && panel.contains(event.target));
+    };
+    document.addEventListener('focusin', onFocusIn, true);
+    return () => document.removeEventListener('focusin', onFocusIn, true);
+  }, [active]);
+
+  const wasOpen = useRef(isOpen);
+  useEffect(() => {
+    const opened = isOpen && !wasOpen.current;
+    const closed = !isOpen && wasOpen.current;
+    wasOpen.current = isOpen;
+    if (!active) return;
+    if (closed && focusInside.current) {
+      focusInside.current = false;
+      returnFocusFromAside(tab);
+    }
+    if (opened && !lastInputWasPointer()) focusIntoTabletDock();
+  }, [active, isOpen, tab]);
 }
 
 /** Dwell on the edge before the panel slides in, so a flick past it does not. */

@@ -1,10 +1,10 @@
 import type { ElementType } from 'react';
-import { formatBytes, formatCompact } from '@/lib/text';
-import type { UsageSummary } from '@/services/userProfile';
+import { formatCompact, formatCost } from '@/lib/text';
+import type { UsageSummary } from '@/data/userProfile';
 import {
   Bot,
+  CircleDollarSign,
   Coins,
-  FileStack,
   FileText,
   MessagesSquare,
   Save,
@@ -21,7 +21,7 @@ function tiles(summary: UsageSummary): Tile[] {
   const tokens = summary.tokens_input + summary.tokens_output;
   return [
     {
-      label: 'Documents',
+      label: 'Pages',
       value: formatCompact(summary.documents_active),
       hint:
         summary.documents_deleted > 0
@@ -43,26 +43,26 @@ function tiles(summary: UsageSummary): Tile[] {
     },
     {
       label: 'Assistant runs',
-      value: formatCompact(summary.agent_runs_total),
+      value: formatCompact(summary.assistant_runs_total),
       hint:
-        summary.agent_runs_failed > 0
-          ? `${formatCompact(summary.agent_runs_failed)} did not finish`
+        summary.assistant_runs_failed > 0
+          ? `${formatCompact(summary.assistant_runs_failed)} did not finish`
           : `${formatCompact(summary.tool_calls_total)} tool calls`,
       icon: Bot,
     },
     {
       label: 'Tokens',
       value: formatCompact(tokens),
-      hint: `${formatCompact(summary.tokens_input)} in · ${formatCompact(
-        summary.tokens_output,
-      )} out`,
+      hint: `${formatCompact(summary.tokens_input)} in · ${formatCompact(summary.tokens_output)} out`
+        + (summary.tokens_cached > 0 ? ` · ${formatCompact(summary.tokens_cached)} cached` : ''),
       icon: Coins,
     },
     {
-      label: 'Resources',
-      value: formatCompact(summary.resources_active),
-      hint: formatBytes(summary.resources_bytes),
-      icon: FileStack,
+      label: 'Cost',
+      value: formatCost(summary.cost),
+      // What providers reported: a CLI engine's runs report none.
+      hint: summary.llm_calls_total > 0 ? `Over ${formatCompact(summary.llm_calls_total)} model calls` : 'No model calls yet',
+      icon: CircleDollarSign,
     },
   ];
 }
@@ -72,14 +72,16 @@ function tiles(summary: UsageSummary): Tile[] {
  *
  * Six headline numbers, so this is a row of tiles rather than a chart: each
  * value is a single current quantity, and a bar chart of six unrelated units
- * would say less than the numbers do.
+ * would say less than the numbers do. The cost is what the providers
+ * reported for the assistant's model calls. The PDF count and size are the
+ * Storage section's, beside the way to the Library.
  */
 export function StatTiles({ summary }: { summary: UsageSummary }) {
   return (
     <section aria-label="Usage summary">
-      {/* Six across from `lg`, not `xl`: the page is capped at max-w-5xl, so the
-          whole lg range was rendering a 3×2 block with room for one row. */}
-      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {/* One row of six once the dialog is wide enough beside its pane
+          list; below that, three across. */}
+      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         {tiles(summary).map((tile) => (
           <li
             key={tile.label}

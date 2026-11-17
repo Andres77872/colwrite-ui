@@ -1,15 +1,22 @@
 import { useCallback, useId, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
-import { ArrowUp, FileClock, FileText, Hash, Square, TextSelect, X } from 'lucide-react';
+import { ArrowUp, FileClock, FileText, Hash, ShieldOff, Square, TextSelect, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useEditor } from '@/editor';
+import { useEditorDoc } from '@/editor';
 import { refLabel } from './ChatRefTags/refTags';
-import type { RefPart } from './ChatTaggedInput/refParts';
+import type { ChatRefTag } from './ChatRefTags/refTags';
 import { ChatRefPicker, type ChatRefPickerHandle } from './ChatRefPicker';
 import { ChatTaggedInput, type ChatTaggedInputHandle } from './ChatTaggedInput';
 import { ChatAttachmentPicker, DraftAttachments } from './ChatAttachments';
 import type { ChatAttachmentDraft } from './useChatAttachments';
 import { EngineSwitcher } from './EngineSwitcher';
+import type { AutoBlockedReason } from '@/editor/types';
+import { AutoModeStrip, AutoModeSwitch } from './AutoModeSwitch';
+import { CollectionPdfOffer } from './CollectionPdfOffer';
+import { AutoModeDialog } from './AutoModeDialog';
+import { EffortSwitcher, type ComposerEffort } from './EffortSwitcher';
+import { WebSwitch, type ComposerWeb } from './WebSwitch';
+import { ImageGenerationButton } from '../ImageGeneration/ImageGenerationHost';
 
 /** File data is protected during dragover; browsers still expose the Files type. */
 function hasDraggedFiles(data: DataTransfer) {
@@ -28,6 +35,23 @@ export type ComposerAttachment = {
   /** The sentence that says which document every edit goes to. */
   hint: string;
 };
+
+/** The chat's Auto state, which the composer shows and switches (D18). */
+export type ComposerAuto = {
+  on: boolean;
+  /** Why the server paused Auto for the latest message. */
+  blocked: AutoBlockedReason | null;
+  /** Called only once the author confirmed the warning. */
+  onTurnOn: () => void;
+  onTurnOff: () => void;
+  /**
+   * Why Auto cannot be turned on here: the workspace's policy switched it off
+   * for everyone, or the account is a viewer. Null when it can.
+   */
+  unavailable?: 'policy' | 'role' | null;
+};
+
+/** What the workspace's policy switched off for the assistant here, in words. */
 
 /**
  * Where the author writes to the assistant.
@@ -51,6 +75,11 @@ export function ChatComposer({
   onDismissSelection,
   inputRef,
   pickerRef,
+  auto,
+  switchedOff = [],
+  canUpload = true,
+  effort,
+  web,
 }: {
   value: string;
   onChange: Dispatch<SetStateAction<string>>;
@@ -63,12 +92,25 @@ export function ChatComposer({
   onDismissSelection: () => void;
   inputRef: RefObject<ChatTaggedInputHandle | null>;
   pickerRef: RefObject<ChatRefPickerHandle | null>;
+  auto: ComposerAuto;
+  /** The assistant's features the workspace switched off for everyone in it. */
+  /** What the workspace switched off for everyone in it, in the catalog's words. */
+  switchedOff?: readonly string[];
+  /**
+   * Files can be uploaded from here: images and PDFs need an editor (D6). A
+   * viewer attaches a PDF already in the Library instead.
+   */
+  canUpload?: boolean;
+  effort?: ComposerEffort;
+  web?: ComposerWeb;
 }) {
   const hintId = useId();
   const dragDepth = useRef(0);
   const [draggingFiles, setDraggingFiles] = useState(false);
-  const { blocks } = useEditor();
-  const labelForRef = useCallback((part: RefPart) => refLabel(part, blocks), [blocks]);
+  /** The Auto warning is open. */
+  const [confirmingAuto, setConfirmingAuto] = useState(false);
+  const { blocks } = useEditorDoc();
+  const labelForRef = useCallback((part: ChatRefTag) => refLabel(part, blocks), [blocks]);
   const overLimit = value.length > MAX_MESSAGE_LENGTH;
   const nearLimit = value.length > MAX_MESSAGE_LENGTH * 0.8;
 
@@ -87,13 +129,13 @@ export function ChatComposer({
       role="group"
       aria-label="Message composer"
       onDragEnter={(event) => {
-        if (!hasDraggedFiles(event.dataTransfer)) return;
+        if (!canUpload || !hasDraggedFiles(event.dataTransfer)) return;
         event.preventDefault();
         dragDepth.current += 1;
         setDraggingFiles(true);
       }}
       onDragOver={(event) => {
-        if (!hasDraggedFiles(event.dataTransfer)) return;
+        if (!canUpload || !hasDraggedFiles(event.dataTransfer)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = isStreaming ? 'none' : 'copy';
       }}
@@ -108,7 +150,7 @@ export function ChatComposer({
         // Intercept files before contenteditable inserts a filename, URL or HTML.
         event.preventDefault();
         event.stopPropagation();
-        if (!isStreaming) files.addFiles(Array.from(event.dataTransfer.files));
+        if (!isStreaming && canUpload) files.addFiles(Array.from(event.dataTransfer.files));
       }}
       className={cn(
         'relative rounded-xl bg-background shadow-xs ring-1 ring-inset ring-border-strong transition-shadow duration-120',
@@ -121,6 +163,10 @@ export function ChatComposer({
           {isStreaming ? 'Wait for the reply to finish before attaching files' : 'Drop images or PDFs to attach'}
         </div>
       )}
+      {/* Persistent while Auto is on, so the author never forgets it is. */}
+      {auto.on && <AutoModeStrip blocked={auto.blocked} onTurnOff={auto.onTurnOff} />}
+      {/* A page in a collection with PDFs is offered them, once. */}
+      {canUpload && <CollectionPdfOffer />}
       {/* One row: the page chip gives way to a selection rather than pushing
           it onto a second line and making the composer taller. */}
       <div className="flex min-w-0 items-center gap-1 px-2 pt-2">
@@ -168,7 +214,7 @@ export function ChatComposer({
         value={value}
         onChange={onChange}
         onSubmit={onSend}
-        onPasteImages={isStreaming ? undefined : files.addFiles}
+        onPasteImages={isStreaming || !canUpload ? undefined : files.addFiles}
         placeholder="Ask AI anything… # to reference a block"
         aria-describedby={hintId}
         onTriggerPicker={(anchor) => pickerRef.current?.openAt(anchor)}
@@ -179,7 +225,7 @@ export function ChatComposer({
         labelForRef={labelForRef}
       />
       <p id={hintId} className="sr-only">
-        Enter sends. Shift+Enter starts a new line. Paste images or drop images and PDFs to attach them. Type # to reference a block or another document.
+        Enter sends. Shift+Enter starts a new line. Paste images or drop images and PDFs to attach them. Type # to reference a block or another page.
       </p>
 
       <div className="flex items-center gap-1 px-2 pb-2">
@@ -188,16 +234,19 @@ export function ChatComposer({
             <button
               type="button"
               onClick={startReference}
-              aria-label="Reference a block or document"
+              aria-label="Reference a block or page"
               className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors duration-120 hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
               <Hash aria-hidden="true" className="h-4 w-4" />
             </button>
           </TooltipTrigger>
-          <TooltipContent>Reference a block or document · #</TooltipContent>
+          <TooltipContent>Reference a block or page · #</TooltipContent>
         </Tooltip>
 
-        <ChatAttachmentPicker draft={files} disabled={isStreaming} />
+        <ChatAttachmentPicker draft={files} disabled={isStreaming} canUpload={canUpload} />
+        <ImageGenerationButton disabled={isStreaming || !canUpload} />
+        {effort && <EffortSwitcher effort={effort} disabled={isStreaming} />}
+        {web && <WebSwitch web={web} disabled={isStreaming} />}
 
         {/* Local servers only: which engine answers (gateway, Claude Code,
             Codex). Locked while a reply runs; it applies to the next one. */}
@@ -215,6 +264,15 @@ export function ChatComposer({
             {value.length}/{MAX_MESSAGE_LENGTH}
           </span>
         )}
+
+        {switchedOff.length > 0 && <WorkspaceLimits off={switchedOff} />}
+
+        <AutoModeSwitch
+          on={auto.on}
+          unavailable={auto.unavailable ?? null}
+          onRequestOn={() => setConfirmingAuto(true)}
+          onTurnOff={auto.onTurnOff}
+        />
 
         {isStreaming ? (
           <Tooltip>
@@ -243,10 +301,19 @@ export function ChatComposer({
                 <ArrowUp aria-hidden="true" className="h-4 w-4" strokeWidth={2.25} />
               </button>
             </TooltipTrigger>
-            <TooltipContent>Send · Enter</TooltipContent>
+            <TooltipContent>{auto.on ? 'Send. Edits apply without asking' : 'Send · Enter'}</TooltipContent>
           </Tooltip>
         )}
       </div>
+
+      <AutoModeDialog
+        open={confirmingAuto}
+        onConfirm={() => {
+          setConfirmingAuto(false);
+          auto.onTurnOn();
+        }}
+        onCancel={() => setConfirmingAuto(false)}
+      />
 
       <ChatRefPicker
         ref={pickerRef}
@@ -256,5 +323,29 @@ export function ChatComposer({
         setCaretIndex={(index) => inputRef.current?.setSelectionRange(index, index)}
       />
     </div>
+  );
+}
+
+/**
+ * A quiet mark beside Auto when the workspace switched some of the
+ * assistant's tools off for everyone in it, so a reply that never searched
+ * the web is not a surprise. Its name says what is off.
+ */
+function WorkspaceLimits({ off }: { off: readonly string[] }) {
+  const text = off.join(' ');
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          role="img"
+          tabIndex={0}
+          aria-label={text}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ShieldOff aria-hidden="true" className="h-4 w-4" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{text}</TooltipContent>
+    </Tooltip>
   );
 }

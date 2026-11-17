@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ElementType, type KeyboardEvent } from 'react';
 import { cn } from '@/lib/utils';
+import { openImageUpload } from '../blocks/ImageBlock/imageUpload';
 import { lastInputWasPointer } from '@/lib/inputModality';
 import { focusQuietly } from '@/components/ui/quietFocus';
 import {
@@ -25,10 +26,11 @@ import {
   htmlToText,
   kindLabel,
   kindOf,
-  useEditor,
+  useDocumentStatus,
   useEditorActions,
   type Block,
   type BlockKindId,
+  usePageReadOnly,
 } from '@/editor';
 import { blocksToMarkdown } from '@/editor/markdown';
 import { uid } from '@/lib/uid';
@@ -36,6 +38,7 @@ import { useToast } from '@/components/ui/toastContext';
 import { openAskAi } from '../AskAi/askAiEvents';
 import { openSlashMenu } from '../SlashMenu/slashMenuEvents';
 import { blockLink } from './blockLink';
+import { InstructionsDialog } from '../AssistantInstructions/InstructionsDialog';
 import {
   ArrowDown,
   ArrowUp,
@@ -192,12 +195,16 @@ export const BlockControls = memo(function BlockControls({
   menuOpen: boolean;
 }) {
   const {
+    batch,
     duplicateBlock,
+    getBlock,
+    getBlockIds,
+    getSelectedBlockIds,
     insertBlocksAfter,
     insertBlockBeforeExact,
     moveBlock,
     refs,
-    removeBlock,
+    removeBlocks,
     selectBlocks,
     setBlockKind,
     setBlockMenu,
@@ -208,16 +215,37 @@ export const BlockControls = memo(function BlockControls({
     toggleLocked,
   } = useEditorActions();
   const { toast } = useToast();
+  // A read-only page (a viewer): the handle opens what reads, copies and
+  // asks; nothing adds, moves, converts, flags or deletes a block.
+  const readOnly = usePageReadOnly();
   const id = block.id;
   const label = kindLabel(block);
   const current = kindOf(block);
   const locked = block.locked === true;
   const draggedRef = useRef(false);
   const handleRef = useRef<HTMLButtonElement | null>(null);
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
   // Set when the menu closes because of a click or focus elsewhere: that
   // target keeps focus instead of the handle.
   const closedOutsideRef = useRef(false);
   const [menuSide, setMenuSide] = useState<'left' | 'right'>('left');
+
+  /**
+   * The blocks a command from this handle applies to: the whole block
+   * selection when this block is part of one, this block alone otherwise.
+   *
+   * The handle used to act on its own block whatever was selected, so
+   * "Delete" on one of five selected blocks removed one. Read when the
+   * command runs: subscribing would re-render every handle with the
+   * selection.
+   */
+  const targetIds = useCallback((): readonly string[] => {
+    const selected = getSelectedBlockIds();
+    return selected.length > 1 && selected.includes(id) ? selected : [id];
+  }, [getSelectedBlockIds, id]);
+  // The selection cannot change while the menu is open (a press outside it
+  // closes it), so the count taken as it renders stays true.
+  const targetCount = menuOpen ? targetIds().length : 1;
 
   const setOpen = useCallback(
     (open: boolean) => setBlockMenu(open ? id : null, open ? 'options' : null),
@@ -240,6 +268,7 @@ export const BlockControls = memo(function BlockControls({
 
   const insert = useCallback(
     (where: 'before' | 'after', kind: BlockKindId, withMenu = false) => {
+      if (kind === 'image') { openImageUpload(id, where, false); return; }
       const fresh = blankBlockOfKind(uid(), kind);
       if (where === 'after') insertBlocksAfter(id, [fresh]);
       else insertBlockBeforeExact(id, fresh);
@@ -277,6 +306,43 @@ export const BlockControls = memo(function BlockControls({
 
   const alt = MOD === '⌘' ? '⌥' : 'Alt-';
 
+  /** Move the target blocks one step, as a run that keeps its order. */
+  const moveTargets = useCallback((dir: -1 | 1) => {
+    const ids = targetIds();
+    const order = getBlockIds();
+    const end = dir < 0 ? ids[0] : ids.at(-1);
+    if (end === undefined) return;
+    const edge = order.indexOf(end) + dir;
+    if (edge < 0 || edge >= order.length) return;
+    // The far end moves first, and the whole move is one undo step.
+    batch(() => {
+      for (const target of dir < 0 ? ids : [...ids].reverse()) {
+        if (!getBlock(target)?.locked) moveBlock(target, dir);
+      }
+    });
+  }, [batch, getBlock, getBlockIds, moveBlock, targetIds]);
+
+  /** Give every target block the flag state this block is about to take. */
+  const toggleTargets = useCallback((flag: 'aiHidden' | 'locked') => {
+    const now = getBlock(id)?.[flag] === true;
+    const toggle = flag === 'aiHidden' ? toggleAiHidden : toggleLocked;
+    batch(() => {
+      for (const target of targetIds()) {
+        if ((getBlock(target)?.[flag] === true) === now) toggle(target);
+      }
+    });
+  }, [batch, getBlock, id, targetIds, toggleAiHidden, toggleLocked]);
+
+  /** Turn every target block that can change into `kind`. */
+  const turnTargetsInto = useCallback((kind: BlockKindId) => {
+    batch(() => {
+      for (const target of targetIds()) {
+        const found = getBlock(target);
+        if (found && found.type !== 'divider' && !found.locked && kindOf(found) !== kind) setBlockKind(target, kind);
+      }
+    });
+  }, [batch, getBlock, setBlockKind, targetIds]);
+
   /**
    * Every command as data, so the search field can filter them. The menu
    * renders the groups when the query is empty and a flat list of matches
@@ -284,21 +350,39 @@ export const BlockControls = memo(function BlockControls({
    */
   const actions = useMemo<MenuAction[]>(() => {
     const list: MenuAction[] = [
-      { id: 'duplicate', group: 'edit', label: 'Duplicate', icon: Copy, shortcut: `${MOD}D`, onSelect: () => duplicateBlock(id) },
+      {
+        id: 'duplicate', group: 'edit', label: 'Duplicate', icon: Copy, shortcut: `${MOD}D`,
+        onSelect: () => {
+          const ids = targetIds();
+          // Last first, so each copy lands under its own original.
+          const copies = batch(() =>
+            [...ids].reverse().map((target) => duplicateBlock(target)).filter((copy): copy is string => Boolean(copy)),
+          );
+          if (ids.length > 1 && copies.length) selectBlocks(copies.reverse());
+        },
+      },
       { id: 'link', group: 'edit', label: 'Copy link to block', icon: Link2, onSelect: () => void copyText(blockLink(id), 'Link to block') },
-      { id: 'up', group: 'move', label: 'Move up', icon: ArrowUp, shortcut: `${MOD}⇧↑`, disabled: isFirst || locked, onSelect: () => moveBlock(id, -1) },
-      { id: 'down', group: 'move', label: 'Move down', icon: ArrowDown, shortcut: `${MOD}⇧↓`, disabled: isLast || locked, onSelect: () => moveBlock(id, 1) },
-      { id: 'ai', group: 'ai', label: 'Ask AI', icon: Sparkles, shortcut: `${MOD}J`, disabled: locked, className: 'text-ai [&>svg]:text-ai', onSelect: () => openAskAi({ blockId: id }) },
-      { id: 'hide', group: 'flags', label: block.aiHidden ? 'Show to assistant' : 'Hide from assistant', icon: block.aiHidden ? Eye : EyeOff, keywords: 'ai private', onSelect: () => toggleAiHidden(id) },
-      { id: 'lock', group: 'flags', label: block.locked ? 'Unlock block' : 'Lock block', icon: block.locked ? Unlock : Lock, keywords: 'protect', onSelect: () => toggleLocked(id) },
-      { id: 'markdown', group: 'more', label: 'Copy as Markdown', icon: ClipboardCopy, keywords: 'md', onSelect: () => void copyText(blocksToMarkdown([block]), 'Markdown') },
+      { id: 'up', group: 'move', label: 'Move up', icon: ArrowUp, shortcut: `${MOD}⇧↑`, disabled: isFirst || locked, onSelect: () => moveTargets(-1) },
+      { id: 'down', group: 'move', label: 'Move down', icon: ArrowDown, shortcut: `${MOD}⇧↓`, disabled: isLast || locked, onSelect: () => moveTargets(1) },
+      // As Mod+J: a locked block can be asked about, and its result goes in
+      // below or as a note, never over it (the prompt says so).
+      { id: 'ai', group: 'ai', label: 'Ask AI', icon: Sparkles, shortcut: `${MOD}J`, className: 'text-ai [&>svg]:text-ai', onSelect: () => openAskAi({ blockId: id }) },
+      { id: 'hide', group: 'flags', label: block.aiHidden ? 'Show to assistant' : 'Hide from assistant', icon: block.aiHidden ? Eye : EyeOff, keywords: 'ai private', onSelect: () => toggleTargets('aiHidden') },
+      { id: 'lock', group: 'flags', label: block.locked ? 'Unlock block' : 'Lock block', icon: block.locked ? Unlock : Lock, keywords: 'protect', onSelect: () => toggleTargets('locked') },
+      { id: 'markdown', group: 'more', label: 'Copy as Markdown', icon: ClipboardCopy, keywords: 'md', onSelect: () => void copyText(blocksToMarkdown(targetIds().map((target) => getBlock(target)).filter((found): found is Block => Boolean(found))), 'Markdown') },
     ];
     if (canCollapse(block)) {
       list.push({ id: 'collapse', group: 'more', label: block.collapsed ? 'Expand' : 'Collapse', icon: block.collapsed ? ChevronDown : ChevronRight, keywords: 'fold', onSelect: () => toggleCollapsed(id) });
     }
-    list.push({ id: 'delete', group: 'delete', label: 'Delete', icon: Trash2, shortcut: 'Del', disabled: locked, destructive: true, keywords: 'remove', onSelect: () => removeBlock(id) });
+    list.push({ id: 'delete', group: 'delete', label: 'Delete', icon: Trash2, shortcut: 'Del', disabled: locked, destructive: true, keywords: 'remove', onSelect: () => removeBlocks(targetIds()) });
     return list;
-  }, [block, copyText, duplicateBlock, id, isFirst, isLast, locked, moveBlock, removeBlock, toggleAiHidden, toggleCollapsed, toggleLocked]);
+  }, [batch, block, copyText, duplicateBlock, getBlock, id, isFirst, isLast, locked, moveTargets, removeBlocks, selectBlocks, targetIds, toggleCollapsed, toggleTargets]);
+
+  /** The commands that change nothing, for a read-only page. */
+  const readOnlyActions = useMemo(
+    () => actions.filter((action) => action.id === 'link' || action.id === 'markdown' || action.id === 'ai'),
+    [actions],
+  );
 
   const [query, setQuery] = useState('');
   const [handleTip, setHandleTip] = useState(false);
@@ -321,6 +405,7 @@ export const BlockControls = memo(function BlockControls({
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return null;
+    if (readOnly) return readOnlyActions.filter((action) => `${action.label} ${action.keywords ?? ''}`.toLowerCase().includes(needle));
     const turnInto: MenuAction[] =
       block.type === 'divider' || locked
         ? []
@@ -330,14 +415,14 @@ export const BlockControls = memo(function BlockControls({
             label: `Turn into ${kind.label}`,
             icon: kind.icon,
             onSelect: () => {
-              setBlockKind(id, kind.id);
+              turnTargetsInto(kind.id);
               focusBlock(id);
             },
           }));
     return [...actions, ...turnInto].filter((action) =>
       `${action.label} ${action.keywords ?? ''}`.toLowerCase().includes(needle),
     );
-  }, [actions, block.type, current, focusBlock, id, locked, query, setBlockKind]);
+  }, [actions, block.type, current, focusBlock, id, locked, query, readOnly, readOnlyActions, turnTargetsInto]);
 
   const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     const items = () =>
@@ -384,6 +469,7 @@ export const BlockControls = memo(function BlockControls({
         className="block-controls flex items-center gap-px pr-1"
         data-open={menuOpen || undefined}
       >
+        {!readOnly && (
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -405,6 +491,7 @@ export const BlockControls = memo(function BlockControls({
             <HandleTip first="Click to add below" second={`${alt}click to add above`} />
           </TooltipContent>
         </Tooltip>
+        )}
 
         <DropdownMenu open={menuOpen} onOpenChange={setOpen} modal={false}>
           {/* Inert anchor for positioning; the handle below opens the menu. */}
@@ -424,12 +511,14 @@ export const BlockControls = memo(function BlockControls({
                 type="button"
                 className={cn(
                   'flex h-6 w-[18px] items-center justify-center rounded-sm text-icon-tertiary transition-colors hover:bg-hover hover:text-muted-foreground',
-                  locked ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
+                  locked || readOnly ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   menuOpen && 'bg-hover text-muted-foreground',
                 )}
                 aria-label={
-                  locked
+                  readOnly
+                    ? `${label} block: click for options`
+                    : locked
                     ? `${label} block, locked: click for options`
                     : `${label} block: drag to move, click for options`
                 }
@@ -437,7 +526,7 @@ export const BlockControls = memo(function BlockControls({
                 aria-expanded={menuOpen}
                 // A locked block stays put, as Move up/down and ⌘⇧↑/↓ already
                 // make it.
-                draggable={!locked}
+                draggable={!locked && !readOnly}
                 onMouseDown={(event) => {
                   event.stopPropagation();
                   draggedRef.current = false;
@@ -451,9 +540,16 @@ export const BlockControls = memo(function BlockControls({
                 }}
                 onClick={(event) => {
                   if (draggedRef.current) return;
-                  // Shift+click selects the block instead, joining a selection.
+                  // Shift+click selects the block instead, and joins a
+                  // selection that is already there: everything from that
+                  // selection to this block, as Shift+click on the row does.
                   if (event.shiftKey) {
-                    selectBlocks([id]);
+                    const selected = getSelectedBlockIds();
+                    const order = getBlockIds();
+                    const at = order.indexOf(id);
+                    const from = Math.min(at, ...selected.map((other) => order.indexOf(other)).filter((i) => i >= 0));
+                    const to = Math.max(at, ...selected.map((other) => order.indexOf(other)).filter((i) => i >= 0));
+                    selectBlocks(order.slice(from, to + 1));
                     return;
                   }
                   setMenuSide(event.clientX < 260 ? 'right' : 'left');
@@ -464,7 +560,7 @@ export const BlockControls = memo(function BlockControls({
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <HandleTip first={locked ? 'Locked in place' : 'Drag to move'} second="Click to open menu" />
+              <HandleTip first={readOnly ? 'View only' : locked ? 'Locked in place' : 'Drag to move'} second="Click to open menu" />
             </TooltipContent>
           </Tooltip>
 
@@ -499,6 +595,12 @@ export const BlockControls = memo(function BlockControls({
             }}
           >
             <div className="shrink-0 p-1.5 pb-1">
+              {targetCount > 1 && (
+                // Said before any command is chosen: Delete here removes them all.
+                <p className="px-0.5 pb-1.5 text-xs text-muted-foreground" data-block-menu-scope="">
+                  Applies to the {targetCount} selected blocks
+                </p>
+              )}
               <input
                 ref={searchRef}
                 type="text"
@@ -520,6 +622,8 @@ export const BlockControls = memo(function BlockControls({
                 ) : (
                   <p className="px-2 py-1.5 text-sm text-muted-foreground">No matching actions</p>
                 )
+              ) : readOnly ? (
+                <DropdownMenuGroup>{readOnlyActions.map(renderAction)}</DropdownMenuGroup>
               ) : (
                 <>
                   <DropdownMenuGroup>
@@ -534,7 +638,7 @@ export const BlockControls = memo(function BlockControls({
                             <DropdownMenuItem
                               key={kind.id}
                               onSelect={() => {
-                                setBlockKind(id, kind.id);
+                                turnTargetsInto(kind.id);
                                 focusBlock(id);
                               }}
                             >
@@ -618,6 +722,10 @@ export const BlockControls = memo(function BlockControls({
                         {block.type === 'heading' && (
                           <>
                             <DropdownMenuSeparator />
+                            <DropdownMenuItem disabled={locked} onSelect={() => setInstructionsOpen(true)}>
+                              <Sparkles aria-hidden="true" />
+                              Assistant instructions…
+                            </DropdownMenuItem>
                             <SegmentedChoice
                               label="Level"
                               options={HEADING_LEVELS}
@@ -642,6 +750,8 @@ export const BlockControls = memo(function BlockControls({
         </DropdownMenu>
       </div>
       </TooltipProvider>
+      {block.type === 'heading' && <InstructionsDialog open={instructionsOpen} onOpenChange={setInstructionsOpen}
+        blockId={id} returnFocus={() => handleRef.current} />}
     </>
   );
 });
@@ -676,7 +786,7 @@ function HandleTip({ first, second }: { first: string; second: string }) {
  * the editor state here costs nothing while writing.
  */
 function MenuFooter({ block, label }: { block: Block; label: string }) {
-  const { lastSavedAt } = useEditor();
+  const { lastSavedAt } = useDocumentStatus();
   const text = block.type === 'code' ? block.text : 'html' in block ? htmlToText(block.html) : '';
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
   const edited = editedLabel(lastSavedAt);

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
-import { useEditor } from '@/editor';
+import { useDocumentActions, useDocumentId, useEditorActions, useEditorDoc } from '@/editor';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Spinner } from '@/components/ui/spinner';
@@ -18,7 +18,10 @@ import { AlertCircle, Check, Copy, RotateCcw, Save, Wand2 } from 'lucide-react';
  * document only, and persistence goes through the editor's normal save path.
  */
 export function JsonPanel() {
-  const { setFromJSON, doc, documentId, saveRemote } = useEditor();
+  const { doc } = useEditorDoc();
+  const documentId = useDocumentId();
+  const { setFromJSON } = useEditorActions();
+  const { saveRemote } = useDocumentActions();
   const { toast } = useToast();
 
   const currentJson = JSON.stringify(doc, null, 2);
@@ -99,7 +102,7 @@ export function JsonPanel() {
     <div className="flex h-full flex-col gap-3">
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
         <dt className="text-muted-foreground">Document</dt>
-        <dd className="truncate font-medium">{doc.name || 'Untitled document'}</dd>
+        <dd className="truncate font-medium">{doc.name || 'Untitled page'}</dd>
         <dt className="text-muted-foreground">ID</dt>
         <dd className="truncate font-mono text-2xs">
           {documentId ?? <span className="font-sans text-muted-foreground">Not saved yet</span>}

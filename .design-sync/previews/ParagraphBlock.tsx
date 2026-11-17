@@ -1,10 +1,10 @@
 import {
-  AgentToolsContext,
+  AssistantCatalogContext,
   BibliographyContext,
   EditorContext,
   LiteralEditor,
   ParagraphBlock,
-  agentToolsAllEnabled,
+  assistantCatalogAllOn,
   buildBibliography,
 } from 'colwrite-ui';
 
@@ -16,7 +16,7 @@ import {
 // value covers it — never the real EditorProvider, which is non-deterministic
 // and hits the network on mount (see .design-sync/NOTES.md).
 //
-// The citation cell mounts CitationInline, which calls useAgentTools(), so the
+// The citation cell mounts CitationInline, which calls the assistant catalog, so the
 // frame supplies that literal too — without it the paragraph still renders but
 // throws on the widget, and the citation never appears.
 //
@@ -52,15 +52,17 @@ const editorValue = (blocks: unknown[]) => ({
   updateHtml: noop,
   documentId: 'doc-1',
   ensureRemoteDocument: () => Promise.reject(new Error('not reachable from a preview')),
+  hasPendingEdits: () => false,
+  saveRemote: () => Promise.reject(new Error('not reachable from a preview')),
 });
 
 function Frame({ children, blocks = [] }: { children: React.ReactNode; blocks?: unknown[] }) {
   return (
     <LiteralEditor value={editorValue(blocks) as unknown as Ctx}>
       <BibliographyContext.Provider value={buildBibliography(blocks as never)}>
-        <AgentToolsContext.Provider value={agentToolsAllEnabled}>
+        <AssistantCatalogContext.Provider value={assistantCatalogAllOn}>
           <div className="mx-auto w-full max-w-[var(--doc-measure)] px-6">{children}</div>
-        </AgentToolsContext.Provider>
+        </AssistantCatalogContext.Provider>
       </BibliographyContext.Provider>
     </LiteralEditor>
   );
@@ -108,13 +110,21 @@ const citationBlock = {
       id: 'c1',
       type: 'citation',
       keys: ['hoffmann2022'],
-      style: 'author-year',
+      style: 'apa',
       sources: [
         {
           key: 'hoffmann2022',
-          title: 'Training Compute-Optimal Large Language Models',
-          authors: 'Hoffmann, J., Borgeaud, S., Mensch, A.',
-          year: '2022',
+          kind: 'paper',
+          provider: 'openalex',
+          state: 'verified',
+          flags: [],
+          csl: {
+            id: 'hoffmann2022',
+            type: 'paper-conference',
+            title: 'Training Compute-Optimal Large Language Models',
+            author: [{ family: 'Hoffmann', given: 'Jordan' }, { family: 'Borgeaud', given: 'Sebastian' }, { family: 'Mensch', given: 'Arthur' }],
+            issued: { 'date-parts': [[2022]] },
+          },
         },
       ],
     },

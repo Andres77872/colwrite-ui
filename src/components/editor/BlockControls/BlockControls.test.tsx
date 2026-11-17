@@ -8,8 +8,18 @@ import type { Block } from '@/editor/types';
  * The pure block-kind helpers are the real ones; only the actions are mocked.
  */
 
+const selection = vi.hoisted(() => ({ ids: [] as string[], order: ['p1', 'p2', 'h1', 'todo', 'locked'] }));
+/** The page is read-only here (a viewer, M6.UI-2). */
+const page = vi.hoisted(() => ({ readOnly: false }));
+
 const actions = vi.hoisted(() => ({
-  duplicateBlock: vi.fn(() => 'copy-id'),
+  // Runs its edits at once: the real one only groups them into an undo step.
+  batch: vi.fn(<T,>(run: () => T) => run()),
+  getBlock: vi.fn((_id: string): Block | undefined => undefined),
+  getBlockIds: vi.fn(() => selection.order),
+  getSelectedBlockIds: vi.fn(() => selection.ids),
+  removeBlocks: vi.fn(),
+  duplicateBlock: vi.fn((id: string) => `copy-of-${id}`),
   insertBlocksAfter: vi.fn(() => ['new-id']),
   insertBlockBeforeExact: vi.fn(),
   moveBlock: vi.fn(),
@@ -28,7 +38,12 @@ const actions = vi.hoisted(() => ({
 vi.mock('@/editor', async () => {
   const actual = await vi.importActual<typeof import('@/editor')>('@/editor');
   // The menu footer reads when the page was last saved.
-  return { ...actual, useEditorActions: () => actions, useEditor: () => ({ lastSavedAt: null }) };
+  return {
+    ...actual,
+    useEditorActions: () => actions,
+    useDocumentStatus: () => ({ lastSavedAt: null }),
+    usePageReadOnly: () => page.readOnly,
+  };
 });
 vi.mock('@/components/ui/toastContext', () => ({ useToast: () => ({ toast: vi.fn() }) }));
 
@@ -42,10 +57,16 @@ const BLOCKS: Record<string, Block> = {
   locked: { id: 'locked', type: 'paragraph', html: 'fixed', children: [], columns: 1, locked: true },
 };
 
+function blockFixture(id: string): Block {
+  const block = BLOCKS[id];
+  if (!block) throw new Error(`No fixture block "${id}"`);
+  return block;
+}
+
 function renderControls(id: string, options: { open?: boolean; first?: boolean; last?: boolean } = {}) {
   return render(
     <BlockControls
-      block={BLOCKS[id]}
+      block={blockFixture(id)}
       isFirst={options.first ?? false}
       isLast={options.last ?? false}
       menuOpen={options.open ?? false}
@@ -55,6 +76,9 @@ function renderControls(id: string, options: { open?: boolean; first?: boolean; 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  page.readOnly = false;
+  selection.ids = [];
+  actions.getBlock.mockImplementation((id: string) => BLOCKS[id]);
 });
 
 afterEach(cleanup);
@@ -207,6 +231,8 @@ describe('BlockControls menu commands', () => {
 
   it('protects a locked block from delete, move and turn into', () => {
     renderControls('locked', { open: true });
+    // One rule with Mod+J (U-12): asking about it is fine; replacing it is not, which the prompt enforces.
+    expect(screen.getByRole('menuitem', { name: /Ask AI/ }).getAttribute('aria-disabled')).toBeNull();
     expect(screen.getByRole('menuitem', { name: /Delete/ }).getAttribute('aria-disabled')).toBe('true');
     expect(screen.getByRole('menuitem', { name: /Move up/ }).getAttribute('aria-disabled')).toBe('true');
     expect(screen.getByRole('menuitem', { name: /Turn into/ }).getAttribute('aria-disabled')).toBe('true');
@@ -217,6 +243,88 @@ describe('BlockControls menu commands', () => {
   it('names the block by its kind', () => {
     renderControls('todo', { open: true });
     expect(screen.getByRole('menu').textContent).toContain('To-do list');
+  });
+
+  it('deletes the block', () => {
+    renderControls('p1', { open: true });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Delete/ }));
+    expect(actions.removeBlocks).toHaveBeenCalledWith(['p1']);
+  });
+});
+
+describe('BlockControls on a block that is part of a selection', () => {
+  beforeEach(() => {
+    selection.ids = ['p1', 'p2', 'h1'];
+  });
+
+  it('says how many blocks a command will apply to', () => {
+    renderControls('p2', { open: true });
+    expect(screen.getByRole('menu').textContent).toContain('Applies to the 3 selected blocks');
+  });
+
+  it('says nothing of the kind for a block outside the selection, and acts on it alone', () => {
+    renderControls('todo', { open: true });
+    expect(screen.getByRole('menu').textContent).not.toContain('selected blocks');
+    fireEvent.click(screen.getByRole('menuitem', { name: /Delete/ }));
+    expect(actions.removeBlocks).toHaveBeenCalledWith(['todo']);
+  });
+
+  it('deletes every selected block', () => {
+    renderControls('p2', { open: true });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Delete/ }));
+    expect(actions.removeBlocks).toHaveBeenCalledWith(['p1', 'p2', 'h1']);
+  });
+
+  it('moves the run in one step, far end first so it keeps its order', () => {
+    renderControls('p2', { open: true });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Move down/ }));
+
+    expect(actions.batch).toHaveBeenCalledTimes(1);
+    expect(actions.moveBlock.mock.calls).toEqual([['h1', 1], ['p2', 1], ['p1', 1]]);
+  });
+
+  it('does not move a run that is already at the edge', () => {
+    renderControls('p2', { open: true });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Move up/ }));
+    expect(actions.moveBlock).not.toHaveBeenCalled();
+  });
+
+  it('duplicates the run and selects the copies', () => {
+    renderControls('p2', { open: true });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Duplicate/ }));
+
+    expect(actions.duplicateBlock.mock.calls.map(([id]) => id)).toEqual(['h1', 'p2', 'p1']);
+    expect(actions.selectBlocks).toHaveBeenCalledWith(['copy-of-p1', 'copy-of-p2', 'copy-of-h1']);
+  });
+
+  it('turns every selected block that can change into the chosen kind', () => {
+    renderControls('p2', { open: true });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search actions' }), { target: { value: 'turn into quote' } });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Turn into Quote/ }));
+
+    expect(actions.setBlockKind.mock.calls.map(([id]) => id)).toEqual(['p1', 'p2', 'h1']);
+  });
+
+  it('locks the blocks that are in the state this one is leaving', () => {
+    selection.ids = ['p1', 'p2', 'locked'];
+    renderControls('p2', { open: true });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Lock block/ }));
+    // Already locked: toggling it would unlock it.
+    expect(actions.toggleLocked.mock.calls.map(([id]) => id)).toEqual(['p1', 'p2']);
+  });
+
+  it('extends the selection to a Shift+clicked handle', () => {
+    selection.ids = ['p1'];
+    renderControls('h1');
+    fireEvent.click(screen.getByRole('button', { name: /drag to move/ }), { shiftKey: true });
+    expect(actions.selectBlocks).toHaveBeenCalledWith(['p1', 'p2', 'h1']);
+  });
+
+  it('selects just the block on Shift+click when nothing is selected', () => {
+    selection.ids = [];
+    renderControls('p2');
+    fireEvent.click(screen.getByRole('button', { name: /drag to move/ }), { shiftKey: true });
+    expect(actions.selectBlocks).toHaveBeenCalledWith(['p2']);
   });
 });
 
@@ -251,5 +359,21 @@ describe('BlockControls menu search', () => {
     renderControls('p1', { open: true });
     expect(screen.queryByRole('menuitem', { name: /Copy as Markdown/ })).toBeNull();
     expect(screen.getByRole('menuitem', { name: /More/ })).toBeTruthy();
+  });
+});
+
+describe('BlockControls on a read-only page (M6.UI-2)', () => {
+  it('offers no add button and no drag, and a menu of what reads, copies and asks', () => {
+    page.readOnly = true;
+    renderControls('p1', { open: true });
+    expect(screen.queryByRole('button', { name: 'Add a block below' })).toBeNull();
+    const handle = screen.getByRole('button', { name: 'Text block: click for options' });
+    expect(handle.getAttribute('draggable')).toBe('false');
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent?.replace(/(⌘|Ctrl\+).*$/, '').trim())).toEqual([
+      'Copy link to block',
+      'Ask AI',
+      'Copy as Markdown',
+    ]);
+    expect(screen.queryByRole('menuitem', { name: /Delete|Duplicate|Turn into|Move up/ })).toBeNull();
   });
 });

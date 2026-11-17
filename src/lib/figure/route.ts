@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { FIGURE_METRICS, figureFont } from './constants';
 import {
   center,
@@ -7,6 +8,7 @@ import {
   isVertical,
   oppositeSide,
   outlineBounds,
+  polylineSegments,
   portPoint,
   rectsOverlap,
   shapeOutline,
@@ -346,8 +348,8 @@ function spacedPorts(desired: number[], spacing: number, lo: number, hi: number)
   for (const value of shifted) {
     blocks.push({ sum: value, count: 1 });
     while (blocks.length > 1) {
-      const last = blocks[blocks.length - 1];
-      const prev = blocks[blocks.length - 2];
+      const last = itemAt(blocks, blocks.length - 1);
+      const prev = itemAt(blocks, blocks.length - 2);
       if (prev.sum / prev.count <= last.sum / last.count) break;
       prev.sum += last.sum;
       prev.count += last.count;
@@ -358,8 +360,8 @@ function spacedPorts(desired: number[], spacing: number, lo: number, hi: number)
   for (const block of blocks) for (let k = 0; k < block.count; k += 1) fitted.push(block.sum / block.count);
   let out = fitted.map((value, k) => value + k * gap);
   // Keep the run inside the side.
-  if (out[0] < lo) out = out.map((value) => value + (lo - out[0]));
-  if (out[n - 1] > hi) out = out.map((value) => value - (out[n - 1] - hi));
+  if (itemAt(out, 0) < lo) out = out.map((value) => value + (lo - itemAt(out, 0)));
+  if (itemAt(out, n - 1) > hi) out = out.map((value) => value - (itemAt(out, n - 1) - hi));
   return out;
 }
 
@@ -378,7 +380,9 @@ function assignPorts(ends: End[]): void {
   }
   for (const list of bySide.values()) {
     list.sort((p, q) => p.key - q.key || p.plan.index - q.plan.index || p.which - q.which);
-    const { endpoint, side } = list[0];
+    const [first] = list;
+    if (!first) continue;
+    const { endpoint, side } = first;
     const span = sideSpan(endpoint.outline, side);
     const n = list.length;
     if (endpoint.pointPorts) {
@@ -397,7 +401,7 @@ function assignPorts(ends: End[]): void {
       span[1],
     );
     list.forEach((end, k) => {
-      end.point = portAt(endpoint, side, placed[k]);
+      end.point = portAt(endpoint, side, itemAt(placed, k));
       end.shared = n > 1;
     });
   }
@@ -581,7 +585,7 @@ function lowerBound(values: number[], v: number): number {
   let hi = values.length;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if (values[mid] < v) lo = mid + 1;
+    if (itemAt(values, mid) < v) lo = mid + 1;
     else hi = mid;
   }
   return lo;
@@ -591,13 +595,13 @@ function lowerBound(values: number[], v: number): number {
 function lineIndex(values: number[], v: number): number {
   const target = r3(v);
   const i = lowerBound(values, target - EPS);
-  return i < values.length && Math.abs(values[i] - target) < 1e-4 ? i : -1;
+  return i < values.length && Math.abs(itemAt(values, i) - target) < 1e-4 ? i : -1;
 }
 
 function sortedUnique(values: number[]): number[] {
   const sorted = values.map(r3).sort((a, b) => a - b);
   const out: number[] = [];
-  for (const v of sorted) if (out.length === 0 || v - out[out.length - 1] > EPS) out.push(v);
+  for (const v of sorted) if (out.length === 0 || v - itemAt(out, out.length - 1) > EPS) out.push(v);
   return out;
 }
 
@@ -623,7 +627,7 @@ function lineSet(structural: number[], preferred: number[], plain: number[], bor
   const mids: number[] = [];
   if (withMidlines) {
     for (let k = 0; k + 1 < base.length; k += 1) {
-      const mid = r3((base[k] + base[k + 1]) / 2);
+      const mid = r3((itemAt(base, k) + itemAt(base, k + 1)) / 2);
       if (!borders.some((b) => Math.abs(b - mid) < 1)) mids.push(mid);
     }
   }
@@ -667,7 +671,7 @@ function buildGrid(input: GridInput): Grid {
     structY.push(box.y0 - c, box.y0 + c, box.y1 - c, box.y1 + c);
     grow({ x0: box.x0 - c, y0: box.y0 - c, x1: box.x1 + c, y1: box.y1 + c });
   }
-  for (let k = 0; k < input.stubX.length; k += 1) grow({ x0: input.stubX[k], y0: input.stubY[k], x1: input.stubX[k], y1: input.stubY[k] });
+  for (let k = 0; k < input.stubX.length; k += 1) grow({ x0: itemAt(input.stubX, k), y0: itemAt(input.stubY, k), x1: itemAt(input.stubX, k), y1: itemAt(input.stubY, k) });
   const outer = frame as Box | null;
   if (outer) {
     structX.push(outer.x0 - c, outer.x1 + c);
@@ -728,12 +732,18 @@ function rasterize(grid: Grid, box: Box, h: Uint16Array, v: Uint16Array): void {
   const j0 = lowerBound(ys, box.y0 - EPS);
   const j1 = lowerBound(ys, box.y1 + EPS) - 1;
   for (let j = j0; j <= j1; j += 1) {
-    if (!(ys[j] > box.y0 + EPS && ys[j] < box.y1 - EPS)) continue;
-    for (let i = i0; i < i1; i += 1) h[j * (nx - 1) + i] += 1;
+    if (!(itemAt(ys, j) > box.y0 + EPS && itemAt(ys, j) < box.y1 - EPS)) continue;
+    for (let i = i0; i < i1; i += 1) {
+      const k = j * (nx - 1) + i;
+      h[k] = itemAt(h, k) + 1;
+    }
   }
   for (let i = i0; i <= i1; i += 1) {
-    if (!(xs[i] > box.x0 + EPS && xs[i] < box.x1 - EPS)) continue;
-    for (let j = j0; j < j1; j += 1) v[j * nx + i] += 1;
+    if (!(itemAt(xs, i) > box.x0 + EPS && itemAt(xs, i) < box.x1 - EPS)) continue;
+    for (let j = j0; j < j1; j += 1) {
+      const k = j * nx + i;
+      v[k] = itemAt(v, k) + 1;
+    }
   }
 }
 
@@ -752,8 +762,8 @@ function claim(grid: Grid, points: Point[]): void {
   const { xs, ys, nx } = grid;
   const last = points.length - 2;
   for (let k = 0; k <= last; k += 1) {
-    const a = points[k];
-    const b = points[k + 1];
+    const a = itemAt(points, k);
+    const b = itemAt(points, k + 1);
     const mark = k === 0 || k === last ? USED_PORT : USED;
     if (Math.abs(a.y - b.y) < EPS && Math.abs(a.x - b.x) > EPS) {
       const j = lineIndex(ys, a.y);
@@ -762,8 +772,8 @@ function claim(grid: Grid, points: Point[]): void {
       const hi = Math.max(a.x, b.x);
       const i0 = lowerBound(xs, lo - 1e-4);
       const i1 = lowerBound(xs, hi + 1e-4) - 1;
-      for (let i = i0; i < i1; i += 1) grid.usedH[j * (nx - 1) + i] = Math.max(grid.usedH[j * (nx - 1) + i], mark);
-      for (let i = i0; i <= i1; i += 1) if (xs[i] > lo + 1e-4 && xs[i] < hi - 1e-4) grid.throughH[j * nx + i] = 1;
+      for (let i = i0; i < i1; i += 1) grid.usedH[j * (nx - 1) + i] = Math.max(itemAt(grid.usedH, j * (nx - 1) + i), mark);
+      for (let i = i0; i <= i1; i += 1) if (itemAt(xs, i) > lo + 1e-4 && itemAt(xs, i) < hi - 1e-4) grid.throughH[j * nx + i] = 1;
     } else if (Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) > EPS) {
       const i = lineIndex(xs, a.x);
       if (i < 0) continue;
@@ -771,13 +781,13 @@ function claim(grid: Grid, points: Point[]): void {
       const hi = Math.max(a.y, b.y);
       const j0 = lowerBound(ys, lo - 1e-4);
       const j1 = lowerBound(ys, hi + 1e-4) - 1;
-      for (let j = j0; j < j1; j += 1) grid.usedV[j * nx + i] = Math.max(grid.usedV[j * nx + i], mark);
-      for (let j = j0; j <= j1; j += 1) if (ys[j] > lo + 1e-4 && ys[j] < hi - 1e-4) grid.throughV[j * nx + i] = 1;
+      for (let j = j0; j < j1; j += 1) grid.usedV[j * nx + i] = Math.max(itemAt(grid.usedV, j * nx + i), mark);
+      for (let j = j0; j <= j1; j += 1) if (itemAt(ys, j) > lo + 1e-4 && itemAt(ys, j) < hi - 1e-4) grid.throughV[j * nx + i] = 1;
     }
   }
   for (let k = 1; k < points.length - 1; k += 1) {
-    const i = lineIndex(xs, points[k].x);
-    const j = lineIndex(ys, points[k].y);
+    const i = lineIndex(xs, itemAt(points, k).x);
+    const j = lineIndex(ys, itemAt(points, k).y);
     if (i >= 0 && j >= 0) grid.corner[j * nx + i] = 1;
   }
 }
@@ -847,8 +857,8 @@ class OpenSet {
     heap.push(id);
     while (i > 0) {
       const parent = (i - 1) >> 1;
-      if (!this.less(id, heap[parent])) break;
-      heap[i] = heap[parent];
+      if (!this.less(id, itemAt(heap, parent))) break;
+      heap[i] = itemAt(heap, parent);
       i = parent;
     }
     heap[i] = id;
@@ -857,7 +867,7 @@ class OpenSet {
   /** The entry id with the smallest key; the caller checks `size` first. */
   pop(): number {
     const heap = this.heap;
-    const top = heap[0];
+    const top = itemAt(heap, 0);
     const last = heap.pop() as number;
     if (heap.length > 0) this.siftDown(0, last);
     return top;
@@ -867,8 +877,8 @@ class OpenSet {
   reweight(weight: number): void {
     this.weight = weight;
     const heap = this.heap;
-    for (const id of heap) this.f[id] = this.g[id] + weight * this.h[id];
-    for (let i = (heap.length >> 1) - 1; i >= 0; i -= 1) this.siftDown(i, heap[i]);
+    for (const id of heap) this.f[id] = itemAt(this.g, id) + weight * itemAt(this.h, id);
+    for (let i = (heap.length >> 1) - 1; i >= 0; i -= 1) this.siftDown(i, itemAt(heap, i));
   }
 
   private siftDown(from: number, id: number): void {
@@ -879,20 +889,20 @@ class OpenSet {
       const l = 2 * i + 1;
       if (l >= n) break;
       const r = l + 1;
-      const child = r < n && this.less(heap[r], heap[l]) ? r : l;
-      if (!this.less(heap[child], id)) break;
-      heap[i] = heap[child];
+      const child = r < n && this.less(itemAt(heap, r), itemAt(heap, l)) ? r : l;
+      if (!this.less(itemAt(heap, child), id)) break;
+      heap[i] = itemAt(heap, child);
       i = child;
     }
     heap[i] = id;
   }
 
   private less(a: number, b: number): boolean {
-    const fa = this.f[a];
-    const fb = this.f[b];
+    const fa = itemAt(this.f, a);
+    const fb = itemAt(this.f, b);
     if (fa !== fb) return fa < fb;
-    const ha = this.h[a];
-    const hb = this.h[b];
+    const ha = itemAt(this.h, a);
+    const hb = itemAt(this.h, b);
     if (ha !== hb) return ha < hb;
     return a < b;
   }
@@ -930,12 +940,12 @@ class StateTable {
   }
 
   best(state: number): number {
-    if (this.seen) return this.seen[state] === this.stamp ? (this.cost as Float64Array)[state] : Infinity;
+    if (this.seen) return this.seen[state] === this.stamp ? itemAt((this.cost as Float64Array), state) : Infinity;
     return this.costMap.get(state) ?? Infinity;
   }
 
   from(state: number): number {
-    if (this.seen) return this.seen[state] === this.stamp ? (this.prev as Int32Array)[state] : -1;
+    if (this.seen) return this.seen[state] === this.stamp ? itemAt((this.prev as Int32Array), state) : -1;
     return this.prevMap.get(state) ?? -1;
   }
 
@@ -1002,12 +1012,12 @@ function groupsEntered(a: number, b: number, s: Search, foreign: Int32Array): nu
   let x = a;
   let y = b;
   while (x !== y) {
-    const dx = x < 0 ? 0 : s.groupDepth[x];
-    const dy = y < 0 ? 0 : s.groupDepth[y];
-    if (dx >= dy && x >= 0) x = s.groupParent[x];
-    if (dy >= dx && y >= 0) y = s.groupParent[y];
+    const dx = x < 0 ? 0 : itemAt(s.groupDepth, x);
+    const dy = y < 0 ? 0 : itemAt(s.groupDepth, y);
+    if (dx >= dy && x >= 0) x = itemAt(s.groupParent, x);
+    if (dy >= dx && y >= 0) y = itemAt(s.groupParent, y);
   }
-  return foreign[b] - (x >= 0 ? foreign[x] : 0);
+  return itemAt(foreign, b) - (x >= 0 ? itemAt(foreign, x) : 0);
 }
 
 /** How many of the obstacles covering the point the search may pass through. */
@@ -1020,10 +1030,10 @@ function coveredByExcluded(excluded: Excluded[], x: number, y: number): number {
 /** Whether the elementary grid segment from (i, j) to (ni, nj) runs through an obstacle the search may not cross. */
 function segmentBlocked(grid: Grid, excluded: Excluded[], i: number, j: number, ni: number, nj: number): boolean {
   const horizontal = j === nj;
-  const hard = horizontal ? grid.hardH[j * (grid.nx - 1) + Math.min(i, ni)] : grid.hardV[Math.min(j, nj) * grid.nx + i];
+  const hard = horizontal ? itemAt(grid.hardH, j * (grid.nx - 1) + Math.min(i, ni)) : itemAt(grid.hardV, Math.min(j, nj) * grid.nx + i);
   if (hard === 0) return false;
   if (excluded.length === 0) return true;
-  return hard > coveredByExcluded(excluded, (grid.xs[i] + grid.xs[ni]) / 2, (grid.ys[j] + grid.ys[nj]) / 2);
+  return hard > coveredByExcluded(excluded, (itemAt(grid.xs, i) + itemAt(grid.xs, ni)) / 2, (itemAt(grid.ys, j) + itemAt(grid.ys, nj)) / 2);
 }
 
 /**
@@ -1039,11 +1049,11 @@ function search(grid: Grid, table: StateTable, s: Search, budget: Budget): { pat
   const { xs, ys, nx, ny } = grid;
   const gi = s.goal % nx;
   const gj = (s.goal - gi) / nx;
-  const tx = xs[gi];
-  const ty = ys[gj];
+  const tx = itemAt(xs, gi);
+  const ty = itemAt(ys, gj);
   const goalDir = s.goalDir;
   const heuristic = (i: number, j: number, d: Dir) =>
-    Math.abs(xs[i] - tx) + Math.abs(ys[j] - ty) + EDGE.bendPenalty * bendsBetween(tx - xs[i], ty - ys[j], d, goalDir);
+    Math.abs(itemAt(xs, i) - tx) + Math.abs(itemAt(ys, j) - ty) + EDGE.bendPenalty * bendsBetween(tx - itemAt(xs, i), ty - itemAt(ys, j), d, goalDir);
 
   table.begin();
   const open = new OpenSet();
@@ -1060,8 +1070,8 @@ function search(grid: Grid, table: StateTable, s: Search, budget: Budget): { pat
 
   while (open.size > 0) {
     const id = open.pop();
-    const state = open.state[id];
-    const g = open.g[id];
+    const state = itemAt(open.state, id);
+    const g = itemAt(open.g, id);
     if (state === GOAL) {
       budget.left -= expansions;
       const path: number[] = [];
@@ -1074,8 +1084,8 @@ function search(grid: Grid, table: StateTable, s: Search, budget: Budget): { pat
       return null;
     }
     expansions += 1;
-    if (stage < SEARCH_STAGES.length && expansions >= SEARCH_STAGES[stage][0]) {
-      open.reweight(SEARCH_STAGES[stage][1]);
+    if (stage < SEARCH_STAGES.length && expansions >= itemAt(SEARCH_STAGES, stage)[0]) {
+      open.reweight(itemAt(SEARCH_STAGES, stage)[1]);
       stage += 1;
     }
     const p = state >> 2;
@@ -1097,7 +1107,7 @@ function search(grid: Grid, table: StateTable, s: Search, budget: Budget): { pat
     if (grid.corner[p] && p !== s.start) {
       const bi = i - DX[d];
       const bj = j - DY[d];
-      usedIn = d === 0 || d === 2 ? grid.usedH[j * (nx - 1) + Math.min(i, bi)] : grid.usedV[Math.min(j, bj) * nx + i];
+      usedIn = d === 0 || d === 2 ? itemAt(grid.usedH, j * (nx - 1) + Math.min(i, bi)) : itemAt(grid.usedV, Math.min(j, bj) * nx + i);
     }
     // Straight on, then the two turns; never back.
     for (let turn = 0; turn < 3; turn += 1) {
@@ -1109,8 +1119,8 @@ function search(grid: Grid, table: StateTable, s: Search, budget: Budget): { pat
       const horizontal = nd === 0 || nd === 2;
       const seg = horizontal ? j * (nx - 1) + Math.min(i, ni) : Math.min(j, nj) * nx + i;
       const q = nj * nx + ni;
-      const len = horizontal ? Math.abs(xs[ni] - xs[i]) : Math.abs(ys[nj] - ys[j]);
-      let cost = len * (1 + (horizontal ? grid.costY[j] : grid.costX[i]));
+      const len = horizontal ? Math.abs(itemAt(xs, ni) - itemAt(xs, i)) : Math.abs(itemAt(ys, nj) - itemAt(ys, j));
+      let cost = len * (1 + (horizontal ? itemAt(grid.costY, j) : itemAt(grid.costX, i)));
       if (nd !== d) cost += EDGE.bendPenalty;
       const used = horizontal ? grid.usedH[seg] : grid.usedV[seg];
       if (used) cost += (used === USED_PORT ? 0.5 + PORT_RUN_SHARE : 0.5) * len;
@@ -1118,10 +1128,10 @@ function search(grid: Grid, table: StateTable, s: Search, budget: Budget): { pat
       if (horizontal ? grid.throughV[q] : grid.throughH[q]) cost += EDGE.crossingPenalty;
       if (horizontal ? grid.softH[seg] : grid.softV[seg]) cost += LABEL_COST;
       if (s.foreign) {
-        const ga = grid.groupAt[p];
-        const gb = grid.groupAt[q];
+        const ga = itemAt(grid.groupAt, p);
+        const gb = itemAt(grid.groupAt, q);
         if (ga !== gb) cost += EDGE.groupPenalty * groupsEntered(ga, gb, s, s.foreign);
-        if (gb >= 0 && s.foreign[gb] > 0) cost += 2 * len;
+        if (gb >= 0 && itemAt(s.foreign, gb) > 0) cost += 2 * len;
       }
       const ng = g + cost;
       const ns = q * 4 + nd;
@@ -1141,11 +1151,11 @@ function search(grid: Grid, table: StateTable, s: Search, budget: Budget): { pat
 function simplify(points: Point[], tolerance = EPS): Point[] {
   const out: Point[] = [];
   for (const p of points) {
-    const last = out[out.length - 1];
+    const last = out.at(-1);
     if (last && Math.abs(last.x - p.x) <= tolerance && Math.abs(last.y - p.y) <= tolerance) continue;
-    if (out.length >= 2) {
-      const a = out[out.length - 2];
-      const b = last;
+    const a = out.at(-2);
+    const b = last;
+    if (a && b) {
       const collinear =
         (Math.abs(a.x - b.x) <= tolerance && Math.abs(b.x - p.x) <= tolerance) ||
         (Math.abs(a.y - b.y) <= tolerance && Math.abs(b.y - p.y) <= tolerance);
@@ -1170,26 +1180,26 @@ function rectify(points: Point[]): Point[] {
   const pts = simplify(points, 2e-3);
   const n = pts.length;
   if (n < 2) return pts;
-  const vertical = (k: number) => Math.abs(pts[k].x - pts[k + 1].x) <= Math.abs(pts[k].y - pts[k + 1].y);
+  const vertical = (k: number) => Math.abs(itemAt(pts, k).x - itemAt(pts, k + 1).x) <= Math.abs(itemAt(pts, k).y - itemAt(pts, k + 1).y);
   if (n === 2) {
     // One run between two ports already in line: move the far end along its side.
-    return vertical(0) ? [pts[0], { x: pts[0].x, y: pts[1].y }] : [pts[0], { x: pts[1].x, y: pts[0].y }];
+    return vertical(0) ? [itemAt(pts, 0), { x: itemAt(pts, 0).x, y: itemAt(pts, 1).y }] : [itemAt(pts, 0), { x: itemAt(pts, 1).x, y: itemAt(pts, 0).y }];
   }
   // Grid moves alternate once collinear runs are merged; anything else is left as found.
   for (let k = 1; k < n - 1; k += 1) if (vertical(k - 1) === vertical(k)) return pts;
   const line = (k: number): number => {
     const v = vertical(k);
-    if (k === 0) return v ? pts[0].x : pts[0].y;
-    if (k === n - 2) return v ? pts[n - 1].x : pts[n - 1].y;
-    return v ? (pts[k].x + pts[k + 1].x) / 2 : (pts[k].y + pts[k + 1].y) / 2;
+    if (k === 0) return v ? itemAt(pts, 0).x : itemAt(pts, 0).y;
+    if (k === n - 2) return v ? itemAt(pts, n - 1).x : itemAt(pts, n - 1).y;
+    return v ? (itemAt(pts, k).x + itemAt(pts, k + 1).x) / 2 : (itemAt(pts, k).y + itemAt(pts, k + 1).y) / 2;
   };
-  const out: Point[] = [pts[0]];
+  const out: Point[] = [itemAt(pts, 0)];
   for (let k = 1; k < n - 1; k += 1) {
     // An interior point joins one vertical and one horizontal run.
     const before = vertical(k - 1);
     out.push(before ? { x: line(k - 1), y: line(k) } : { x: line(k), y: line(k - 1) });
   }
-  out.push(pts[n - 1]);
+  out.push(itemAt(pts, n - 1));
   return simplify(out);
 }
 
@@ -1219,8 +1229,8 @@ function collectRuns(routes: Route[], horizontal: boolean): Run[] {
     const pts = route.points;
     const n = pts.length;
     for (let k = 0; k + 1 < n; k += 1) {
-      const a = pts[k];
-      const b = pts[k + 1];
+      const a = itemAt(pts, k);
+      const b = itemAt(pts, k + 1);
       const isRun = horizontal
         ? Math.abs(a.y - b.y) < EPS && Math.abs(a.x - b.x) > EPS
         : Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) > EPS;
@@ -1285,12 +1295,12 @@ function runRange(run: Run, horizontal: boolean, boxes: Box[]): [number, number]
   const along = (p: Point) => (horizontal ? p.x : p.y);
   const neighbours: Array<{ at: number; other: number; min: number }> = [];
   if (k > 0) {
-    neighbours.push({ at: along(pts[k]), other: across(pts[k - 1]), min: k - 1 === 0 ? run.route.stubs[0] : MIN_RUN });
+    neighbours.push({ at: along(itemAt(pts, k)), other: across(itemAt(pts, k - 1)), min: k - 1 === 0 ? run.route.stubs[0] : MIN_RUN });
   }
   if (k + 2 < n) {
     neighbours.push({
-      at: along(pts[k + 1]),
-      other: across(pts[k + 2]),
+      at: along(itemAt(pts, k + 1)),
+      other: across(itemAt(pts, k + 2)),
       min: k + 1 === n - 2 ? run.route.stubs[1] : MIN_RUN,
     });
   }
@@ -1330,25 +1340,25 @@ function placeBundle(coords: number[], ranges: Array<[number, number]>): number[
   const centre = coords.reduce((sum, v) => sum + v, 0) / n;
   for (const factor of [1, 0.75, 0.5, 0.3]) {
     const gap = EDGE.nudge * factor;
-    const p = coords.map((_, i) => clamp(centre + (i - (n - 1) / 2) * gap, ranges[i][0], ranges[i][1]));
+    const p = coords.map((_, i) => clamp(centre + (i - (n - 1) / 2) * gap, itemAt(ranges, i)[0], itemAt(ranges, i)[1]));
     for (let pass = 0; pass < n + 2; pass += 1) {
       let moved = false;
       for (let i = 1; i < n; i += 1) {
-        if (p[i] < p[i - 1] + gap - EPS) {
-          p[i] = Math.min(p[i - 1] + gap, ranges[i][1]);
+        if (itemAt(p, i) < itemAt(p, i - 1) + gap - EPS) {
+          p[i] = Math.min(itemAt(p, i - 1) + gap, itemAt(ranges, i)[1]);
           moved = true;
         }
       }
       for (let i = n - 2; i >= 0; i -= 1) {
-        if (p[i] > p[i + 1] - gap + EPS) {
-          p[i] = Math.max(p[i + 1] - gap, ranges[i][0]);
+        if (itemAt(p, i) > itemAt(p, i + 1) - gap + EPS) {
+          p[i] = Math.max(itemAt(p, i + 1) - gap, itemAt(ranges, i)[0]);
           moved = true;
         }
       }
       if (!moved) break;
     }
     const fits = p.every(
-      (v, i) => v >= ranges[i][0] - EPS && v <= ranges[i][1] + EPS && (i === 0 || v - p[i - 1] >= gap - 1e-3),
+      (v, i) => v >= itemAt(ranges, i)[0] - EPS && v <= itemAt(ranges, i)[1] + EPS && (i === 0 || v - itemAt(p, i - 1) >= gap - 1e-3),
     );
     if (fits) return p;
   }
@@ -1358,10 +1368,10 @@ function placeBundle(coords: number[], ranges: Array<[number, number]>): number[
 function insertionSort<T>(items: T[], compare: (a: T, b: T) => number): T[] {
   const out = items.slice();
   for (let i = 1; i < out.length; i += 1) {
-    const item = out[i];
+    const item = itemAt(out, i);
     let j = i - 1;
-    while (j >= 0 && compare(out[j], item) > 0) {
-      out[j + 1] = out[j];
+    while (j >= 0 && compare(itemAt(out, j), item) > 0) {
+      out[j + 1] = itemAt(out, j);
       j -= 1;
     }
     out[j + 1] = item;
@@ -1388,12 +1398,12 @@ function nudgeBundle(bundle: Run[], horizontal: boolean, boxes: Box[]): void {
     );
     if (!placed) continue;
     order.forEach((run, i) => {
-      if (run.fixed || Math.abs(placed[i] - run.coord) < EPS) return;
+      if (run.fixed || Math.abs(itemAt(placed, i) - run.coord) < EPS) return;
       const pts = run.route.points;
       for (const idx of [run.k, run.k + 1]) {
-        pts[idx] = horizontal ? { x: pts[idx].x, y: placed[i] } : { x: placed[i], y: pts[idx].y };
+        pts[idx] = horizontal ? { x: itemAt(pts, idx).x, y: itemAt(placed, i) } : { x: itemAt(placed, i), y: itemAt(pts, idx).y };
       }
-      run.coord = placed[i];
+      run.coord = itemAt(placed, i);
     });
     return;
   }
@@ -1414,15 +1424,15 @@ function nudgeRoutes(routes: Route[], boxes: Box[]): void {
     const root = runs.map((_, i) => i);
     const find = (i: number): number => {
       while (root[i] !== i) {
-        root[i] = root[root[i]];
-        i = root[i];
+        root[i] = itemAt(root, itemAt(root, i));
+        i = itemAt(root, i);
       }
       return i;
     };
     for (let i = 0; i < runs.length; i += 1) {
-      for (let j = i + 1; j < runs.length && runs[j].coord - runs[i].coord < NUDGE_REACH; j += 1) {
-        const a = runs[i];
-        const b = runs[j];
+      for (let j = i + 1; j < runs.length && itemAt(runs, j).coord - itemAt(runs, i).coord < NUDGE_REACH; j += 1) {
+        const a = itemAt(runs, i);
+        const b = itemAt(runs, j);
         if (a.route === b.route) continue;
         if (Math.min(a.hi, b.hi) - Math.max(a.lo, b.lo) <= 0.5) continue;
         const ra = find(i);
@@ -1458,9 +1468,9 @@ function unit(from: Point, to: Point): Point {
 
 /** The last point before `index` that differs from it (routes may repeat a point). */
 function distinctNeighbour(points: Point[], index: number, step: 1 | -1): Point | null {
-  const p = points[index];
+  const p = itemAt(points, index);
   for (let k = index + step; k >= 0 && k < points.length; k += step) {
-    const q = points[k];
+    const q = itemAt(points, k);
     if (Math.hypot(q.x - p.x, q.y - p.y) > EPS) return q;
   }
   return null;
@@ -1485,7 +1495,7 @@ function shorten(points: Point[], atEnd: boolean, by: number): Point[] {
   const i = atEnd ? out.length - 1 : 0;
   const neighbour = distinctNeighbour(out, i, atEnd ? -1 : 1);
   if (!neighbour || by <= 0) return out;
-  const p = out[i];
+  const p = itemAt(out, i);
   const len = Math.hypot(p.x - neighbour.x, p.y - neighbour.y);
   const t = Math.min(by, len) / len;
   out[i] = { x: p.x + (neighbour.x - p.x) * t, y: p.y + (neighbour.y - p.y) * t };
@@ -1498,11 +1508,11 @@ const f = formatCoordinate;
 function roundedPath(points: Point[], radius: number): string {
   const pts = simplifyPolyline(points);
   if (pts.length === 0) return '';
-  let d = `M${f(pts[0].x)} ${f(pts[0].y)}`;
+  let d = `M${f(itemAt(pts, 0).x)} ${f(itemAt(pts, 0).y)}`;
   for (let k = 1; k + 1 < pts.length; k += 1) {
-    const prev = pts[k - 1];
-    const cur = pts[k];
-    const next = pts[k + 1];
+    const prev = itemAt(pts, k - 1);
+    const cur = itemAt(pts, k);
+    const next = itemAt(pts, k + 1);
     const lin = Math.hypot(cur.x - prev.x, cur.y - prev.y);
     const lout = Math.hypot(next.x - cur.x, next.y - cur.y);
     const r = Math.min(radius, lin / 2, lout / 2);
@@ -1517,7 +1527,7 @@ function roundedPath(points: Point[], radius: number): string {
     const sweep = uin.x * uout.y - uin.y * uout.x > 0 ? 1 : 0;
     d += `L${f(a.x)} ${f(a.y)}A${f(r)} ${f(r)} 0 0 ${sweep} ${f(b.x)} ${f(b.y)}`;
   }
-  const last = pts[pts.length - 1];
+  const last = itemAt(pts, pts.length - 1);
   return `${d}L${f(last.x)} ${f(last.y)}`;
 }
 
@@ -1525,10 +1535,10 @@ function roundedPath(points: Point[], radius: number): string {
 function simplifyPolyline(points: Point[]): Point[] {
   const out: Point[] = [];
   for (const p of points) {
-    const last = out[out.length - 1];
+    const last = out.at(-1);
     if (last && Math.hypot(last.x - p.x, last.y - p.y) < EPS) continue;
-    if (out.length >= 2) {
-      const a = out[out.length - 2];
+    const a = out.at(-2);
+    if (a && last) {
       const cross = (last.x - a.x) * (p.y - last.y) - (last.y - a.y) * (p.x - last.x);
       const dot = (last.x - a.x) * (p.x - last.x) + (last.y - a.y) * (p.y - last.y);
       if (Math.abs(cross) < 1e-6 && dot > 0) {
@@ -1548,8 +1558,8 @@ function bezierPoint(p: Point[], t: number): Point {
   const c = 3 * s * t * t;
   const d = t * t * t;
   return {
-    x: a * p[0].x + b * p[1].x + c * p[2].x + d * p[3].x,
-    y: a * p[0].y + b * p[1].y + c * p[2].y + d * p[3].y,
+    x: a * itemAt(p, 0).x + b * itemAt(p, 1).x + c * itemAt(p, 2).x + d * itemAt(p, 3).x,
+    y: a * itemAt(p, 0).y + b * itemAt(p, 1).y + c * itemAt(p, 2).y + d * itemAt(p, 3).y,
   };
 }
 
@@ -1557,7 +1567,7 @@ function bezierPoint(p: Point[], t: number): Point {
 function strokeSegments(points: Point[], curved: boolean): Array<[Point, Point]> {
   const pts = curved ? Array.from({ length: 17 }, (_, i) => bezierPoint(points, i / 16)) : points;
   const out: Array<[Point, Point]> = [];
-  for (let k = 0; k + 1 < pts.length; k += 1) out.push([pts[k], pts[k + 1]]);
+  for (let k = 0; k + 1 < pts.length; k += 1) out.push([itemAt(pts, k), itemAt(pts, k + 1)]);
   return out;
 }
 
@@ -1579,10 +1589,10 @@ function labelSpots(points: Point[], curved: boolean, width: number, height: num
   const gap = EDGE.labelGap;
   const axisAligned =
     !curved &&
-    points.every((p, k) => k === 0 || Math.abs(p.x - points[k - 1].x) < EPS || Math.abs(p.y - points[k - 1].y) < EPS);
+    points.every((p, k) => k === 0 || Math.abs(p.x - itemAt(points, k - 1).x) < EPS || Math.abs(p.y - itemAt(points, k - 1).y) < EPS);
   if (!axisAligned) {
-    const mid = curved ? bezierPoint(points, 0.5) : { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 };
-    const tangent = curved ? unit(bezierPoint(points, 0.45), bezierPoint(points, 0.55)) : unit(points[0], points[1]);
+    const mid = curved ? bezierPoint(points, 0.5) : { x: (itemAt(points, 0).x + itemAt(points, 1).x) / 2, y: (itemAt(points, 0).y + itemAt(points, 1).y) / 2 };
+    const tangent = curved ? unit(bezierPoint(points, 0.45), bezierPoint(points, 0.55)) : unit(itemAt(points, 0), itemAt(points, 1));
     const normal = { x: -tangent.y, y: tangent.x };
     const sides = [normal, { x: -normal.x, y: -normal.y }].sort((a, b) => b.x - a.x || a.y - b.y);
     return sides.map((n) => {
@@ -1591,9 +1601,7 @@ function labelSpots(points: Point[], curved: boolean, width: number, height: num
       return { x: mid.x + n.x * reach - width / 2, y: mid.y + n.y * reach - height / 2, align: 'center' as const, anchor: -1 };
     });
   }
-  const runs = points
-    .slice(0, -1)
-    .map((a, k) => ({ a, b: points[k + 1], k, len: Math.hypot(points[k + 1].x - a.x, points[k + 1].y - a.y) }));
+  const runs = polylineSegments(points).map(([a, b], k) => ({ a, b, k, len: Math.hypot(b.x - a.x, b.y - a.y) }));
   // Inner runs first; the port runs, which carry the stubs and arrowheads, only as a fallback.
   const byLength = (p: { len: number; k: number }, q: { len: number; k: number }) => q.len - p.len || p.k - q.k;
   const isInner = (k: number) => k > 0 && k < runs.length - 1;
@@ -1709,11 +1717,11 @@ function simpleRoute(grid: Grid, excluded: Excluded[], a: Cell, d0: Dir, b: Cell
   const [bi, bj] = b;
   const nearest = (values: number[], v: number) => {
     const k = Math.min(values.length - 1, lowerBound(values, v));
-    return k > 0 && v - values[k - 1] < values[k] - v ? k - 1 : k;
+    return k > 0 && v - itemAt(values, k - 1) < itemAt(values, k) - v ? k - 1 : k;
   };
   const unique = (values: number[]) => [...new Set(values)];
-  const cols = unique([ai, bi, nearest(xs, (xs[ai] + xs[bi]) / 2), 0, nx - 1]);
-  const rows = unique([aj, bj, nearest(ys, (ys[aj] + ys[bj]) / 2), 0, ny - 1]);
+  const cols = unique([ai, bi, nearest(xs, (itemAt(xs, ai) + itemAt(xs, bi)) / 2), 0, nx - 1]);
+  const rows = unique([aj, bj, nearest(ys, (itemAt(ys, aj) + itemAt(ys, bj)) / 2), 0, ny - 1]);
   // Straight out to the frame along the start's heading, and in from it against the goal's.
   const outRows = unique([aj, d0 === 1 ? ny - 1 : d0 === 3 ? 0 : aj]);
   const inRows = unique([bj, e === 1 ? 0 : e === 3 ? ny - 1 : bj]);
@@ -1731,14 +1739,14 @@ function simpleRoute(grid: Grid, excluded: Excluded[], a: Cell, d0: Dir, b: Cell
     let length = 0;
     let valid = true;
     for (const next of shape) {
-      const last = cells[cells.length - 1];
+      const last = itemAt(cells, cells.length - 1);
       const h = headingOf(last, next);
       if (h < 0) continue;
       if (h === reverse(heading)) {
         valid = false;
         break;
       }
-      length += Math.abs(xs[next[0]] - xs[last[0]]) + Math.abs(ys[next[1]] - ys[last[1]]);
+      length += Math.abs(itemAt(xs, next[0]) - itemAt(xs, last[0])) + Math.abs(itemAt(ys, next[1]) - itemAt(ys, last[1]));
       if (h !== heading) {
         bends += 1;
         cells.push(next);
@@ -1759,7 +1767,7 @@ function simpleRoute(grid: Grid, excluded: Excluded[], a: Cell, d0: Dir, b: Cell
   let fewest = Infinity;
   for (const { cells } of candidates) {
     let hits = 0;
-    for (let k = 1; k < cells.length && hits < fewest; k += 1) hits += runHits(grid, excluded, cells[k - 1], cells[k], fewest - hits);
+    for (let k = 1; k < cells.length && hits < fewest; k += 1) hits += runHits(grid, excluded, itemAt(cells, k - 1), itemAt(cells, k), fewest - hits);
     if (hits < fewest) {
       best = cells;
       fewest = hits;
@@ -1788,7 +1796,9 @@ function headingKeys(ends: End[]): Map<End, number> | null {
   }
   const keys = new Map<End, number>();
   for (const list of bySide.values()) {
-    const { endpoint, side } = list[0];
+    const [first] = list;
+    if (!first) continue;
+    const { endpoint, side } = first;
     const [lo, hi] = sideSpan(endpoint.outline, side);
     const along = (p: Point) => (isHorizontalSide(side) ? p.x : p.y);
     const next = list.map((end) => {
@@ -1796,15 +1806,15 @@ function headingKeys(ends: End[]): Map<End, number> | null {
       if (plan.kind !== 'grid' && plan.kind !== 'direct') return end.key;
       const pts = end.which === 0 ? plan.points : [...plan.points].reverse();
       for (const p of pts) if (along(p) < lo - EPS || along(p) > hi + EPS) return along(p);
-      return along(pts[pts.length - 1]);
+      return along(itemAt(pts, pts.length - 1));
     });
     const order = (keyOf: (k: number) => number) =>
       list
         .map((_, k) => k)
-        .sort((p, q) => keyOf(p) - keyOf(q) || list[p].plan.index - list[q].plan.index || list[p].which - list[q].which)
+        .sort((p, q) => keyOf(p) - keyOf(q) || itemAt(list, p).plan.index - itemAt(list, q).plan.index || itemAt(list, p).which - itemAt(list, q).which)
         .join(',');
-    if (order((k) => list[k].key) === order((k) => next[k])) continue;
-    list.forEach((end, k) => keys.set(end, next[k]));
+    if (order((k) => itemAt(list, k).key) === order((k) => itemAt(next, k))) continue;
+    list.forEach((end, k) => keys.set(end, itemAt(next, k)));
   }
   return keys.size > 0 ? keys : null;
 }
@@ -1884,8 +1894,8 @@ export function routeFigure(
     plan.ends = [0, 1].map((which) => {
       const endpoint = which === 0 ? from : to;
       const far = which === 0 ? to : from;
-      const side = sides[which];
-      const farSide = sides[1 - which];
+      const side = itemAt(sides, which);
+      const farSide = itemAt(sides, 1 - which);
       const aim = sideMidpoint(far.rect, farSide);
       const end: End = {
         plan,
@@ -1931,7 +1941,7 @@ export function routeFigure(
     groups.forEach((group, g) => {
       const own = group.visible && !plan.free.has(group.id) ? 1 : 0;
       if (own) any = true;
-      counts[g] = own + (group.parent >= 0 ? counts[group.parent] : 0);
+      counts[g] = own + (group.parent >= 0 ? itemAt(counts, group.parent) : 0);
     });
     return any ? counts : null;
   };
@@ -2056,7 +2066,7 @@ export function routeFigure(
       return Math.abs(s.point.x - t.point.x) + Math.abs(s.point.y - t.point.y);
     };
     const order = [...gridPlans].sort((a, b) => span(a) - span(b) || a.index - b.index);
-    const pointOf = ([i, j]: Cell): Point => ({ x: grid.xs[i], y: grid.ys[j] });
+    const pointOf = ([i, j]: Cell): Point => ({ x: itemAt(grid.xs, i), y: itemAt(grid.ys, j) });
     for (const plan of order) {
       const [s, t] = plan.ends as [End, End];
       let points: Point[] | null = null;
@@ -2176,8 +2186,8 @@ export function routeFigure(
       message:
         `The figure has too many edges to route them all carefully: ${skipped.length} of them (${named}${skipped.length > 3 ? ', …' : ''}) ` +
         'take simple routes that may cross other items. Split it into several figures, or drop some edges.',
-      path: skipped[0].edge.path,
-      ...(skipped[0].edge.range ? { range: skipped[0].edge.range } : {}),
+      path: itemAt(skipped, 0).edge.path,
+      ...(itemAt(skipped, 0).edge.range ? { range: itemAt(skipped, 0).edge.range } : {}),
     });
   }
 
@@ -2245,7 +2255,7 @@ export function routeFigure(
             if (!inside && !outside) score += 50;
           }
           strokes.forEach((segments, q) => {
-            const sb = strokeBoxes[q];
+            const sb = itemAt(strokeBoxes, q);
             if (sb.x > rect.x + rect.width || sb.x + sb.width < rect.x || sb.y > rect.y + rect.height || sb.y + sb.height < rect.y) return;
             segments.forEach(([a, b], k) => {
               if (q === p && (k === spot.anchor || spot.anchor < 0)) return;
@@ -2281,8 +2291,8 @@ function selfLoop(edge: EdgeModel, endpoint: Endpoint): Point[] {
   const along = isHorizontalSide(side)
     ? [r.x + r.width / 3, r.x + (2 * r.width) / 3]
     : [r.y + r.height / 3, r.y + (2 * r.height) / 3];
-  const p0 = portAt(endpoint, side, along[0]);
-  const p3 = portAt(endpoint, side, along[1]);
+  const p0 = portAt(endpoint, side, itemAt(along, 0));
+  const p3 = portAt(endpoint, side, itemAt(along, 1));
   if (edge.route === 'curved') {
     const reach = SELF_LOOP_OUT * 1.5;
     return [p0, { x: p0.x + n.x * reach, y: p0.y + n.y * reach }, { x: p3.x + n.x * reach, y: p3.y + n.y * reach }, p3];
@@ -2314,8 +2324,8 @@ function drawEdge(plan: Plan, curved: boolean): SceneEdge {
   let start: Arrowhead | null = null;
   let end: Arrowhead | null = null;
   let d: string;
-  if (curved) {
-    const [p0, c1, c2, p3] = points;
+  const [p0, c1, c2, p3] = points;
+  if (curved && p0 && c1 && c2 && p3) {
     const uEnd = unit(Math.hypot(p3.x - c2.x, p3.y - c2.y) > EPS ? c2 : p0, p3);
     const uStart = unit(Math.hypot(p0.x - c1.x, p0.y - c1.y) > EPS ? c1 : p3, p0);
     let q0 = p0;
@@ -2340,17 +2350,17 @@ function drawEdge(plan: Plan, curved: boolean): SceneEdge {
     const both = hasStartArrow(edge) && hasEndArrow(edge);
     const runLength = (i: number, step: 1 | -1) => {
       const q = distinctNeighbour(points, i, step);
-      return q ? Math.hypot(points[i].x - q.x, points[i].y - q.y) : 0;
+      return q ? Math.hypot(itemAt(points, i).x - q.x, itemAt(points, i).y - q.y) : 0;
     };
     if (hasEndArrow(edge) && n >= 2) {
       const q = distinctNeighbour(points, n - 1, -1);
-      end = arrowhead(points[n - 1], q ? unit(q, points[n - 1]) : { x: 0, y: 1 }, length, width);
+      end = arrowhead(itemAt(points, n - 1), q ? unit(q, itemAt(points, n - 1)) : { x: 0, y: 1 }, length, width);
       const run = runLength(n - 1, -1);
       stroke = shorten(stroke, true, Math.min(length, both && n === 2 ? run / 2 : run));
     }
     if (hasStartArrow(edge) && n >= 2) {
       const q = distinctNeighbour(points, 0, 1);
-      start = arrowhead(points[0], q ? unit(q, points[0]) : { x: 0, y: -1 }, length, width);
+      start = arrowhead(itemAt(points, 0), q ? unit(q, itemAt(points, 0)) : { x: 0, y: -1 }, length, width);
       const run = runLength(0, 1);
       stroke = shorten(stroke, false, Math.min(length, both && n === 2 ? run / 2 : run));
     }

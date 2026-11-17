@@ -1,13 +1,44 @@
 export * from './types';
 export * from './citations';
+export * from './referenceRecords';
+export {
+  CITATION_CREDITS,
+  CITATION_STYLES,
+  DEFAULT_CITATION_STYLE,
+  citationStyleInfo,
+  isCitationStyle,
+  type CitationStyleInfo,
+} from './csl/styles';
+export { markupHasLink, markupHtml, markupMarkdown, markupText, type CslMarkup, type CslNode } from './csl/markup';
+export { loadCitationProcessor } from './csl/processor';
+export { useCitationProcessor } from './csl/useCitationProcessor';
 export { EditorProvider } from './EditorContext';
 export {
-  useEditor,
   useEditorActions,
-  useEditorState,
+  useEditorView,
   useActiveBlock,
   useOptionalEditorActions,
 } from './editorContextState';
+export type {
+  BlockActions,
+  EditorActionsContextValue,
+  EditorViewValue,
+} from './editorContextState';
+export {
+  useDocumentActions,
+  useDocumentId,
+  useDocumentSession,
+  useDocumentStatus,
+  useEditorDoc,
+  usePageReadOnly,
+} from './documentSessionState';
+export type {
+  DocumentActionsValue,
+  DocumentSessionValue,
+  DocumentStatusValue,
+  EditorDocValue,
+  RestoreReason,
+} from './documentSessionState';
 export { useBibliography, BibliographyContext } from './bibliographyContextState';
 export { BLOCK_TYPES, blockTypeLabel, blockTypeIcon } from './blockTypes';
 export type { BlockTypeMeta } from './blockTypes';
@@ -34,7 +65,6 @@ export {
 } from './blockKinds';
 export type { BlockKind, BlockKindId } from './blockKinds';
 export {
-  DEFAULT_DOCUMENT_TITLE,
   PAGE_TITLE_SELECTOR,
   focusPageTitle,
   useDocumentTitle,

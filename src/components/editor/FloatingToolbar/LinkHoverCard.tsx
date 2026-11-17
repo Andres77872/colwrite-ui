@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ExternalLink, Globe, Hash, Mail, Phone } from 'lucide-react';
-import { useEditor } from '@/editor';
+import { useEditorActions } from '@/editor';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
 import { EDIT_LINK_EVENT, describeHref, normalizeHref, openLinkInNewTab } from './linkHref';
+import { pageIdOf } from '@/lib/pageLink';
+import { useOpenPageLink, usePageLinkTarget } from '@/actions/usePageLink';
+import { PageLinkStatus } from '@/components/workspace/PageLinkStatus';
 
 const SHOW_DELAY = 350;
 const HIDE_DELAY = 200;
@@ -43,7 +46,7 @@ function rectNear(anchor: HTMLAnchorElement, y?: number): DOMRect {
  * followed or checked. Ctrl/⌘+click opens the link in a new tab directly.
  */
 export function LinkHoverCard() {
-  const { refs, updateHtml } = useEditor();
+  const { refs, updateHtml } = useEditorActions();
   const [card, setCard] = useState<Card | null>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -163,6 +166,7 @@ export function LinkHoverCard() {
   const { anchor } = card;
   const href = resolvedHref(anchor);
   const raw = anchor.getAttribute('href') ?? '';
+  const pageId = href ? pageIdOf(href) : null;
   const described = href ? describeHref(href) : null;
   const editable = anchor.closest<HTMLElement>('.editable');
   // A locked or read-only block offers Open only. (`isContentEditable` is
@@ -221,6 +225,21 @@ export function LinkHoverCard() {
         if (!(event.target as Element).closest('a')) event.preventDefault();
       }}
     >
+      {pageId ? (
+        <div className="space-y-2 px-3 py-2.5">
+          <PageLinkCard documentId={pageId} onOpened={hide} />
+          {editableAllowed && (
+            <div className="flex items-center gap-3 text-xs">
+              <button type="button" onClick={edit} className="-my-1 py-1 text-muted-foreground transition-colors hover:text-foreground">
+                Edit
+              </button>
+              <button type="button" onClick={remove} className="-my-1 py-1 text-muted-foreground transition-colors hover:text-destructive">
+                Remove
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="flex items-start gap-2.5 px-3 py-2.5">
         <Icon aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
@@ -269,7 +288,26 @@ export function LinkHoverCard() {
           </div>
         </div>
       </div>
+      )}
     </div>,
     document.body,
+  );
+}
+
+/**
+ * A link to one of this app's pages: where that page is, opened in place or
+ * in its own workspace rather than by loading the app again in a new tab.
+ */
+function PageLinkCard({ documentId, onOpened }: { documentId: string; onOpened: () => void }) {
+  const target = usePageLinkTarget(documentId);
+  const openLink = useOpenPageLink();
+  return (
+    <PageLinkStatus
+      target={target}
+      onOpen={async () => {
+        onOpened();
+        await openLink(documentId);
+      }}
+    />
   );
 }

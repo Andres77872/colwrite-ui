@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, type ClipboardEvent, type KeyboardEvent } from 'react';
-import type { TableAlign, TableChild } from '@/editor';
+import { usePageReadOnly, type TableAlign, type TableChild } from '@/editor';
 import type { InlineWidgetProps } from '../types';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
@@ -65,6 +65,8 @@ function autoSize(el: HTMLTextAreaElement | null): void {
 function TableInlineContent(props: InlineWidgetProps<TableChild>) {
   const { child } = props;
   const { patch, remove } = useInlineChild(props);
+  // A read-only page (a viewer): the cells read, and nothing adds or removes one.
+  const readOnly = usePageReadOnly();
   const cellRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
 
   // The grid is derived from the stored child on every render rather than
@@ -94,9 +96,7 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
   );
 
   const setCell = (r: number, c: number, value: string) => {
-    const next = grid.map((row) => row.slice());
-    next[r][c] = value;
-    commit(next);
+    commit(grid.map((row, rowIndex) => (rowIndex === r ? row.map((cell, column) => (column === c ? value : cell)) : row)));
   };
 
   const focusCell = (r: number, c: number) => {
@@ -229,7 +229,8 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
         autoSize(el);
       }}
       rows={1}
-      value={grid[r][c]}
+      readOnly={readOnly}
+      value={grid[r]?.[c] ?? ''}
       onChange={(event) => {
         autoSize(event.currentTarget);
         setCell(r, c, event.target.value);
@@ -252,7 +253,7 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
   const cellWithMenu = (r: number, c: number, isHeader: boolean) => (
     <>
       {cell(r, c, isHeader)}
-      <CellMenu
+      {!readOnly && <CellMenu
         label={isHeader ? `Column ${c + 1} heading options` : `Row ${r + 1}, column ${c + 1} options`}
         align={align[c] ?? 'left'}
         canDeleteRow={!(isHeader && header) && rows > (header ? 2 : 1)}
@@ -264,7 +265,7 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
         onDeleteRow={() => deleteRowAt(r)}
         onDeleteColumn={() => deleteColumnAt(c)}
         onAlign={(value) => setAlign(c, value)}
-      />
+      />}
     </>
   );
 
@@ -310,7 +311,7 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
           {header && (
             <thead>
               <tr>
-                {grid[0].map((_, c) => (
+                {(grid[0] ?? []).map((_, c) => (
                   <th key={c} className="group/cell relative border border-border bg-subtle p-0 align-top">
                     {cellWithMenu(0, c, true)}
                   </th>
@@ -337,8 +338,8 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
       </span>
       {/* Notion's edge bars: a "+" strip under the last row and beside the
           last column, shown while the table is hovered or being edited. */}
-      <EdgeBar edge="bottom" label="Add a row" onClick={() => addRowAt(rows)} />
-      <EdgeBar edge="right" label="Add a column" onClick={() => addColumnAt(cols)} />
+      {!readOnly && <EdgeBar edge="bottom" label="Add a row" onClick={() => addRowAt(rows)} />}
+      {!readOnly && <EdgeBar edge="right" label="Add a column" onClick={() => addColumnAt(cols)} />}
       </span>
     </InlineFigureShell>
   );

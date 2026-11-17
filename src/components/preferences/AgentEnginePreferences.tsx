@@ -12,7 +12,7 @@ import {
   AGENT_ENGINE_IDS,
   type AgentEngineId,
   type AgentEngineStatus,
-} from '@/services/agentEngines';
+} from '@/data/agentEngines';
 import {
   CLAUDE_MODEL_ALIASES,
   ENGINE_SUMMARY,
@@ -22,25 +22,28 @@ import {
   inlineCodeParts,
 } from './agentEngineCopy';
 import { useAgentEngine } from './agentEngineContextState';
+import { GatewayModelPreferences } from './GatewayModelPreferences';
 
 /**
- * Settings → AI & tools → Agent engine.
- *
- * Rendered only when the API runs locally: a deployed ColWrite has one engine
- * and nothing to choose, and Claude Code / Codex cannot be turned on there.
- * The choice applies at once and is kept on this device.
+ * Settings → AI & tools: gateway models everywhere, local engines only locally.
  */
 export function AgentEnginePreferences() {
-  const engines = useAgentEngine();
-  const { prefs, selectable, statusOf, setChatEngine, setInlineEngine } = engines;
-  const inlineId = useId();
+  const { selectable, preferenceError, savingPreferences } = useAgentEngine();
+  return (
+    <div className="space-y-6">
+      <GatewayModelPreferences />
+      {selectable && <LocalEnginePreferences />}
+      {preferenceError && <Alert variant="destructive">{preferenceError}</Alert>}
+      {savingPreferences && <p role="status" className="text-xs text-muted-foreground">Saving assistant preferences…</p>}
+    </div>
+  );
+}
 
-  if (!selectable) return null;
+function LocalEnginePreferences() {
+  const engines = useAgentEngine();
+  const { prefs, statusOf, setChatEngine, preferencesReady, savingPreferences } = engines;
 
   const chatStatus = statusOf(prefs.chat);
-  const inlineOptions = AGENT_ENGINE_IDS.filter(
-    (engine) => statusOf(engine)?.available || engine === prefs.inline,
-  );
 
   return (
     <section aria-labelledby="agent-engine-title">
@@ -48,8 +51,8 @@ export function AgentEnginePreferences() {
         Agent engine
       </h2>
       <p className="mt-0.5 max-w-2xl text-xs text-muted-foreground">
-        What runs the assistant on this machine. Claude Code and Codex use your own CLI sign-in;
-        ColWrite never signs in for you or reads those logins. Applies right away, on this device.
+        Preferred engines are saved to your account. Claude Code and Codex still require a
+        local server and a CLI sign-in on this machine.
       </p>
 
       <div
@@ -63,6 +66,8 @@ export function AgentEnginePreferences() {
             engine={engine}
             status={statusOf(engine)}
             selected={prefs.chat === engine}
+            disabled={!preferencesReady || savingPreferences}
+            model={prefs.models[engine]}
             onSelect={() => setChatEngine(engine)}
           />
         ))}
@@ -77,24 +82,35 @@ export function AgentEnginePreferences() {
         </Alert>
       )}
 
+      <SurfaceEngineField surface="inline" label="Inline AI" description="Ask AI, selection rewrites and AI beats." />
+      <SurfaceEngineField surface="review" label="Review engine" description="Named reviews that leave comments on a page." />
+    </section>
+  );
+}
+
+function SurfaceEngineField({ surface, label, description }: {
+  surface: 'inline' | 'review'; label: string; description: string;
+}) {
+  const { prefs, statusOf, setSurfaceEngine, preferencesReady, savingPreferences } = useAgentEngine();
+  const id = useId();
+  const selected = prefs[surface] ?? 'chat';
+  const options = AGENT_ENGINE_IDS.filter((engine) => statusOf(engine)?.available || engine === selected);
+
+  return (
       <div className="flex items-center justify-between gap-6 py-3 max-sm:flex-col max-sm:items-stretch max-sm:gap-2.5">
         <div className="min-w-0">
-          <label htmlFor={inlineId} className="text-sm font-medium text-foreground">
-            Inline AI
-          </label>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Ask AI, selection rewrites and AI beats. A local CLI takes a few seconds to start, so
-            quick rewrites may suit the gateway better.
-          </p>
+          <label htmlFor={id} className="text-sm font-medium text-foreground">{label}</label>
+          <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
         </div>
         <NativeSelect
-          id={inlineId}
+          id={id}
           className="w-full shrink-0 sm:w-60"
-          value={prefs.inline}
-          onChange={(event) => setInlineEngine(event.target.value as AgentEngineId | 'chat')}
+          value={selected}
+          disabled={!preferencesReady || savingPreferences}
+          onChange={(event) => setSurfaceEngine(surface, event.target.value as AgentEngineId | 'chat')}
         >
           <option value="chat">Same as assistant</option>
-          {inlineOptions.map((engine) => (
+          {options.map((engine) => (
             <option key={engine} value={engine}>
               {engineName(engine, statusOf(engine))}
               {statusOf(engine)?.available ? '' : ` (${engineBadge(statusOf(engine)).label.toLowerCase()})`}
@@ -102,7 +118,6 @@ export function AgentEnginePreferences() {
           ))}
         </NativeSelect>
       </div>
-    </section>
   );
 }
 
@@ -110,18 +125,22 @@ function EngineRow({
   engine,
   status,
   selected,
+  disabled,
+  model,
   onSelect,
 }: {
   engine: AgentEngineId;
   status: AgentEngineStatus | null;
   selected: boolean;
+  disabled: boolean;
+  model?: string;
   onSelect: () => void;
 }) {
   const { checking, checkError, check } = useAgentEngine();
   const radioId = useId();
   const badge = engineBadge(status);
   const available = status?.available === true;
-  const isCli = engine !== 'legacy';
+  const isCli = engine !== 'gateway';
   const signedIn = engineSignedInLine(status);
 
   return (
@@ -134,7 +153,7 @@ function EngineRow({
           value={engine}
           checked={selected}
           // A CLI that cannot run is not offered; once it is ready, it can be.
-          disabled={!available && !selected}
+          disabled={disabled || (!available && !selected)}
           onChange={onSelect}
           aria-describedby={`${radioId}-summary`}
           className="mt-0.5 size-4 shrink-0 cursor-pointer accent-primary-strong disabled:cursor-not-allowed"
@@ -180,9 +199,9 @@ function EngineRow({
           </Button>
         )}
       </div>
-      {available && (
+      {available && isCli && (
         <div className="pl-7">
-          <ModelField engine={engine} />
+          <ModelField key={model ?? ''} engine={engine} disabled={disabled} />
         </div>
       )}
     </div>
@@ -247,7 +266,7 @@ function LoginCommand({ command }: { command: string }) {
 const OTHER = '__other__';
 
 /** Per-engine model override. Empty means the engine's own default. */
-function ModelField({ engine }: { engine: AgentEngineId }) {
+function ModelField({ engine, disabled }: { engine: 'claude' | 'codex'; disabled: boolean }) {
   const { prefs, setModel } = useAgentEngine();
   const saved = prefs.models[engine] ?? '';
   const [draft, setDraft] = useState(saved);
@@ -263,18 +282,16 @@ function ModelField({ engine }: { engine: AgentEngineId }) {
     if (!next) setDraft(value.trim());
   };
 
-  const placeholder =
-    engine === 'legacy' ? 'Server default' : engine === 'claude' ? 'claude-sonnet-5' : 'Codex default';
+  const placeholder = engine === 'claude' ? 'claude-sonnet-5' : 'Codex default';
   const hint =
-    engine === 'legacy'
-      ? 'A gateway model id for this server. Empty uses the server default.'
-      : engine === 'claude'
-        ? 'Empty uses Claude Code’s own default. Your Claude Code settings file is not read.'
-        : 'A Codex model id. Empty uses Codex’s own default for your plan.';
+    engine === 'claude'
+      ? 'Empty uses Claude Code’s own default. Your Claude Code settings file is not read.'
+      : 'A Codex model id. Empty uses Codex’s own default for your plan.';
 
   const textField = (
     <Input
       id={inputId}
+      disabled={disabled}
       value={draft}
       placeholder={placeholder}
       spellCheck={false}
@@ -304,6 +321,7 @@ function ModelField({ engine }: { engine: AgentEngineId }) {
           <>
             <NativeSelect
               id={`${inputId}-alias`}
+              disabled={disabled}
               className="w-full sm:w-44"
               value={other ? OTHER : isAlias ? saved : ''}
               onChange={(event) => {

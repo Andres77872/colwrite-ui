@@ -1,3 +1,4 @@
+import type { AssistantPreset } from '@/data/assistant';
 import {
   BookCheck,
   FileText,
@@ -6,13 +7,24 @@ import {
   Sigma,
   Sparkles,
   Telescope,
+  Scissors,
+  ClipboardCheck,
   type LucideIcon,
 } from 'lucide-react';
 
-/** Label on the row, and the message it sends. */
-const SUGGESTIONS: ReadonlyArray<{ label: string; prompt: string; icon: LucideIcon }> = [
+/** How the home shows each of the server's chat presets; one it does not know shows as the assistant's. */
+const PRESET_ICONS: Readonly<Record<string, LucideIcon>> = {
+  'review-page': ClipboardCheck,
+  'tighten-page': Scissors,
+};
+
+/**
+ * Label on the row, and the message it sends. `edits` marks a start whose
+ * answer is a change to the page, which a viewer is not offered.
+ */
+const SUGGESTIONS: ReadonlyArray<{ label: string; prompt: string; icon: LucideIcon; edits?: true }> = [
   {
-    label: 'Summarize this document',
+    label: 'Summarize this page',
     prompt: 'Summarize this document in a short paragraph.',
     icon: FileText,
   },
@@ -30,23 +42,34 @@ const SUGGESTIONS: ReadonlyArray<{ label: string; prompt: string; icon: LucideIc
     label: 'Improve the introduction',
     prompt: 'Improve the introduction.',
     icon: PenLine,
+    edits: true,
   },
-  { label: 'Draft an abstract', prompt: 'Draft an abstract for this paper.', icon: ScrollText },
+  { label: 'Draft an abstract', prompt: 'Draft an abstract for this paper.', icon: ScrollText, edits: true },
   { label: 'Explain an equation', prompt: 'Explain the main equation in this paper.', icon: Sigma },
 ];
 
 /**
  * What an empty conversation shows: what the assistant is for, and six
  * one-click starts. Each row sends its prompt straight away — it is a
- * shortcut, not a template to edit.
+ * shortcut, not a template to edit. For a viewer (M6.UI-2) it promises no
+ * edits: the assistant answers, and the starts that would change the page
+ * are left out.
  */
 export function AssistantHome({
   documentName,
   saved,
   unsavedNoticeId,
   onPick,
+  presets = [],
+  onPreset,
+  readOnly = false,
 }: {
   documentName: string;
+  /** The server's chat presets (the catalog's `profile: "chat"` ones), each with its state here. */
+  presets?: readonly AssistantPreset[];
+  onPreset?: (preset: AssistantPreset) => void;
+  /** The page is read-only here: the account is a viewer. */
+  readOnly?: boolean;
   /** Whether the document already has an id. Asking saves it otherwise. */
   saved: boolean;
   unsavedNoticeId: string;
@@ -57,12 +80,42 @@ export function AssistantHome({
       <Sparkles aria-hidden="true" className="h-7 w-7 text-ai" strokeWidth={1.75} />
       <h3 className="mt-3 text-lg font-semibold text-foreground">How can I help with this paper?</h3>
       <p className="mt-1 text-sm text-muted-foreground text-pretty">
-        Working on <span className="text-foreground">“{documentName}”</span>. Edits arrive as
-        suggestions you accept in the page.
+        Working on <span className="text-foreground">“{documentName}”</span>.{' '}
+        {readOnly
+          ? 'You can view this page, so the assistant answers questions about it and changes nothing.'
+          : 'Edits arrive as suggestions you accept in the page.'}
       </p>
 
       <ul className="-mx-2 mt-5 flex flex-col gap-px" aria-label="Suggestions">
-        {SUGGESTIONS.map(({ label, prompt, icon: Icon }) => (
+        {/* The server's actions first: their words and instructions are its own.
+            One that cannot run here is shown with the reason, in the server's words. */}
+        {onPreset && presets.map((preset) => {
+          const Icon = PRESET_ICONS[preset.id] ?? Sparkles;
+          const off = preset.state !== 'on';
+          const reasonId = `${unsavedNoticeId}-preset-${preset.id}`;
+          return (
+            <li key={preset.id}>
+              <button
+                type="button"
+                onClick={() => onPreset(preset)}
+                disabled={off}
+                aria-describedby={[off ? reasonId : null, saved ? null : unsavedNoticeId].filter(Boolean).join(' ') || undefined}
+                className="flex min-h-8 w-full items-center gap-2.5 rounded-md px-2 py-1 text-left text-sm text-foreground outline-none transition-colors duration-120 hover:bg-hover focus-visible:bg-hover focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
+              >
+                <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  {preset.label}
+                  {off && (
+                    <span id={reasonId} className="block text-xs text-muted-foreground">
+                      {preset.reason ?? 'Not available here.'}
+                    </span>
+                  )}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+        {SUGGESTIONS.filter((suggestion) => !readOnly || !suggestion.edits).map(({ label, prompt, icon: Icon }) => (
           <li key={label}>
             <button
               type="button"
@@ -81,7 +134,7 @@ export function AssistantHome({
           so the only thing worth saying is that it will. */}
       {!saved && (
         <p id={unsavedNoticeId} className="mt-4 text-xs text-muted-foreground">
-          Asking saves this document first, so the assistant can work on it.
+          Asking saves this page first, so the assistant can work on it.
         </p>
       )}
     </div>

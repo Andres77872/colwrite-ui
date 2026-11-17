@@ -1,75 +1,76 @@
-import { AgentActivity } from 'colwrite-ui';
+import type { ReactNode } from 'react';
+import { AgentActivity, AssistantCatalogContext, assistantCatalogAllOn } from 'colwrite-ui';
 
 // AgentActivity is the assistant's "what I just did" list, rendered above the
 // answer in a chat turn: one quiet line per tool call ("✓ Searched Semantic
-// Scholar · 0.8s"), each opening onto its query, input and output.
+// Scholar · 0.8s"), each opening onto its input and output.
 //
 // `live` is the only prop that changes the shape: while a turn runs every line
 // is shown and the running one shimmers; once it finishes, more than three
 // steps fold under a single "Used N tools" line until someone clicks it. A
 // failure's cause is always printed under its line.
 //
-// `tool` is a key into TOOL_META (ChatAssistant/AgentActivity/toolMeta.ts). An
-// unknown key still renders, but with the generic fallback label — the ids below
-// are all real ones the agent can emit.
+// A row's label, running label, icon and detail line come from the workspace's
+// assistant catalog (here the literal `assistantCatalogAllOn`), or, for a tool
+// the catalog does not list, from the `display` its start event carried. The
+// detail is the first of the tool's templates its arguments can fill.
 
 type Run = {
   id: string;
   tool: string;
   state: 'running' | 'done' | 'error';
   durationMs?: number;
-  detail?: string;
+  args?: Record<string, unknown>;
+  error?: string;
+  errorType?: string;
+  display?: { label: string; running_label: string; icon: string; detail_templates: string[] };
 };
 
+function WithCatalog({ children }: { children: ReactNode }) {
+  return (
+    <AssistantCatalogContext.Provider value={assistantCatalogAllOn}>
+      <div className="max-w-[34rem]">{children}</div>
+    </AssistantCatalogContext.Provider>
+  );
+}
+
 const FINISHED: Run[] = [
-  {
-    id: 'r1',
-    tool: 'doc_read',
-    state: 'done',
-    durationMs: 420,
-    detail: '18 blocks, 2,140 words',
-  },
+  { id: 'r1', tool: 'doc_read', state: 'done', durationMs: 420 },
   {
     id: 'r2',
-    tool: 'search_citations',
+    tool: 'semantic_scholar_search',
     state: 'done',
     durationMs: 2600,
-    detail: '4 candidates for the scaling claim',
+    args: { content_redacted: true, query_redacted: true, query_length: 38, limit: 10, year_from: 2020 },
   },
-  {
-    id: 'r3',
-    tool: 'doc_edit',
-    state: 'done',
-    durationMs: 890,
-    detail: 'Rewrote the caveat in 4. Results',
-  },
+  { id: 'r3', tool: 'doc_edit', state: 'done', durationMs: 890 },
 ];
 
 export function Running() {
   return (
-    <div className="max-w-[34rem]">
+    <WithCatalog>
       <AgentActivity
         live
         runs={[
-          { id: 'r1', tool: 'doc_read', state: 'done', durationMs: 380, detail: '18 blocks read' },
+          { id: 'r1', tool: 'doc_read', state: 'done', durationMs: 380 },
           { id: 'r2', tool: 'semantic_scholar_search', state: 'running' },
         ]}
       />
-    </div>
+    </WithCatalog>
   );
 }
 
 export function Finished() {
   return (
-    <div className="max-w-[34rem]">
+    <WithCatalog>
       <AgentActivity live={false} runs={FINISHED} />
-    </div>
+    </WithCatalog>
   );
 }
 
 export function WithAFailedStep() {
   return (
-    <div className="max-w-[34rem]">
+    <WithCatalog>
       <AgentActivity
         live
         runs={[
@@ -78,34 +79,45 @@ export function WithAFailedStep() {
             id: 'r2',
             tool: 'validate_claim',
             state: 'error',
-            durationMs: 1200,
-            detail: 'Source returned 404',
+            durationMs: 30_000,
+            error: 'External research tool failed; content-bearing details redacted.',
+            errorType: 'timeout',
           },
-          { id: 'r3', tool: 'search_citations', state: 'running' },
+          { id: 'r3', tool: 'web_search', state: 'running' },
         ]}
       />
-    </div>
+    </WithCatalog>
   );
 }
 
 export function FinishedAndFolded() {
   return (
-    <div className="max-w-[34rem]">
+    <WithCatalog>
       <AgentActivity
         live={false}
         runs={[...FINISHED, { id: 'r4', tool: 'doc_read', state: 'done', durationMs: 300 }]}
       />
-    </div>
+    </WithCatalog>
   );
 }
 
-export function SingleStep() {
+/** A tool this client's catalog does not list: named by its start event's display. */
+export function AToolTheCatalogLacks() {
   return (
-    <div className="max-w-[34rem]">
+    <WithCatalog>
       <AgentActivity
-        live
-        runs={[{ id: 'r1', tool: 'doc_read', state: 'done', durationMs: 310, detail: '2,140 words' }]}
+        live={false}
+        runs={[
+          {
+            id: 'r1',
+            tool: 'page_outline',
+            state: 'done',
+            durationMs: 410,
+            args: { sections_count: 4 },
+            display: { label: 'Read the page outline', running_label: 'Reading the page outline', icon: 'file-search', detail_templates: ['{sections_count} sections'] },
+          },
+        ]}
       />
-    </div>
+    </WithCatalog>
   );
 }

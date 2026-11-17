@@ -1,6 +1,11 @@
+import { itemAt } from '@/lib/itemAt';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup, fireEvent, screen } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import type { Block, CitationChild, Doc } from '@/editor/types';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
+import { reference } from '@/__tests__/agentSource';
 
 /**
  * The reference list is derived from the document, so it is tested through the
@@ -8,13 +13,21 @@ import type { Block, CitationChild, Doc } from '@/editor/types';
  * only that the fixture matches itself.
  */
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
+
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const { EditorProvider } = await import('@/editor');
 const { ReferencesSection } = await import('./ReferencesSection');
@@ -26,7 +39,7 @@ const cite = (id: string, over: Partial<CitationChild> = {}): CitationChild => (
   id,
   type: 'citation',
   keys: ['k1'],
-  style: 'numeric',
+  style: 'nlm-citation-sequence-brackets',
   ...over,
 });
 
@@ -38,8 +51,8 @@ const para = (id: string, children: CitationChild[]): Block => ({
 });
 
 async function mount(blocks: Block[]) {
-  const doc: Doc = { version: 1, blocks };
-  localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc }));
+  const doc: Doc = { blocks };
+  localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: null, doc }));
   const utils = render(
     <EditorProvider>
       {/* Stands in for the paragraph a back-link jumps to. */}
@@ -80,16 +93,11 @@ describe('ReferencesSection', () => {
     expect(screen.queryByRole('heading', { name: 'References' })).toBeNull();
   });
 
-  it('lists one row per source, numbered in citation order', async () => {
+  it('lists one row per source, numbered in citation order, as the page’s CSL style prints it', async () => {
     await mount([
       para('p1', [
-        cite('c1', {
-          sources: [{ key: 'k1', title: 'First paper', authors: 'A. Author', year: '2020' }],
-        }),
-        cite('c2', {
-          keys: ['k2'],
-          sources: [{ key: 'k2', title: 'Second paper', authors: 'B. Buthor', year: '2021' }],
-        }),
+        cite('c1', { sources: [reference('k1', { title: 'First paper', authors: 'Ada Author', year: 2020 })] }),
+        cite('c2', { keys: ['k2'], sources: [reference('k2', { title: 'Second paper', authors: 'Bea Buthor', year: 2021 })] }),
       ]),
       // A repeat of the first source: one row, not two.
       para('p2', [cite('c3')]),
@@ -97,10 +105,34 @@ describe('ReferencesSection', () => {
 
     const rows = screen.getAllByRole('listitem');
     expect(rows).toHaveLength(2);
-    expect(rows[0].textContent).toContain('[1]');
-    expect(rows[0].textContent).toContain('A. Author. First paper. 2020.');
-    expect(rows[1].textContent).toContain('[2]');
-    expect(screen.getByText('2 sources · Numbered in order of first citation.')).toBeTruthy();
+    expect(rows[0]?.textContent).toContain('1.');
+    expect(rows[0]?.textContent).toContain('Author A. First paper. 2020.');
+    expect(rows[1]?.textContent).toContain('2.');
+    expect(screen.getByText('2 sources · Vancouver (brackets), numbered in order of first citation.')).toBeTruthy();
+  });
+
+  it('marks a retracted work in the list itself, with its notice, and a work to review with what differs', async () => {
+    await mount([
+      para('p1', [
+        cite('c1', {
+          sources: [reference('k1', {
+            title: 'Retracted paper', authors: 'Ada Author', year: 2020, state: 'verified', flags: ['retracted'],
+            notices: [{ type: 'retraction', date: '2024-03-12', doi: '10.5555/r1', source: 'crossref' }],
+          })],
+        }),
+        cite('c2', { keys: ['k2'], sources: [reference('k2', { title: 'Odd paper', state: 'needs_review', differs: ['issued'] })] }),
+        cite('c3', { keys: ['k3'], sources: [reference('k3', { title: 'Fine paper', state: 'verified' })] }),
+      ]),
+    ]);
+
+    const [retracted, review, fine] = screen.getAllByRole('listitem');
+    expect(retracted?.textContent).toContain('Retracted.');
+    expect(retracted?.textContent).toContain('Retraction published on 2024-03-12 (reported by Crossref).');
+    expect(retracted?.querySelector('a[aria-label="Retracted: the notice"]')?.getAttribute('href')).toBe('https://doi.org/10.5555/r1');
+    expect(review?.textContent).toContain('Needs review.');
+    expect(review?.textContent).toContain('Sources disagree on its year.');
+    // The normal case is quiet.
+    expect(fine?.querySelector('[data-mark]')).toBeNull();
   });
 
   it('links each usage back to the citation it came from', async () => {
@@ -108,9 +140,9 @@ describe('ReferencesSection', () => {
 
     const back = screen.getAllByRole('button', { name: /Go to citation/ });
     expect(back).toHaveLength(2);
-    expect(back[0].getAttribute('aria-label')).toBe('Go to citation 1 of 2 for k1');
+    expect(back[0]?.getAttribute('aria-label')).toBe('Go to citation 1 of 2 for k1');
 
-    fireEvent.click(back[1]);
+    fireEvent.click(itemAt(back, 1));
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     // Focus lands on the citation, not back where the reader started.
     expect(document.activeElement?.closest('[data-child-id]')?.getAttribute('data-child-id'))
@@ -126,7 +158,7 @@ describe('ReferencesSection', () => {
     await mount([
       para('p1', [
         cite('c1'),
-        cite('c2', { keys: ['k2'], sources: [{ key: 'k2', title: 'Known' }] }),
+        cite('c2', { keys: ['k2'], sources: [reference('k2', { title: 'Known' })] }),
       ]),
     ]);
 
@@ -134,49 +166,17 @@ describe('ReferencesSection', () => {
     expect(screen.getByText('No details attached')).toBeTruthy();
   });
 
-  it('drops the numeric marker and sorts alphabetically for author–year', async () => {
+  it('drops the numeric marker and sorts by author for an author-date style', async () => {
     await mount([
       para('p1', [
-        cite('c1', {
-          style: 'author-year',
-          keys: ['zed'],
-          sources: [{ key: 'zed', title: 'Later', authors: 'Z. Zed', year: '2020' }],
-        }),
-        cite('c2', {
-          style: 'author-year',
-          keys: ['abel'],
-          sources: [{ key: 'abel', title: 'Earlier', authors: 'A. Abel', year: '2019' }],
-        }),
+        cite('c1', { style: 'apa', keys: ['zed'], sources: [reference('zed', { title: 'Later', authors: 'Zoe Zed', year: 2020 })] }),
+        cite('c2', { style: 'apa', keys: ['abel'], sources: [reference('abel', { title: 'Earlier', authors: 'Abe Abel', year: 2019 })] }),
       ]),
     ]);
 
     const rows = screen.getAllByRole('listitem');
-    expect(rows[0].textContent).toContain('A. Abel (2019). Earlier.');
-    expect(rows[0].textContent).not.toContain('[1]');
-    expect(rows[1].textContent).toContain('Z. Zed (2020). Later.');
-  });
-
-  it('renders a source whose year arrived from the agent as a number', async () => {
-    // `doc_edit` accepts an integer year, and formatting one used to throw and
-    // take the reference list — and the canvas with it — down.
-    await mount([
-      para('p1', [
-        cite('c1', {
-          keys: ['k1'],
-          sources: [
-            {
-              key: 'k1',
-              title: 'Numeric year',
-              authors: 'A. Author',
-              year: 2020 as unknown as string,
-            },
-          ],
-        }),
-      ]),
-    ]);
-
-    expect(screen.getByRole('listitem').textContent).toContain(
-      'A. Author. Numeric year. 2020.',
-    );
+    expect(rows[0]?.textContent).toContain('Abel, A. (2019). Earlier.');
+    expect(rows[0]?.textContent).not.toContain('1.');
+    expect(rows[1]?.textContent).toContain('Zed, Z. (2020). Later.');
   });
 });

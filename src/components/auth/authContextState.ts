@@ -9,6 +9,11 @@ export type AuthContextValue = {
   openAuth: () => void;
   closeAuth: () => void;
   logout: () => void;
+  /**
+   * The server already ended the session (the account was deleted): forget
+   * it here, with nothing more sent. The caller says why.
+   */
+  endSession: () => void;
   loginWithCredentials: (usernameOrEmail: string, password: string) => Promise<void>;
 };
 

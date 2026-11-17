@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useEditor } from '@/editor';
-import { deleteChat, listChats, updateChatTitle, type ChatItem } from '@/services/chats';
-import { describeApiError } from '@/services/contracts';
-import { isRetryableProblem } from '@/services/retry';
+import { useQuery } from '@tanstack/react-query';
+import { useDocumentId } from '@/editor';
+import { chatListQuery, useDeleteChat, useRenameChat, type ChatItem } from '@/data/chats';
+import { describeApiError } from '@/api/errors';
+import { isRetryableProblem } from '@/api/retry';
 import { useChatSessions } from '@/components/chat/chatSessionsState';
 import { useConfirm } from '@/components/ui/confirmContext';
 import { useToast } from '@/components/ui/toastContext';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 
 export const CHATS_PAGE_SIZE = 10;
+/** The API's largest page; "Show more" stops here. */
+const MAX_CHATS = 50;
 
 /**
  * Chats are stored against the document id, so the list can only be read once
@@ -18,11 +22,12 @@ export type ChatListError = { message: string; preparing: boolean };
 
 export type ChatHistory = {
   documentId: string | null;
+  /** The newest chats first, as many as were asked for so far. */
   items: ChatItem[];
-  count: number;
-  page: number;
-  totalPages: number;
-  setPage: (page: number) => void;
+  /** The list holds no total; there are more chats than these. */
+  hasMore: boolean;
+  /** Read the next chats into the list. */
+  showMore: () => void;
   loading: boolean;
   listError: ChatListError | null;
   reload: () => void;
@@ -43,86 +48,51 @@ export function chatLabel(chat: ChatItem): string {
  * the first message of a cleared transcript starts one on the server.
  */
 export function useChatHistory(): ChatHistory {
-  const { documentId } = useEditor();
-  const { selectedChatId, setSelectedChatId, setSelectedThreadId } = useChatSessions();
+  const documentId = useDocumentId();
+  const workspaceId = useWorkspaceId();
+  const { selectedChatId, setSelectedChatId, setSelectedLeafId } = useChatSessions();
   const confirm = useConfirm();
   const { toast } = useToast();
 
-  const [items, setItems] = useState<ChatItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  // "Show more" reads the first rows again with a larger limit, so a list
+  // that reads again (after a rename or a delete) keeps what was shown.
+  const [limit, setLimit] = useState(CHATS_PAGE_SIZE);
+  const list = useQuery({
+    ...chatListQuery(workspaceId, documentId ?? '', limit),
+    enabled: documentId !== null,
+    placeholderData: (previous) => previous,
+  });
+  const refetchList = list.refetch;
+  const reload = useCallback(() => void refetchList(), [refetchList]);
+  const renameChat = useRenameChat(workspaceId, documentId).mutateAsync;
+  const deletion = useDeleteChat(workspaceId, documentId);
+  const deleteChat = deletion.mutateAsync;
+
   // Background list loads report in place; toasts are reserved for actions the
   // user actually initiated (create, delete, rename).
-  const [listError, setListError] = useState<ChatListError | null>(null);
-  const [page, setPage] = useState(1);
-  const [count, setCount] = useState(0);
-  /** The document whose list has been read at least once. */
-  const [loadedFor, setLoadedFor] = useState<string | null>(null);
-  /** Bumped to re-run the load effect — the single way the list is fetched. */
-  const [refreshTick, setRefreshTick] = useState(0);
-  const reload = useCallback(() => setRefreshTick((tick) => tick + 1), []);
-
-  const totalPages = useMemo(() => Math.max(1, Math.ceil(count / CHATS_PAGE_SIZE)), [count]);
+  const failed = documentId !== null && list.isError;
+  const listError = useMemo<ChatListError | null>(
+    () => (failed ? { message: describeApiError(list.error, 'Request failed'), preparing: isRetryableProblem(list.error) } : null),
+    [failed, list.error],
+  );
+  const shown = documentId && !failed ? list.data : undefined;
+  const items = useMemo(() => shown?.items ?? [], [shown]);
+  const hasMore = Boolean(shown?.next_cursor) && limit < MAX_CHATS;
+  const showMore = useCallback(() => setLimit((current) => Math.min(MAX_CHATS, current + CHATS_PAGE_SIZE)), []);
+  const loading = (documentId !== null && list.isFetching) || deletion.isPending;
 
   // A first message creates its chat on the server, and the assistant selects
   // it when the turn finishes. A selected id the loaded list does not have is
-  // read for once more — a dependency of the loader below — so the switcher
-  // can name the conversation it is showing. It stays the same id if that read
-  // does not find it either, so this never loops.
+  // read for once more, so the switcher can name the conversation it is
+  // showing. It stays the same id if that read does not find it either, so
+  // this never loops.
   const unlistedChatId =
-    loadedFor === documentId && selectedChatId && !items.some((chat) => chat.chat_id === selectedChatId)
+    list.isSuccess && selectedChatId && !items.some((chat) => chat.id === selectedChatId)
       ? selectedChatId
       : null;
-
-  // One loader. There used to be a second, callable copy for the action
-  // buttons; it shared no cancellation with this one, so the two could race
-  // and the earlier `finally` would clear the later request's loading state.
-  // Everything now goes through `reload()`.
   useEffect(() => {
-    const controller = new AbortController();
-
-    (async () => {
-      if (!documentId) {
-        setItems([]);
-        setCount(0);
-        return;
-      }
-      setLoading(true);
-      try {
-        // Keep the request on the asynchronous side of the effect boundary:
-        // StrictMode sets up, tears down and sets up again inside one commit,
-        // and a request sent synchronously would go out before its own cleanup
-        // could abort it — two real requests, each amplified by the transport's
-        // retry ladder.
-        await Promise.resolve();
-        if (controller.signal.aborted) return;
-
-        const res = await listChats(documentId, CHATS_PAGE_SIZE, (page - 1) * CHATS_PAGE_SIZE, {
-          signal: controller.signal,
-        });
-        if (controller.signal.aborted) return;
-        setItems(res.chats ?? []);
-        setCount(res.count ?? 0);
-        setListError(null);
-        setLoadedFor(documentId);
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setListError({
-          message: describeApiError(error, 'Request failed'),
-          preparing: isRetryableProblem(error),
-        });
-        setItems([]);
-        setCount(0);
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    })();
-
-    return () => {
-      // Also aborts the api layer's backoff sleep, which used to run on past
-      // a document switch with nothing left to receive it.
-      controller.abort();
-    };
-  }, [documentId, page, refreshTick, unlistedChatId]);
+    if (unlistedChatId) void refetchList();
+  }, [refetchList, unlistedChatId]);
 
   const remove = useCallback(
     async (chat: ChatItem) => {
@@ -135,19 +105,12 @@ export function useChatHistory(): ChatHistory {
       });
       if (!ok) return false;
 
-      setLoading(true);
       try {
-        await deleteChat(documentId, chat.chat_id);
-        if (selectedChatId === chat.chat_id) {
+        await deleteChat(chat.id);
+        if (selectedChatId === chat.id) {
           setSelectedChatId(null);
-          setSelectedThreadId(null);
+          setSelectedLeafId(null);
         }
-        const nextPage = Math.min(
-          page,
-          Math.max(1, Math.ceil(Math.max(0, count - 1) / CHATS_PAGE_SIZE)),
-        );
-        setPage(nextPage);
-        reload();
         return true;
       } catch (error) {
         toast({
@@ -156,19 +119,16 @@ export function useChatHistory(): ChatHistory {
           variant: 'error',
         });
         return false;
-      } finally {
-        setLoading(false);
       }
     },
-    [confirm, count, documentId, page, reload, selectedChatId, setSelectedChatId, setSelectedThreadId, toast],
+    [confirm, deleteChat, documentId, selectedChatId, setSelectedChatId, setSelectedLeafId, toast],
   );
 
   const rename = useCallback(
     async (chatId: string, title: string) => {
       if (!documentId) return;
       try {
-        await updateChatTitle(documentId, chatId, title.trim());
-        reload();
+        await renameChat({ chatId, title: title.trim() });
       } catch (error) {
         toast({
           title: 'Could not rename chat',
@@ -177,16 +137,14 @@ export function useChatHistory(): ChatHistory {
         });
       }
     },
-    [documentId, reload, toast],
+    [documentId, renameChat, toast],
   );
 
   return {
     documentId,
     items,
-    count,
-    page,
-    totalPages,
-    setPage,
+    hasMore,
+    showMore,
     loading,
     listError,
     reload,

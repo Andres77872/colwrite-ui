@@ -20,20 +20,25 @@ guard sits at the wrapper level and declares no hooks, so a child whose type
 changes in place cannot make React render a different number of hooks than the
 previous pass.
 
-`child.keys` are the citation keys; `child.sources` carries resolved
-bibliographic detail so a citation can render as something other than a raw key.
-A citation with no key at all renders `[?]` in the error tone.
+`child.keys` are reference keys (`doi:…`, `arxiv:…`, or a key the author
+typed); `child.sources` carries each work's reference record (a CSL-JSON item
+under `csl`, with `key`, `kind`, `provider`, `state` and `flags` beside it), so a
+citation renders from the record, not the key. A citation with no key at all
+renders `[?]` in the error tone. `child.passage` names the passage the claim
+rests on; without one the popover says "Passage not recorded".
 
-`style` is `'numeric' | 'author-year' | 'ieee'`; `prefix`, `suffix` and `locator`
-add "see", "cf.", "ch. 2" and similar. An author–year signal phrase goes inside
-the parentheses — `(see Smith, 2020, p. 12)`.
+`style` is one of the API's eight CSL style ids, each its CSL file's name (`nlm-citation-sequence-brackets`, `apa`,
+`ieee`, …); the page's `citationStyle` overrides it, and the whole page renders
+in one style through citeproc-js. `prefix`, `suffix` and `locator` add "see",
+"ch. 2", "p. 12"; in APA a signal phrase goes inside the parentheses —
+`(see Smith, 2020, p. 12)`.
 
 ## Numbering
 
 The printed number is the **source's** position in the document's reference
 list, read from `useBibliography()`. One paper cited three times is `[1]` all
-three times. Multiple keys collapse into a range: `[1–3]` in numeric,
-`[1]–[3]` in IEEE, and a run of two stays as two.
+three times. Multiple keys print as the style prints them: `[1–3]` in
+Vancouver (brackets), `[1], [2], [3]` in IEEE.
 
 Because numbering is a document-wide property, the widget cannot compute it
 alone: without a `BibliographyContext` above it — as in a preview supplying a
@@ -45,8 +50,11 @@ You Need`) rather than repeating its own text.
 
 ## Popover
 
-Each attached source shows its reference number as a button that jumps to the
-row in `ReferencesSection`, and the entry as `formatReference` will publish it,
-so what is checked here is what is printed. Re-attaching a key that is already
-present upgrades its metadata instead of doing nothing — that is how a key typed
-by hand acquires a title.
+Each attached source shows its reference label as a button that jumps to the
+row in `ReferencesSection`, the entry as the CSL style prints it, and its state
+(retracted, needs review, a published version). Re-attaching a key that is
+already present replaces its record — that is how a key typed by hand acquires
+its reference. The search field searches the paper routes (one `PaperRow` per
+result, with the shared Cite and Add); a pasted DOI or arXiv id goes through the
+resolver first. The page's style picker sits under More options, with the
+citeproc-js and CSL credits.

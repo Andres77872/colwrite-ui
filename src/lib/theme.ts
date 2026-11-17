@@ -1,4 +1,5 @@
 import { useLayoutEffect, useSyncExternalStore } from 'react';
+import { THEME_KEY, readItem, writeItem } from './storageKeys';
 
 /**
  * Light / dark appearance.
@@ -17,7 +18,6 @@ import { useLayoutEffect, useSyncExternalStore } from 'react';
 export type ThemePreference = 'system' | 'light' | 'dark';
 export type ResolvedTheme = 'light' | 'dark';
 
-export const THEME_STORAGE_KEY = 'colwrite:theme';
 
 /** The browser chrome colour for each theme — the page background. */
 const THEME_COLOR: Record<ResolvedTheme, string> = { light: '#ffffff', dark: '#191919' };
@@ -27,12 +27,8 @@ const DARK_QUERY = '(prefers-color-scheme: dark)';
 const listeners = new Set<() => void>();
 
 function readPreference(): ThemePreference {
-  try {
-    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
-  } catch {
-    return 'system';
-  }
+  const stored = readItem(THEME_KEY);
+  return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
 }
 
 function systemTheme(): ResolvedTheme {
@@ -74,11 +70,8 @@ function apply(): void {
 
 export function setThemePreference(next: ThemePreference): void {
   preference = next;
-  try {
-    window.localStorage.setItem(THEME_STORAGE_KEY, next);
-  } catch {
-    /* the choice still applies to this tab */
-  }
+  // A refused write still applies the choice to this tab.
+  writeItem(THEME_KEY, next);
   apply();
 }
 

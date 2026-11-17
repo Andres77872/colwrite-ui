@@ -1,3 +1,4 @@
+import { takeItems } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import {
   blocksToHtml,
@@ -9,6 +10,7 @@ import {
   markdownToBlocks,
 } from '../markdown';
 import type { Block, CitationChild, ParagraphBlock } from '../types';
+import { reference } from '@/__tests__/agentSource';
 
 function shape(blocks: Block[]) {
   return blocks.map((block) => {
@@ -57,20 +59,20 @@ describe('markdownToBlocks', () => {
   });
 
   it('turns maths into equation widgets, but not prices', () => {
-    const [inline] = markdownToBlocks('Energy $E=mc^2$ costs $5 and $10.') as ParagraphBlock[];
+    const [inline] = takeItems(markdownToBlocks('Energy $E=mc^2$ costs $5 and $10.') as ParagraphBlock[], 1);
     expect(inline.children).toHaveLength(1);
     expect(inline.children?.[0]).toMatchObject({ type: 'equation', latex: 'E=mc^2' });
     expect(inline.html).toContain('$5 and $10');
 
-    const [display] = markdownToBlocks('$$\n\\int_0^1 x\\,dx\n$$') as ParagraphBlock[];
+    const [display] = takeItems(markdownToBlocks('$$\n\\int_0^1 x\\,dx\n$$') as ParagraphBlock[], 1);
     expect(display.children?.[0]).toMatchObject({ type: 'equation', latex: '\\int_0^1 x\\,dx', display: true });
 
-    const [bracket] = markdownToBlocks('\\[ a^2 + b^2 \\]') as ParagraphBlock[];
+    const [bracket] = takeItems(markdownToBlocks('\\[ a^2 + b^2 \\]') as ParagraphBlock[], 1);
     expect(bracket.children?.[0]).toMatchObject({ display: true, latex: 'a^2 + b^2' });
   });
 
   it('reads pipe tables into a table widget with alignment', () => {
-    const [block] = markdownToBlocks('| Model | Acc |\n|:--|--:|\n| A | 0.9 |\n| B | 0.8 |') as ParagraphBlock[];
+    const [block] = takeItems(markdownToBlocks('| Model | Acc |\n|:--|--:|\n| A | 0.9 |\n| B | 0.8 |') as ParagraphBlock[], 1);
     expect(block.children?.[0]).toMatchObject({
       type: 'table',
       rows: 3,
@@ -93,19 +95,19 @@ describe('markdownToBlocks', () => {
       id: 'c1',
       type: 'citation',
       keys: ['10.1/real'],
-      sources: [{ key: '10.1/real', title: 'Real paper', year: '2020' }],
+      sources: [reference('10.1/real', { title: 'Real paper', year: 2020 })],
     };
     const lookup = new Map([['10.1/real', known]]);
-    const [block] = markdownToBlocks('Shown [@10.1/real, p. 4] and [@10.9/invented].', {
+    const [block] = takeItems(markdownToBlocks('Shown [@10.1/real, p. 4] and [@10.9/invented].', {
       citations: lookup,
-    }) as ParagraphBlock[];
+    }) as ParagraphBlock[], 1);
 
     expect(block.children).toHaveLength(1);
     expect(block.children?.[0]).toMatchObject({
       type: 'citation',
       keys: ['10.1/real'],
       locator: 'p. 4',
-      sources: [{ title: 'Real paper' }],
+      sources: [{ csl: { title: 'Real paper' } }],
     });
     // The invented key stays text, never a widget.
     expect(block.html).toContain('[@10.9/invented]');

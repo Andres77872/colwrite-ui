@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
@@ -119,8 +120,8 @@ describe('FigureBlock', () => {
 
     expect(screen.getByRole('textbox', { name: 'Figure source, JSON' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: FIGURE_TEMPLATES[0].label }));
-    expect(actions.updateCodeText).toHaveBeenCalledWith('f1', FIGURE_TEMPLATES[0].source);
+    fireEvent.click(screen.getByRole('button', { name: itemAt(FIGURE_TEMPLATES, 0).label }));
+    expect(actions.updateCodeText).toHaveBeenCalledWith('f1', itemAt(FIGURE_TEMPLATES, 0).source);
   });
 
   it('asks the assistant to draw a starter figure (a caption with nothing drawn yet)', () => {
@@ -144,6 +145,9 @@ describe('FigureBlock', () => {
     expect(screen.getByText(/Figure 2\./)).toBeTruthy();
     expect(screen.getByText('Two steps.')).toBeTruthy();
 
+    // Revealed by hover with a mouse; on touch, globals.css shows
+    // `.block-action` for the active block instead, since nothing hovers.
+    expect(screen.getByRole('button', { name: 'Edit' }).classList.contains('block-action')).toBe(true);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     });

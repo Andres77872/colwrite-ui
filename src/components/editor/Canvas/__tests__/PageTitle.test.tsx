@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -75,6 +76,19 @@ describe('PageTitle', () => {
     expect(title.rename).toHaveBeenCalledWith('A title');
   });
 
+  it('stays one line: Shift+Enter adds no line break and does not leave the title', () => {
+    title.draftTitle = 'Sparse routing';
+    const onContinue = vi.fn();
+    render(<PageTitle onContinue={onContinue} />);
+    const field = screen.getByRole('textbox', { name: 'Page title' });
+
+    const notPrevented = fireEvent.keyDown(field, { key: 'Enter', shiftKey: true });
+
+    expect(notPrevented).toBe(false);
+    expect(onContinue).not.toHaveBeenCalled();
+    expect(title.rename).not.toHaveBeenCalled();
+  });
+
   it('restores the saved name on Escape', () => {
     title.draftTitle = 'Kept';
     render(<PageTitle onContinue={vi.fn()} />);
@@ -92,7 +106,7 @@ describe('BlankPageActions', () => {
     render(<BlankPageActions blankId="blank" />);
     fireEvent.click(screen.getByRole('button', { name: 'Paper outline' }));
 
-    const [anchor, blocks, options] = actions.insertBlocksAfter.mock.calls[0];
+    const [anchor, blocks, options] = itemAt(actions.insertBlocksAfter.mock.calls, 0);
     expect(anchor).toBe('blank');
     expect(options).toEqual({ replaceAnchor: true });
     expect(blocks.filter((block) => block.type === 'heading').map((block) => block.html)).toEqual(['Abstract', 'Introduction', 'Related work', 'Method', 'Experiments', 'Conclusion']);
@@ -102,9 +116,9 @@ describe('BlankPageActions', () => {
     render(<BlankPageActions blankId={null} />);
     fireEvent.click(screen.getByRole('button', { name: 'Start with AI' }));
 
-    const [anchor, blocks] = actions.insertBlocksAfter.mock.calls[0];
+    const [anchor, blocks] = itemAt(actions.insertBlocksAfter.mock.calls, 0);
     expect(anchor).toBeNull();
-    expect(openAskAi).toHaveBeenCalledWith({ blockId: blocks[0].id });
+    expect(openAskAi).toHaveBeenCalledWith({ blockId: itemAt(blocks, 0).id });
   });
 
   it('imports Markdown, naming an untitled page after its leading "# Title"', async () => {
@@ -116,7 +130,7 @@ describe('BlankPageActions', () => {
 
     await waitFor(() => expect(actions.insertBlocksAfter).toHaveBeenCalled());
     expect(title.rename).toHaveBeenCalledWith('My paper');
-    const [anchor, blocks] = actions.insertBlocksAfter.mock.calls[0];
+    const [anchor, blocks] = itemAt(actions.insertBlocksAfter.mock.calls, 0);
     expect(anchor).toBe('blank');
     expect(blocks).toEqual([expect.objectContaining({ type: 'paragraph', html: 'Hello world' })]);
   });

@@ -1,4 +1,4 @@
-import type { RevisionSummary } from '@/services/documentHistory';
+import type { RevisionSummary } from '@/data/documentHistory';
 
 /**
  * How a revision reads in the History list: a human name for its kind, a
@@ -23,7 +23,7 @@ const KIND_LABELS: Record<string, string> = {
 /** "change_set_accept" → "Change set accept": never a raw identifier. */
 function sentenceCase(value: string): string {
   const words = value.replace(/[_-]+/g, ' ').trim().toLowerCase();
-  return words ? words[0].toUpperCase() + words.slice(1) : 'Saved';
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Saved';
 }
 
 export function kindLabel(revision: Pick<RevisionSummary, 'kind'>): string {

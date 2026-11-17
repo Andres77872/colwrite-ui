@@ -1,22 +1,31 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { useRef, useState } from 'react';
+import { documentList, mockDocumentList } from '@/data/__tests__/documentFixtures';
 import type { ChatRefPickerHandle } from './ChatRefPicker';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+const listDocuments = documentList();
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
 
 const { EditorProvider } = await import('@/editor');
 const { ChatRefPicker } = await import('./ChatRefPicker');
 
+beforeEach(() => {
+  mockDocumentList(listDocuments);
+});
+
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  vi.restoreAllMocks();
 });
 
 function PickerHarness() {
@@ -53,7 +62,7 @@ function PickerHarness() {
 describe('ChatRefPicker callbacks', () => {
   it('inserts the selected block reference and restores the caret after it', async () => {
     localStorage.setItem(
-      'colwrite:doc:local',
+      `colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`,
       JSON.stringify({
         documentId: null,
         doc: {
@@ -72,7 +81,7 @@ describe('ChatRefPicker callbacks', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open picker' }));
     // The picker is a listbox, not a menu: focus stays in the composer and the
     // highlight is virtual, so its entries are options.
-    fireEvent.click(screen.getByRole('option', { name: /this document/i }));
+    fireEvent.click(screen.getByRole('option', { name: /this page/i }));
     fireEvent.click(screen.getByRole('option', { name: /hello paragraph/i }));
 
     await act(async () => {
@@ -84,7 +93,7 @@ describe('ChatRefPicker callbacks', () => {
 
   it('filters this page by what is typed after the #, and picks with Enter', async () => {
     localStorage.setItem(
-      'colwrite:doc:local',
+      `colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`,
       JSON.stringify({
         documentId: null,
         doc: {
@@ -119,6 +128,24 @@ describe('ChatRefPicker callbacks', () => {
     await waitFor(() => expect(screen.getByLabelText('input value').textContent).toBe('#this/p1 '));
   });
 
+  it('asks the server for matching pages, so any page can be referenced', async () => {
+    const old = { id: 'old-page', name: 'Helium notes', version: 1, tags: [], createdAt: '', updatedAt: '' };
+    listDocuments.mockImplementation(async (body) => ({
+      documents: body.query === 'hel' ? [old] : [],
+    }));
+    render(
+      <EditorProvider>
+        <PickerHarness />
+      </EditorProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open picker' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Type hel' }));
+
+    expect(await screen.findByRole('option', { name: /Helium notes/ })).toBeTruthy();
+    expect(listDocuments).toHaveBeenCalledWith(expect.objectContaining({ query: 'hel' }), expect.any(Request));
+    listDocuments.mockReset().mockResolvedValue({});
+  });
+
   it('lets go when nothing matches, so the text stays ordinary', async () => {
     render(
       <EditorProvider>
@@ -126,7 +153,7 @@ describe('ChatRefPicker callbacks', () => {
       </EditorProvider>,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Open picker' }));
-    expect(screen.getByRole('option', { name: /this document/i })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /this page/i })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Type zzz' }));
     await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
     expect(screen.getByLabelText('input value').textContent).toBe('#zzz');

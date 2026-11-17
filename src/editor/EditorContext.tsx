@@ -1,37 +1,27 @@
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { Block, CitationSource, Doc, ParagraphChild, ToolOperation } from './types';
-import { clampIndent, continuationOf, convertBlock, isListItem, type BlockKindId } from './blockKinds';
-import { buildBibliography, canonicalCitationKey, citationFingerprint } from './citations';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { Block, Doc, ToolOperation } from './types';
+import { buildBibliography, citationFingerprint } from './citations';
 import { BibliographyContext } from './bibliographyContextState';
-import { loadDoc, saveDoc, loadDocumentId, saveDocumentId } from './storage';
+import { useCitationProcessor } from './csl/useCitationProcessor';
+import { applyOperations, coerceBlock, replayFootprint, type ApplyPatchResult } from './docOps';
+import { createBlockActions } from './blockActions';
+import { DocumentSessionProvider } from './DocumentSession';
+import { useWorkspaceScope } from '@/components/workspace/workspaceContextState';
+import { useWorkspaceAccess } from '@/components/workspace/workspaceAccess';
 import {
-  applyPatchToBlocks,
-  coerceBlock,
-  describeSaveError,
-  placeholderIds,
-  reconcileBlocks,
-  withoutOrphanChildren,
-  type ApplyPatchResult,
-} from './docOps';
-import { createDocument as apiCreateDocument, saveDocument as apiSaveDocument, loadDocument as apiLoadDocument, deleteDocument as apiDeleteDocument, listDocuments as apiListDocuments } from '../services';
-import type {
-  DocumentInput,
-  DocumentListOptions,
-  DocumentListResult,
-} from '../services';
-import { uid } from '../lib/uid';
+  useDocumentActions,
+  useDocumentBody,
+  useEditorDoc,
+} from './documentSessionState';
 import {
   EditorActionsContext,
   EditorActiveBlockContext,
-  EditorContext,
+  EditorViewContext,
   type EditorActionsContextValue,
   type EditorActiveBlockContextValue,
-  type EditorContextValue,
-  type EditorStateContextValue,
+  type EditorViewValue,
 } from './editorContextState';
 import { serializeEditableHtml } from '@/components/common/Editable/editableHtml';
-import { emitDocumentTransitionStart } from './documentTransition';
-export type { EditorContextValue } from './editorContextState';
 
 /** How many document states undo can walk back. */
 const UNDO_LIMIT = 100;
@@ -44,152 +34,54 @@ type HistoryEntry = {
   time: number;
 };
 
-/**
- * An empty block of the given type.
- *
- * The same three-way expression was written out in each insertion helper, so a
- * new block type — or a change to a paragraph's defaults — had to be made in
- * every one of them or the block came out shaped differently depending on
- * which affordance created it.
- */
-function blankBlock(id: string, type: Block['type']): Block {
-  if (type === 'paragraph') return { id, type: 'paragraph', html: '', children: [], columns: 1 };
-  if (type === 'heading') return { id, type: 'heading', level: 2, html: '' };
-  if (type === 'code') return { id, type: 'code', text: '' };
-  return { id, type: 'divider' };
-}
-
-/**
- * A copy of `block` under a new id, safe to sit next to the original.
- *
- * Inline widget ids get fresh values as well (with their placeholders
- * rewritten), and an equation's cross-reference label is dropped: labels are
- * unique across the document and the export rejects a duplicate.
- */
-function duplicateOf(block: Block, id: string): Block {
-  const copy = structuredClone(block) as Block;
-  copy.id = id;
-  if (copy.type !== 'paragraph' || !copy.children?.length) return copy;
-  let html = copy.html;
-  copy.children = copy.children.map((child) => {
-    const childId = uid();
-    html = html.split(`data-child-id="${child.id}"`).join(`data-child-id="${childId}"`);
-    const next = { ...child, id: childId } as ParagraphChild;
-    if (next.type === 'equation') delete next.labelId;
-    return next;
-  });
-  copy.html = html;
-  return copy;
-}
-
-/**
- * A new page: no name yet (the title shows its "Untitled" placeholder) and
- * one empty line to write on, rather than sample prose to delete first.
- */
-function makeDefaultDoc(): Doc {
-  return {
-    version: 1,
-    name: 'Untitled document',
-    blocks: [{ id: uid(), type: 'paragraph', html: '', children: [], columns: 1 }],
-  };
-}
-
-function documentInputToDoc(input: DocumentInput): Doc {
-  if (Array.isArray(input)) {
-    return { version: 1, blocks: input };
-  }
-  return {
-    version: typeof input.version === 'number' ? input.version : 1,
-    blocks: Array.isArray(input.blocks) ? input.blocks : [],
-    name:
-      typeof input.name === 'string'
-        ? input.name
-        : 'title' in input && typeof input.title === 'string'
-          ? input.title
-          : undefined,
-  };
-}
-
-function migrateLegacyInlineAiBeats(doc: Doc): Doc {
-  if (typeof document === 'undefined') return doc;
-  try {
-    let changed = false;
-    const blocks = doc.blocks.map((block) => {
-      if (block.type !== 'paragraph') return block;
-      if (block.html.includes('data-child-id') || !/ai-beat-widget/.test(block.html)) return block;
-
-      const container = document.createElement('div');
-      container.innerHTML = block.html;
-      const children: ParagraphChild[] = Array.isArray(block.children) ? [...block.children] : [];
-      const widgets = Array.from(container.querySelectorAll<HTMLElement>('.ai-beat-widget'));
-      for (const element of widgets) {
-        const id = uid();
-        const output = (element.querySelector('.ai-beat-output')?.textContent || '').trim();
-        const collapsed = element.getAttribute('data-collapsed') === '1';
-        const placeholder = document.createElement('span');
-        placeholder.setAttribute('data-child-id', id);
-        placeholder.setAttribute('contenteditable', 'false');
-        element.replaceWith(placeholder);
-        children.push({ id, type: 'aiBeat', message: '', prompt: '', output, collapsed });
-        changed = true;
-      }
-      return { ...block, html: container.innerHTML, children };
-    });
-    return changed ? { ...doc, blocks } : doc;
-  } catch {
-    return doc;
-  }
-}
-
-function urlDocumentId(): string | null {
-  if (typeof window === 'undefined') return null;
-  const requested = new URLSearchParams(window.location.search).get('doc');
-  return requested || null;
-}
-
-type MountDocumentSelection = {
-  committedDocumentId: string | null;
-  committedDocument: Doc;
-  requestedDocumentId: string | null;
-};
-
-function mountDocumentSelection(): MountDocumentSelection {
-  const cachedDocumentId = loadDocumentId();
-  const requestedDocumentId = urlDocumentId();
-  const targetDocumentId = requestedDocumentId ?? cachedDocumentId;
-  const targetDocument = targetDocumentId ? loadDoc(targetDocumentId) : null;
-  const cachedDocument = cachedDocumentId ? loadDoc(cachedDocumentId) : null;
-  const localDocument = loadDoc(null);
-
-  // A remote id is committed only when the body beside it is keyed to that
-  // exact id. Otherwise the editor owns a safe cached/local body while the
-  // remote id remains merely requested.
-  const committedDocumentId = targetDocument
-    ? targetDocumentId
-    : cachedDocument
-      ? cachedDocumentId
-      : null;
-  const committedDocument = targetDocument ?? cachedDocument ?? localDocument ?? makeDefaultDoc();
-
-  return {
-    committedDocumentId,
-    committedDocument,
-    requestedDocumentId: targetDocumentId,
-  };
-}
-
-export function EditorProvider({ children }: { children: ReactNode }) {
-  // A shared document link is more specific than the last locally cached id.
-  // Selecting it before either provider runs an effect also means mount
-  // hydration performs one request for the URL document instead of briefly
-  // reopening the cached one.
-  const [mountSelection] = useState<MountDocumentSelection>(mountDocumentSelection);
-  const initialDocumentId = mountSelection.committedDocumentId;
-  const initialRequestedDocumentId = mountSelection.requestedDocumentId;
-  const [doc, setDoc] = useState<Doc>(
-    () => migrateLegacyInlineAiBeats(mountSelection.committedDocument),
+/** Whether a change is one the undo journal records. */
+function journaledChange(before: Doc, next: Doc): boolean {
+  return (
+    next.blocks !== before.blocks ||
+    next.name !== before.name ||
+    next.sources !== before.sources ||
+    next.citationStyle !== before.citationStyle ||
+    next.instructions !== before.instructions ||
+    next.documentType !== before.documentType
   );
-  const blocks = doc.blocks;
+}
+
+/**
+ * A contenteditable command. `value` carries the argument the few commands
+ * that take one need — `createLink` above all, which was unreachable while
+ * this signature had nowhere to put a URL.
+ */
+function exec(cmd: string, value?: string): void {
+  document.execCommand(cmd, false, value);
+}
+
+/**
+ * The editor: the open page's session (`DocumentSessionProvider`: which page,
+ * loading, saving, drafts, conflicts) and, inside it, the editor core
+ * (blocks, undo, selection, the caret and menus).
+ *
+ * Read it through the selector hooks — `useEditorDoc`, `useDocumentId`,
+ * `useDocumentSession`, `useDocumentStatus`, `useDocumentActions`,
+ * `useEditorActions`, `useEditorView`, `useActiveBlock` — each of which
+ * re-renders only when its own slice changes.
+ */
+export function EditorProvider({ children }: { children: ReactNode }) {
+  const { workspaceId, initialDocumentId } = useWorkspaceScope();
+  // A viewer reads the page and never writes it (D6, M6.UI-2).
+  const { canEdit } = useWorkspaceAccess();
+  return (
+    <DocumentSessionProvider workspaceId={workspaceId} initialDocumentId={initialDocumentId} canEdit={canEdit}>
+      <EditorCore>{children}</EditorCore>
+    </DocumentSessionProvider>
+  );
+}
+
+function EditorCore({ children }: { children: ReactNode }) {
+  const body = useDocumentBody();
+  const { readDoc, editDoc, commitDoc, attachEditor } = body;
+  const { doc, blocks } = useEditorDoc();
+  const { hasPendingEdits } = useDocumentActions();
+
   const refs = useRef<Record<string, HTMLDivElement | null>>({});
   const registerEditable = useCallback((id: string, element: HTMLDivElement | null) => {
     // React re-calls the ref with null on unmount; storing `{id: null}` would
@@ -197,205 +89,21 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     if (element) refs.current[id] = element;
     else delete refs.current[id];
   }, []);
-  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
-  const [documentId, setDocumentId] = useState<string | null>(initialDocumentId);
-  /**
-   * Identity of the document the workspace is *on*, as opposed to the id the
-   * server knows it by.
-   *
-   * The two differ for exactly one transition: saving a local draft gives the
-   * open document an id without changing which document it is. Anything keyed
-   * on `documentId` alone — the assistant's transcript, most of all — would
-   * treat that as navigating away and throw the session out mid-sentence.
-   */
-  const [documentSessionId, setDocumentSessionId] = useState<string>(uid);
-  const startDocumentSession = useCallback(() => setDocumentSessionId(uid()), []);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [loadingDocumentId, setLoadingDocumentId] = useState<string | null>(
-    initialRequestedDocumentId,
-  );
-  const loadingDocumentIdRef = useRef<string | null>(initialRequestedDocumentId);
-  const noticeSequenceRef = useRef(0);
-  const [documentLoadNotice, setDocumentLoadNotice] = useState<
-    EditorContextValue['documentLoadNotice']
-  >(null);
-
-  // Saves are optimistically locked on the version. The authoritative value
-  // lives in a ref rather than in `doc`, because adopting a new version has to
-  // NOT look like a content change — `doc` is an autosave dependency, so
-  // writing the version back into it would re-arm the timer and the editor
-  // would save itself forever.
-  const versionRef = useRef<number>(doc.version ?? 1);
-
-  // Revisions distinguish real edits from navigation. A document is dirty
-  // only while its edit revision is newer than the revision last confirmed by
-  // the server. Merely opening or leaving a document must not change
-  // `updated_at`.
-  const [dirtyTick, setDirtyTick] = useState(0);
-  const editRevisionRef = useRef(0);
-  const persistedRevisionRef = useRef(0);
-  const saveInFlightRef = useRef<Promise<void> | null>(null);
-  const [documentListRevision, setDocumentListRevision] = useState(0);
-  const [restoreEpoch, setRestoreEpoch] = useState(0);
-  const autoSaveTimerRef = useRef<number | null>(null);
-  // Mirrors `isAutoSaving` for readers that run outside React's render cycle —
-  // specifically the beforeunload guard, which has to answer "is there
-  // unsaved work" synchronously at event time.
-  const isAutoSavingRef = useRef(false);
-
-  // Latest doc/id without waiting for a re-render. Callbacks captured by the
-  // chat stream can outlive several renders, and saving from a stale closure
-  // is how edits get silently reverted.
-  //
-  // Every writer below goes through `commitDoc`, so this ref is current the
-  // moment a change is made rather than one commit later. `applyPatch` depends
-  // on that: it has to report which blocks it touched to its caller, and it
-  // cannot learn that from inside a `setState` updater React runs whenever it
-  // likes.
-  const docRef = useRef(doc);
-  const documentIdRef = useRef(documentId);
-  useEffect(() => {
-    docRef.current = doc;
-    documentIdRef.current = documentId;
-  }, [doc, documentId]);
-
-  const commitDoc = useCallback((next: Doc) => {
-    docRef.current = next;
-    setDoc(next);
-  }, []);
-
-  // Which document the in-state `doc` was actually loaded for. Without this a
-  // PUT can write one document's body over another's — the id and the body are
-  // separate pieces of state that briefly disagree while switching documents.
-  const loadedForIdRef = useRef<string | null>(documentId);
-  // All document loads share one sequence. A transition reserves its token
-  // before doing any asynchronous work; only that token may later commit or
-  // report a failure. Mount hydration owns token zero.
-  const documentRequestRef = useRef(0);
-  const documentLoadControllerRef = useRef<AbortController | null>(null);
-  const beginDocumentTransition = useCallback((id: string | null) => {
-    documentRequestRef.current += 1;
-    emitDocumentTransitionStart();
-    documentLoadControllerRef.current?.abort();
-    documentLoadControllerRef.current = null;
-    loadingDocumentIdRef.current = id;
-    setLoadingDocumentId(id);
-    setDocumentLoadNotice(null);
-    if (autoSaveTimerRef.current !== null) {
-      clearTimeout(autoSaveTimerRef.current);
-      autoSaveTimerRef.current = null;
-    }
-    return documentRequestRef.current;
-  }, []);
-  const finishDocumentTransition = useCallback((requestToken: number) => {
-    if (requestToken !== documentRequestRef.current) return;
-    loadingDocumentIdRef.current = null;
-    setLoadingDocumentId(null);
-    documentLoadControllerRef.current = null;
-  }, []);
-  const reportDocumentLoadFailure = useCallback((
-    error: unknown,
-    options?: { mount?: boolean; source?: 'selection' | 'history' },
-  ) => {
-    const detail = error instanceof Error && error.message
-      ? error.message
-      : 'The request failed.';
-    const title = options?.source === 'history'
-      ? 'Could not open that document from history'
-      : 'Could not open document';
-    setDocumentLoadNotice({
-      id: ++noticeSequenceRef.current,
-      title,
-      description: options?.mount
-        ? `${detail} Showing your local copy.`
-        : `${detail} Your current document remains open.`,
-    });
-  }, []);
   // Global menu state - only one block menu open at a time
   const [openMenuBlockId, setOpenMenuBlockId] = useState<string | null>(null);
   const [openMenuType, setOpenMenuType] = useState<'add' | 'options' | null>(null);
-  
   const setBlockMenu = useCallback((blockId: string | null, type: 'add' | 'options' | null) => {
     setOpenMenuBlockId(blockId);
     setOpenMenuType(type);
   }, []);
-  const [lastSaveSource, setLastSaveSource] = useState<'auto' | 'manual' | null>(null);
-
   /**
-   * Capture the DOM-backed editable values synchronously before export.
-   *
-   * React state normally follows on the next frame. Export is user-initiated
-   * and must include the character still visible under the caret even when
-   * that state update has not committed yet.
+   * Blocks selected as whole blocks (Esc, Shift+click on the handle, ⌘A
+   * twice) rather than as text; `selectedBlockIds` below keeps them in
+   * document order.
    */
-  const getExportSnapshot = useCallback((): {
-    document: Doc;
-    baseVersion: number;
-    localRevision: number;
-    dirty: boolean;
-  } => {
-    // Reads `docRef` rather than closing over `doc`: the snapshot must be of
-    // the document as it is at click time, and a state closure would also
-    // make this action change identity on every edit.
-    const document = structuredClone(docRef.current);
-    document.version = versionRef.current;
-    document.blocks = document.blocks.map((block) => {
-      if (block.type === 'divider') return block;
-      const editable = refs.current[block.id];
-      return editable ? { ...block, html: serializeEditableHtml(editable) } : block;
-    });
-    return {
-      document,
-      baseVersion: versionRef.current,
-      localRevision: editRevisionRef.current,
-      dirty: editRevisionRef.current > persistedRevisionRef.current
-        || autoSaveTimerRef.current !== null
-        || isAutoSavingRef.current,
-    };
-  }, []);
+  const [selectedIdsRaw, setSelectedIds] = useState<readonly string[]>([]);
 
-  const [hasAnyRemoteDocs, setHasAnyRemoteDocs] = useState<boolean | null>(null);
-  // `save` reads this at event time. Mirrored into a ref so the action can
-  // stay referentially stable instead of closing over state.
-  const hasAnyRemoteDocsRef = useRef(hasAnyRemoteDocs);
-  useEffect(() => {
-    hasAnyRemoteDocsRef.current = hasAnyRemoteDocs;
-  }, [hasAnyRemoteDocs]);
-
-  // Local draft cache, keyed by the document it belongs to.
-  useEffect(() => {
-    if (loadingDocumentId !== null) return;
-    const raf = requestAnimationFrame(() => {
-      if (loadingDocumentIdRef.current === null) saveDoc(doc, documentId);
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [doc, documentId, loadingDocumentId]);
-
-  // Persist current document id
-  useEffect(() => {
-    if (loadingDocumentId !== null) return;
-    saveDocumentId(documentId);
-  }, [documentId, loadingDocumentId]);
-
-  // Determine whether the account has any remote documents to tailor
-  // the initial Canvas experience and gate autosave behavior.
-  useEffect(() => {
-    let canceled = false;
-    (async () => {
-      try {
-        const res = await apiListDocuments({ page: 1, limit: 1 });
-        if (!canceled) setHasAnyRemoteDocs((res.count || 0) > 0);
-      } catch {
-        // On error, assume true to avoid blocking normal autosave flows.
-        if (!canceled) setHasAnyRemoteDocs(true);
-      }
-    })();
-    return () => { canceled = true; };
-  }, []);
-
-  /** Apply a content change and arm the autosave timer. */
   const historyRef = useRef<{ undo: HistoryEntry[]; redo: HistoryEntry[] }>({
     undo: [],
     redo: [],
@@ -404,1053 +112,111 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const [canRedo, setCanRedo] = useState(false);
   /** Set while undo/redo replays a state, so the replay is not itself journaled. */
   const applyingHistoryRef = useRef(false);
+  /** The document as it was when the open `batch` began. */
+  const batchRef = useRef<{ before: Doc } | null>(null);
 
-  const mutateDoc = useCallback((updater: (prev: Doc) => Doc, options?: { coalesceKey?: string }) => {
-    if (loadingDocumentIdRef.current !== null) return;
-    const before = docRef.current;
-    editRevisionRef.current += 1;
-    const next = updater(before);
-    commitDoc(next);
-    setDirtyTick(editRevisionRef.current);
-    // Journal for undo. Typing bursts coalesce per block (a pause of a second
-    // starts a fresh step); structural changes always start a new entry.
-    if (
-      !applyingHistoryRef.current &&
-      (next.blocks !== before.blocks ||
-        next.name !== before.name ||
-        next.sources !== before.sources ||
-        next.citationStyle !== before.citationStyle)
-    ) {
-      const key = options?.coalesceKey ?? null;
-      const now = Date.now();
-      const stack = historyRef.current.undo;
-      const top = stack[stack.length - 1];
-      if (key && top && top.key === key && now - top.time < 1000) {
-        top.after = next;
-        top.time = now;
-      } else {
-        stack.push({ before, after: next, key, time: now });
-        if (stack.length > UNDO_LIMIT) stack.shift();
-      }
-      historyRef.current.redo = [];
-      setCanUndo(true);
-      setCanRedo(false);
-    }
-  }, [commitDoc]);
-
-  const setBlocks = useCallback((updater: (prev: Block[]) => Block[], coalesceKey?: string) =>
-    mutateDoc(
-      d => ({ ...d, blocks: updater(d.blocks) }),
-      coalesceKey ? { coalesceKey } : undefined,
-    ), [mutateDoc]);
-
-  const setDocMeta = useCallback((meta: Partial<Doc>) => mutateDoc(prev => ({ ...prev, ...meta })), [mutateDoc]);
-  const setDocName = useCallback((name: string) => setDocMeta({ name }), [setDocMeta]);
-
-  /**
-   * Record the version the server now holds, without marking the doc dirty.
-   *
-   * Called after our own saves and after the assistant edits the document
-   * server-side. Skipping this is what made every save after the first fail:
-   * the client kept optimistically locking on the version it first loaded.
-   */
-  const applyServerVersion = useCallback((
-    version: number | undefined | null,
-    invalidateList: boolean,
-  ): boolean => {
-    if (typeof version !== 'number' || Number.isNaN(version)) return true;
-    // Never move backwards: a response to a save that was in flight while the
-    // user restored to a newer version would drag the optimistic lock below
-    // the server's head, and every later save would 409 until reload. The
-    // persisted-revision guard below is monotonic for the same reason.
-    if (version < versionRef.current) return false;
-    const changed = versionRef.current !== version;
-    versionRef.current = version;
-    if (docRef.current.version !== version) {
-      commitDoc({ ...docRef.current, version });
-    }
-    if (invalidateList && changed) {
-      setDocumentListRevision(revision => revision + 1);
-    }
-    return true;
-  }, [commitDoc]);
-
-  const adoptServerVersion = useCallback((version: number | undefined | null) => {
-    applyServerVersion(version, true);
-  }, [applyServerVersion]);
-
-  /**
-   * Adopt a server-side restore of the open document.
-   *
-   * A restore is written by the server outside the editor's save path, so the
-   * restored content and version become the new persisted baseline. That is
-   * neither an edit (autosave must not re-save what the server just wrote)
-   * nor a navigation (the document session — and with it the assistant
-   * transcript — must survive), so neither path can be reused here.
-   */
-  const adoptRestoredDocument = useCallback((next: Doc, serverVersion: number) => {
-    if (autoSaveTimerRef.current !== null) {
-      clearTimeout(autoSaveTimerRef.current);
-      autoSaveTimerRef.current = null;
-    }
-    commitDoc({
-      ...next,
-      version: serverVersion,
-      blocks: reconcileBlocks(next.blocks),
-    });
-    editRevisionRef.current = 0;
-    persistedRevisionRef.current = 0;
-    setDirtyTick(0);
-    versionRef.current = serverVersion;
-    setSaveError(null);
-    // The document is now a different version of its tree: anything staged
-    // against the pre-restore content (pending proposals, in-flight agent
-    // streams) must not apply to it.
-    setRestoreEpoch(epoch => epoch + 1);
-    // The restore changed `updated_at` server-side, so list order can change.
-    setDocumentListRevision(revision => revision + 1);
-  }, [commitDoc]);
-
-  const addBlockAtStart = useCallback((type: Block['type']): string => {
-    const newId = uid();
-    setBlocks(prev => [blankBlock(newId, type), ...prev]);
-    return newId;
-  }, [setBlocks]);
-
-  const addBlockAfter = useCallback((afterId: string, type: Block['type']): string => {
-    const newId = uid();
-    setBlocks(prev => {
-      const idx = prev.findIndex(b => b.id === afterId);
-      const out = [...prev];
-      out.splice(idx + 1, 0, blankBlock(newId, type));
-      return out;
-    });
-    return newId;
-  }, [setBlocks]);
-
-  /**
-   * Insert above a given block.
-   *
-   * The gutter menu could only ever insert below, so nothing could be put in
-   * front of the first block: `addBlockAtStart` reached the same place but was
-   * surfaced only on the empty-document screen.
-   */
-  const addBlockBefore = useCallback((beforeId: string, type: Block['type']): string => {
-    const newId = uid();
-    setBlocks(prev => {
-      const idx = prev.findIndex(b => b.id === beforeId);
-      const out = [...prev];
-      out.splice(idx === -1 ? 0 : idx, 0, blankBlock(newId, type));
-      return out;
-    });
-    return newId;
-  }, [setBlocks]);
-
-  // --- Exact placement helpers (preserve provided id and full block data) ---
-  const insertBlockAtStartExact = useCallback((block: Block) => setBlocks(prev => [block, ...prev]), [setBlocks]);
-  const appendBlockExact = useCallback((block: Block) => setBlocks(prev => [...prev, block]), [setBlocks]);
-  const insertBlockAfterExact = useCallback((afterId: string, block: Block) => setBlocks(prev => {
-    const idx = prev.findIndex(b => b.id === afterId);
-    const out = [...prev];
-    if (idx === -1) {
-      out.push(block);
+  const journal = useCallback((before: Doc, next: Doc, key: string | null) => {
+    if (!journaledChange(before, next)) return;
+    const now = Date.now();
+    const stack = historyRef.current.undo;
+    const top = stack[stack.length - 1];
+    // An inline widget is two writes: its entry in `children`, then the html
+    // with its placeholder. As two undo steps, one Mod+Z left a child with no
+    // placeholder, which the server refuses, so the document stopped saving
+    // until the author typed in that block again. The html write that follows
+    // a child write on the same block completes that step instead.
+    const completesInsert =
+      key !== null &&
+      key.startsWith('html:') &&
+      top !== undefined &&
+      top.key === `child:${key.slice('html:'.length)}` &&
+      now - top.time < 1000;
+    if (completesInsert) {
+      top.after = next;
+      top.time = now;
+      // Closed: typing after the widget is a step of its own.
+      top.key = null;
+    } else if (key && top && top.key === key && now - top.time < 1000) {
+      top.after = next;
+      top.time = now;
     } else {
-      out.splice(idx + 1, 0, block);
+      stack.push({ before, after: next, key, time: now });
+      if (stack.length > UNDO_LIMIT) stack.shift();
     }
-    return out;
-  }), [setBlocks]);
-  const insertBlockBeforeExact = useCallback((beforeId: string, block: Block) => setBlocks(prev => {
-    const idx = prev.findIndex(b => b.id === beforeId);
-    const out = [...prev];
-    if (idx === -1) {
-      out.unshift(block);
-    } else {
-      out.splice(idx, 0, block);
-    }
-    return out;
-  }), [setBlocks]);
+    historyRef.current.redo = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  }, []);
 
-  const moveBlock = useCallback((id: string, dir: -1 | 1) => setBlocks(prev => {
-    const idx = prev.findIndex(b => b.id === id);
-    if (idx < 0) return prev;
-    const j = idx + dir;
-    if (j < 0 || j >= prev.length) return prev;
-    const out = [...prev];
-    const [blk] = out.splice(idx, 1);
-    out.splice(j, 0, blk);
-    return out;
-  }), [setBlocks]);
-
-  /**
-   * Split a text block at the caret (Enter): `beforeHtml` stays in the block,
-   * `afterHtml` becomes a new paragraph below it. Inline widgets travel with
-   * whichever half holds their placeholder span.
-   */
-  const splitBlock = useCallback((id: string, beforeHtml: string, afterHtml: string): string => {
-    const newId = uid();
-    setBlocks(prev => {
-      const idx = prev.findIndex(b => b.id === id && 'html' in b);
-      if (idx === -1) return prev;
-      const b = prev[idx];
-      const children = b.type === 'paragraph' ? b.children ?? [] : [];
-      const afterIds = placeholderIds(afterHtml);
-      const before: Block = (b.type === 'paragraph'
-        ? withoutOrphanChildren({
-            ...b,
-            html: beforeHtml,
-            children: children.filter(c => !afterIds.has(c.id)),
-          } as Block)
-        : ({ ...b, html: beforeHtml } as Block));
-      // A new line under a list item continues the list at its depth; after
-      // anything else it is body text.
-      const continuation = continuationOf(b, newId, afterHtml);
-      const after = withoutOrphanChildren({
-        ...continuation,
-        children: children.filter(c => afterIds.has(c.id)),
-        columns: b.type === 'paragraph' && !isListItem(b) ? b.columns ?? 1 : 1,
-      } as Block);
-      const out = [...prev];
-      out.splice(idx, 1, before, after);
-      return out;
-    });
-    return newId;
-  }, [setBlocks]);
-
-  /**
-   * Merge a block into the one above it (Backspace at the start of a block).
-   * Returns the surviving block id and the caret's text offset at the
-   * junction, or null when there is nothing to merge with.
-   */
-  const mergeWithPrevious = useCallback((
-    id: string,
-  ): { targetId: string; caretOffset: number } | null => {
-    const list = docRef.current.blocks;
-    const idx = list.findIndex(b => b.id === id);
-    if (idx <= 0) return null;
-    const current = list[idx];
-    if (current.type !== 'paragraph' && current.type !== 'heading') return null;
-    const prev = list[idx - 1];
-    // A locked block above is protected from being merged into, and a code
-    // block holds plain text that inline html cannot be folded into.
-    if (prev.locked || prev.type === 'code') return null;
-    if (prev.type === 'divider') {
-      // The block after a divider backspaces the divider away rather than
-      // into it — a divider has no text to merge with.
-      setBlocks(blocks => blocks.filter(b => b.id !== prev.id));
-      return { targetId: id, caretOffset: 0 };
-    }
-    if (prev.type === 'heading' && current.type === 'paragraph' && (current.children ?? []).length > 0) {
-      // A heading does not render children; merging a widget-bearing
-      // paragraph into it would orphan the widgets' placeholders.
-      return null;
-    }
-    // Text length of the survivor's own content: where the caret belongs.
-    const caretOffset = prev.html.replace(/<[^>]*>/g, '').length;
-    const mergedHtml = prev.html + current.html;
-    const merged: Block = prev.type === 'paragraph'
-      ? {
-          ...prev,
-          html: mergedHtml,
-          children: [
-            ...(prev.children ?? []),
-            ...(current.type === 'paragraph' ? current.children ?? [] : []),
-          ],
-        }
-      : ({ ...prev, html: mergedHtml } as Block);
-    setBlocks(blocks => {
-      const i = blocks.findIndex(b => b.id === id);
-      if (i <= 0) return blocks;
-      const out = [...blocks];
-      out.splice(i - 1, 2, merged);
-      return out;
-    });
-    return { targetId: prev.id, caretOffset };
-  }, [setBlocks]);
-
-  const reorderBlock = useCallback((id: string, toIndex: number) => setBlocks(prev => {
-    const fromIndex = prev.findIndex(b => b.id === id);
-    if (fromIndex < 0) return prev;
-    const out = [...prev];
-    const [blk] = out.splice(fromIndex, 1);
-    const clamped = Math.max(0, Math.min(toIndex, out.length));
-    out.splice(clamped, 0, blk);
-    return out;
-  }), [setBlocks]);
-
-  const removeBlock = useCallback((id: string) => setBlocks(prev => prev.filter(b => b.id !== id)), [setBlocks]);
-
-  const updateHtml = useCallback((id: string, html: string) => setBlocks(prev => {
-    const idx = prev.findIndex(b => b.id === id && 'html' in b);
-    if (idx === -1) return prev;
-    const b = prev[idx];
-    if (b.type !== 'paragraph' && b.type !== 'heading') return prev;
-    if (b.html === html) return prev;
-    const out = prev.slice();
-    // Deleting an inline widget removes its placeholder span from the html but
-    // left the child in `children`. That orphan is invisible in the editor and
-    // used to make every subsequent AI edit of the document fail validation.
-    out[idx] = withoutOrphanChildren({ ...b, html } as Block);
-    return out;
-  }, `html:${id}`), [setBlocks]);
-
-  const setParagraphColumns = useCallback((id: string, columns: number) => setBlocks(prev => prev.map(b => (
-    b.id === id && b.type === 'paragraph'
-      ? ({ ...b, columns: Math.max(1, Math.min(6, Math.floor(columns || 1))) })
-      : b
-  ))), [setBlocks]);
-
-  // Generic helper to toggle a boolean meta key on any block
-  const toggleMeta = useCallback((id: string, key: 'aiHidden' | 'locked' | 'collapsed') => setBlocks(prev => prev.map(b => (
-    b.id === id ? ({ ...b, [key]: !(b[key] ?? false) }) : b
-  ))), [setBlocks]);
-
-  const toggleAiHidden = useCallback((id: string) => toggleMeta(id, 'aiHidden'), [toggleMeta]);
-  const toggleLocked = useCallback((id: string) => toggleMeta(id, 'locked'), [toggleMeta]);
-  const toggleCollapsed = useCallback((id: string) => toggleMeta(id, 'collapsed'), [toggleMeta]);
-
-  const addParagraphChild: EditorContextValue['addParagraphChild'] = useCallback((blockId, child) => {
-    setBlocks(prev => prev.map(b => {
-      if (b.id !== blockId || b.type !== 'paragraph') return b;
-      const children = Array.isArray(b.children) ? b.children.slice() : [];
-      const exists = children.find(c => c.id === child.id);
-      if (!exists) children.push(child);
-      return { ...b, children } as Block;
-    }));
-    return child.id;
-  }, [setBlocks]);
-
-  const updateParagraphChild: EditorContextValue['updateParagraphChild'] = useCallback((blockId, childId, next) => {
-    setBlocks(prev => {
-      const bIndex = prev.findIndex(b => b.id === blockId && b.type === 'paragraph');
-      if (bIndex === -1) return prev;
-      const blk = prev[bIndex];
-      if (blk.type !== 'paragraph') return prev;
-      const children: ParagraphChild[] = Array.isArray(blk.children) ? blk.children : [];
-      const cIndex = children.findIndex((c: ParagraphChild) => c.id === childId);
-      if (cIndex === -1) return prev;
-      const cur = children[cIndex];
-      const merged: ParagraphChild = { ...cur, ...next } as ParagraphChild;
-      const equal = JSON.stringify(cur) === JSON.stringify(merged);
-      if (equal) return prev;
-      const nextChildren = children.slice();
-      nextChildren[cIndex] = merged;
-      const out = prev.slice();
-      out[bIndex] = { ...blk, children: nextChildren } as Block;
-      return out;
-    });
-  }, [setBlocks]);
-
-  const removeParagraphChild: EditorContextValue['removeParagraphChild'] = useCallback((blockId, childId) => {
-    setBlocks(prev => prev.map(b => {
-      if (b.id !== blockId || b.type !== 'paragraph') return b;
-      const existing = b.children || [];
-      const filtered = existing.filter(c => c.id !== childId);
-      if (filtered.length === existing.length) return b;
-      return { ...b, children: filtered };
-    }));
-  }, [setBlocks]);
-
-  const setHeadingLevel = useCallback((id: string, level: 1 | 2 | 3) => setBlocks(prev => prev.map(b => (
-    b.id === id && b.type === 'heading' ? ({ ...b, level }) : b
-  ))), [setBlocks]);
-
-  /**
-   * Turn a block into another kind in place ("Turn into", markdown shortcuts).
-   *
-   * `html` replaces the text in the same step — a markdown shortcut removes
-   * the `## ` it was typed as — so the conversion is one undo entry rather
-   * than an edit followed by a conversion.
-   */
-  const setBlockKind = useCallback((id: string, kind: BlockKindId, options?: { html?: string }) => setBlocks(prev => {
-    const idx = prev.findIndex(b => b.id === id);
-    if (idx === -1 || prev[idx].locked) return prev;
-    let source = prev[idx];
-    if (options?.html !== undefined && (source.type === 'paragraph' || source.type === 'heading')) {
-      source = withoutOrphanChildren({ ...source, html: options.html } as Block);
-    }
-    const out = prev.slice();
-    out[idx] = convertBlock(source, kind);
-    return out;
-  }), [setBlocks]);
-
-  const getBlock = useCallback((id: string) => docRef.current.blocks.find(b => b.id === id), []);
-
-  /**
-   * Add sources to the document's library, or refresh ones already there.
-   *
-   * Matched by canonical key, so a DOI written two ways is one entry. An
-   * incoming record's non-empty fields replace the stored ones — this is
-   * how "Add to library" upgrades an entry typed by hand — while fields it
-   * lacks are kept.
-   */
-  const upsertSources = useCallback((incoming: readonly CitationSource[]) => {
-    if (incoming.length === 0) return;
-    mutateDoc(prev => {
-      const library = [...(prev.sources ?? [])];
-      const index = new Map(library.map((source, i) => [canonicalCitationKey(source.key), i]));
-      for (const source of incoming) {
-        const key = canonicalCitationKey(source.key);
-        if (!key) continue;
-        const clean = Object.fromEntries(
-          Object.entries(source).filter(([, value]) => value !== undefined && value !== null && value !== ''),
-        ) as CitationSource;
-        const at = index.get(key);
-        if (at === undefined) {
-          index.set(key, library.length);
-          library.push({ ...clean, key: source.key });
-        } else {
-          library[at] = { ...library[at], ...clean, key: library[at].key };
-        }
-      }
-      return { ...prev, sources: library };
-    });
-  }, [mutateDoc]);
-
-  /** Edit one library entry; an emptied field is removed. */
-  const updateSource = useCallback((key: string, patch: Partial<CitationSource>) => {
-    const target = canonicalCitationKey(key);
-    mutateDoc(prev => {
-      const library = prev.sources ?? [];
-      const at = library.findIndex(source => canonicalCitationKey(source.key) === target);
-      if (at === -1) return prev;
-      const next = { ...library[at], ...patch, key: library[at].key } as Record<string, unknown>;
-      for (const [field, value] of Object.entries(next)) {
-        if (value === undefined || value === null || value === '') delete next[field];
-      }
-      const out = library.slice();
-      out[at] = next as CitationSource;
-      return { ...prev, sources: out };
-    });
-  }, [mutateDoc]);
-
-  /** Drop an entry from the library. Citations keep their own copy of it. */
-  const removeSource = useCallback((key: string) => {
-    const target = canonicalCitationKey(key);
-    mutateDoc(prev => {
-      const library = prev.sources ?? [];
-      const out = library.filter(source => canonicalCitationKey(source.key) !== target);
-      if (out.length === library.length) return prev;
-      const { sources: _sources, ...rest } = prev;
-      return out.length ? { ...prev, sources: out } : rest;
-    });
-  }, [mutateDoc]);
-
-  const setCitationStyle = useCallback((style: Doc['citationStyle'] | null) => {
-    mutateDoc(prev => {
-      if ((prev.citationStyle ?? null) === style) return prev;
-      const { citationStyle: _style, ...rest } = prev;
-      return style ? { ...rest, citationStyle: style } : rest;
-    });
-  }, [mutateDoc]);
-
-  const setChecked = useCallback((id: string, checked: boolean) => setBlocks(prev => prev.map(b => (
-    b.id === id && b.type === 'paragraph' && b.variant === 'todo' && !b.locked
-      ? { ...b, checked }
-      : b
-  ))), [setBlocks]);
-
-  /**
-   * Nest or un-nest a list item (Tab / Shift+Tab).
-   *
-   * An item can sit at most one level deeper than the item above it, the way
-   * an outline works: indenting the first item of a list would otherwise
-   * produce a sub-list with no parent. Returns whether anything changed, so
-   * the key handler knows whether it consumed the key.
-   */
-  const indentBlock = useCallback((id: string, delta: 1 | -1): boolean => {
-    const list = docRef.current.blocks;
-    const idx = list.findIndex(b => b.id === id);
-    const block = list[idx];
-    if (!block || block.type !== 'paragraph' || !isListItem(block) || block.locked) return false;
-    const current = block.indent ?? 0;
-    const above = list[idx - 1];
-    const ceiling = above && above.type === 'paragraph' && isListItem(above) ? (above.indent ?? 0) + 1 : 0;
-    const next = delta > 0 ? Math.min(clampIndent(current + 1), ceiling) : clampIndent(current - 1);
-    if (next === current) return false;
-    setBlocks(prev => prev.map(b => {
-      if (b.id !== id || b.type !== 'paragraph') return b;
-      const { indent: _indent, ...rest } = b;
-      return next > 0 ? { ...rest, indent: next } : rest;
-    }));
-    return true;
-  }, [setBlocks]);
-
-  const updateCodeText = useCallback((id: string, text: string) => setBlocks(prev => {
-    const idx = prev.findIndex(b => b.id === id);
-    const b = prev[idx];
-    if (!b || b.type !== 'code' || b.text === text) return prev;
-    const out = prev.slice();
-    out[idx] = { ...b, text };
-    return out;
-  }, `code:${id}`), [setBlocks]);
-
-  const setCodeLanguage = useCallback((id: string, language: string | null) => setBlocks(prev => prev.map(b => {
-    if (b.id !== id || b.type !== 'code') return b;
-    const { language: _language, ...rest } = b;
-    return language ? { ...rest, language } : rest;
-  })), [setBlocks]);
-
-  const duplicateBlock = useCallback((id: string): string | null => {
-    const source = docRef.current.blocks.find(b => b.id === id);
-    if (!source) return null;
-    const newId = uid();
-    const copy = duplicateOf(source, newId);
-    setBlocks(prev => {
-      const idx = prev.findIndex(b => b.id === id);
-      if (idx === -1) return prev;
-      const out = prev.slice();
-      out.splice(idx + 1, 0, copy);
-      return out;
-    });
-    return newId;
-  }, [setBlocks]);
-
-  /**
-   * Swap blocks for others in one undo step — an AI result replacing the
-   * passage it rewrote. The new blocks land where the first replaced block
-   * stood. Locked blocks are never removed: they stay, after the new ones.
-   * Returns the inserted ids.
-   */
-  const replaceBlocks = useCallback((ids: readonly string[], incoming: readonly Block[]): string[] => {
-    const doomed = new Set(ids);
-    const taken = new Set(docRef.current.blocks.filter(b => !doomed.has(b.id)).map(b => b.id));
-    const fresh = incoming.map(block => (taken.has(block.id) ? duplicateOf(block, uid()) : block));
-    setBlocks(prev => {
-      const first = prev.findIndex(b => doomed.has(b.id));
-      if (first === -1) return fresh.length ? [...prev, ...fresh] : prev;
-      // Everything before `first` survives, so it is also the insertion
-      // index once the replaced blocks are gone.
-      const out = prev.filter(b => !doomed.has(b.id) || b.locked);
-      out.splice(first, 0, ...fresh);
-      return out;
-    });
-    return fresh.map(block => block.id);
-  }, [setBlocks]);
-
-  /** Remove several blocks as one undo step, skipping locked ones. */
-  const removeBlocks = useCallback((ids: readonly string[]) => {
-    const doomed = new Set(ids);
-    setBlocks(prev => {
-      const out = prev.filter(b => !doomed.has(b.id) || b.locked);
-      return out.length === prev.length ? prev : out;
-    });
-  }, [setBlocks]);
-
-  /**
-   * Insert several ready-made blocks after `afterId` (or at the start when it
-   * is null) as one undo step — pasted markdown, an assistant answer.
-   * Returns the ids actually inserted; an id already in use is replaced.
-   */
-  const insertBlocksAfter = useCallback((
-    afterId: string | null,
-    incoming: readonly Block[],
-    options?: { replaceAnchor?: boolean },
-  ): string[] => {
-    const taken = new Set(docRef.current.blocks.map(b => b.id));
-    const fresh = incoming.map(block => (taken.has(block.id) ? duplicateOf(block, uid()) : block));
-    if (fresh.length === 0) return [];
-    setBlocks(prev => {
-      const idx = afterId === null ? -1 : prev.findIndex(b => b.id === afterId);
-      const out = prev.slice();
-      // Replacing takes the anchor's place — pasting into a blank line should
-      // not leave the blank line behind — unless the anchor is locked.
-      if (options?.replaceAnchor && idx !== -1 && !prev[idx].locked) {
-        out.splice(idx, 1, ...fresh);
-      } else {
-        out.splice(afterId === null ? 0 : idx === -1 ? out.length : idx + 1, 0, ...fresh);
-      }
-      return out;
-    });
-    return fresh.map(block => block.id);
-  }, [setBlocks]);
-
-  /**
-   * A contenteditable command. `value` carries the argument the few commands
-   * that take one need — `createLink` above all, which was unreachable while
-   * this signature had nowhere to put a URL.
-   */
-  const exec = useCallback(
-    (cmd: string, value?: string) => document.execCommand(cmd, false, value),
-    [],
-  );
-
-  const newLocal = useCallback(() => {
-    const requestToken = beginDocumentTransition(null);
-    const next = makeDefaultDoc();
-    startDocumentSession();
-    commitDoc(next);
-    editRevisionRef.current = 0;
-    persistedRevisionRef.current = 0;
-    setDirtyTick(0);
-    setDocumentId(null);
-    documentIdRef.current = null;
-    loadedForIdRef.current = null;
-    versionRef.current = 1;
-    setLastSavedAt(null);
-    setSaveError(null);
-    setActiveId(null);
-    setOpenMenuBlockId(null);
-    setOpenMenuType(null);
-    finishDocumentTransition(requestToken);
-  }, [beginDocumentTransition, startDocumentSession, commitDoc, finishDocumentTransition]);
-
-  // API-backed persistence
-  const createRemote = useCallback(async (docOverride?: DocumentInput): Promise<string> => {
-    const requestToken = beginDocumentTransition(null);
-    const payload = docOverride ?? docRef.current;
-    const revisionAtStart = editRevisionRef.current;
-    const res = await apiCreateDocument(payload);
-    const version = res.version ?? 1;
-
-    // The creation itself succeeded even if navigation moved on while it was
-    // in flight, so list metadata still changes. Only the still-current
-    // transition may adopt the created document into the editor.
-    if (requestToken === documentRequestRef.current) {
-      setDocumentId(res.document_id);
-      documentIdRef.current = res.document_id;
-      loadedForIdRef.current = res.document_id;
-      versionRef.current = version;
-      persistedRevisionRef.current = revisionAtStart;
-      // Deliberately not a new document session: this is the document that was
-      // already open, now with an id the server recognises.
-      if (docRef.current.version !== version) {
-        commitDoc({ ...docRef.current, version });
-      }
-      setSaveError(null);
-      // The caret stays where it is. Clearing the active block unconditionally
-      // made saving a draft mid-edit look like a document switch to `Editable`,
-      // which then rewrote the paragraph's DOM from state — throwing away an AI
-      // suggestion or a streaming widget the author was in the middle of. Only
-      // a caller that replaced the body on screen has invalidated it.
-      if (docOverride !== undefined) {
-        setActiveId(null);
-        setOpenMenuBlockId(null);
-        setOpenMenuType(null);
-      }
-    }
-    setHasAnyRemoteDocs(true);
-    setDocumentListRevision(revision => revision + 1);
-    return res.document_id;
-  }, [beginDocumentTransition, commitDoc]);
-
-  // Serialize saves so a switch can wait for an active autosave, then
-  // re-check whether a newer edit still needs its own write.
-  const doRemoteSave = useCallback(async (source: 'auto' | 'manual', docOverride?: DocumentInput): Promise<void> => {
-    // Cancel any pending autosave timer to avoid duplicate saves
-    if (autoSaveTimerRef.current !== null) {
-      clearTimeout(autoSaveTimerRef.current);
-      autoSaveTimerRef.current = null;
-    }
-    // Snapshot before any await: an override is a body snapshot of the
-    // document open *at call time*, and the workspace can move to another
-    // document while a queued save below is awaited.
-    const originId = documentIdRef.current;
-    const pendingSave = saveInFlightRef.current;
-    if (pendingSave) {
-      try {
-        await pendingSave;
-      } catch {
-        // The caller that started the failed request reports it. Re-evaluate
-        // the current dirty revision here so an explicit retry can proceed.
-      }
-    }
-
-    const targetId = documentIdRef.current;
-    if (!targetId) {
-      if (docOverride !== undefined && documentIdRef.current !== originId) return;
-      const createdId = await createRemote(docOverride ?? docRef.current);
-      if (
-        documentIdRef.current === createdId
-        && loadedForIdRef.current === createdId
-      ) {
-        setLastSavedAt(Date.now());
-        setLastSaveSource(source);
-      }
-      return;
-    }
-
-    // Never write the in-state body to a document it did not come from. The id
-    // and the body are separate state, and they disagree for a moment while
-    // switching documents — long enough for a queued autosave to land.
-    if (loadedForIdRef.current !== targetId) {
-      return;
-    }
-    // An override body came from the document that was open at call time; if
-    // the workspace moved on, this PUT would write that body over the newly
-    // active document — and the optimistic lock would not catch it, because
-    // versionRef moved with the switch.
-    if (docOverride !== undefined && targetId !== originId) {
-      return;
-    }
-
-    const revisionAtStart = editRevisionRef.current;
-    const hasUnsavedRevision = revisionAtStart > persistedRevisionRef.current;
-    if (!hasUnsavedRevision && docOverride === undefined) {
-      if (source === 'manual') {
-        setSaveError(null);
-        setLastSavedAt(Date.now());
-        setLastSaveSource(source);
-      }
-      return;
-    }
-
-    const base = docOverride ?? docRef.current;
-    const payload: DocumentInput = Array.isArray(base)
-      ? { blocks: base, version: versionRef.current }
-      : { ...base, version: versionRef.current };
-
-    const request = (async () => {
-      const res = await apiSaveDocument(targetId, payload);
-      setDocumentListRevision(revision => revision + 1);
-
-      // A local reset can happen while a request is in flight. The old
-      // document was still saved, but its response must not alter the newly
-      // active document's version or clean revision.
-      if (
-        documentIdRef.current !== targetId
-        || loadedForIdRef.current !== targetId
-      ) {
-        return;
-      }
-
-      const adopted = applyServerVersion(res?.version, false);
-      if (adopted) {
-        // A stale response (a save that was in flight across a restore) must
-        // not mark its revision persisted either: the server head no longer
-        // contains it, so the next edit would wrongly count as already saved.
-        persistedRevisionRef.current = Math.max(
-          persistedRevisionRef.current,
-          revisionAtStart,
-        );
-      }
-      setSaveError(null);
-      setLastSavedAt(Date.now());
-      setLastSaveSource(source);
-    })();
-
-    saveInFlightRef.current = request;
-    try {
-      await request;
-    } finally {
-      if (saveInFlightRef.current === request) {
-        saveInFlightRef.current = null;
-      }
-    }
-  }, [createRemote, applyServerVersion]);
-
-  const saveRemote = useCallback(async (docOverride?: DocumentInput): Promise<void> => {
-    await doRemoteSave('manual', docOverride);
-  }, [doRemoteSave]);
-
-  /**
-   * Give the open document a server id, creating it if it does not have one.
-   *
-   * Everything the assistant does is addressed by document id: the agent reads
-   * and edits `document_id`, and a chat session is stored against it. A draft
-   * that exists only in this browser therefore has nothing to talk about — the
-   * old behaviour was to refuse and tell the author to save first, which is a
-   * chore in the middle of a sentence they are asking for help with.
-   *
-   * Concurrent callers share one creation. Returning `null` means the document
-   * could not be created, which the caller reports; it never throws past here
-   * because the writing surface stays usable either way.
-   */
-  const attachInFlightRef = useRef<Promise<string | null> | null>(null);
-  const ensureRemoteDocument = useCallback(async (): Promise<string | null> => {
-    if (documentIdRef.current) return documentIdRef.current;
-    if (attachInFlightRef.current) return attachInFlightRef.current;
-
-    const request = (async () => {
-      try {
-        return await createRemote();
-      } catch (error) {
-        setSaveError(describeSaveError(error));
-        return null;
-      }
-    })();
-
-    attachInFlightRef.current = request;
-    try {
-      return await request;
-    } finally {
-      if (attachInFlightRef.current === request) attachInFlightRef.current = null;
-    }
-  }, [createRemote]);
-
-  const loadRemoteForRequest = useCallback(async (
-    id: string,
-    requestToken: number,
-  ): Promise<boolean> => {
-    // A newer transition can supersede this one while it is waiting for a dirty
-    // save to flush. Do not start an obsolete GET afterward.
-    if (requestToken !== documentRequestRef.current) return false;
-
-    let fetched: Doc;
-    const controller = new AbortController();
-    documentLoadControllerRef.current = controller;
-    try {
-      fetched = await apiLoadDocument(id, { signal: controller.signal });
-    } catch (error) {
-      // Callers surface only the latest failure. An older request failing after
-      // the author has moved on is no longer actionable.
-      if (requestToken !== documentRequestRef.current || controller.signal.aborted) return false;
-      throw error;
-    }
-    if (requestToken !== documentRequestRef.current || controller.signal.aborted) return false;
-
-    // Self-heal documents saved before html/children were kept in step, so an
-    // old orphan does not keep failing the agent's edits forever.
-    const loaded: Doc = { ...fetched, blocks: reconcileBlocks(fetched.blocks) };
-    startDocumentSession();
-    commitDoc(loaded);
-    editRevisionRef.current = 0;
-    persistedRevisionRef.current = 0;
-    setDirtyTick(0);
-    setDocumentId(id);
-    documentIdRef.current = id;
-    loadedForIdRef.current = id;
-    versionRef.current = loaded.version ?? 1;
-    setSaveError(null);
-    setActiveId(null);
-    setOpenMenuBlockId(null);
-    setOpenMenuType(null);
-    return true;
-  }, [startDocumentSession, commitDoc]);
-
-  const loadRemote = useCallback(async (id: string): Promise<boolean> => {
-    if (id === documentIdRef.current && loadingDocumentIdRef.current === null) return true;
-    if (id === loadingDocumentIdRef.current) return false;
-    const requestToken = beginDocumentTransition(id);
-    try {
-      return await loadRemoteForRequest(id, requestToken);
-    } catch (error) {
-      if (requestToken === documentRequestRef.current) {
-        reportDocumentLoadFailure(error);
-      }
-      throw error;
-    } finally {
-      finishDocumentTransition(requestToken);
-    }
-  }, [beginDocumentTransition, loadRemoteForRequest, reportDocumentLoadFailure, finishDocumentTransition]);
-
-  const hydrateRemote = useEffectEvent(
-    (id: string, requestToken: number) => loadRemoteForRequest(id, requestToken),
-  );
-  const autoSave = useEffectEvent(() => doRemoteSave('auto'));
-  const autoSaveRetryRef = useRef(0);
-  const autoSaveAttempt = useEffectEvent(async function attemptAutoSave() {
-    isAutoSavingRef.current = true;
-    setIsAutoSaving(true);
-    try {
-      await autoSave();
-      autoSaveRetryRef.current = 0;
-    } catch (error) {
-      setSaveError(describeSaveError(error));
-      // A transient failure used to leave the server stale until the next
-      // keystroke. Retry with capped backoff (15s, 30s, 60s); a new edit
-      // re-arms the normal debounce via `dirtyTick` and resets the backoff.
-      if (editRevisionRef.current > persistedRevisionRef.current) {
-        const attempt = autoSaveRetryRef.current++;
-        const delay = Math.min(15000 * 2 ** attempt, 60000);
-        autoSaveTimerRef.current = window.setTimeout(() => {
-          autoSaveTimerRef.current = null;
-          void attemptAutoSave();
-        }, delay);
-      }
-    } finally {
-      isAutoSavingRef.current = false;
-      setIsAutoSaving(false);
-    }
-  });
-
-  // Hydrate from the server on mount. The cached draft is a fallback for going
-  // offline, not a source of truth: adopting it unconditionally meant a stale
-  // (or another account's) body could be saved over the real document.
-  useEffect(() => {
-    const id = initialRequestedDocumentId;
-    if (!id) return;
-
-    let cancelled = false;
-    const hydrationToken = 0;
-    void hydrateRemote(id, hydrationToken)
-      .catch((error) => {
-        if (!cancelled && hydrationToken === documentRequestRef.current) {
-          // The committed state was selected synchronously from a body keyed to
-          // its own id, so failure only has to reveal it again.
-          reportDocumentLoadFailure(error, { mount: true });
-        }
-      })
-      .finally(() => {
-        if (!cancelled && hydrationToken === documentRequestRef.current) {
-          finishDocumentTransition(hydrationToken);
-        }
-      });
-    return () => {
-      cancelled = true;
-      if (hydrationToken === documentRequestRef.current) {
-        documentLoadControllerRef.current?.abort();
-        documentLoadControllerRef.current = null;
-      }
-    };
-    // Mount only: later document switches go through loadRemote/switchTo.
-    // The two transition helpers are stable callbacks; listing them does not
-    // re-arm the effect.
-  }, [initialRequestedDocumentId, reportDocumentLoadFailure, finishDocumentTransition]);
-
-  // Debounced remote auto-save (5 seconds after last change).
-  // Keyed on `dirtyTick` rather than `doc` so adopting a server version does
-  // not count as a change and re-arm the timer.
-  useEffect(() => {
-    if (
-      hasAnyRemoteDocs === null
-      || loadingDocumentId !== null
-      || dirtyTick === 0
-      || editRevisionRef.current <= persistedRevisionRef.current
-    ) {
-      return;
-    }
-
-    if (autoSaveTimerRef.current !== null) {
-      clearTimeout(autoSaveTimerRef.current);
-      autoSaveTimerRef.current = null;
-    }
-
-    if (hasAnyRemoteDocs === false && !documentId) return;
-
-    // A new edit supersedes any pending retry and starts the backoff over.
-    autoSaveRetryRef.current = 0;
-    autoSaveTimerRef.current = window.setTimeout(() => {
-      autoSaveTimerRef.current = null;
-      void autoSaveAttempt();
-    }, 5000);
-    return () => {
-      if (autoSaveTimerRef.current !== null) {
-        clearTimeout(autoSaveTimerRef.current);
-        autoSaveTimerRef.current = null;
-      }
-    };
-  }, [dirtyTick, documentId, hasAnyRemoteDocs, loadingDocumentId]);
-
-  /** Flush pending local edits, then switch to another document. */
-  const switchTo = useCallback(async (
-    id: string,
-    options?: { source?: 'selection' | 'history' },
-  ): Promise<boolean> => {
-    if (id === documentIdRef.current && loadingDocumentIdRef.current === null) return true;
-    // Duplicate activation is ignored without disabling the row, so focus stays
-    // where the author put it and a different row can still supersede the load.
-    if (id === loadingDocumentIdRef.current) return false;
-    let requestToken = beginDocumentTransition(id);
-    // Switching used to drop whatever had not hit the 5s autosave yet. The
-    // assistant creating a document made that a routine occurrence. A draft
-    // without a server id is flushed too — creating it remotely — where it
-    // used to be silently abandoned in the local cache with no way back.
-    if (
-      editRevisionRef.current > persistedRevisionRef.current
-      && (documentIdRef.current
-        ? loadedForIdRef.current === documentIdRef.current
-        : editRevisionRef.current > 0)
-    ) {
-      try {
-        await doRemoteSave('auto');
-      } catch (error) {
-        // A failed flush must not block the switch — the error is already
-        // retained in the keyed local draft, and the user asked to move on.
-        if (requestToken === documentRequestRef.current) {
-          setSaveError(describeSaveError(error));
-        }
-      }
-      // Creating the draft remotely ran its own document transition, which
-      // superseded this switch's token. Re-mark the pending switch before
-      // loading; harmless when the flush kept the token all along.
-      requestToken = beginDocumentTransition(id);
-    }
-    try {
-      return await loadRemoteForRequest(id, requestToken);
-    } catch (error) {
-      if (requestToken === documentRequestRef.current) {
-        reportDocumentLoadFailure(error, { source: options?.source });
-      }
-      throw error;
-    } finally {
-      finishDocumentTransition(requestToken);
-    }
-  }, [beginDocumentTransition, doRemoteSave, loadRemoteForRequest, reportDocumentLoadFailure, finishDocumentTransition]);
-
-  const createAndSwitch = useCallback(async (input: DocumentInput): Promise<string> => {
-    if (
-      editRevisionRef.current > persistedRevisionRef.current
-      && (documentIdRef.current || editRevisionRef.current > 0)
-    ) {
-      await doRemoteSave('auto');
-    }
-
-    const requestToken = beginDocumentTransition(null);
-    const next = documentInputToDoc(input);
-    const res = await apiCreateDocument(input);
-    const adopted = { ...next, version: res.version ?? 1 };
-
-    if (requestToken === documentRequestRef.current) {
-      startDocumentSession();
-      commitDoc(adopted);
-      setDocumentId(res.document_id);
-      documentIdRef.current = res.document_id;
-      loadedForIdRef.current = res.document_id;
-      versionRef.current = adopted.version;
-      editRevisionRef.current = 0;
-      persistedRevisionRef.current = 0;
-      setDirtyTick(0);
-      setLastSavedAt(Date.now());
-      setLastSaveSource('manual');
-      setSaveError(null);
-      setActiveId(null);
+  // The session's transitions reach the caret, the menus, the selection and
+  // the journal through this handle. Another page's history is meaningless
+  // here, and a restore replaces the tree wholesale, so both reset it. Typing bursts coalesce per block (a pause of a
+  // second starts a fresh step); structural changes always start a new
+  // entry. A replay is not journaled, and a batch is journaled once, when it
+  // closes.
+  useLayoutEffect(() => attachEditor({
+    journal: (before, next, key) => {
+      if (applyingHistoryRef.current || batchRef.current) return;
+      journal(before, next, key);
+    },
+    clearActive: () => setActiveId(null),
+    closeMenus: () => {
       setOpenMenuBlockId(null);
       setOpenMenuType(null);
-    }
-    setHasAnyRemoteDocs(true);
-    setDocumentListRevision(revision => revision + 1);
-    return res.document_id;
-  }, [doRemoteSave, beginDocumentTransition, startDocumentSession, commitDoc]);
+    },
+    resetHistory: () => {
+      historyRef.current = { undo: [], redo: [] };
+      setCanUndo(false);
+      setCanRedo(false);
+    },
+    clearSelection: () => setSelectedIds(previous => (previous.length ? [] : previous)),
+  }), [attachEditor, journal]);
 
-  const deleteRemote = useCallback(async (id: string): Promise<void> => {
-    const deletingActiveDocument = documentIdRef.current === id;
-    const requestToken = deletingActiveDocument
-      ? beginDocumentTransition(null)
-      : documentRequestRef.current;
-    // The open document's adopted version says exactly which state is being
-    // deleted; for any other document the service presents the current ETag.
-    await apiDeleteDocument(
-      id,
-      deletingActiveDocument ? { version: versionRef.current } : {},
-    );
-    if (
-      deletingActiveDocument
-      && requestToken === documentRequestRef.current
-      && documentIdRef.current === id
-    ) {
-      newLocal();
-    }
-    setDocumentListRevision(revision => revision + 1);
+  const blockActions = useMemo(() => createBlockActions(editDoc, readDoc), [editDoc, readDoc]);
+
+  /**
+   * Run several edits as one undo step.
+   *
+   * Moving, duplicating or converting a run of selected blocks repeats a
+   * one-block action; each used to be its own step, so one Mod+Z split the
+   * run. Nested batches join the outer one.
+   */
+  const batch = useCallback(<T,>(run: () => T): T => {
+    if (batchRef.current || applyingHistoryRef.current) return run();
+    const before = readDoc();
+    batchRef.current = { before };
     try {
-      const res = await apiListDocuments({ page: 1, limit: 1 });
-      setHasAnyRemoteDocs((res.count || 0) > 0);
-    } catch {
-      // On error, leave the previous value; UX will rely on existing state.
+      return run();
+    } finally {
+      batchRef.current = null;
+      journal(before, readDoc(), null);
     }
-  }, [beginDocumentTransition, newLocal]);
+  }, [readDoc, journal]);
 
-  const listRemote = useCallback(
-    (
-      options: DocumentListOptions = {},
-      init?: { signal?: AbortSignal },
-    ): Promise<DocumentListResult> => apiListDocuments(options, init),
-    [],
-  );
+  /**
+   * Capture the DOM-backed editable values synchronously before export.
+   *
+   * React state normally follows on the next frame. Export is user-initiated
+   * and must include the character still visible under the caret even when
+   * that state update has not committed yet.
+   */
+  const getExportSnapshot = useCallback(() => {
+    // Reads `readDoc()` rather than closing over `doc`: the snapshot must be
+    // of the document as it is at click time, and a state closure would also
+    // make this action change identity on every edit.
+    const document = structuredClone(readDoc());
+    document.blocks = document.blocks.map((block) => {
+      if (block.type === 'divider') return block;
+      const editable = refs.current[block.id];
+      return editable ? { ...block, html: serializeEditableHtml(editable) } : block;
+    });
+    return { document, localRevision: body.getEditRevision(), dirty: hasPendingEdits() };
+  }, [body, readDoc, hasPendingEdits]);
 
-  // `docRef` rather than a `doc` closure: the JSON must be of the document as
-  // it is at call time, and closing over state would make the action change
-  // identity on every edit.
-  const getJSON = useCallback(() => JSON.stringify(docRef.current, null, 2), []);
+  // `readDoc()` rather than a `doc` closure: the JSON must be of the document
+  // as it is at call time, and closing over state would make the action
+  // change identity on every edit.
+  const getJSON = useCallback(() => JSON.stringify(readDoc(), null, 2), [readDoc]);
   const setFromJSON = useCallback((json: string) => {
     const parsed = JSON.parse(json);
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)) throw new Error('Invalid JSON structure');
@@ -1464,12 +230,11 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       blocks.push(block);
     }
     const next: Doc = {
-      version: typeof parsed.version === 'number' ? parsed.version : 1,
       name: typeof parsed.name === 'string' ? parsed.name : undefined,
       blocks,
     };
-    mutateDoc(() => next);
-  }, [mutateDoc]);
+    editDoc(() => next);
+  }, [editDoc]);
 
   /**
    * Apply agent tool operations in a single pass.
@@ -1486,16 +251,17 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const applyPatch = useCallback((
     ops: ToolOperation[],
     options?: { persist?: boolean; base?: Block[] },
-  ): ApplyPatchResult => {
-    if (loadingDocumentIdRef.current !== null) {
-      return { blocks: docRef.current.blocks, desynced: ops, touched: [], stale: true };
+  ): ApplyPatchResult & { doc: Doc } => {
+    if (body.isLoading()) {
+      const current = readDoc();
+      return { blocks: current.blocks, doc: current, desynced: ops, touched: [], stale: true };
     }
 
     // Computed against the ref rather than inside a `setState` updater. The
     // caller needs `touched` to highlight what moved and `desynced` to say the
     // two copies have diverged, and React runs an updater when it pleases —
     // both used to come back empty for anything but the first update in a tick.
-    const base = docRef.current;
+    const base = readDoc();
 
     // A caller that computed a plan (positions, absolute indexes) against a
     // rendered snapshot tags it with `base`. If the document moved since —
@@ -1503,23 +269,17 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     // could half-apply, so refuse atomically and hand back the live blocks
     // for one recompute-and-retry.
     if (options?.base !== undefined && base.blocks !== options.base) {
-      return { blocks: base.blocks, desynced: ops, touched: [], stale: true };
+      return { blocks: base.blocks, doc: base, desynced: ops, touched: [], stale: true };
     }
 
-    const outcome = applyPatchToBlocks(base.blocks, ops);
+    // The blocks, then the page's name, citation style and library.
+    const outcome = applyOperations(base, ops);
 
-    let nextDoc: Doc = { ...base, blocks: outcome.blocks };
-    for (const op of ops) {
-      if (op.op === 'update_meta' && op.meta?.name) {
-        nextDoc = { ...nextDoc, name: op.meta.name };
-      }
-    }
-
-    if (options?.persist) mutateDoc(() => nextDoc);
-    else commitDoc(nextDoc);
+    if (options?.persist) editDoc(() => outcome.doc);
+    else commitDoc(outcome.doc);
 
     return outcome;
-  }, [mutateDoc, commitDoc]);
+  }, [body, commitDoc, editDoc, readDoc]);
 
   /**
    * Blocks an accepted change just landed on.
@@ -1544,12 +304,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     if (recentlyChangedTimer.current !== null) clearTimeout(recentlyChangedTimer.current);
   }, []);
 
-  /**
-   * Blocks selected as whole blocks (Esc, Shift+click on the handle, ⌘A
-   * twice) rather than as text. Kept in document order and pruned of ids
-   * that left the document, so every consumer can act on it directly.
-   */
-  const [selectedIdsRaw, setSelectedIds] = useState<readonly string[]>([]);
+  // The selection in document order, pruned of ids that left the document,
+  // so every consumer can act on it directly.
   const selectedBlockIds = useMemo(() => {
     if (selectedIdsRaw.length === 0) return selectedIdsRaw;
     const wanted = new Set(selectedIdsRaw);
@@ -1559,94 +315,67 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       : ordered;
   }, [blocks, selectedIdsRaw]);
   const selectBlocks = useCallback((ids: readonly string[]) => setSelectedIds(ids.slice()), []);
-  const clearBlockSelection = useCallback(() => setSelectedIds(previous => (previous.length ? [] : previous)), []);
+  // The selection at call time, for commands that act on it without
+  // re-rendering with it (every block's handle menu).
+  const selectedBlockIdsRef = useRef<readonly string[]>(selectedBlockIds);
   useEffect(() => {
-    // Selection belongs to the document it was made in.
-    setSelectedIds(previous => (previous.length ? [] : previous));
-  }, [documentSessionId]);
+    selectedBlockIdsRef.current = selectedBlockIds;
+  }, [selectedBlockIds]);
+  const getSelectedBlockIds = useCallback(() => selectedBlockIdsRef.current, []);
+  const clearBlockSelection = useCallback(() => setSelectedIds(previous => (previous.length ? [] : previous)), []);
+
+  /**
+   * Show the author what an undo or redo changed.
+   *
+   * The replay swaps the document state; when the change was off screen (an
+   * accepted suggestion further down, a block moved away) nothing visible
+   * happened and the author pressed Mod+Z again. The changed blocks are
+   * tinted for a moment and the first is scrolled into view.
+   */
+  const showReplay = useCallback((from: Doc, to: Doc) => {
+    const { changed, near } = replayFootprint(from, to);
+    // Taking back a few typed words in the block the caret is in needs no
+    // signal: the author is looking at it. Tinting it on every Mod+Z would
+    // only flicker.
+    const focused = document.activeElement?.closest?.('.block-row')?.getAttribute('data-block-id') ?? null;
+    if (changed.length === 1 && changed[0] === focused) return;
+    markRecentlyChanged(changed);
+    const target = changed[0] ?? near;
+    if (!target) return;
+    requestAnimationFrame(() => {
+      const row = document.querySelector<HTMLElement>(
+        `.blocks-container > .block-row[data-block-id="${CSS.escape(target)}"]`,
+      );
+      row?.scrollIntoView?.({ block: 'nearest' });
+    });
+  }, [markRecentlyChanged]);
 
   /**
    * Walk the document back or forward one journaled state.
    *
-   * The replay goes through `mutateDoc` so it dirties the revision and arms
+   * The replay goes through `editDoc` so it dirties the revision and arms
    * autosave like any edit; `applyingHistoryRef` keeps the replay itself out
    * of the journal. `Editable` rebases an active block whose state changed
    * underneath it, so the canvas follows the walk without extra wiring.
    */
-  const undo = useCallback(() => {
-    const entry = historyRef.current.undo.pop();
+  const replay = useCallback((direction: 'undo' | 'redo') => {
+    const history = historyRef.current;
+    const entry = (direction === 'undo' ? history.undo : history.redo).pop();
     if (!entry) return;
-    historyRef.current.redo.push(entry);
-    setCanUndo(historyRef.current.undo.length > 0);
-    setCanRedo(true);
+    (direction === 'undo' ? history.redo : history.undo).push(entry);
+    setCanUndo(history.undo.length > 0);
+    setCanRedo(history.redo.length > 0);
+    const [from, to] = direction === 'undo' ? [entry.after, entry.before] : [entry.before, entry.after];
     applyingHistoryRef.current = true;
     try {
-      mutateDoc(() => entry.before);
+      editDoc(() => to);
     } finally {
       applyingHistoryRef.current = false;
     }
-  }, [mutateDoc]);
-
-  const redo = useCallback(() => {
-    const entry = historyRef.current.redo.pop();
-    if (!entry) return;
-    historyRef.current.undo.push(entry);
-    setCanUndo(true);
-    setCanRedo(historyRef.current.redo.length > 0);
-    applyingHistoryRef.current = true;
-    try {
-      mutateDoc(() => entry.after);
-    } finally {
-      applyingHistoryRef.current = false;
-    }
-  }, [mutateDoc]);
-
-  // Another document's history is meaningless here, and a restore replaces
-  // the tree wholesale — walking back across it would resurrect text the
-  // server has already moved past.
-  useEffect(() => {
-    historyRef.current = { undo: [], redo: [] };
-    setCanUndo(false);
-    setCanRedo(false);
-  }, [documentSessionId, restoreEpoch]);
-
-  const save = useCallback(() => {
-    if (loadingDocumentIdRef.current !== null) return;
-    // Refs rather than state closures: the save must describe the document as
-    // it is at call time, and closing over `doc`/`documentId` would make this
-    // action change identity on every edit.
-    saveDoc(docRef.current, documentIdRef.current);
-    saveDocumentId(documentIdRef.current);
-    // Ctrl+S must mean what the header shows: a save the server actually
-    // received. Writing only the local cache here used to flash "Saved" while
-    // the server copy stayed stale until the next autosave.
-    const shouldPersistRemote =
-      documentIdRef.current !== null ||
-      (hasAnyRemoteDocsRef.current !== false &&
-        editRevisionRef.current > persistedRevisionRef.current);
-    if (shouldPersistRemote) {
-      void doRemoteSave('manual').catch((error) => setSaveError(describeSaveError(error)));
-      return;
-    }
-    setLastSavedAt(Date.now());
-    setLastSaveSource('manual');
-  }, [doRemoteSave]);
-
-  const hasPendingEditsNow = useCallback(() => (
-    editRevisionRef.current > persistedRevisionRef.current
-    || autoSaveTimerRef.current !== null
-    || isAutoSavingRef.current
-  ), []);
-
-  /**
-   * Block order at call time, for event handlers that need it without
-   * subscribing to `blocks` (an editable's arrow-key neighbour walk).
-   */
-  const getBlockIds = useCallback(() => docRef.current.blocks.map(b => b.id), []);
-
-  const savedHeadSeq = useCallback(() => (documentIdRef.current ? versionRef.current : null), []);
-  const clearSaveError = useCallback(() => setSaveError(null), []);
-  const clearDocumentLoadNotice = useCallback(() => setDocumentLoadNotice(null), []);
+    showReplay(from, to);
+  }, [editDoc, showReplay]);
+  const undo = useCallback(() => replay('undo'), [replay]);
+  const redo = useCallback(() => replay('redo'), [replay]);
 
   // Numbering, ordering and back-links are all derived from the same scan, so
   // it happens once here rather than inside each citation widget.
@@ -1660,218 +389,82 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     () => citationFingerprint(blocks, { library, style: documentStyle }),
     [blocks, library, documentStyle],
   );
+  // A page with citations asks for the processor (`buildBibliography`); this
+  // renders them again in their style when it arrives.
+  const processorReady = useCitationProcessor(false);
   const bibliography = useMemo(
     () => buildBibliography(blocks, { library, style: documentStyle }),
     // The fingerprint stands in for `blocks`: identical fingerprint means
     // identical scan inputs, hence an identical bibliography.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bibliographyFingerprint],
+    [bibliographyFingerprint, processorReady],
   );
 
   /**
-   * The context is split so a keystroke re-renders only what renders document
-   * state. Every action closes over refs or stable setters, which keeps this
-   * value referentially stable across edits; consumers that only dispatch —
-   * the per-block editables most of all — subscribe to it alone and skip the
+   * Every action closes over refs or stable setters, which keeps this value
+   * referentially stable across edits; consumers that only dispatch — the
+   * per-block editables most of all — subscribe to it alone and skip the
    * per-keystroke render entirely.
    */
   const actionsValue: EditorActionsContextValue = useMemo(() => ({
+    ...blockActions,
     refs,
     registerEditable,
     setActive: setActiveId,
     setBlockMenu,
-    setDocMeta,
-    setDocName,
-    addBlockAtStart,
-    addBlockAfter,
-    addBlockBefore,
-    insertBlockAtStartExact,
-    insertBlockAfterExact,
-    insertBlockBeforeExact,
-    appendBlockExact,
-    moveBlock,
-    reorderBlock,
-    splitBlock,
-    mergeWithPrevious,
-    removeBlock,
-    updateHtml,
-    setParagraphColumns,
-    toggleAiHidden,
-    toggleLocked,
-    toggleCollapsed,
-    addParagraphChild,
-    updateParagraphChild,
-    removeParagraphChild,
-    setHeadingLevel,
-    setBlockKind,
-    getBlock,
-    upsertSources,
-    updateSource,
-    removeSource,
-    setCitationStyle,
-    setChecked,
-    indentBlock,
-    updateCodeText,
-    setCodeLanguage,
-    duplicateBlock,
-    removeBlocks,
-    replaceBlocks,
-    insertBlocksAfter,
-    exec,
-    getBlockIds,
-    getJSON,
-    setFromJSON,
-    save,
+    batch,
     undo,
     redo,
-    newLocal,
+    exec,
+    getJSON,
+    setFromJSON,
     getExportSnapshot,
-    createRemote,
-    createAndSwitch,
-    ensureRemoteDocument,
-    saveRemote,
-    loadRemote,
-    switchTo,
-    deleteRemote,
-    listRemote,
-    hasPendingEdits: hasPendingEditsNow,
-    savedHeadSeq,
-    clearSaveError,
-    clearDocumentLoadNotice,
-    adoptServerVersion,
-    adoptRestoredDocument,
     applyPatch,
     markRecentlyChanged,
     selectBlocks,
+    getSelectedBlockIds,
     clearBlockSelection,
   }), [
+    blockActions,
     registerEditable,
     setBlockMenu,
-    setDocMeta,
-    setDocName,
-    addBlockAtStart,
-    addBlockAfter,
-    addBlockBefore,
-    insertBlockAtStartExact,
-    insertBlockAfterExact,
-    insertBlockBeforeExact,
-    appendBlockExact,
-    moveBlock,
-    reorderBlock,
-    splitBlock,
-    mergeWithPrevious,
-    removeBlock,
-    updateHtml,
-    setParagraphColumns,
-    toggleAiHidden,
-    toggleLocked,
-    toggleCollapsed,
-    addParagraphChild,
-    updateParagraphChild,
-    removeParagraphChild,
-    setHeadingLevel,
-    setBlockKind,
-    getBlock,
-    upsertSources,
-    updateSource,
-    removeSource,
-    setCitationStyle,
-    setChecked,
-    indentBlock,
-    updateCodeText,
-    setCodeLanguage,
-    duplicateBlock,
-    removeBlocks,
-    replaceBlocks,
-    insertBlocksAfter,
-    exec,
-    getBlockIds,
-    getJSON,
-    setFromJSON,
-    save,
+    batch,
     undo,
     redo,
-    newLocal,
+    getJSON,
+    setFromJSON,
     getExportSnapshot,
-    createRemote,
-    createAndSwitch,
-    ensureRemoteDocument,
-    saveRemote,
-    loadRemote,
-    switchTo,
-    deleteRemote,
-    listRemote,
-    hasPendingEditsNow,
-    savedHeadSeq,
-    clearSaveError,
-    clearDocumentLoadNotice,
-    adoptServerVersion,
-    adoptRestoredDocument,
     applyPatch,
     markRecentlyChanged,
     selectBlocks,
+    getSelectedBlockIds,
     clearBlockSelection,
   ]);
 
-  const stateValue: EditorStateContextValue = useMemo(() => ({
-    doc,
-    blocks,
-    documentId,
-    documentSessionId,
-    loadingDocumentId,
-    activeId,
+  const viewValue: EditorViewValue = useMemo(() => ({
     openMenuBlockId,
     openMenuType,
-    documentListRevision,
-    lastSavedAt,
-    isAutoSaving,
-    lastSaveSource,
-    saveError,
+    selectedBlockIds,
+    recentlyChanged,
     canUndo,
     canRedo,
-    documentLoadNotice,
-    restoreEpoch,
-    hasAnyRemoteDocs,
-    recentlyChanged,
-    selectedBlockIds,
-  }), [
-    doc,
-    blocks,
-    documentId,
-    documentSessionId,
-    loadingDocumentId,
-    activeId,
-    openMenuBlockId,
-    openMenuType,
-    documentListRevision,
-    lastSavedAt,
-    isAutoSaving,
-    lastSaveSource,
-    saveError,
-    canUndo,
-    canRedo,
-    documentLoadNotice,
-    restoreEpoch,
-    hasAnyRemoteDocs,
-    recentlyChanged,
-    selectedBlockIds,
-  ]);
+  }), [openMenuBlockId, openMenuType, selectedBlockIds, recentlyChanged, canUndo, canRedo]);
 
   // Focus moves are rare next to keystrokes, so the one piece of state an
-  // editable needs reactively gets its own context: subscribing to the full
-  // state value would re-render every editable on every edit.
+  // editable needs reactively gets its own context: subscribing to the view
+  // would re-render every editable whenever the blocks move.
   const activeBlockValue: EditorActiveBlockContextValue = useMemo(() => ({
     activeId,
     setActive: setActiveId,
   }), [activeId]);
 
   return (
-    <EditorContext.Provider value={stateValue}>
-      <EditorActionsContext.Provider value={actionsValue}>
+    <EditorActionsContext.Provider value={actionsValue}>
+      <EditorViewContext.Provider value={viewValue}>
         <EditorActiveBlockContext.Provider value={activeBlockValue}>
           <BibliographyContext.Provider value={bibliography}>{children}</BibliographyContext.Provider>
         </EditorActiveBlockContext.Provider>
-      </EditorActionsContext.Provider>
-    </EditorContext.Provider>
+      </EditorViewContext.Provider>
+    </EditorActionsContext.Provider>
   );
 }

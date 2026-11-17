@@ -1,5 +1,6 @@
 import type { Mermaid, MermaidConfig } from 'mermaid';
 import { importMermaid } from '@/lib/mermaidModule';
+import { withoutRemoteLoads } from '@/lib/remoteLoads';
 
 /**
  * Mermaid diagrams, drawn the same way everywhere they appear: the editor's
@@ -16,9 +17,10 @@ import { importMermaid } from '@/lib/mermaidModule';
  * Security: `securityLevel: 'strict'` is fixed here and is on Mermaid's own
  * `secure` list, so an `%%{init}%%` directive inside a diagram cannot lower
  * it. In strict mode labels are text, click handlers are disabled, and the
- * finished SVG goes through DOMPurify before it is returned. That sanitised
- * string is what callers inject; no other markup from the source reaches the
- * page.
+ * finished SVG goes through DOMPurify; then everything in it that would load
+ * from another origin (an image shape's `href`, an `<img>` in a label, a CSS
+ * `url(…)`) is taken out (`withoutRemoteLoads`). That string is what callers
+ * inject; no other markup from the source reaches the page.
  */
 
 /** The code-block language that makes a block a diagram. */
@@ -87,9 +89,9 @@ const FALLBACK_FONT = 'Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 
 const PARSEABLE_COLOR = /^(#[0-9a-f]{3,8}|rgba?\([^)]*\))$/i;
 
 function relativeLuminance(hex: string): number {
-  const match = /^#([0-9a-f]{6})/i.exec(hex);
-  if (!match) return 1;
-  const value = parseInt(match[1], 16);
+  const digits = /^#([0-9a-f]{6})/i.exec(hex)?.[1];
+  if (!digits) return 1;
+  const value = parseInt(digits, 16);
   const channel = (shift: number) => {
     const c = ((value >> shift) & 0xff) / 255;
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
@@ -312,7 +314,9 @@ async function draw(source: string, theme: MermaidTheme, id: string): Promise<Me
     mermaid.initialize(config);
     await mermaid.parse(source);
     const { svg, diagramType } = await mermaid.render(id, source);
-    return { ok: true, svg, diagramType };
+    // Strict mode and DOMPurify still let an image shape or an HTML label
+    // name a remote image, which would be fetched as the SVG is shown.
+    return { ok: true, svg: withoutRemoteLoads(svg), diagramType };
   } catch (error) {
     return { ok: false, error: mermaidErrorMessage(error) };
   } finally {

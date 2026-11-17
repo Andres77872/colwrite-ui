@@ -5,44 +5,37 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useEditor } from '../../editor';
+import { chatSelectionKey, readItem, removeItem, writeItem } from '@/lib/storageKeys';
+import { useDocumentId } from '../../editor';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import { ChatSessionsContext, type ChatSessionsValue } from './chatSessionsState';
 export type { ChatSessionsValue } from './chatSessionsState';
 
 type DocumentChatState = {
   documentId: string | null;
   selectedChatId: string | null;
-  selectedThreadId: number | null;
+  selectedLeafId: number | null;
 };
 
-function keyForDoc(docId: string | null): string | null {
-  if (!docId) return null;
-  return `colwrite:chat:selected:${docId}`;
+function readSelectedChat(workspaceId: string, documentId: string | null): string | null {
+  return documentId ? readItem(chatSelectionKey(workspaceId, documentId)) || null : null;
 }
 
-function readSelectedChat(documentId: string | null): string | null {
-  try {
-    const key = keyForDoc(documentId);
-    return key ? localStorage.getItem(key) || null : null;
-  } catch {
-    return null;
-  }
-}
-
-function stateForDocument(documentId: string | null): DocumentChatState {
+function stateForDocument(workspaceId: string, documentId: string | null): DocumentChatState {
   return {
     documentId,
-    selectedChatId: readSelectedChat(documentId),
-    selectedThreadId: null,
+    selectedChatId: readSelectedChat(workspaceId, documentId),
+    selectedLeafId: null,
   };
 }
 
 export function ChatSessionsProvider({ children }: { children: React.ReactNode }) {
-  const { documentId } = useEditor();
+  const documentId = useDocumentId();
+  const workspaceId = useWorkspaceId();
   const ownerDocumentId = documentId;
   const activeDocumentIdRef = useRef(ownerDocumentId);
 
-  const resetState = useMemo(() => stateForDocument(ownerDocumentId), [ownerDocumentId]);
+  const resetState = useMemo(() => stateForDocument(workspaceId, ownerDocumentId), [ownerDocumentId, workspaceId]);
   const [storedState, setStoredState] = useState<DocumentChatState>(() => resetState);
   const needsReset = storedState.documentId !== ownerDocumentId;
   if (needsReset) setStoredState(resetState);
@@ -61,37 +54,33 @@ export function ChatSessionsProvider({ children }: { children: React.ReactNode }
       if (activeDocumentIdRef.current !== ownerDocumentId) return current;
       const owned = current.documentId === ownerDocumentId
         ? current
-        : stateForDocument(ownerDocumentId);
+        : stateForDocument(workspaceId, ownerDocumentId);
       return { ...owned, selectedChatId: id };
     });
 
-    try {
-      const key = keyForDoc(ownerDocumentId);
-      if (!key) return;
-      if (id) localStorage.setItem(key, id);
-      else localStorage.removeItem(key);
-    } catch {
-      // Persisted selection is optional.
-    }
-  }, [ownerDocumentId]);
+    if (!ownerDocumentId) return;
+    // The persisted selection is optional; a refused write changes nothing.
+    if (id) writeItem(chatSelectionKey(workspaceId, ownerDocumentId), id);
+    else removeItem(chatSelectionKey(workspaceId, ownerDocumentId));
+  }, [ownerDocumentId, workspaceId]);
 
-  const setSelectedThreadId = useCallback((id: number | null) => {
+  const setSelectedLeafId = useCallback((id: number | null) => {
     if (activeDocumentIdRef.current !== ownerDocumentId) return;
     setStoredState((current) => {
       if (activeDocumentIdRef.current !== ownerDocumentId) return current;
       const owned = current.documentId === ownerDocumentId
         ? current
-        : stateForDocument(ownerDocumentId);
-      return { ...owned, selectedThreadId: id };
+        : stateForDocument(workspaceId, ownerDocumentId);
+      return { ...owned, selectedLeafId: id };
     });
-  }, [ownerDocumentId]);
+  }, [ownerDocumentId, workspaceId]);
 
   const value = useMemo<ChatSessionsValue>(() => ({
     selectedChatId: state.selectedChatId,
-    selectedThreadId: state.selectedThreadId,
+    selectedLeafId: state.selectedLeafId,
     setSelectedChatId,
-    setSelectedThreadId,
-  }), [state, setSelectedChatId, setSelectedThreadId]);
+    setSelectedLeafId,
+  }), [state, setSelectedChatId, setSelectedLeafId]);
 
   return <ChatSessionsContext.Provider value={value}>{children}</ChatSessionsContext.Provider>;
 }

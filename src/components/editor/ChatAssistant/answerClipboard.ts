@@ -1,42 +1,11 @@
 import { blocksToHtml, markdownToBlocks } from '@/editor/markdown';
-import type { AgentSource } from '@/services/streamParser';
+import type { AgentSource } from '@/api/assistant/streamParser';
+import { formatReferences } from '@/editor/citations';
+import { markupHasLink, markupHtml, markupText } from '@/editor/csl/markup';
+import { referenceLink } from '@/editor/referenceRecords';
+import { escapeHtml } from '@/lib/clipboard';
+import { replaceSourceMarkers } from '@/lib/sourceHandles';
 import { citedOrder } from './answerSourceMarkers';
-
-const MARKER = /\[(S\d{1,5}(?:\s*[,;]\s*S\d{1,5})*)\](?!\()/g;
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-/** "William Fedus, Barret Zoph, Noam Shazeer" → "Fedus, Zoph, Shazeer". */
-function surnames(authors: string | undefined): string {
-  if (!authors) return '';
-  const names = authors
-    .split(/\s*(?:,|;|\band\b|&)\s*/)
-    .map((name) => name.trim())
-    .filter(Boolean)
-    .map((name) => name.split(/\s+/).pop() ?? name);
-  if (names.length === 0) return '';
-  return names.length > 3 ? `${names[0]} et al.` : names.join(', ');
-}
-
-function linkOf(source: AgentSource): string | undefined {
-  const href = source.url ?? (source.doi ? `https://doi.org/${source.doi}` : undefined);
-  return href && /^https?:\/\//.test(href) ? href : undefined;
-}
-
-/** One bibliography line: "Fedus, Zoph, Shazeer. Switch Transformers. JMLR 2021." */
-function reference(source: AgentSource): { text: string; href?: string } {
-  const who = surnames(source.authors);
-  const title = (source.title || source.key).replace(/\.$/, '');
-  const where = [source.venue, source.year].filter(Boolean).join(' ');
-  const text = [who, title, where].filter(Boolean).join('. ');
-  return { text: `${text}.`, href: linkOf(source) };
-}
 
 /**
  * An answer as the reader saw it, ready to paste anywhere.
@@ -52,19 +21,26 @@ export function answerForClipboard(
 ): { plain: string; html: string } {
   const cited = citedOrder(text, sources);
   const numbers = new Map(cited.map((id, index) => [id, index + 1]));
-  const body = text.replace(MARKER, (marker, list: string) => {
-    const known = list
-      .split(/\s*[,;]\s*/)
+  const body = replaceSourceMarkers(text, (handles) => {
+    const known = handles
       .map((id) => numbers.get(id))
       .filter((number): number is number => number !== undefined);
-    return known.length > 0 ? `[${known.join(', ')}]` : marker;
+    return known.length > 0 ? `[${known.join(', ')}]` : null;
   });
 
-  const byId = new Map(sources.map((source) => [source.id, source]));
-  const entries = cited
-    .map((id) => byId.get(id))
-    .filter((source): source is AgentSource => Boolean(source))
-    .map((source, index) => ({ number: index + 1, ...reference(source) }));
+  const byHandle = new Map(sources.map((source) => [source.handle, source]));
+  const citedSources = cited
+    .map((handle) => byHandle.get(handle))
+    .filter((source): source is AgentSource => Boolean(source));
+  // Each reference as the reference list prints it, from its record.
+  const formatted = formatReferences(citedSources.map((source) => source.record));
+  const entries = citedSources.map((source, index) => {
+    const markup = formatted.get(source.record.key) ?? [source.record.csl.title];
+    const text = markupText(markup);
+    // A style that printed no DOI or URL still gets the link, after the entry.
+    const href = markupHasLink(markup) ? undefined : referenceLink(source.record)?.href;
+    return { number: index + 1, text, html: markupHtml(markup), href };
+  });
 
   const plainSources = entries.map(
     (entry) => `[${entry.number}] ${entry.text}${entry.href ? ` ${entry.href}` : ''}`,
@@ -76,7 +52,7 @@ export function answerForClipboard(
       const link = entry.href
         ? ` <a href="${escapeHtml(entry.href)}">${escapeHtml(entry.href)}</a>`
         : '';
-      return `<p>[${entry.number}] ${escapeHtml(entry.text)}${link}</p>`;
+      return `<p>[${entry.number}] ${entry.html}${link}</p>`;
     })
     .join('');
   const html =
@@ -84,23 +60,4 @@ export function answerForClipboard(
     (entries.length > 0 ? `<p><strong>Sources</strong></p>${htmlSources}` : '');
 
   return { plain, html };
-}
-
-/** Rich text where the browser allows it, plain text where it does not. */
-export async function copyAnswer(text: string, sources: readonly AgentSource[]): Promise<void> {
-  const { plain, html } = answerForClipboard(text, sources);
-  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
-    try {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'text/plain': new Blob([plain], { type: 'text/plain' }),
-          'text/html': new Blob([html], { type: 'text/html' }),
-        }),
-      ]);
-      return;
-    } catch {
-      /* fall through to plain text */
-    }
-  }
-  await navigator.clipboard.writeText(plain);
 }

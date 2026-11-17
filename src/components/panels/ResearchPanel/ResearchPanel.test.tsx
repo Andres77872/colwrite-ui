@@ -1,53 +1,16 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, within } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect } from 'react';
 import { ToastProvider } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { http, queryOf, recordRequests, server } from '@/__tests__/server';
+import { fixtures } from '@/dev/msw/fixtures';
+import { FEDUS, ZOPH } from '@/dev/fixtureReferences';
 
 const mocks = vi.hoisted(() => ({
-  arxiv: vi.fn(),
-  colpali: vi.fn(),
+  /** Any request for the account's PDFs: a list or a search, by its query. */
   resources: vi.fn(),
-  getResource: vi.fn(),
-}));
-
-vi.mock('@/services/arxiv', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/services/arxiv')>()),
-  searchArxiv: mocks.arxiv,
-}));
-vi.mock('@/services/colpali', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/services/colpali')>()),
-  searchColpaliArxiv: mocks.colpali,
-}));
-vi.mock('@/services/resources', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/services/resources')>()),
-  searchResources: mocks.resources,
-  listResources: vi.fn().mockResolvedValue({ resources: [], count: 0 }),
-}));
-// The file manager is covered by its own tests; here it only has to open,
-// and hand back through the way out it draws in its own header.
-vi.mock('../LibraryPanel/LibraryPanel', () => ({
-  LibraryPanel: ({
-    initialResource,
-    onExit,
-  }: {
-    initialResource: { resourceId: number } | null;
-    onExit: () => void;
-  }) => (
-    <>
-      <button type="button" onClick={onExit}>
-        Back to search
-      </button>
-      <p>File manager{initialResource ? ` on ${initialResource.resourceId}` : ''}</p>
-    </>
-  ),
-}));
-vi.mock('@/components/preferences', () => ({
-  useAgentTools: () => ({ isSourceEnabled: () => true }),
-}));
-vi.mock('@/editor', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/editor')>()),
-  useEditor: () => ({ documentId: null }),
 }));
 
 import { PanelsProvider } from '../panelsContext';
@@ -77,6 +40,13 @@ function renderPanel() {
   );
 }
 
+/** The query of each paper search sent, in order. */
+function paperSearches(requests: Request[]): Record<string, string>[] {
+  return requests
+    .filter((request) => new URL(request.url).pathname.endsWith('/papers/search'))
+    .map(queryOf);
+}
+
 function search(placeholder: string, query: string) {
   fireEvent.change(screen.getByPlaceholderText(placeholder), { target: { value: query } });
   fireEvent.click(screen.getByRole('button', { name: 'Search' }));
@@ -84,98 +54,172 @@ function search(placeholder: string, query: string) {
 
 beforeEach(() => {
   localStorage.clear();
-  mocks.arxiv.mockReset().mockResolvedValue([
-    { id: '2101.03961', title: 'Switch Transformers', authors: 'William Fedus', date: '2021-01-11', score: 0.9 },
-  ]);
-  mocks.colpali.mockReset().mockResolvedValue([
-    {
-      page: 3, id: '2202.08906', doi: null, date: '2022-02-17', title: 'ST-MoE', authors: 'Barret Zoph',
-      abstract: null, url: 'https://arxiv.org/abs/2202.08906', version: 'v2', page_image: null,
-    },
-  ]);
-  mocks.resources.mockReset().mockResolvedValue({
-    query: 'router', scope: 'library', resources_searched: 1, resources_skipped: [], truncated: false,
-    next_offset: null, match_count: 1,
-    matches: [{ resource_id: 41, filename: 'moe.pdf', title: 'MoE notes', offset: 120, excerpt: 'the router picks' }],
-  });
+  mocks.resources.mockReset();
+  const queryOf = (request: Request) => Object.fromEntries(new URL(request.url).searchParams);
+  server.use(
+    http.get('/workspaces/{workspace_id}/resources', ({ request, response }) => {
+      mocks.resources(queryOf(request));
+      return response(200).json({ items: [], next_cursor: null });
+    }),
+    http.get('/workspaces/{workspace_id}/resources/search', ({ request, query, response }) => {
+      mocks.resources(queryOf(request));
+      return response(200).json({
+        query: query.get('query') ?? '', scope: 'library', items: [], next_cursor: null,
+        resources_searched: 0, resources_skipped: [], truncated: false,
+      });
+    }),
+  );
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+const SWITCH = /^Switch Transformers: Scaling/;
 
 describe('ResearchPanel', () => {
-  it('keeps each source’s results while another source is searched', async () => {
+  it('searches papers through the API’s paper route, and keeps its results while PDFs are picked', async () => {
+    const requests = recordRequests();
     renderPanel();
-    search('Search arXiv papers…', 'sparse experts');
-    await screen.findByText('Switch Transformers');
-    expect(mocks.arxiv).toHaveBeenCalledWith({ query: 'sparse experts', limit: 20, lite_search: true });
+    search('Search papers…', 'routing experts');
+    await screen.findByText(SWITCH);
+    expect(paperSearches(requests)).toEqual([expect.objectContaining({ query: 'routing experts', limit: '20' })]);
+    // One row per work, read from its record, with who found it.
+    const row = screen.getByText(SWITCH).closest('article');
+    expect(row?.textContent).toContain('William Fedus, Barret Zoph, Noam Shazeer');
+    expect(row?.textContent).toContain('2022 · Journal of Machine Learning Research');
+    expect(row?.textContent).toContain('Found by OpenAlex, Semantic Scholar');
+    // A source whose data is shown is credited as it asks.
+    expect(screen.getByText('Data from Semantic Scholar (semanticscholar.org).')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Pages' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Inside my PDFs' }));
     // One query box: what was typed carries over to the next source.
-    expect((screen.getByPlaceholderText('Find pages that answer a question…') as HTMLInputElement).value).toBe(
-      'sparse experts',
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await screen.findByText('ST-MoE');
-    expect(screen.getByText(/2022 · v2/)).toBeTruthy();
+    expect((screen.getByPlaceholderText('Search inside my PDFs…') as HTMLInputElement).value).toBe('routing experts');
+    fireEvent.click(screen.getByRole('radio', { name: 'Papers' }));
+    expect(screen.getByText(SWITCH)).toBeTruthy();
+  });
 
-    fireEvent.click(screen.getByRole('radio', { name: 'arXiv' }));
-    expect(screen.getByText('Switch Transformers')).toBeTruthy();
-    expect(mocks.arxiv).toHaveBeenCalledTimes(1);
+  it('shows a result’s flags where they matter: a preprint says so', async () => {
+    renderPanel();
+    search('Search papers…', 'stable sparse expert models');
+    const row = (await screen.findByText(/^ST-MoE/)).closest('article');
+    expect(row?.querySelector('[data-mark="preprint"]')?.textContent).toBe('Preprint');
   });
 
   it('runs a query handed over from elsewhere on the current source', async () => {
+    const requests = recordRequests();
     renderPanel();
 
-    act(() => handle.current!.openSidebar('research', { tab: 'research', query: 'load balancing' }));
+    act(() => handle.current!.openSidebar('research', { tab: 'research', query: 'trillion parameter models' }));
 
-    await screen.findByText('Switch Transformers');
-    expect((screen.getByPlaceholderText('Search arXiv papers…') as HTMLInputElement).value).toBe('load balancing');
-    expect(mocks.arxiv).toHaveBeenCalledWith({ query: 'load balancing', limit: 20, lite_search: true });
+    await screen.findByText(SWITCH);
+    expect((screen.getByPlaceholderText('Search papers…') as HTMLInputElement).value).toBe('trillion parameter models');
+    expect(paperSearches(requests)).toEqual([expect.objectContaining({ query: 'trillion parameter models' })]);
   });
 
-  it('sends the result limit chosen under Filters', async () => {
+  it('sends the filters chosen, as the paper route takes them', async () => {
+    const requests = recordRequests();
     renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Search filters' }));
     fireEvent.change(screen.getByLabelText('Number of results to return'), { target: { value: '40' } });
-    search('Search arXiv papers…', 'routing');
+    fireEvent.change(screen.getByLabelText('Published from year'), { target: { value: '2021' } });
+    fireEvent.change(screen.getByLabelText('Order of results'), { target: { value: 'cited' } });
+    fireEvent.change(screen.getByLabelText('Kind of work'), { target: { value: 'preprint' } });
+    search('Search papers…', 'routing');
 
-    await screen.findByText('Switch Transformers');
-    expect(mocks.arxiv).toHaveBeenCalledWith({ query: 'routing', limit: 40, lite_search: true });
+    await screen.findByText(SWITCH);
+    expect(paperSearches(requests)).toEqual([
+      { query: 'routing', limit: '40', year_from: '2021', sort: 'cited', kind: 'preprint' },
+    ]);
   });
 
-  it('offers Semantic Scholar’s modes in their own row, without relabelling the sources', async () => {
+  it('follows a paper’s citation graph from its menu, and comes back', async () => {
+    const requests = recordRequests();
     renderPanel();
-    expect(screen.queryByRole('radiogroup', { name: 'Semantic Scholar mode' })).toBeNull();
+    search('Search papers…', 'trillion parameter models');
+    await screen.findByText(SWITCH);
+    fireEvent.pointerDown(screen.getByRole('button', { name: /^More actions for Switch Transformers/ }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Papers citing this' }));
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Semantic Scholar' }));
-    // Every source keeps its name; the modes are spelled out, not icons.
-    for (const name of ['arXiv', 'Semantic Scholar', 'Pages', 'My PDFs']) {
-      expect(screen.getByRole('radio', { name })).toBeTruthy();
-    }
-    expect(screen.getByRole('radio', { name: 'Find papers' }).getAttribute('aria-checked')).toBe('true');
-    fireEvent.click(screen.getByRole('radio', { name: 'Check a claim' }));
-    expect(screen.getByRole('textbox', { name: 'Claim to check' })).toBeTruthy();
+    const graph = await screen.findByRole('region', { name: 'Papers that cite this work' });
+    expect(graph.textContent).toContain('ST-MoE');
+    const sent = requests.find((request) => new URL(request.url).pathname.endsWith('/graph'));
+    expect(decodeURIComponent(new URL(sent?.url ?? 'http://x').pathname)).toMatch(/\/papers\/arxiv:2101\.03961\/graph$/);
+    expect(queryOf(sent as Request)).toMatchObject({ relation: 'citations' });
 
-    fireEvent.click(screen.getByRole('radio', { name: 'My PDFs' }));
-    expect(screen.queryByRole('radiogroup', { name: 'Semantic Scholar mode' })).toBeNull();
-    // Nothing to filter in My PDFs, but the button's slot is kept.
+    fireEvent.click(screen.getByRole('button', { name: /^Close Papers that cite this work/ }));
+    expect(await screen.findByText(SWITCH)).toBeTruthy();
+  });
+
+  it('makes no request to a host other than the API', async () => {
+    const requests = recordRequests();
+    renderPanel();
+    search('Search papers…', 'routing');
+    await screen.findByText(SWITCH);
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) expect(new URL(request.url).origin).toBe(window.location.origin);
+  });
+
+  it('keeps its sources in one row, with nothing to filter in a PDF search', () => {
+    renderPanel();
+    for (const name of ['Papers', 'Check a claim', 'Inside my PDFs']) expect(screen.getByRole('radio', { name })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Search filters' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Inside my PDFs' }));
+    // Nothing to filter in a PDF search, but the button's slot is kept.
     expect(screen.queryByRole('button', { name: 'Search filters' })).toBeNull();
   });
 
-  it('searches inside My PDFs and opens a match in the file manager', async () => {
+  it('hands “Search inside my PDFs” to the Library instead of searching here', async () => {
     renderPanel();
-    fireEvent.click(screen.getByRole('radio', { name: 'My PDFs' }));
-    search('Search inside your PDFs…', 'router');
+    fireEvent.click(screen.getByRole('radio', { name: 'Inside my PDFs' }));
+    expect(screen.getByRole('button', { name: 'Open Library' })).toBeTruthy();
+    search('Search inside my PDFs…', ' router ');
 
-    fireEvent.click(await screen.findByText('MoE notes'));
-    expect(mocks.resources).toHaveBeenCalledWith({ query: 'router', scope: 'library' });
-    expect(screen.getByText('File manager on 41')).toBeTruthy();
+    // One PDF search, in the Library: Research neither queries nor lists PDFs.
+    expect(mocks.resources).not.toHaveBeenCalled();
+    expect(handle.current!.activePanel).toBe('library');
+    expect(handle.current!.intent).toMatchObject({ tab: 'library', query: 'router' });
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Back to search' }));
-    // The search is still there to go back to.
-    expect(screen.getByText('MoE notes')).toBeTruthy();
+  it('opens the Library from the PDF source', () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole('radio', { name: 'Inside my PDFs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Library' }));
+    expect(handle.current!.activePanel).toBe('library');
+    expect(handle.current!.isOpen).toBe(true);
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Manage files' }));
-    expect(screen.getByText('File manager')).toBeTruthy();
+  it('checks a claim as a job and shows the verdict with each passage, its level and its work (P2.UI-3)', async () => {
+    fixtures.jobDurationMs = 0;
+    const sent = recordRequests();
+    renderPanel();
+    fireEvent.click(screen.getByRole('radio', { name: 'Check a claim' }));
+    // Nothing to filter in a claim check.
+    expect(screen.queryByRole('button', { name: 'Search filters' })).toBeNull();
+    search('A claim to check…', 'Top-1 routing keeps per-token compute constant.');
+
+    const card = await screen.findByRole('region', { name: 'Claim check' }, { timeout: 5_000 });
+    expect(card.getAttribute('data-claim-verdict')).toBe('partly');
+    expect(within(card).getByText('Partly supported')).toBeTruthy();
+    expect(within(card).getByText('Judged on: full text')).toBeTruthy();
+    expect(within(card).getByText('Top-1 routing keeps per-token compute constant.')).toBeTruthy();
+    const passages = within(card).getAllByRole('listitem');
+    expect(passages.map((item) => within(item).getByText(/^(Supports|Narrows the claim)$/).textContent)).toEqual(['Supports', 'Narrows the claim']);
+    expect(passages[0]?.textContent).toContain(FEDUS.csl.title);
+    expect(passages[0]?.textContent).toContain('“We simplify the MoE routing algorithm');
+    const posted = sent.find((request) => request.method === 'POST' && request.url.includes('/claims/check'));
+    expect(await posted?.clone().json()).toEqual({ claim: 'Top-1 routing keeps per-token compute constant.', sources: [] });
+  });
+
+  it('checks a claim handed over from the toolbar, and says when it cannot be assessed', async () => {
+    fixtures.jobDurationMs = 0;
+    renderPanel();
+    act(() => handle.current!.openSidebar('research', { tab: 'research', claim: 'Router z-loss removes all instability.', sources: [ZOPH.key] }));
+    const card = await screen.findByRole('region', { name: 'Claim check' }, { timeout: 5_000 });
+    expect(card.getAttribute('data-claim-verdict')).toBe('cannot_assess');
+    expect(within(card).getByText('Cannot assess without the full text')).toBeTruthy();
+    expect(card.textContent).toContain('Upload the paper’s PDF');
+    expect(screen.getByRole('radio', { name: 'Check a claim' }).getAttribute('aria-checked')).toBe('true');
   });
 });

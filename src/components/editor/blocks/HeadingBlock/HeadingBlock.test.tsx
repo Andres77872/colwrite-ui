@@ -41,7 +41,9 @@ describe('HeadingBlock', () => {
     // One level below the block's own: the page title is the only level 1.
     const heading = screen.getByRole('heading', { level: 3, name: 'Results' });
     expect(heading.textContent).toContain('Results');
-    expect(screen.getByRole('textbox', { name: 'Heading level 2' })).toBeTruthy();
+    // The field announces the same level as the heading it sits in.
+    expect(screen.getByRole('textbox', { name: 'Heading level 3' })).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: 'Heading level 2' })).toBeNull();
   });
 
   it('nests every block level under the page title', () => {
@@ -64,7 +66,7 @@ describe('HeadingBlock', () => {
       />,
     );
 
-    const textbox = screen.getByRole('textbox', { name: 'Heading level 1' });
+    const textbox = screen.getByRole('textbox', { name: 'Heading level 2' });
     expect(textbox.getAttribute('aria-readonly')).toBe('true');
   });
 });

@@ -1,3 +1,4 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FIGURE_METRICS } from '../constants';
 import { labelArea } from '../geometry';
@@ -107,7 +108,7 @@ function group(id: string, children: string[], extra: Partial<GroupModel> = {}):
 }
 
 function edge(spec: string, extra: Partial<EdgeModel> = {}): EdgeModel {
-  const [from, to] = spec.split('->').map((s) => s.trim());
+  const [from, to] = takeItems(spec.split('->').map((s) => s.trim()), 2);
   return {
     id: spec,
     from,
@@ -216,7 +217,7 @@ function expectSound(model: FigureModel, layout: FigureLayout): void {
     // Siblings never overlap.
     for (let i = 0; i < kids.length; i += 1) {
       for (let j = i + 1; j < kids.length; j += 1) {
-        expect(overlaps(boundsOf(kids[i]), boundsOf(kids[j]))).toBe(false);
+        expect(overlaps(boundsOf(itemAt(kids, i)), boundsOf(itemAt(kids, j)))).toBe(false);
       }
     }
     // Children stay inside their group's box.
@@ -464,11 +465,11 @@ describe('layoutFigure — flow', () => {
     );
     const layout = layoutFigure(model, measurer);
     const centres = ['x', 'attn', 'add', 'ffn'].map((id) => cx(nodeOf(layout, id).anchor));
-    for (const c of centres) expect(Math.abs(c - centres[0])).toBeLessThan(EPS);
+    for (const c of centres) expect(Math.abs(c - itemAt(centres, 0))).toBeLessThan(EPS);
     const ys = ['x', 'attn', 'add', 'ffn'].map((id) => nodeOf(layout, id).bounds.y);
     for (let i = 1; i < ys.length; i += 1) {
-      const above = nodeOf(layout, ['x', 'attn', 'add', 'ffn'][i - 1]).bounds;
-      expect(ys[i] - (above.y + above.height)).toBeGreaterThanOrEqual(M.gap.rank - EPS);
+      const above = nodeOf(layout, itemAt(['x', 'attn', 'add', 'ffn'], i - 1)).bounds;
+      expect(itemAt(ys, i) - (above.y + above.height)).toBeGreaterThanOrEqual(M.gap.rank - EPS);
     }
     expectSound(model, layout);
   });
@@ -480,7 +481,7 @@ describe('layoutFigure — flow', () => {
     );
     const layout = layoutFigure(model, measurer);
     const xs = ['x', 'attn', 'add'].map((id) => cx(nodeOf(layout, id).anchor));
-    for (const c of xs) expect(c).toBeCloseTo(xs[0], 6);
+    for (const c of xs) expect(c).toBeCloseTo(itemAt(xs, 0), 6);
     // The residual's channel sits to the left of the stack.
     expect(nodeOf(layout, 'attn').bounds.x).toBeGreaterThan(M.margin + M.gap.dummy);
   });
@@ -488,7 +489,7 @@ describe('layoutFigure — flow', () => {
   it('puts rank 0 at the bottom when the flow goes up', () => {
     const model = figure([node('a'), node('b'), node('c')], [edge('a -> b'), edge('b -> c')], { root: { direction: 'up' } });
     const layout = layoutFigure(model, measurer);
-    const [a, b, c] = ['a', 'b', 'c'].map((id) => nodeOf(layout, id).shape);
+    const [a, b, c] = takeItems(['a', 'b', 'c'].map((id) => nodeOf(layout, id).shape), 3);
     expect(a.y).toBeGreaterThan(b.y + b.height);
     expect(b.y).toBeGreaterThan(c.y + c.height);
     expect(c.y).toBeCloseTo(M.margin, 9);
@@ -501,7 +502,7 @@ describe('layoutFigure — flow', () => {
       order = 0;
       const model = figure([node('a'), node('b'), node('c')], [edge('a -> b'), edge('b -> c')], { root: { direction } });
       const layout = layoutFigure(model, measurer);
-      const [a, b, c] = ['a', 'b', 'c'].map((id) => nodeOf(layout, id).shape);
+      const [a, b, c] = takeItems(['a', 'b', 'c'].map((id) => nodeOf(layout, id).shape), 3);
       if (direction === 'right') expect(a.x < b.x && b.x < c.x).toBe(true);
       else expect(a.x > b.x && b.x > c.x).toBe(true);
       expect(cy(a)).toBeCloseTo(cy(b), 6);
@@ -513,7 +514,7 @@ describe('layoutFigure — flow', () => {
   it('keeps declaration order across a layer when nothing is gained', () => {
     const model = figure([node('src'), node('c'), node('a'), node('b')], [edge('src -> c'), edge('src -> a'), edge('src -> b')]);
     const layout = layoutFigure(model, measurer);
-    const [c, a, b] = ['c', 'a', 'b'].map((id) => cx(nodeOf(layout, id).anchor));
+    const [c, a, b] = takeItems(['c', 'a', 'b'].map((id) => cx(nodeOf(layout, id).anchor)), 3);
     expect(c < a && a < b).toBe(true);
     expect(cx(nodeOf(layout, 'src').anchor)).toBeCloseTo(a, 6);
   });
@@ -549,7 +550,7 @@ describe('layoutFigure — flow', () => {
       { root: { direction: 'right' } },
     );
     const layout = layoutFigure(model, measurer);
-    const [c0, c1, c2, x1] = ['c0', 'c1', 'c2', 'x1'].map((id) => nodeOf(layout, id).shape);
+    const [c0, c1, c2, x1] = takeItems(['c0', 'c1', 'c2', 'x1'].map((id) => nodeOf(layout, id).shape), 4);
     expect(c0.x + c0.width).toBeLessThan(c1.x);
     expect(c1.x + c1.width).toBeLessThan(c2.x);
     expect(cx(x1)).toBeCloseTo(cx(c1), 6);
@@ -572,7 +573,7 @@ describe('layoutFigure — flow', () => {
     );
     const layout = layoutFigure(model, measurer);
     const ys = ['llm', 'tool', 'env'].map((id) => nodeOf(layout, id).shape.y);
-    expect(ys[0] < ys[1] && ys[1] < ys[2]).toBe(true);
+    expect(itemAt(ys, 0) < itemAt(ys, 1) && itemAt(ys, 1) < itemAt(ys, 2)).toBe(true);
   });
 
   it('runs a residual channel on the side its target is entered from', () => {
@@ -654,7 +655,7 @@ describe('layoutFigure — flow', () => {
   it('uses the group gap, but keeps room for an arrow', () => {
     const model = figure([group('g', ['a', 'b', 'c'], { gap: 4 }), node('a'), node('b'), node('c')], [edge('a -> b')]);
     const layout = layoutFigure(model, measurer);
-    const [a, b, c] = ['a', 'b', 'c'].map((id) => nodeOf(layout, id).bounds);
+    const [a, b, c] = takeItems(['a', 'b', 'c'].map((id) => nodeOf(layout, id).bounds), 3);
     expect(b.y - (a.y + a.height)).toBeCloseTo(M.edge.stub * 2 + M.edge.arrowLength, 9);
     expect(c.x - (a.x + a.width)).toBeCloseTo(4, 9);
   });
@@ -728,7 +729,7 @@ describe('layoutFigure — groups', () => {
       node('c'),
     ]);
     const layout = layoutFigure(model, measurer);
-    const [p1, p2, p3] = ['p1', 'p2', 'p3'].map((id) => groupOf(layout, id).bounds);
+    const [p1, p2, p3] = takeItems(['p1', 'p2', 'p3'].map((id) => groupOf(layout, id).bounds), 3);
     expect(p2.x - (p1.x + p1.width)).toBeCloseTo(M.gap.panel, 6);
     expect(p3.x - (p2.x + p2.width)).toBeCloseTo(M.gap.panel, 6);
     expectSound(model, layout);
@@ -773,7 +774,7 @@ describe('layoutFigure — rows, columns and grids', () => {
       order = 0;
       const model = figure([group('r', ['a', 'b', 'c'], { layout: 'row', direction }), node('a'), node('b'), node('c')]);
       const layout = layoutFigure(model, measurer);
-      const [a, b, c] = ['a', 'b', 'c'].map((id) => nodeOf(layout, id).bounds);
+      const [a, b, c] = takeItems(['a', 'b', 'c'].map((id) => nodeOf(layout, id).bounds), 3);
       if (direction === 'down') expect(a.x < b.x && b.x < c.x).toBe(true);
       else expect(a.x > b.x && b.x > c.x).toBe(true);
       const [first, second] = direction === 'down' ? [a, b] : [b, a];
@@ -787,7 +788,7 @@ describe('layoutFigure — rows, columns and grids', () => {
       order = 0;
       const model = figure([group('col', ['a', 'b'], { layout: 'column', direction }), node('a'), node('b')]);
       const layout = layoutFigure(model, measurer);
-      const [a, b] = ['a', 'b'].map((id) => nodeOf(layout, id).bounds);
+      const [a, b] = takeItems(['a', 'b'].map((id) => nodeOf(layout, id).bounds), 2);
       expect(direction === 'down' ? a.y < b.y : a.y > b.y).toBe(true);
     }
   });
@@ -798,7 +799,7 @@ describe('layoutFigure — rows, columns and grids', () => {
       order = 0;
       const model = figure([group('r', ['a', 'b', 'c'], { layout: 'row', align }), ...items()]);
       const layout = layoutFigure(model, measurer);
-      const [a, b, c] = ['a', 'b', 'c'].map((id) => nodeOf(layout, id));
+      const [a, b, c] = takeItems(['a', 'b', 'c'].map((id) => nodeOf(layout, id)), 3);
       if (align === 'start') {
         expect(a.bounds.y).toBeCloseTo(b.bounds.y, 9);
         expect(b.bounds.y).toBeCloseTo(c.bounds.y, 9);
@@ -823,7 +824,7 @@ describe('layoutFigure — rows, columns and grids', () => {
       node('e'),
     ]);
     const layout = layoutFigure(model, measurer);
-    const [a, b, c, d, e] = ['a', 'b', 'c', 'd', 'e'].map((id) => nodeOf(layout, id).bounds);
+    const [a, b, c, d, e] = takeItems(['a', 'b', 'c', 'd', 'e'].map((id) => nodeOf(layout, id).bounds), 5);
     // Columns: a, c, e share a centre; b, d share another.
     expect(cx(a)).toBeCloseTo(cx(c), 9);
     expect(cx(c)).toBeCloseTo(cx(e), 9);
@@ -861,8 +862,8 @@ describe('layoutFigure — rows, columns and grids', () => {
     );
     const layout = layoutFigure(model, measurer);
     const widths = ['a', 'b', 'c'].map((id) => nodeOf(layout, id).shape.width);
-    expect(widths[0]).toBeCloseTo(widths[1], 9);
-    expect(widths[1]).toBeCloseTo(widths[2], 9);
+    expect(widths[0]).toBeCloseTo(itemAt(widths, 1), 9);
+    expect(widths[1]).toBeCloseTo(itemAt(widths, 2), 9);
     expect(nodeOf(layout, 'd').shape.width).toBe(15 + 14);
     expect(nodeOf(layout, 'e').shape.width).toBe(50);
     // Uniform widening re-centres the label rather than re-wrapping it.
@@ -871,7 +872,7 @@ describe('layoutFigure — rows, columns and grids', () => {
     expect(a.label!.lines).toHaveLength(1);
     // Still one straight column.
     const centres = ['a', 'b', 'c', 'd', 'e'].map((id) => cx(nodeOf(layout, id).anchor));
-    for (const c of centres) expect(c).toBeCloseTo(centres[0], 6);
+    for (const c of centres) expect(c).toBeCloseTo(itemAt(centres, 0), 6);
     expectSound(model, layout);
   });
 
@@ -920,7 +921,7 @@ describe('layoutFigure — room for edges and captions', () => {
       expectSound(model, layout);
       const { edges } = routeFigure(layout, model, measurer);
       for (const e of edges) {
-        for (let k = 1; k < e.points.length; k += 1) expect(segmentCrosses(e.points[k - 1], e.points[k], g.label!), e.id).toBe(false);
+        for (let k = 1; k < e.points.length; k += 1) expect(segmentCrosses(itemAt(e.points, k - 1), itemAt(e.points, k), g.label!), e.id).toBe(false);
       }
     }
   });
@@ -967,7 +968,7 @@ describe('layoutFigure — room for edges and captions', () => {
       order = 0;
       const model = figure(panels(), links(), { root });
       const layout = layoutFigure(model, measurer);
-      const [p1, p2, p3] = ['p1', 'p2', 'p3'].map((id) => groupOf(layout, id));
+      const [p1, p2, p3] = takeItems(['p1', 'p2', 'p3'].map((id) => groupOf(layout, id)), 3);
       expect(p1.box.height).not.toBeCloseTo(p3.box.height, 3);
       expect(p1.panel!.y).toBeCloseTo(p3.panel!.y, 9);
       expect(p2.panel!.y).toBeCloseTo(p3.panel!.y, 9);
@@ -990,7 +991,7 @@ describe('layoutFigure — room for edges and captions', () => {
       [edge('a -> b', { label: label('residual') }), edge('b -> c')],
     );
     const layout = layoutFigure(model, measurer);
-    const [a, b, c] = ['a', 'b', 'c'].map((id) => nodeOf(layout, id).bounds);
+    const [a, b, c] = takeItems(['a', 'b', 'c'].map((id) => nodeOf(layout, id).bounds), 3);
     // "residual" at 10px is 8 × 6.5 × 10/12 wide.
     expect(b.x - (a.x + a.width)).toBeCloseTo((8 * 6.5 * 10) / 12 + LABEL_ROOM, 9);
     expect(c.x - (b.x + b.width)).toBeCloseTo(M.gap.stack, 9);
@@ -1006,7 +1007,7 @@ describe('layoutFigure — room for edges and captions', () => {
       figure([group('c', ['a', 'b'], { layout: 'column' }), node('a'), node('b')], [edge('a -> b', { label: tall })]),
       measurer,
     );
-    const [ca, cb] = ['a', 'b'].map((id) => nodeOf(column, id).bounds);
+    const [ca, cb] = takeItems(['a', 'b'].map((id) => nodeOf(column, id).bounds), 2);
     expect(cb.y - (ca.y + ca.height)).toBeCloseTo(3 * 10 * 1.25 + LABEL_ROOM, 9);
     order = 0;
     const model = figure(
@@ -1014,7 +1015,7 @@ describe('layoutFigure — room for edges and captions', () => {
       [edge('a -> b', { label: label('projection') }), edge('a -> c', { label: tall })],
     );
     const grid = layoutFigure(model, measurer);
-    const [a, b, c, d] = ['a', 'b', 'c', 'd'].map((id) => nodeOf(grid, id).bounds);
+    const [a, b, c, d] = takeItems(['a', 'b', 'c', 'd'].map((id) => nodeOf(grid, id).bounds), 4);
     expect(b.x - (a.x + a.width)).toBeCloseTo((10 * 6.5 * 10) / 12 + LABEL_ROOM, 9);
     expect(c.y - (a.y + a.height)).toBeCloseTo(3 * 10 * 1.25 + LABEL_ROOM, 9);
     expect(cx(b)).toBeCloseTo(cx(d), 9);
@@ -1029,7 +1030,7 @@ describe('layoutFigure — room for edges and captions', () => {
       [edge('a -> b')],
     );
     const layout = layoutFigure(model, measurer);
-    const [a, b, c] = ['a', 'b', 'c'].map((id) => nodeOf(layout, id).bounds);
+    const [a, b, c] = takeItems(['a', 'b', 'c'].map((id) => nodeOf(layout, id).bounds), 3);
     expect(b.x - (a.x + a.width)).toBeGreaterThanOrEqual(2 * M.edge.clearance + M.edge.stub);
     expect(c.x - (b.x + b.width)).toBeCloseTo(2, 9);
   });
@@ -1048,12 +1049,12 @@ describe('layoutFigure — legend and canvas', () => {
     const box = layout.legend!.box;
     expect(box.y).toBeCloseTo(b.bounds.y + b.bounds.height + M.legend.marginTop, 9);
     expect(layout.height).toBeCloseTo(box.y + box.height + M.margin, 9);
-    const [first, second] = layout.legend!.items;
+    const [first, second] = takeItems(layout.legend!.items, 2);
     expect(first.swatch).toMatchObject({ width: M.legend.swatchWidth, height: M.legend.swatchHeight });
     expect(first.label.x).toBeCloseTo(first.swatch.x + M.legend.swatchWidth + 6, 9);
     expect(second.swatch.x).toBeCloseTo(first.label.x + first.label.width + M.legend.itemGap, 9);
     expect(cy(first.swatch)).toBeCloseTo(cy(first.label), 9);
-    expect(second.sample).toEqual(legend[1].sample);
+    expect(second.sample).toEqual(itemAt(legend, 1).sample);
     expectSound(model, layout);
   });
 

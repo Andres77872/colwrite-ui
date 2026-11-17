@@ -1,0 +1,1590 @@
+{
+  "profiles": [
+    {
+      "id": "chat",
+      "label": "Assistant",
+      "efforts": [
+        "quick",
+        "standard",
+        "deep"
+      ],
+      "default_effort": "standard"
+    },
+    {
+      "id": "inline",
+      "label": "Inline",
+      "efforts": [
+        "quick"
+      ],
+      "default_effort": "quick"
+    },
+    {
+      "id": "review",
+      "label": "Review",
+      "efforts": [
+        "standard"
+      ],
+      "default_effort": "standard"
+    }
+  ],
+  "efforts": [
+    {
+      "id": "quick",
+      "label": "Quick",
+      "description": "A lookup, a small edit, any inline action.",
+      "budget": {
+        "model_calls": 12,
+        "tool_calls": 20,
+        "web_calls": 4,
+        "scholarly_calls": 8,
+        "workers": 0,
+        "wall_clock_seconds": 300,
+        "cost_limit": 1.0
+      },
+      "needs_plan": false,
+      "cuts": [
+        {
+          "tool": "delegate",
+          "reason": "A quick run starts no workers."
+        }
+      ]
+    },
+    {
+      "id": "standard",
+      "label": "Standard",
+      "description": "A focused question, a section, a claim check.",
+      "budget": {
+        "model_calls": 40,
+        "tool_calls": 60,
+        "web_calls": 12,
+        "scholarly_calls": 30,
+        "workers": 3,
+        "wall_clock_seconds": 1200,
+        "cost_limit": 5.0
+      },
+      "needs_plan": false,
+      "cuts": []
+    },
+    {
+      "id": "deep",
+      "label": "Deep",
+      "description": "A literature review, a report, a full review. Starts from a plan you approve.",
+      "budget": {
+        "model_calls": 120,
+        "tool_calls": 200,
+        "web_calls": 40,
+        "scholarly_calls": 100,
+        "workers": 6,
+        "wall_clock_seconds": 3600,
+        "cost_limit": 20.0
+      },
+      "needs_plan": true,
+      "cuts": []
+    }
+  ],
+  "workers": [
+    {
+      "id": "web_researcher",
+      "label": "Web researcher",
+      "description": "Finds out what outside sources, papers and the web, say about one question. It never sees the page.",
+      "tools": [
+        "evidence_read",
+        "paper_search",
+        "paper_get",
+        "paper_graph",
+        "paper_passages",
+        "web_search",
+        "web_read",
+        "skill_read"
+      ],
+      "core_toolsets": [
+        "web",
+        "papers"
+      ],
+      "configurable": true
+    },
+    {
+      "id": "library_reader",
+      "label": "Library reader",
+      "description": "Finds out what the author's own PDFs and pages say about one question. Nothing it reads leaves ColWrite.",
+      "tools": [
+        "doc_read",
+        "evidence_read",
+        "library_list",
+        "library_read",
+        "library_search",
+        "page_search",
+        "page_read",
+        "skill_read"
+      ],
+      "core_toolsets": [
+        "library",
+        "page",
+        "pages"
+      ],
+      "configurable": true
+    },
+    {
+      "id": "reviewer",
+      "label": "Reviewer",
+      "description": "Checks a drafted section against the passages it cites, with nothing else in view.",
+      "tools": [
+        "evidence_read"
+      ],
+      "core_toolsets": [
+        "evidence"
+      ],
+      "configurable": true
+    }
+  ],
+  "toolsets": [
+    {
+      "id": "page",
+      "label": "Document tools",
+      "description": "Read, propose edits to, or create ColWrite documents.",
+      "switch": null
+    },
+    {
+      "id": "citations",
+      "label": "Citations",
+      "description": "Cite sources in the page, from the records they came from.",
+      "switch": null
+    },
+    {
+      "id": "evidence",
+      "label": "Evidence",
+      "description": "Read back the passages this conversation's tools returned.",
+      "switch": null
+    },
+    {
+      "id": "library",
+      "label": "PDF library tools",
+      "description": "Read and search PDFs available to the active document.",
+      "switch": null
+    },
+    {
+      "id": "papers",
+      "label": "Research tools",
+      "description": "Find papers, their records and status, the citation graph and passages from their text.",
+      "switch": "papers"
+    },
+    {
+      "id": "web",
+      "label": "Web tools",
+      "description": "Search the public web and read selected source pages.",
+      "switch": "web"
+    },
+    {
+      "id": "pages",
+      "label": "Workspace pages",
+      "description": "Find and read the other pages of this workspace.",
+      "switch": null
+    },
+    {
+      "id": "planning",
+      "label": "Planning",
+      "description": "Propose a plan, ask the author, and keep the task list they see.",
+      "switch": null
+    },
+    {
+      "id": "delegation",
+      "label": "Research workers",
+      "description": "Hand bounded reading tasks to read-only workers: a web researcher, a library reader, a reviewer.",
+      "switch": "workers"
+    },
+    {
+      "id": "skills",
+      "label": "Skills",
+      "description": "Load writing and research instructions on demand.",
+      "switch": null
+    },
+    {
+      "id": "images",
+      "label": "Images",
+      "description": "Propose illustrations for explicit author confirmation.",
+      "switch": "images"
+    }
+  ],
+  "tools": [
+    {
+      "id": "doc_read",
+      "toolset": "page",
+      "label": "Read the page",
+      "running_label": "Reading your page",
+      "icon": "file-search",
+      "detail_templates": [
+        "{view}"
+      ],
+      "value_labels": {
+        "view": {
+          "outline": "Its outline",
+          "section": "One section",
+          "blocks": "A range of blocks",
+          "find": "Blocks with some words"
+        }
+      },
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {},
+      "labels": [
+        "private"
+      ]
+    },
+    {
+      "id": "doc_comment",
+      "toolset": "page",
+      "label": "Left review comments",
+      "running_label": "Recording review findings",
+      "icon": "message-square",
+      "detail_templates": [],
+      "value_labels": {},
+      "effects": [
+        "comment"
+      ],
+      "profiles": [
+        "review"
+      ],
+      "configurable": false,
+      "needs": {},
+      "labels": [
+        "private"
+      ]
+    },
+    {
+      "id": "doc_edit",
+      "toolset": "page",
+      "label": "Prepared changes",
+      "running_label": "Drafting changes",
+      "icon": "pen-line",
+      "detail_templates": [],
+      "value_labels": {},
+      "effects": [
+        "propose"
+      ],
+      "profiles": [
+        "chat"
+      ],
+      "configurable": false,
+      "needs": {},
+      "labels": [
+        "private"
+      ],
+      "skill": "editor"
+    },
+    {
+      "id": "doc_create",
+      "toolset": "page",
+      "label": "Created a page",
+      "running_label": "Creating a page",
+      "icon": "file-plus",
+      "detail_templates": [],
+      "value_labels": {},
+      "effects": [
+        "create"
+      ],
+      "profiles": [
+        "chat"
+      ],
+      "configurable": true,
+      "needs": {},
+      "skill": "editor"
+    },
+    {
+      "id": "cite_sources",
+      "toolset": "citations",
+      "label": "Prepared citations",
+      "running_label": "Adding citations",
+      "icon": "book-marked",
+      "detail_templates": [],
+      "value_labels": {},
+      "effects": [
+        "propose"
+      ],
+      "profiles": [
+        "chat"
+      ],
+      "configurable": false,
+      "needs": {
+        "tools": [
+          "doc_edit"
+        ]
+      },
+      "labels": [
+        "private"
+      ],
+      "destinations": [
+        {
+          "kind": "scholarly",
+          "optional": true
+        }
+      ]
+    },
+    {
+      "id": "evidence_read",
+      "toolset": "evidence",
+      "label": "Read back stored passages",
+      "running_label": "Reading back stored passages",
+      "icon": "book-open",
+      "detail_templates": [
+        "From {sources_count} sources"
+      ],
+      "value_labels": {},
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {},
+      "labels": [
+        "untrusted",
+        "private"
+      ]
+    },
+    {
+      "id": "claim_check",
+      "toolset": "evidence",
+      "label": "Checked a claim",
+      "running_label": "Checking a claim against its sources",
+      "icon": "search-check",
+      "detail_templates": [
+        "Against {sources_count} sources"
+      ],
+      "value_labels": {},
+      "effects": [
+        "read",
+        "spend"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {},
+      "labels": [
+        "untrusted",
+        "private"
+      ],
+      "destinations": [
+        {
+          "kind": "scholarly",
+          "optional": true
+        }
+      ]
+    },
+    {
+      "id": "reference_check",
+      "toolset": "evidence",
+      "label": "Checked the references",
+      "running_label": "Checking the references",
+      "icon": "book-marked",
+      "detail_templates": [
+        "Of {keys_count} references"
+      ],
+      "value_labels": {},
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {},
+      "labels": [
+        "private"
+      ],
+      "destinations": [
+        {
+          "kind": "scholarly",
+          "optional": true
+        }
+      ]
+    },
+    {
+      "id": "library_list",
+      "toolset": "library",
+      "label": "Listed your PDFs",
+      "running_label": "Checking which of your PDFs it can read",
+      "icon": "library",
+      "detail_templates": [],
+      "value_labels": {},
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {},
+      "labels": [
+        "untrusted",
+        "private"
+      ]
+    },
+    {
+      "id": "library_read",
+      "toolset": "library",
+      "label": "Read one of your PDFs",
+      "running_label": "Reading one of your PDFs",
+      "icon": "book-open",
+      "detail_templates": [],
+      "value_labels": {},
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {},
+      "labels": [
+        "untrusted",
+        "private"
+      ]
+    },
+    {
+      "id": "library_search",
+      "toolset": "library",
+      "label": "Searched your PDFs",
+      "running_label": "Searching your PDFs",
+      "icon": "search-check",
+      "detail_templates": [
+        "Matching {mode}, up to {limit} matches",
+        "Matching {mode}"
+      ],
+      "value_labels": {
+        "mode": {
+          "exact": "exact words",
+          "meaning": "by meaning"
+        }
+      },
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {},
+      "labels": [
+        "untrusted",
+        "private"
+      ],
+      "destinations": [
+        {
+          "kind": "embeddings",
+          "when": {
+            "mode": "meaning"
+          }
+        }
+      ]
+    },
+    {
+      "id": "paper_search",
+      "toolset": "papers",
+      "label": "Searched for papers",
+      "running_label": "Searching for papers",
+      "icon": "book-open",
+      "detail_templates": [
+        "Published {year_from}–{year_to}",
+        "Published from {year_from}",
+        "Published up to {year_to}"
+      ],
+      "value_labels": {},
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {
+        "switch": "papers",
+        "sources": [
+          "openalex",
+          "arxiv_index",
+          "semantic_scholar"
+        ]
+      },
+      "labels": [
+        "untrusted"
+      ],
+      "destinations": [
+        {
+          "kind": "scholarly"
+        }
+      ]
+    },
+    {
+      "id": "paper_get",
+      "toolset": "papers",
+      "label": "Looked up a paper",
+      "running_label": "Looking up a paper",
+      "icon": "file-search",
+      "detail_templates": [],
+      "value_labels": {},
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {
+        "switch": "papers",
+        "sources": [
+          "openalex",
+          "arxiv_index",
+          "semantic_scholar"
+        ]
+      },
+      "labels": [
+        "untrusted"
+      ],
+      "destinations": [
+        {
+          "kind": "scholarly"
+        }
+      ]
+    },
+    {
+      "id": "paper_graph",
+      "toolset": "papers",
+      "label": "Explored the citation graph",
+      "running_label": "Exploring the citation graph",
+      "icon": "network",
+      "detail_templates": [
+        "Following {relation}"
+      ],
+      "value_labels": {
+        "relation": {
+          "references": "its references",
+          "citations": "the papers citing it",
+          "related": "related papers"
+        }
+      },
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": true,
+      "needs": {
+        "switch": "papers",
+        "sources": [
+          "openalex",
+          "semantic_scholar"
+        ]
+      },
+      "labels": [
+        "untrusted"
+      ],
+      "destinations": [
+        {
+          "kind": "scholarly"
+        }
+      ]
+    },
+    {
+      "id": "paper_passages",
+      "toolset": "papers",
+      "label": "Read passages from papers",
+      "running_label": "Searching papers' text",
+      "icon": "search-check",
+      "detail_templates": [
+        "In {papers_count} papers"
+      ],
+      "value_labels": {},
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {
+        "switch": "papers",
+        "sources": [
+          "arxiv_index",
+          "semantic_scholar"
+        ]
+      },
+      "labels": [
+        "untrusted"
+      ],
+      "destinations": [
+        {
+          "kind": "scholarly"
+        }
+      ]
+    },
+    {
+      "id": "web_search",
+      "toolset": "web",
+      "label": "Searched the web",
+      "running_label": "Searching the web",
+      "icon": "globe",
+      "detail_templates": [
+        "On {domains_count} sites, from the last {recency_days} days",
+        "On {domains_count} sites",
+        "From the last {recency_days} days",
+        "Up to {limit} results"
+      ],
+      "value_labels": {},
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {
+        "switch": "web",
+        "deployment": "web_search"
+      },
+      "labels": [
+        "untrusted"
+      ],
+      "destinations": [
+        {
+          "kind": "web"
+        }
+      ]
+    },
+    {
+      "id": "web_read",
+      "toolset": "web",
+      "label": "Read a web page",
+      "running_label": "Reading a web page",
+      "icon": "globe",
+      "detail_templates": [
+        "On {url_host}"
+      ],
+      "value_labels": {},
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {
+        "switch": "web",
+        "tools": [
+          "web_search"
+        ],
+        "deployment": "web_search"
+      },
+      "labels": [
+        "untrusted"
+      ],
+      "destinations": [
+        {
+          "kind": "web"
+        }
+      ]
+    },
+    {
+      "id": "page_search",
+      "toolset": "pages",
+      "label": "Searched your pages",
+      "running_label": "Searching your pages",
+      "icon": "file-search",
+      "detail_templates": [
+        "Up to {limit} pages"
+      ],
+      "value_labels": {},
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat"
+      ],
+      "configurable": true,
+      "needs": {},
+      "labels": [
+        "private"
+      ]
+    },
+    {
+      "id": "page_read",
+      "toolset": "pages",
+      "label": "Read one of your pages",
+      "running_label": "Reading one of your pages",
+      "icon": "file-search",
+      "detail_templates": [
+        "{view}"
+      ],
+      "value_labels": {
+        "view": {
+          "outline": "Its outline",
+          "section": "One section",
+          "blocks": "A range of blocks",
+          "find": "Blocks with some words"
+        }
+      },
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat"
+      ],
+      "configurable": true,
+      "needs": {},
+      "labels": [
+        "private"
+      ]
+    },
+    {
+      "id": "plan_propose",
+      "toolset": "planning",
+      "label": "Proposed a plan",
+      "running_label": "Proposing a plan",
+      "icon": "list-ordered",
+      "detail_templates": [
+        "{sections_count} sections"
+      ],
+      "value_labels": {},
+      "effects": [
+        "propose"
+      ],
+      "profiles": [
+        "chat"
+      ],
+      "configurable": false,
+      "needs": {}
+    },
+    {
+      "id": "author_ask",
+      "toolset": "planning",
+      "label": "Asked you",
+      "running_label": "Asking you",
+      "icon": "message-question",
+      "detail_templates": [
+        "{questions_count} questions"
+      ],
+      "value_labels": {},
+      "effects": [
+        "propose"
+      ],
+      "profiles": [
+        "chat"
+      ],
+      "configurable": false,
+      "needs": {}
+    },
+    {
+      "id": "todo_write",
+      "toolset": "planning",
+      "label": "Updated task progress",
+      "running_label": "Updating task progress",
+      "icon": "search-check",
+      "detail_templates": [],
+      "value_labels": {},
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {}
+    },
+    {
+      "id": "delegate",
+      "toolset": "delegation",
+      "label": "Delegated to a worker",
+      "running_label": "A worker is reading",
+      "icon": "network",
+      "detail_templates": [
+        "{worker}"
+      ],
+      "value_labels": {
+        "worker": {
+          "web_researcher": "Web researcher",
+          "library_reader": "Library reader",
+          "reviewer": "Reviewer"
+        }
+      },
+      "effects": [
+        "read",
+        "spend"
+      ],
+      "profiles": [
+        "chat",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {
+        "switch": "workers",
+        "workers": true
+      },
+      "labels": [
+        "untrusted",
+        "private"
+      ]
+    },
+    {
+      "id": "skill_read",
+      "toolset": "skills",
+      "label": "Read writing guidance",
+      "running_label": "Reading relevant guidance",
+      "icon": "book-open",
+      "detail_templates": [
+        "{skill_id}: {resource}",
+        "{skill_id}"
+      ],
+      "value_labels": {
+        "skill_id": {
+          "ai-use-disclosure": "AI-use disclosure",
+          "citing": "Citing",
+          "editor": "Writing blocks",
+          "evidence-review": "Evidence review",
+          "figures-and-images": "Figures and images",
+          "find-citations": "Find citations",
+          "literature-review": "Literature review",
+          "peer-review": "Peer review",
+          "reporting-guidelines": "Reporting guidelines",
+          "research-paper": "Research paper",
+          "statistics-reporting": "Statistics reporting",
+          "systematic-review": "Systematic review",
+          "technical-report": "Technical report",
+          "white-paper": "White paper"
+        }
+      },
+      "effects": [
+        "read"
+      ],
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": false,
+      "needs": {
+        "run": "skills"
+      }
+    },
+    {
+      "id": "image_generate",
+      "toolset": "images",
+      "label": "Proposed an image",
+      "running_label": "Preparing an image request",
+      "icon": "image",
+      "detail_templates": [],
+      "value_labels": {},
+      "effects": [
+        "propose"
+      ],
+      "profiles": [
+        "chat"
+      ],
+      "configurable": false,
+      "needs": {
+        "switch": "images",
+        "deployment": "image_generation",
+        "engine": "image_generator"
+      },
+      "destinations": [
+        {
+          "kind": "images"
+        }
+      ]
+    }
+  ],
+  "presets": [
+    {
+      "id": "figure-from-caption",
+      "label": "Draw from the caption",
+      "group": "write",
+      "profile": "inline",
+      "skill": "editor",
+      "skill_reference": "references/figures.md",
+      "requires": []
+    },
+    {
+      "id": "figure-improve",
+      "label": "Improve the figure",
+      "group": "edit",
+      "profile": "inline",
+      "skill": "editor",
+      "skill_reference": "references/figures.md",
+      "requires": []
+    },
+    {
+      "id": "figure-fix",
+      "label": "Fix problems",
+      "group": "edit",
+      "profile": "inline",
+      "skill": "editor",
+      "skill_reference": "references/figures.md",
+      "requires": []
+    },
+    {
+      "id": "figure-print",
+      "label": "Make print-safe",
+      "group": "edit",
+      "profile": "inline",
+      "skill": "editor",
+      "skill_reference": "references/figures.md",
+      "requires": []
+    },
+    {
+      "id": "figure-simplify",
+      "label": "Simplify the figure",
+      "group": "edit",
+      "profile": "inline",
+      "skill": "editor",
+      "skill_reference": "references/figures.md",
+      "requires": []
+    },
+    {
+      "id": "figure-explain",
+      "label": "Explain the figure",
+      "group": "understand",
+      "profile": "inline",
+      "skill": "editor",
+      "skill_reference": "references/figures.md",
+      "requires": []
+    },
+    {
+      "id": "figure",
+      "label": "Draw as a figure",
+      "group": "understand",
+      "profile": "inline",
+      "skill": "editor",
+      "skill_reference": "references/figures.md",
+      "requires": []
+    },
+    {
+      "id": "figure-custom",
+      "label": "Custom figure request",
+      "group": "write",
+      "profile": "inline",
+      "skill": "editor",
+      "skill_reference": "references/figures.md",
+      "requires": []
+    },
+    {
+      "id": "improve",
+      "label": "Improve writing",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "grammar",
+      "label": "Fix spelling & grammar",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "shorter",
+      "label": "Make shorter",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "longer",
+      "label": "Make longer",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "simplify",
+      "label": "Simplify language",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "tone-academic",
+      "label": "Academic",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "tone-professional",
+      "label": "Professional",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "tone-confident",
+      "label": "Confident",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "tone-neutral",
+      "label": "Neutral",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "tone-friendly",
+      "label": "Friendly",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "translate-en",
+      "label": "English",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "translate-es",
+      "label": "Spanish",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "translate-fr",
+      "label": "French",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "translate-de",
+      "label": "German",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "translate-pt",
+      "label": "Portuguese",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "translate-it",
+      "label": "Italian",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "translate-zh",
+      "label": "Chinese (Simplified)",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "translate-ja",
+      "label": "Japanese",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "bullets",
+      "label": "Turn into bullet points",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "table",
+      "label": "Turn into a table",
+      "group": "edit",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "continue",
+      "label": "Continue writing",
+      "group": "understand",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "summarize",
+      "label": "Summarize",
+      "group": "understand",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "explain",
+      "label": "Explain this",
+      "group": "understand",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "summary-so-far",
+      "label": "Summarize the page",
+      "group": "understand",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "check",
+      "label": "Check the claims",
+      "group": "research",
+      "profile": "inline",
+      "skill": "evidence-review",
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "counter",
+      "label": "Find counterarguments",
+      "group": "research",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "outline",
+      "label": "Draft an outline",
+      "group": "write",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "introduction",
+      "label": "Write an introduction",
+      "group": "write",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "abstract",
+      "label": "Write an abstract",
+      "group": "write",
+      "profile": "inline",
+      "skill": "research-paper",
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "brainstorm",
+      "label": "Brainstorm ideas",
+      "group": "write",
+      "profile": "inline",
+      "skill": null,
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "review-page",
+      "label": "Review this page",
+      "group": "research",
+      "profile": "chat",
+      "skill": "peer-review",
+      "skill_reference": null,
+      "requires": []
+    },
+    {
+      "id": "tighten-page",
+      "label": "Tighten this page",
+      "group": "edit",
+      "profile": "chat",
+      "skill": "editor",
+      "skill_reference": null,
+      "requires": [
+        "doc_edit"
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "id": "ai-use-disclosure",
+      "label": "AI-use disclosure",
+      "description": "Helps draft an AI-use disclosure from the page's actual AI-use record and the target venue's dated policy, preserving the author's responsibility and gaps in the record. Use for an AI-use statement or disclosure of assistance. Not for claiming no AI was used, inferring use outside ColWrite or promising that a statement guarantees venue compliance.",
+      "version": "1",
+      "profiles": [
+        "chat",
+        "inline"
+      ],
+      "configurable": true,
+      "needs": [],
+      "guidelines": null,
+      "read": null
+    },
+    {
+      "id": "citing",
+      "label": "Citing",
+      "description": "Cites works in a ColWrite page the way the server checks them, by handle with cite_sources, each citation tied to the passage its claim rests on, and decides what to do with a work that is retracted, unverified, a preprint or not found. Use whenever you are about to add, move or replace a citation in the page, or the author asks to cite a source they named. Not for finding which sources support a sentence (use find-citations), and not for checking the references already on the page (use evidence-review).",
+      "version": "1",
+      "profiles": [
+        "chat"
+      ],
+      "configurable": true,
+      "needs": [
+        "citations"
+      ],
+      "guidelines": "ICMJE Recommendations (updated January 2026), IV.A.3.g; Crossref DOI display guidelines",
+      "read": "2026-11-15"
+    },
+    {
+      "id": "editor",
+      "label": "Writing blocks",
+      "description": "Writing blocks into a ColWrite page with doc_edit and doc_create, so the editor renders real lists, tables, charts, equations, diagrams and figures and no widget is lost in a rewrite. Use before writing, rewriting or restructuring blocks. Not for deciding what to write, and not needed for a wording fix inside a block, which replace_text makes.",
+      "version": "1",
+      "profiles": [
+        "chat",
+        "inline"
+      ],
+      "configurable": false,
+      "needs": [
+        "page"
+      ],
+      "guidelines": null,
+      "read": null
+    },
+    {
+      "id": "evidence-review",
+      "label": "Evidence review",
+      "description": "Audits the claims and references of text the author already wrote, what each claim rests on, how strong that support is and the state of each reference, and reports the findings for the author to act on. Use when the author asks to fact-check, check the claims, the evidence or the references of a page or a passage, or whether a draft is ready to submit. Not for finding sources for sentences that have none (use find-citations), and not for writing a review of the literature (use literature-review).",
+      "version": "2",
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": true,
+      "needs": [
+        "evidence"
+      ],
+      "guidelines": "ICMJE Recommendations (updated January 2026), IV.A.3.g, on citing original sources and preprints",
+      "read": "2026-11-15"
+    },
+    {
+      "id": "figures-and-images",
+      "label": "Figures and images",
+      "description": "Chooses how to show something visually in a ColWrite page, a chart, a table, a Mermaid diagram, a structured figure or an image, and writes its caption and alt text within what venues allow for AI-made images. Use when the author asks for a figure, a chart, a diagram, an illustration, a graphical abstract or an image, asks how to show a result, or asks for a caption or alt text. Not for the block syntax of a widget once chosen (the editor skill has it), and never for an image of results or data.",
+      "version": "1",
+      "profiles": [
+        "chat"
+      ],
+      "configurable": true,
+      "needs": [
+        "page"
+      ],
+      "guidelines": "ICMJE Recommendations (updated January 2026), IV.A.3.h–i; AI-image policies of Elsevier, Springer Nature, Science, Taylor & Francis, Wiley, PLOS, IEEE and ACS as listed in references/venue-rules.md",
+      "read": "2026-11-15"
+    },
+    {
+      "id": "find-citations",
+      "label": "Find citations",
+      "description": "Finds evidence for specific uncited claims in existing text, one claim at a time, and proposes only citations whose passages match the claim. Use when asked to source these sentences or find support for a stated claim. Not for general background reading or a literature review, and not for auditing the citations already present (evidence-review).",
+      "version": "1",
+      "profiles": [
+        "chat",
+        "inline"
+      ],
+      "configurable": true,
+      "needs": [
+        "evidence"
+      ],
+      "guidelines": null,
+      "read": null
+    },
+    {
+      "id": "literature-review",
+      "label": "Literature review",
+      "description": "Plans and synthesizes a literature review or related-work section from identifiable sources, an evidence matrix and a source-bound outline. Use for comparing a body of research, mapping disagreements or writing related work. Not for checking an already-written claim (evidence-review), finding one citation (find-citations), or claiming a systematic search without a protocol (systematic-review).",
+      "version": "1",
+      "profiles": [
+        "chat",
+        "inline"
+      ],
+      "configurable": true,
+      "needs": [
+        "evidence"
+      ],
+      "guidelines": null,
+      "read": null
+    },
+    {
+      "id": "peer-review",
+      "label": "Peer review",
+      "description": "Reviews a draft as a constructive referee, prioritizing consequential, text-anchored major and minor concerns without a score. Use for a referee-style critique, readiness review or examination of a paper's argument and methods. Not for proofreading, rewriting the page unasked or auditing only citation metadata.",
+      "version": "2",
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": true,
+      "needs": [],
+      "guidelines": null,
+      "read": null
+    },
+    {
+      "id": "reporting-guidelines",
+      "label": "Reporting guidelines",
+      "description": "Chooses a reporting guideline for the actual study type and audits a draft for reported, missing and unclear items with locations. Use for CONSORT, PRISMA, STROBE, TRIPOD+AI, ARRIVE or NeurIPS checklist help. Not for certifying study quality, marking invented methods as performed or applying a checklist solely from the word AI.",
+      "version": "1",
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": true,
+      "needs": [],
+      "guidelines": "CONSORT 2025; PRISMA 2020; STROBE 2007; TRIPOD+AI 2024; ARRIVE 2.0 2020; NeurIPS 2026 Main Track Handbook and Paper Checklist",
+      "read": "2026-11-16"
+    },
+    {
+      "id": "research-paper",
+      "label": "Research paper",
+      "description": "Structures and writes a research paper from the author's actual contribution, methods and results, with an abstract faithful to the body and explicit limitations. Use for drafting or restructuring a paper, its introduction, methods, results, discussion, title or abstract. Not for inventing experiments, checking reference support alone or imposing biomedical IMRaD on every theoretical or systems paper.",
+      "version": "1",
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": true,
+      "needs": [],
+      "guidelines": null,
+      "read": null
+    },
+    {
+      "id": "statistics-reporting",
+      "label": "Statistics reporting",
+      "description": "Checks how a draft reports quantitative results, denominators, units, uncertainty and significance versus importance, including agreement between abstract and body. Use for statistical-reporting review or rewriting supplied numbers accurately. Not for running analyses, deriving unavailable statistics, prescribing a study design or treating a p-value as an effect size.",
+      "version": "1",
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": true,
+      "needs": [],
+      "guidelines": "SAMPL, Lang and Altman (2013 guidance; 2015 journal publication), EQUATOR record",
+      "read": "2026-11-16"
+    },
+    {
+      "id": "systematic-review",
+      "label": "Systematic review",
+      "description": "Helps report a protocol-led systematic review with eligibility, dated searches, screening, quoted extraction and a traceable flow record. Use for a systematic review, evidence synthesis protocol or PRISMA reporting. Not for relabeling a narrative search as systematic, producing invented screening counts or treating a reporting checklist as a risk-of-bias assessment.",
+      "version": "1",
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": true,
+      "needs": [],
+      "guidelines": "PRISMA 2020 statement (published 2021), EQUATOR record and PRISMA 2020 checklist",
+      "read": "2026-11-16"
+    },
+    {
+      "id": "technical-report",
+      "label": "Technical report",
+      "description": "Writes a decision-led technical report from requirements, methods, evidence, alternatives and explicit trade-offs. Use for an engineering assessment, benchmark report, feasibility report or technical recommendation. Not for marketing copy, an academic related-work survey or an invented benchmark.",
+      "version": "1",
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": true,
+      "needs": [],
+      "guidelines": null,
+      "read": null
+    },
+    {
+      "id": "white-paper",
+      "label": "White paper",
+      "description": "Develops an evidence-led white paper for a defined audience with a clear problem, approach, trade-offs and next step. Use for an explanatory or policy-facing white paper backed by supplied facts. Not for promotional claims, fabricated market figures, an academic research article or a systematic review.",
+      "version": "1",
+      "profiles": [
+        "chat",
+        "inline",
+        "review"
+      ],
+      "configurable": true,
+      "needs": [],
+      "guidelines": null,
+      "read": null
+    }
+  ],
+  "switches": [
+    {
+      "id": "papers",
+      "label": "Papers",
+      "description": "Search the scholarly literature and check references.",
+      "default": true,
+      "destination": "scholarly",
+      "deployment": null
+    },
+    {
+      "id": "web",
+      "label": "Web",
+      "description": "Search the public web and read pages.",
+      "default": false,
+      "destination": "web",
+      "deployment": "web_search"
+    },
+    {
+      "id": "workers",
+      "label": "Research workers",
+      "description": "Let the assistant split reading across helpers. Uses more of your model budget.",
+      "default": false,
+      "destination": null,
+      "deployment": null
+    },
+    {
+      "id": "images",
+      "label": "Images",
+      "description": "Generate illustrations. Each image is confirmed first.",
+      "default": false,
+      "destination": null,
+      "deployment": "image_generation"
+    }
+  ],
+  "sources": [
+    {
+      "id": "openalex",
+      "label": "OpenAlex",
+      "description": "Search OpenAlex's open catalogue of scholarly works: records, references, citations and retraction flags.",
+      "default": true
+    },
+    {
+      "id": "arxiv_index",
+      "label": "arXiv index",
+      "description": "Search arXiv's preprints and passages from their full text.",
+      "default": true
+    },
+    {
+      "id": "semantic_scholar",
+      "label": "Semantic Scholar",
+      "description": "Search Semantic Scholar's papers, citation graph with its contexts, related papers and passages from full text.",
+      "default": true
+    }
+  ],
+  "engines": {
+    "gateway": {
+      "snapshot_refresh": "every_call",
+      "context_budget": "colwrite",
+      "final_answer_at_limit": "notice",
+      "lite_tier": true,
+      "image_generator": "openrouter",
+      "streams_tokens": "yes",
+      "checkpoints": true
+    },
+    "claude": {
+      "snapshot_refresh": "per_turn",
+      "context_budget": "cli",
+      "final_answer_at_limit": "forced_turn",
+      "lite_tier": false,
+      "image_generator": null,
+      "streams_tokens": "yes",
+      "checkpoints": false
+    },
+    "codex": {
+      "snapshot_refresh": "per_turn",
+      "context_budget": "cli",
+      "final_answer_at_limit": "forced_turn",
+      "lite_tier": false,
+      "image_generator": "codex",
+      "streams_tokens": "per_message",
+      "checkpoints": false
+    }
+  }
+}

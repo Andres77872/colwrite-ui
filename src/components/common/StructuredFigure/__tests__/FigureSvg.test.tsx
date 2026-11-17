@@ -1,3 +1,4 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -246,8 +247,9 @@ function parse(markup: string): SVGSVGElement {
   return doc.documentElement as unknown as SVGSVGElement;
 }
 
+/** The four layers a figure draws, in order; a figure always has all four. */
 function layers(svg: Element) {
-  const [groups, edges, nodes, edgeLabels] = [...svg.children].filter((child) => child.tagName === 'g');
+  const [groups, edges, nodes, edgeLabels] = takeItems([...svg.children].filter((child) => child.tagName === 'g'), 4);
   return { groups, edges, nodes, edgeLabels };
 }
 
@@ -313,7 +315,7 @@ describe('FigureSvg: document structure', () => {
     const once = render({ scene: s });
     expect(render({ scene: s })).toBe(once);
     expect(once).not.toMatch(/\d\.\d{3,}/);
-    expect(once).toContain(shapePath('box', s.nodes[0].shape, 'down').d);
+    expect(once).toContain(shapePath('box', itemAt(s.nodes, 0).shape, 'down').d);
   });
 });
 
@@ -365,7 +367,7 @@ describe('FigureSvg: nodes', () => {
         }),
       }),
     );
-    const [a, b] = [...layers(svg).nodes.children];
+    const [a, b] = takeItems([...layers(svg).nodes.children], 2);
     expect(a.querySelector('path')?.getAttribute('stroke')).toBe('none');
     expect(a.querySelector('path')?.getAttribute('fill')).toBe(LIGHT.tones.green.fill);
     expect(b.querySelector('path')?.getAttribute('fill')).toBe('none');
@@ -396,7 +398,7 @@ describe('FigureSvg: nodes', () => {
     expect(pattern?.querySelector('path')?.getAttribute('stroke')).toBe(LIGHT.tones.teal.stroke);
     const paths = [...layers(svg).nodes.querySelectorAll('path')];
     expect(paths.map((p) => p.getAttribute('fill'))).toEqual([LIGHT.tones.teal.fill, 'url(#figA-hatch-teal)', 'none']);
-    expect(paths[2].getAttribute('stroke')).toBe(LIGHT.tones.teal.stroke);
+    expect(paths[2]?.getAttribute('stroke')).toBe(LIGHT.tones.teal.stroke);
     // Only the patterns in use are defined.
     expect(svg.querySelectorAll('defs > pattern')).toHaveLength(1);
     expect(parse(render({ scene: basicScene() })).querySelectorAll('defs > pattern')).toHaveLength(0);
@@ -429,7 +431,7 @@ describe('FigureSvg: nodes', () => {
         expect(g.querySelector('circle')?.getAttribute('cx')).toBe(String(cx));
         continue;
       }
-      const glyph = g.querySelectorAll('path')[1].getAttribute('d')!;
+      const glyph = itemAt(g.querySelectorAll('path'), 1).getAttribute('d')!;
       if (op === 'plus') expect(glyph).toBe(`M${cx - 10} 50H${cx + 10}M${cx} 40V60`);
       if (op === 'minus') expect(glyph).toBe(`M${cx - 10} 50H${cx + 10}`);
       if (op === 'times') expect(glyph.match(/[ML]/g)).toEqual(['M', 'L', 'M', 'L']);
@@ -447,14 +449,14 @@ describe('FigureSvg: nodes', () => {
     const badge = labelBox('cached', { x: 80, y: 24, width: 34, height: 13 }, font(8.5));
     const repeat = labelBox('h', { x: 106, y: 36, width: 10, height: 16 }, font(13, 600));
     const s = scene({ nodes: [node('c', rect, { tone: 'teal', badge: 'cached' }, { badge, repeat })] });
-    const g = layers(parse(render({ scene: s }))).nodes.children[0];
+    const g = itemAt(layers(parse(render({ scene: s }))).nodes.children, 0);
     const pill = g.querySelector('rect');
     expect(pill?.getAttribute('rx')).toBe('6.5');
     expect(pill?.getAttribute('stroke')).toBe(LIGHT.tones.teal.stroke);
     const texts = [...g.querySelectorAll('text')];
     expect(texts.map((t) => t.textContent)).toEqual(['c', 'cached', 'h']);
-    expect(texts[1].getAttribute('fill')).toBe(LIGHT.tones.teal.stroke);
-    expect(texts[2].getAttribute('font-weight')).toBe('600');
+    expect(texts[1]?.getAttribute('fill')).toBe(LIGHT.tones.teal.stroke);
+    expect(texts[2]?.getAttribute('font-weight')).toBe('600');
   });
 });
 
@@ -482,7 +484,7 @@ describe('FigureSvg: labels', () => {
       ['start', '12'],
       ['end', '160'],
     ]);
-    expect(texts[0].getAttribute('fill')).toBe(LIGHT.ink);
+    expect(texts[0]?.getAttribute('fill')).toBe(LIGHT.ink);
   });
 
   it('draws italic and bold labels', () => {
@@ -550,14 +552,14 @@ describe('FigureSvg: edges', () => {
     });
     const svg = parse(render({ scene: s }));
     expect(svg.querySelector('marker')).toBeNull();
-    const g = layers(svg).edges.children[0];
+    const g = itemAt(layers(svg).edges.children, 0);
     const path = g.querySelector('path')!;
-    expect(path.getAttribute('d')).toBe(s.edges[0].d);
+    expect(path.getAttribute('d')).toBe(itemAt(s.edges, 0).d);
     expect(path.getAttribute('fill')).toBe('none');
     expect(path.getAttribute('stroke')).toBe(LIGHT.edge);
     expect(path.getAttribute('stroke-width')).toBe(String(FIGURE_METRICS.edge.stroke));
     const polygons = [...g.querySelectorAll('polygon')].map((p) => p.getAttribute('points'));
-    expect(polygons).toEqual([polygonPoints(s.edges[0].start!.polygon), polygonPoints(s.edges[0].end!.polygon)]);
+    expect(polygons).toEqual([polygonPoints(itemAt(s.edges, 0).start!.polygon), polygonPoints(itemAt(s.edges, 0).end!.polygon)]);
     expect(g.querySelector('polygon')?.getAttribute('fill')).toBe(LIGHT.edge);
   });
 
@@ -712,7 +714,7 @@ describe('FigureSvg: tensors and images', () => {
   it('draws the grid rules and the cell text', () => {
     const text = [['the', 'cat', '', null]];
     const s = tensor({ rows: 1, cols: 4, text, values: null, pattern: 'none' }, { tone: 'neutral' });
-    const g = layers(parse(render({ scene: s }))).nodes.children[0];
+    const g = itemAt(layers(parse(render({ scene: s }))).nodes.children, 0);
     const background = g.querySelector('rect');
     expect(background?.getAttribute('fill')).toBe(LIGHT.background);
     const grid = g.querySelector('path')!.getAttribute('d')!;
@@ -727,13 +729,13 @@ describe('FigureSvg: tensors and images', () => {
     const text = [['$x_p^1$', 'a  b', 'top\nbottom', 'costs \\$5']];
     const s = tensor({ rows: 1, cols: 4, text, values: null, pattern: 'none' });
     const markup = render({ scene: s });
-    const g = layers(parse(markup)).nodes.children[0];
+    const g = itemAt(layers(parse(markup)).nodes.children, 0);
     // Maths is KaTeX in the cell's own box, never the raw LaTeX as text.
     const math = [...g.querySelectorAll('foreignObject')];
     expect(math).toHaveLength(1);
-    expect(math[0].querySelector('.katex')).not.toBeNull();
-    expect(math[0].getAttribute('x')).toBe('9');
-    expect(math[0].getAttribute('width')).toBe('13');
+    expect(itemAt(math, 0).querySelector('.katex')).not.toBeNull();
+    expect(math[0]?.getAttribute('x')).toBe('9');
+    expect(math[0]?.getAttribute('width')).toBe('13');
     expect(markup).not.toContain('$x_p^1$');
     const texts = [...g.querySelectorAll('text')];
     expect(texts.map((t) => [...t.querySelectorAll('tspan')].map((span) => span.textContent))).toEqual([
@@ -747,7 +749,7 @@ describe('FigureSvg: tensors and images', () => {
     const spec = { nodes: [{ id: 't', shape: 'tensor', cells: ['$x_p^1$', '$x_p^2$', '$x_p^N$'] }] };
     const compiled = compileFigure(JSON.stringify(spec), createHeuristicMeasurer());
     expect(compiled.ok).toBe(true);
-    const t = compiled.scene!.nodes[0];
+    const t = itemAt(compiled.scene!.nodes, 0);
     const svg = parse(render({ scene: compiled.scene! }));
     const boxes = [...svg.querySelectorAll('foreignObject')];
     expect(boxes).toHaveLength(3);
@@ -776,7 +778,7 @@ describe('FigureSvg: tensors and images', () => {
       const s = scene({ nodes: [node('img', rect, { shape: 'image', src }, { label: null })] });
       const svg = parse(render({ scene: s }));
       expect(svg.querySelector('image')).toBeNull();
-      const [placeholder] = [...layers(svg).nodes.querySelectorAll('rect')];
+      const [placeholder] = takeItems([...layers(svg).nodes.querySelectorAll('rect')], 1);
       expect(placeholder.getAttribute('fill')).toBe(LIGHT.placeholder);
       expect(layers(svg).nodes.querySelector('path')?.getAttribute('d')?.match(/M/g)).toHaveLength(2);
     },
@@ -832,7 +834,8 @@ describe('FigureSvg: legend', () => {
     };
     const svg = parse(render({ scene: scene({ legend }) }));
     expect(svg.querySelector('defs > pattern')?.id).toBe('fig1-dots-teal');
-    const [nodeItem, edgeItem] = [...svg.children].filter((c) => c.tagName === 'g').at(-1)!.children;
+    const legendLayer = [...svg.children].filter((c) => c.tagName === 'g').at(-1);
+    const [nodeItem, edgeItem] = takeItems([...(legendLayer?.children ?? [])], 2);
     expect([...nodeItem.querySelectorAll('path')].map((p) => p.getAttribute('fill'))).toEqual([
       LIGHT.tones.teal.fill,
       'url(#fig1-dots-teal)',
@@ -875,7 +878,7 @@ describe('FigureSvg: interaction and selection', () => {
     const hit = svg.querySelector('[data-figure-id="q->k"] path')!;
     expect(hit.getAttribute('stroke')).toBe('transparent');
     expect(hit.getAttribute('stroke-width')).toBe('10');
-    expect(hit.getAttribute('d')).toBe(basicScene().edges[0].d);
+    expect(hit.getAttribute('d')).toBe(itemAt(basicScene().edges, 0).d);
   });
 
   it('reports clicks with the item id and kind', () => {
@@ -884,8 +887,8 @@ describe('FigureSvg: interaction and selection', () => {
     document.body.append(host);
     const root = createRoot(host);
     const s = basicScene();
-    s.edges[0].label = labelBox('x', { x: 74, y: 70, width: 10, height: 12.5 }, font(10), 'left');
-    s.nodes[0].label = labelBox('$q_t$', s.nodes[0].shape);
+    itemAt(s.edges, 0).label = labelBox('x', { x: 74, y: 70, width: 10, height: 12.5 }, font(10), 'left');
+    itemAt(s.nodes, 0).label = labelBox('$q_t$', itemAt(s.nodes, 0).shape);
     act(() => root.render(<FigureSvg scene={s} palette={LIGHT} idPrefix="c" onItemClick={onItemClick} />));
     // Created by React in the DOM, the maths wrapper is XHTML, not SVG.
     expect(host.querySelector('foreignObject > div')?.namespaceURI).toBe('http://www.w3.org/1999/xhtml');
@@ -895,7 +898,7 @@ describe('FigureSvg: interaction and selection', () => {
     click(host.querySelector('[data-figure-kind="group"] path'));
     click(host.querySelector('[data-figure-kind="edge"] path'));
     // The edge label selects its edge too.
-    click(host.querySelectorAll('[data-figure-kind="edge"]')[1].querySelector('text'));
+    click(itemAt(host.querySelectorAll('[data-figure-kind="edge"]'), 1).querySelector('text'));
     expect(onItemClick.mock.calls).toEqual([
       ['k', 'node'],
       ['block', 'group'],
@@ -1047,10 +1050,10 @@ describe('sceneHasMath', () => {
     expect(sceneHasMath(basicScene())).toBe(false);
     expect(sceneHasMath(mathScene())).toBe(true);
     const withEdgeMath = basicScene();
-    withEdgeMath.edges[0].label = labelBox('$x$', { x: 0, y: 0, width: 10, height: 12 });
+    itemAt(withEdgeMath.edges, 0).label = labelBox('$x$', { x: 0, y: 0, width: 10, height: 12 });
     expect(sceneHasMath(withEdgeMath)).toBe(true);
     const withPanelMath = basicScene();
-    withPanelMath.groups[0].panel = labelBox('(a) $\\alpha$', { x: 0, y: 0, width: 10, height: 12 });
+    itemAt(withPanelMath.groups, 0).panel = labelBox('(a) $\\alpha$', { x: 0, y: 0, width: 10, height: 12 });
     expect(sceneHasMath(withPanelMath)).toBe(true);
   });
 

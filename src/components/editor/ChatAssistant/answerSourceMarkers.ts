@@ -1,39 +1,47 @@
 import { useMemo } from 'react';
 import { scrollBehavior } from '@/lib/motion';
-import type { AgentSource } from '@/services/streamParser';
+import type { AgentSource } from '@/api/assistant/streamParser';
+import { sourceMarkers } from '@/lib/sourceHandles';
+import { referenceAuthors, referenceYear } from '@/editor/referenceRecords';
 import type { SourceMarkers } from './ChatMarkdown/ChatMarkdown';
 
-const MARKER = /\[(S\d{1,5}(?:\s*[,;]\s*S\d{1,5})*)\](?!\()/g;
-
-/** Source ids in the order an answer first cites them. */
+/**
+ * The handles an answer cites, in the order it first cites them, among the
+ * sources it can name. A marker naming a handle never received is not a
+ * source.
+ */
 export function citedOrder(text: string, sources: readonly AgentSource[]): string[] {
-  const known = new Set(sources.map((source) => source.id));
+  const known = new Set(sources.map((source) => source.handle));
   const order: string[] = [];
-  for (const match of text.matchAll(MARKER)) {
-    for (const id of match[1].split(/\s*[,;]\s*/)) {
-      if (known.has(id) && !order.includes(id)) order.push(id);
+  for (const handles of sourceMarkers(text)) {
+    for (const handle of handles) {
+      if (known.has(handle) && !order.includes(handle)) order.push(handle);
     }
   }
   return order;
 }
 
-export function anchorId(messageId: string, sourceId: string): string {
-  return `answer-${messageId}-source-${sourceId}`;
+export function anchorId(messageId: string, handle: string): string {
+  return `answer-${messageId}-source-${handle}`;
 }
 
-/** Markers for `ChatMarkdown`, numbered by first citation in the answer. */
+/**
+ * Markers for `ChatMarkdown`, numbered by first citation in the answer,
+ * read against `sources`: for a chat reply the conversation's, so a handle
+ * an earlier turn registered resolves too.
+ */
 export function useSourceMarkers(messageId: string, text: string, sources: readonly AgentSource[] | undefined) {
   return useMemo(() => {
     const list = sources ?? [];
     const cited = citedOrder(text, list);
-    const numbers = new Map(cited.map((id, index) => [id, index + 1]));
-    const byId = new Map(list.map((source) => [source.id, source]));
+    const numbers = new Map(cited.map((handle, index) => [handle, index + 1]));
+    const byHandle = new Map(list.map((source) => [source.handle, source]));
     const markers: SourceMarkers = {
-      numberOf: (id) => numbers.get(id),
-      describe: (id) => {
-        const source = byId.get(id);
+      numberOf: (handle) => numbers.get(handle),
+      describe: (handle) => {
+        const source = byHandle.get(handle);
         if (!source) return undefined;
-        return [source.title, source.authors, source.year].filter(Boolean).join(' · ');
+        return [source.title, referenceAuthors(source.record), referenceYear(source.record)].filter(Boolean).join(' · ');
       },
       onActivate: (id) => {
         const target = document.getElementById(anchorId(messageId, id));

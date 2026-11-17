@@ -90,6 +90,16 @@ describe('mermaidThemeFor', () => {
 });
 
 describe('renderMermaid', () => {
+  it('takes out what would load from another origin: an image shape, a label image, a CSS url (P0.UI-7)', async () => {
+    mocks.render.mockImplementation(async (id: string) => ({
+      svg: `<svg id="${id}"><image href="https://evil.example/a.png"></image><foreignObject><img src="https://evil.example/b.png"></foreignObject><g style="fill:url(https://evil.example/c)"></g><text>Kept</text></svg>`,
+      diagramType: 'flowchart-v2',
+    }));
+    const result = await renderMermaid('flowchart LR\n  A@{ img: "https://evil.example/a.png" }', mermaidThemeFor(null));
+    expect(result.ok && result.svg).not.toContain('evil.example');
+    expect(result.ok && result.svg).toContain('<text>Kept</text>');
+  });
+
   it('draws in strict mode with the theme and without Mermaid painting errors itself', async () => {
     const theme = mermaidThemeFor(null);
     const result = await renderMermaid('flowchart LR\n  A --> B', theme);

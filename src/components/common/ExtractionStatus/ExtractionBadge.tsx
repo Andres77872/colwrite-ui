@@ -1,6 +1,5 @@
 import { cn } from '@/lib/utils';
 import { badgeVariants } from '@/components/ui/badgeVariants';
-import type { ExtractionStatus } from '@/services/resources';
 import { describeExtraction } from './extractionStatus';
 
 /**
@@ -21,7 +20,7 @@ export function ExtractionBadge({
   describe = false,
   className,
 }: {
-  status: ExtractionStatus | null;
+  status: string | null | undefined;
   error?: string | null;
   /**
    * Add the hint to the accessible name.

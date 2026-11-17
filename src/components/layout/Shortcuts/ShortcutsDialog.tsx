@@ -8,7 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useReturnFocus } from '@/hooks/useReturnFocus';
-import { modifierLabel, shortcutReference } from './shortcuts';
+import { keycapLabel, modifierLabel, shortcutReference } from './shortcuts';
 
 /**
  * ShortcutsDialog — the reference for the bindings, reachable from Mod+/.
@@ -57,7 +57,7 @@ export function ShortcutsDialog({
                           {index > 0 && <span className="px-0.5">{row.joiner ?? 'or'}</span>}
                           <span className="flex items-center gap-0.5">
                             {binding.map((part) => (
-                              <Kbd key={part}>{part === 'Mod' ? modifier : part}</Kbd>
+                              <Kbd key={part}>{keycapLabel(part, modifier)}</Kbd>
                             ))}
                           </span>
                         </Fragment>

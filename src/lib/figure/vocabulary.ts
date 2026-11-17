@@ -148,26 +148,27 @@ function parseColour(value: string): [number, number, number] | null {
   const text = value.trim().toLowerCase();
   const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(text);
   if (hex) {
-    const digits = hex[1];
+    const digits = hex[1] ?? '';
     if (digits.length <= 4) {
-      return [0, 1, 2].map((i) => parseInt(digits[i] + digits[i], 16)) as [number, number, number];
+      return [0, 1, 2].map((i) => parseInt(digits.charAt(i).repeat(2), 16)) as [number, number, number];
     }
     return [0, 2, 4].map((i) => parseInt(digits.slice(i, i + 2), 16)) as [number, number, number];
   }
   const fn = /^(rgba?|hsla?)\(\s*([^)]*)\)$/.exec(text);
   if (!fn) return null;
-  const parts = fn[2].split(/[\s,/]+/).filter(Boolean);
-  if (parts.length < 3) return null;
-  if (fn[1].startsWith('rgb')) {
+  const parts = (fn[2] ?? '').split(/[\s,/]+/).filter(Boolean);
+  const [hPart, sPart, lPart] = parts;
+  if (hPart === undefined || sPart === undefined || lPart === undefined) return null;
+  if (fn[1]?.startsWith('rgb')) {
     const channels = parts.slice(0, 3).map((part) =>
       part.endsWith('%') ? (parseFloat(part) / 100) * 255 : parseFloat(part),
     );
     if (channels.some((c) => !Number.isFinite(c))) return null;
     return channels.map((c) => Math.max(0, Math.min(255, c))) as [number, number, number];
   }
-  const h = parseFloat(parts[0]);
-  const s = parseFloat(parts[1]) / 100;
-  const l = parseFloat(parts[2]) / 100;
+  const h = parseFloat(hPart);
+  const s = parseFloat(sPart) / 100;
+  const l = parseFloat(lPart) / 100;
   if (![h, s, l].every(Number.isFinite)) return null;
   // HSL → RGB (CSS Color 4).
   const hue = ((h % 360) + 360) % 360;
@@ -369,7 +370,7 @@ const OP_INDEX = new Map<string, Exclude<OpGlyph, null>>(
 export function opGlyphFor(label: string): OpGlyph {
   let text = label.trim();
   const maths = /^\$(.*)\$$/s.exec(text);
-  if (maths) text = maths[1].trim();
+  if (maths) text = (maths[1] ?? '').trim();
   return OP_INDEX.get(opKey(text)) ?? null;
 }
 

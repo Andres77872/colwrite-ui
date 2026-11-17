@@ -2,36 +2,19 @@
  * A representative paper for the dev preview: every block kind and inline
  * widget the editor draws, in the backend's document shape.
  */
+import { FEDUS, LEPIKHIN, OKAFOR, SHAZEER, VASWANI, VASWANI_DOI } from './fixtureReferences';
 
 const ph = (id: string) => `<span data-child-id="${id}" contenteditable="false"></span>`;
 
-const vaswani = {
-  key: '1706.03762',
-  title: 'Attention Is All You Need',
-  authors: 'Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit',
-  year: '2017',
-  venue: 'NeurIPS',
-  url: 'https://arxiv.org/abs/1706.03762',
-  provider: 'arxiv',
-};
-const fedus = {
-  key: '2101.03961',
-  title: 'Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity',
-  authors: 'William Fedus, Barret Zoph, Noam Shazeer',
-  year: '2021',
-  venue: 'JMLR',
-  url: 'https://arxiv.org/abs/2101.03961',
-  provider: 'arxiv',
-};
-const lepikhin = {
-  key: '2006.16668',
-  title: 'GShard: Scaling Giant Models with Conditional Computation and Automatic Sharding',
-  authors: 'Dmitry Lepikhin, HyoukJoong Lee, Yuanzhong Xu',
-  year: '2020',
-  venue: 'ICLR',
-  url: 'https://arxiv.org/abs/2006.16668',
-  provider: 'arxiv',
-};
+/*
+ * The page's library: the works it cites, and one kept for later (Shazeer et
+ * al.), as reference records (`fixtureReferences.ts`). The reference list
+ * shows each one's state: a preprint with a published version (Vaswani et
+ * al.), one whose sources disagree on the year (Fedus et al.), a retracted
+ * article the page still cites (Okafor and Brandt), and the Transformer paper
+ * a second time under its arXiv DOI, which the reference audit reports as a
+ * duplicate (cited in the results).
+ */
 
 export const FIXTURE_DOCUMENT_ID = '66f0c0ffee0000000000d0c1';
 
@@ -39,18 +22,22 @@ export function fixtureDocument() {
   return {
     _id: FIXTURE_DOCUMENT_ID,
     name: 'Sparse Routing for Long-Context Pretraining',
-    version: 3,
-    citationStyle: 'numeric',
-    sources: [vaswani, fedus, lepikhin],
+    head_seq: 3,
+    citationStyle: 'nlm-citation-sequence-brackets',
+    sources: [VASWANI, FEDUS, LEPIKHIN, SHAZEER, OKAFOR, VASWANI_DOI],
     blocks: [
       { id: 'h-intro', type: 'heading', level: 1, html: 'Introduction' },
       {
         id: 'p-1',
         type: 'paragraph',
-        html: `Mixture-of-experts layers route each token to a small subset of feed-forward networks, decoupling parameter count from per-token compute${ph('c-1')}. Dense attention remains the bottleneck at long context lengths${ph('c-2')}.`,
+        html: `Mixture-of-experts layers route each token to a small subset of feed-forward networks, decoupling parameter count from per-token compute${ph('c-1')}. Dense attention remains the bottleneck at long context lengths${ph('c-2')}. Learned routing was once reported to remove expert collapse altogether${ph('c-3')}.`,
         children: [
-          { id: 'c-1', type: 'citation', keys: ['2101.03961', '2006.16668'], style: 'numeric', sources: [fedus, lepikhin] },
-          { id: 'c-2', type: 'citation', keys: ['1706.03762'], style: 'numeric', sources: [vaswani] },
+          {
+            id: 'c-1', type: 'citation', keys: [FEDUS.key, LEPIKHIN.key], style: 'nlm-citation-sequence-brackets', sources: [FEDUS, LEPIKHIN],
+            passage: { id: 'S1.1', level: 'abstract', chat_id: 'chat-related' },
+          },
+          { id: 'c-2', type: 'citation', keys: [VASWANI.key], style: 'nlm-citation-sequence-brackets', sources: [VASWANI] },
+          { id: 'c-3', type: 'citation', keys: [OKAFOR.key], style: 'nlm-citation-sequence-brackets', sources: [OKAFOR] },
         ],
       },
       {
@@ -157,8 +144,10 @@ export function fixtureDocument() {
       {
         id: 'p-4',
         type: 'paragraph',
-        html: 'Table 1 compares perplexity at matched compute: routing closes most of the gap to a model eight times larger.',
-        children: [],
+        html: `Table 1 compares perplexity at matched compute: routing closes most of the gap to a model eight times larger, with the attention layers left dense${ph('c-4')}.`,
+        children: [
+          { id: 'c-4', type: 'citation', keys: [VASWANI_DOI.key], style: 'nlm-citation-sequence-brackets', sources: [VASWANI_DOI] },
+        ],
       },
       {
         id: 'p-4t',

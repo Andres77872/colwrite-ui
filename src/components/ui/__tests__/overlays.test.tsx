@@ -1,4 +1,5 @@
 /// <reference types="node" />
+import { itemAt } from '@/lib/itemAt';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -18,7 +19,7 @@ function zTokens(): Record<string, number> {
   // Read from disk: Vitest stubs CSS imports, `?raw` included.
   const css = readFileSync(resolve(__dirname, '../../../styles/globals.css'), 'utf8');
   const out: Record<string, number> = {};
-  for (const match of css.matchAll(/--(z-[a-z-]+):\s*(\d+);/g)) out[match[1]] = Number(match[2]);
+  for (const match of css.matchAll(/--(z-[a-z-]+):\s*(\d+);/g)) out[itemAt(match, 1)] = Number(match[2]);
   return out;
 }
 

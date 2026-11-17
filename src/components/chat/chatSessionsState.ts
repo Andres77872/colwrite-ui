@@ -2,9 +2,9 @@ import { createContext, useContext } from 'react';
 
 export type ChatSessionsValue = {
   selectedChatId: string | null;
-  selectedThreadId: number | null;
+  selectedLeafId: number | null;
   setSelectedChatId: (id: string | null) => void;
-  setSelectedThreadId: (id: number | null) => void;
+  setSelectedLeafId: (id: number | null) => void;
 };
 
 export const ChatSessionsContext = createContext<ChatSessionsValue | null>(null);

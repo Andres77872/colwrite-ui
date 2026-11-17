@@ -7,13 +7,12 @@ import {
   type MutableRefObject,
   type SetStateAction,
 } from 'react';
-import { findActiveAgentRun, type AssistantSnapshot } from '@/services/agentSessionChat';
-import { listMessages, listThreads } from '@/services/chats';
-import { isRetryableProblem } from '@/services/retry';
-import { describeApiError } from '@/services/contracts';
-import type { EditorContextValue } from '@/editor/editorContextState';
-import type { AgentProgress } from '@/components/editor/AgentProgress';
-import { emptyMessage, type ChatMessage } from './chatUtils';
+import { findActiveAgentRun, type AssistantSnapshot } from '@/api/assistant/agentSessionChat';
+import { listMessages } from '@/data/chats';
+import { isRetryableProblem } from '@/api/retry';
+import { ApiError, describeApiError } from '@/api/errors';
+import type { DocumentSessionValue } from '@/editor';
+import { historyMessages, type ChatMessage } from './chatUtils';
 
 /**
  * Why a conversation is not on screen. Kept apart from {@link ChatError}: this
@@ -23,17 +22,24 @@ export type ConversationNotice = { message: string; preparing: boolean };
 
 type ConversationLoaderOptions = {
   onResumeRun?: (snapshot: AssistantSnapshot) => void;
-  documentId: EditorContextValue['documentId'];
+  /** Return true when an explicit checkpoint action takes over the loaded
+   * transcript, rather than observational active-run reattachment. */
+  onLoaded?: () => boolean;
+  /**
+   * The selected chat does not exist on this page (the server answered 404):
+   * it was deleted, here or on another device. The caller drops the selection.
+   */
+  onChatGone?: () => void;
+  workspaceId: string;
+  documentId: DocumentSessionValue['documentId'];
   selectedChatId: string | null;
-  selectedThreadId: number | null;
-  setSelectedThreadId: (id: number | null) => void;
-  /** The turn's stream controller, aborted when a load takes over the transcript. */
-  abortRef: MutableRefObject<AbortController | null>;
+  selectedLeafId: number | null;
+  setSelectedLeafId: (id: number | null) => void;
+  /** Stop following the running turn, without cancelling it: a load takes over the transcript. */
+  detachRun: () => void;
   /** The claim key below, shared with the turn so a finished stream can pre-claim it. */
   loadedConversationRef: MutableRefObject<string | null>;
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
-  setIsStreaming: Dispatch<SetStateAction<boolean>>;
-  setAgentStatus: Dispatch<SetStateAction<AgentProgress | null>>;
 };
 
 export type ConversationLoader = {
@@ -43,21 +49,25 @@ export type ConversationLoader = {
 
 /**
  * useConversationLoader — fetch the transcript of the conversation the author
- * switched to, pivoting onto the latest thread.
+ * switched to: the branch that ends at the selected leaf message, or the
+ * chat's newest branch.
  */
 export function useConversationLoader({
   onResumeRun,
+  onLoaded,
+  onChatGone,
+  workspaceId,
   documentId,
   selectedChatId,
-  selectedThreadId,
-  setSelectedThreadId,
-  abortRef,
+  selectedLeafId,
+  setSelectedLeafId,
+  detachRun,
   loadedConversationRef,
   setMessages,
-  setIsStreaming,
-  setAgentStatus,
 }: ConversationLoaderOptions): ConversationLoader {
   const resumeRun = useEffectEvent((snapshot: AssistantSnapshot) => onResumeRun?.(snapshot));
+  const loaded = useEffectEvent(() => onLoaded?.() ?? false);
+  const chatGone = useEffectEvent(() => onChatGone?.());
 
   /** Bumped by the notice's Retry button. There is no automatic ladder. */
   const [conversationReloadTick, setConversationReloadTick] = useState(0);
@@ -80,7 +90,7 @@ export function useConversationLoader({
   useEffect(() => {
     if (!documentId || !selectedChatId) return;
 
-    const key = `${documentId}:${selectedChatId}:${selectedThreadId ?? 'latest'}`;
+    const key = `${documentId}:${selectedChatId}:${selectedLeafId ?? 'latest'}`;
     if (loadedConversationRef.current === key) return;
     loadedConversationRef.current = key;
 
@@ -90,64 +100,49 @@ export function useConversationLoader({
      * before it delivers has to hand the claim back, or the next run sees the
      * key already taken and returns — which under StrictMode's
      * setup/cleanup/setup left the transcript permanently empty. An explicit
-     * flag rather than comparing keys: when `selectedThreadId` is already a
+     * flag rather than comparing keys: when `selectedLeafId` is already a
      * number the key written on success is byte-identical to this one, so it
      * cannot tell "loaded" from "claimed and abandoned".
      */
     let settled = false;
 
     (async () => {
-      abortRef.current?.abort();
-      abortRef.current = null;
-      setIsStreaming(false);
-      setAgentStatus(null);
+      detachRun();
 
       try {
         const transport = { signal: controller.signal };
-
-        let pivot = typeof selectedThreadId === 'number' ? selectedThreadId : undefined;
-        if (pivot === undefined) {
-          const threads = await listThreads(documentId, selectedChatId, 100, 0, transport);
-          const ids = (threads.threads ?? [])
-            .map((t) => t.id)
-            .filter((n): n is number => typeof n === 'number');
-          if (ids.length) pivot = Math.max(...ids);
-        }
-        if (controller.signal.aborted) return;
-        // A queued run can exist before its first transcript row. Even an
-        // empty chat must continue to the durable-run lookup below.
-        const res = pivot === undefined
-          ? null
-          : await listMessages(documentId, selectedChatId, pivot, transport);
+        // The branch that ends at the selected leaf; without one, the server
+        // answers the chat's newest message and says which it is. A queued run
+        // can exist before its first message, so even an empty chat continues
+        // to the durable-run lookup below.
+        const res = await listMessages(workspaceId, documentId, selectedChatId, selectedLeafId, transport);
         if (controller.signal.aborted) return;
 
-        const resolvedPivot = typeof res?.pivotThreadId === 'number' ? res.pivotThreadId : pivot;
-        loadedConversationRef.current = `${documentId}:${selectedChatId}:${resolvedPivot ?? 'latest'}`;
+        const resolvedLeaf = res.leaf_id;
+        loadedConversationRef.current = `${documentId}:${selectedChatId}:${resolvedLeaf ?? 'latest'}`;
         settled = true;
         setConversationNotice(null);
 
-        const history = (res?.messages ?? []).map((m) =>
-          emptyMessage(
-            m.role,
-            // Legacy rows can still carry EXTRAS_JSON envelopes.
-            m.content?.replace(/<EXTRAS_JSON>[\s\S]*?<\/EXTRAS_JSON>/g, '') ?? '',
-            m.attachments,
-            m.run_id,
-          ),
-        );
+        const history = historyMessages(res.items);
         // A conversation the server has nothing for does not overwrite one the
         // author can see: that reads as the transcript being thrown away.
         setMessages((prev) => (history.length === 0 && prev.length > 0 ? prev : history));
+        if (typeof resolvedLeaf === 'number') setSelectedLeafId(resolvedLeaf);
+        if (loaded()) return;
         // Restoring is observational: never creates another model turn.
         let active: AssistantSnapshot | null = null;
-        try { active = await findActiveAgentRun(documentId, selectedChatId, controller.signal); }
+        try { active = await findActiveAgentRun(workspaceId, documentId, selectedChatId, controller.signal); }
         catch { /* Stored chat remains useful while the socket is unavailable. */ }
         if (controller.signal.aborted) return;
-        if (typeof resolvedPivot === 'number') setSelectedThreadId(resolvedPivot);
         if (active?.run) resumeRun(active);
       } catch (e) {
         if (controller.signal.aborted) return;
         settled = true;
+        if (e instanceof ApiError && e.status === 404) {
+          setConversationNotice(null);
+          chatGone();
+          return;
+        }
         // Its own notice rather than `setError`: that alert's button resends
         // the last message, which is not what failed here.
         setConversationNotice({
@@ -162,16 +157,15 @@ export function useConversationLoader({
       if (!settled && loadedConversationRef.current === key) loadedConversationRef.current = null;
     };
   }, [
+    workspaceId,
     documentId,
     selectedChatId,
-    selectedThreadId,
-    setSelectedThreadId,
+    selectedLeafId,
+    setSelectedLeafId,
     conversationReloadTick,
-    abortRef,
+    detachRun,
     loadedConversationRef,
     setMessages,
-    setIsStreaming,
-    setAgentStatus,
   ]);
 
   return { conversationNotice, reloadConversation };

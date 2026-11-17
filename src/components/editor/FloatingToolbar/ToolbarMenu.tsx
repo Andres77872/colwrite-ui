@@ -75,10 +75,11 @@ export function ToolbarMenu({
       event.stopPropagation();
       return;
     }
-    if (next === null || items.length === 0) return;
+    const item = next === null ? undefined : items[next];
+    if (!item) return;
     event.preventDefault();
     event.stopPropagation();
-    items[next].focus();
+    item.focus();
   };
 
   return (

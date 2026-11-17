@@ -1,11 +1,14 @@
 import { createContext, useContext } from 'react';
 import {
   engineModelProblem,
-  isAgentEngineId,
+  gatewayModelsFor,
   type AgentEngineCatalog,
   type AgentEngineId,
   type AgentEngineStatus,
-} from '@/services/agentEngines';
+  type GatewayModelSelection,
+  type GatewayModelTier,
+} from '@/data/agentEngines';
+import type { AssistantDefaults } from '@/data/assistant';
 
 /**
  * Where an agent run starts: the chat assistant, or the inline AI (Ask AI,
@@ -13,57 +16,73 @@ import {
  * local CLI takes a few seconds to start, which suits a conversation better
  * than a one-line rewrite.
  */
-export type AgentEngineSurface = 'chat' | 'inline';
+export type AgentEngineSurface = 'chat' | 'inline' | 'review';
 
 /**
- * The engine choice, kept on this device (localStorage), not the account: the
- * `claude` / `codex` engines are this machine's own CLIs.
+ * Account choices. Local CLI availability and sign-in still belong to the
+ * machine; the account stores only the preferred engine and model IDs.
  */
 export type AgentEnginePrefs = {
   chat: AgentEngineId;
   /** `'chat'` follows the chat assistant's engine. */
   inline: AgentEngineId | 'chat';
-  /** Per-engine model override; missing or empty means the engine's default. */
+  review?: AgentEngineId | 'chat';
+  /** Per-engine model; `gateway` is the gateway's general choice. Empty uses defaults. */
   models: Partial<Record<AgentEngineId, string>>;
+  /** The gateway's lite model; absent uses the server's default. */
+  liteModel?: string;
+  chatEffort?: NonNullable<AssistantDefaults['chat_effort']>;
+  reviewKind?: NonNullable<AssistantDefaults['review_kind']>;
 };
 
-export const DEFAULT_ENGINE_PREFS: AgentEnginePrefs = { chat: 'legacy', inline: 'chat', models: {} };
+export const DEFAULT_ENGINE_PREFS: AgentEnginePrefs = { chat: 'gateway', inline: 'chat', models: {} };
 
-export function isAgentEnginePrefs(value: unknown): value is AgentEnginePrefs {
-  if (!value || typeof value !== 'object') return false;
-  const prefs = value as Record<string, unknown>;
-  if (!isAgentEngineId(prefs.chat)) return false;
-  if (prefs.inline !== 'chat' && !isAgentEngineId(prefs.inline)) return false;
-  if (!prefs.models || typeof prefs.models !== 'object') return false;
-  return Object.entries(prefs.models as Record<string, unknown>).every(
-    ([engine, model]) => isAgentEngineId(engine) && typeof model === 'string',
-  );
+export function preferencesOf(defaults?: AssistantDefaults): AgentEnginePrefs {
+  if (!defaults) return DEFAULT_ENGINE_PREFS;
+  return {
+    chat: defaults.chat_engine ?? 'gateway',
+    inline: defaults.inline_engine ?? 'chat',
+    review: defaults.review_engine ?? 'chat',
+    models: {
+      ...(defaults.gateway_main ? { gateway: defaults.gateway_main } : {}),
+      ...(defaults.claude_model ? { claude: defaults.claude_model } : {}),
+      ...(defaults.codex_model ? { codex: defaults.codex_model } : {}),
+    },
+    liteModel: defaults.gateway_lite ?? undefined,
+    chatEffort: defaults.chat_effort ?? undefined,
+    reviewKind: defaults.review_kind ?? undefined,
+  };
 }
 
-/** What `streamAgentChat` gets: nothing at all for the plain default. */
-export type AgentEngineRequest = { engine?: AgentEngineId; model?: string };
+/** What `runAgentTurn` gets: nothing at all for the plain default. */
+export type AgentEngineRequest = {
+  engine?: AgentEngineId;
+  model?: string;
+  gateway_models?: GatewayModelSelection;
+};
 
 /** The engine a surface uses, before the runtime is taken into account. */
 export function selectedEngine(prefs: AgentEnginePrefs, surface: AgentEngineSurface): AgentEngineId {
-  return surface === 'inline' && prefs.inline !== 'chat' ? prefs.inline : prefs.chat;
+  const choice = surface === 'inline' ? prefs.inline : surface === 'review' ? prefs.review : 'chat';
+  return choice && choice !== 'chat' ? choice : prefs.chat;
 }
 
 /**
  * The engine a request on *surface* actually names.
  *
- * A deployed API has no local engines at all, so a choice remembered from a
- * local session is ignored there rather than failing every request. Locally
- * the choice is sent as is, even when that CLI is not signed in: the server
- * then refuses with instructions, and nothing silently switches engines.
+ * Only a server that says it is local (`runtime: "local"`) has local engines.
+ * A deployed one, and one whose catalog has not answered yet, gets the
+ * gateway: a choice remembered from a local session is ignored rather than
+ * failing a request, the first one included. Locally the choice is sent as
+ * is, even when that CLI is not signed in: the server then refuses with
+ * instructions, and nothing silently switches engines.
  */
-export function effectiveEngine(
+function effectiveEngine(
   prefs: AgentEnginePrefs,
   catalog: AgentEngineCatalog | null,
   surface: AgentEngineSurface,
 ): AgentEngineId {
-  const engine = selectedEngine(prefs, surface);
-  if (catalog?.runtime === 'deployed') return 'legacy';
-  return engine;
+  return catalog?.runtime === 'local' ? selectedEngine(prefs, surface) : 'gateway';
 }
 
 export function resolveEngineRequest(
@@ -72,10 +91,19 @@ export function resolveEngineRequest(
   surface: AgentEngineSurface,
 ): AgentEngineRequest {
   const engine = effectiveEngine(prefs, catalog, surface);
-  const model = (prefs.models[engine] ?? '').trim();
-  const usableModel = model && engineModelProblem(engine, model) === null ? model : '';
-  if (engine === 'legacy' && !usableModel) return {};
-  return usableModel ? { engine, model: usableModel } : { engine };
+  const request: AgentEngineRequest = {};
+  if (engine !== 'gateway') {
+    request.engine = engine;
+    const model = (prefs.models[engine] ?? '').trim();
+    if (model && engineModelProblem(engine, model) === null) request.model = model;
+  }
+  const selected: GatewayModelSelection = {};
+  const main = prefs.models.gateway?.trim();
+  const lite = prefs.liteModel?.trim();
+  if (main && gatewayModelsFor(catalog, 'main').includes(main)) selected.main = main;
+  if (lite && gatewayModelsFor(catalog, 'lite').includes(lite)) selected.lite = lite;
+  if (Object.keys(selected).length) request.gateway_models = selected;
+  return request;
 }
 
 export type AgentEngineContextValue = {
@@ -83,21 +111,25 @@ export type AgentEngineContextValue = {
   loading: boolean;
   error: string | null;
   prefs: AgentEnginePrefs;
+  preferencesReady: boolean;
+  savingPreferences: boolean;
+  preferenceError: string | null;
   /** The server runs locally, so engines can be chosen at all. */
   selectable: boolean;
   statusOf: (engine: AgentEngineId) => AgentEngineStatus | null;
-  engineFor: (surface: AgentEngineSurface) => AgentEngineId;
   requestFor: (surface: AgentEngineSurface) => AgentEngineRequest;
   setChatEngine: (engine: AgentEngineId) => void;
-  setInlineEngine: (engine: AgentEngineId | 'chat') => void;
+  setSurfaceEngine: (surface: 'inline' | 'review', engine: AgentEngineId | 'chat') => void;
+  saveDefaults: (changes: AssistantDefaults) => void;
   /** Saves a valid override (or clears it with `''`); returns why not otherwise. */
   setModel: (engine: AgentEngineId, model: string) => string | null;
+  setGatewayModel: (tier: GatewayModelTier, model: string) => string | null;
   /** Engine being re-checked right now, if any. */
   checking: AgentEngineId | null;
   checkError: Partial<Record<AgentEngineId, string>>;
   check: (engine: AgentEngineId) => Promise<AgentEngineStatus | null>;
   refresh: () => Promise<void>;
-  /** A run ended with this SSE error code; `ENGINE_*` re-reads the statuses. */
+  /** Engine errors and stale gateway selections re-read the server catalog. */
   noteRunError: (code: string) => void;
 };
 
@@ -112,13 +144,17 @@ const DEFAULT_CONTEXT: AgentEngineContextValue = {
   loading: false,
   error: null,
   prefs: DEFAULT_ENGINE_PREFS,
+  preferencesReady: false,
+  savingPreferences: false,
+  preferenceError: null,
   selectable: false,
   statusOf: () => null,
-  engineFor: () => 'legacy',
   requestFor: () => ({}),
   setChatEngine: noop,
-  setInlineEngine: noop,
+  setSurfaceEngine: noop,
+  saveDefaults: noop,
   setModel: () => null,
+  setGatewayModel: () => null,
   checking: null,
   checkError: {},
   check: async () => null,

@@ -1,3 +1,4 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import { MathTracker, lineColumn, parseFigureSource } from '../parse';
 import type { FigureDiagnostic, JsonNode, ParseResult } from '../types';
@@ -62,7 +63,7 @@ function syntaxError(source: string): FigureDiagnostic {
   expect(result.ast).toBeNull();
   expect(result.value).toBeNull();
   expect(result.diagnostics).toHaveLength(1);
-  const [error] = result.diagnostics;
+  const [error] = takeItems(result.diagnostics, 1);
   expect(error.severity).toBe('error');
   expect(error.code).toBe('json.syntax');
   expect(error.range).toBeDefined();
@@ -204,7 +205,7 @@ describe('parseFigureSource — leniency', () => {
     expect(result.value).toEqual({ a: 1, b: [2, 3] });
     expect(result.diagnostics).toEqual([]);
     const ast = result.ast!;
-    expect(ast.kind === 'object' && source.slice(ast.members[1].start, ast.members[1].end)).toBe(
+    expect(ast.kind === 'object' && source.slice(ast.members[1]?.start, ast.members[1]?.end)).toBe(
       '"b" /* before colon */ : [ // in array\n    2, /* between */ 3 // last\n  ]',
     );
   });
@@ -230,7 +231,7 @@ describe('parseFigureSource — leniency', () => {
     const result = ok(source);
     expect(result.value).toEqual({ label: 'say "hi" it\'s', k: '$\\beta$' });
     const ast = result.ast!;
-    expect(ast.kind === 'object' && source.slice(ast.members[0].value.start, ast.members[0].value.end)).toBe(
+    expect(ast.kind === 'object' && source.slice(ast.members[0]?.value.start, ast.members[0]?.value.end)).toBe(
       `'say "hi" it\\'s'`,
     );
   });
@@ -243,7 +244,7 @@ describe('parseFigureSource — leniency', () => {
     const ast = result.ast!;
     if (ast.kind !== 'object') throw new Error('expected an object');
     expect(ast.members.map((m) => source.slice(m.keyStart, m.keyEnd))).toEqual(['id', 'font-size', '$ref', '_x2']);
-    expect(source.slice(ast.members[1].start, ast.members[1].end)).toBe('font-size: 12');
+    expect(source.slice(ast.members[1]?.start, ast.members[1]?.end)).toBe('font-size: 12');
   });
 
   it('recovers a missing comma at a line break between members, with a warning at the gap', () => {
@@ -282,7 +283,7 @@ describe('parseFigureSource — leniency', () => {
     const source = '{"nodes": [{"id": "a", "tone": "red", "tone": "blue"}]}';
     const result = ok(source);
     expect(result.value).toEqual({ nodes: [{ id: 'a', tone: 'blue' }] });
-    const node = (result.ast as { members: { value: { items: JsonNode[] } }[] }).members[0].value.items[0];
+    const node = itemAt(itemAt((result.ast as { members: { value: { items: JsonNode[] } }[] }).members, 0).value.items, 0);
     expect(node.kind === 'object' && node.members.map((m) => m.key)).toEqual(['id', 'tone', 'tone']);
     const second = source.lastIndexOf('"tone"');
     expect(result.diagnostics).toEqual([
@@ -305,7 +306,7 @@ describe('parseFigureSource — leniency', () => {
 
   it('names odd keys with bracket paths', () => {
     const result = ok('{"a b": {"x": 1, "x": 2}}');
-    expect(result.diagnostics[0].path).toBe('["a b"].x');
+    expect(result.diagnostics[0]?.path).toBe('["a b"].x');
   });
 });
 
@@ -379,8 +380,8 @@ describe('parseFigureSource — LaTeX in strings', () => {
   it('notes a non-letter backslash sequence by its two characters', () => {
     const result = ok(String.raw`{"a": "x\,y"}`);
     expect((result.value as { a: string }).a).toBe('x\\,y');
-    expect(result.diagnostics[0].message.startsWith('`\\,`')).toBe(true);
-    expect(result.diagnostics[0].range).toEqual([8, 10]);
+    expect(result.diagnostics[0]?.message.startsWith('`\\,`')).toBe(true);
+    expect(result.diagnostics[0]?.range).toEqual([8, 10]);
   });
 
   it.each([
@@ -471,7 +472,7 @@ describe('parseFigureSource — numbers', () => {
       },
     ]);
     const ast = result.ast!;
-    expect(ast.kind === 'object' && source.slice(ast.members[0].value.start, ast.members[0].value.end)).toBe(text);
+    expect(ast.kind === 'object' && source.slice(ast.members[0]?.value.start, ast.members[0]?.value.end)).toBe(text);
   });
 
   it('reads strict numbers silently', () => {
@@ -578,7 +579,7 @@ describe('parseFigureSource — syntax errors', () => {
   it('drops warnings when the parse fails, so the one error stands alone', () => {
     const result = parseFigureSource('{"a": .5, "a": 1, "b": }');
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0].code).toBe('json.syntax');
+    expect(result.diagnostics[0]?.code).toBe('json.syntax');
   });
 
   it('stops runaway nesting without overflowing the stack', () => {

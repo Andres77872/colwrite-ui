@@ -1,15 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
-import { EditorProvider, useEditor } from './editor'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { createAppQueryClient } from './api/query'
+import { flushAssistantSettingsWrites, stopAssistantSettingsWrites } from './data/assistant'
+import { registerPendingSave } from './lib/pendingSaves'
+import { EditorProvider, useDocumentActions, useDocumentSession, useDocumentStatus } from './editor'
 import { ProposalsProvider } from './editor/ProposalsContext'
+import { ReferenceHealthProvider } from './components/editor/References/ReferenceHealthProvider'
+import { ReviewCommentsProvider } from './components/editor/ReviewComments/ReviewCommentsProvider'
 import { AppShell } from './components/layout/AppShell'
 import { Canvas } from './components/editor/Canvas'
 import { PageTopbar } from './components/editor/DocumentChrome'
 import { FloatingToolbar } from './components/editor/FloatingToolbar'
 import { SlashMenu } from './components/editor/SlashMenu'
-import { PanelsProvider, ToolsAside } from './components/panels'
+import { FindCitationsHost } from './components/editor/FindCitations'
+import { PanelsProvider, PanelsAside } from './components/panels'
 import { Sidebar } from './components/layout/Sidebar'
-import { ViewProvider } from './components/layout/ViewContext'
-import { useDocumentTitle, useUnsavedGuard } from './components/layout/useAppChrome'
+import { DocumentUrlSync, NavigationProvider } from './components/layout/NavigationContext'
+import { useDocumentTitle, useStrayFileDropGuard, useUnsavedGuard } from './components/layout/useAppChrome'
 import { useView } from './components/layout/viewContextState'
 import { ShortcutsDialog, useAppShortcuts } from './components/layout/Shortcuts'
 import { CommandPalette } from './components/layout/CommandPalette'
@@ -19,9 +26,12 @@ import { LandingPage } from './components/landing'
 import { SettingsDialog } from './components/profile'
 import { Spinner } from './components/ui/spinner'
 import { ErrorBoundary } from './components/common/ErrorBoundary'
-import { AgentEngineProvider, AgentToolsProvider } from './components/preferences'
+import { AgentEngineProvider, AssistantCatalogProvider } from './components/preferences'
 import { DocumentLoadingBoundary } from './components/editor/DocumentLoading'
 import { useToast } from './components/ui/toastContext'
+import { WorkspaceProvider } from './components/workspace/WorkspaceProvider'
+import { WorkspaceScope } from './components/workspace/WorkspaceScope'
+import { TrashDialog } from './components/collections/TrashDialog'
 
 function App() {
   const { user, status } = useAuth();
@@ -44,36 +54,62 @@ function App() {
     )
   }
 
+  // The account's server data sits at the top, in one query cache per signed-in
+  // account, where every workspace's queries name their workspace. Navigation
+  // (the URL) sits above the workspace, so Back and Forward survive a switch;
+  // the panel layout belongs to this device. Everything
+  // inside `WorkspaceScope` belongs to one workspace and remounts when it
+  // changes (`docs/workspace_collection/08` §5.1).
   return (
-    <AgentToolsProvider key={`${user.email}\u0000${user.name}`}>
-      {/* The engines a local API offers (Claude Code, Codex) and which one each
-          surface uses; a deployed API offers only the gateway. */}
-      <AgentEngineProvider>
-        <EditorProvider>
-          {/* Navigation must outlive every document-scoped provider. In particular,
-              it needs to update ?doc= after a switch without being remounted by
-              that same switch and re-reading the previous URL. */}
-          <ViewProvider>
-            {/* Pending agent changes are applied through the editor's own patch path
-                once the author accepts them. These providers reset their tagged
-                document state without remounting the workspace. */}
-            <ProposalsProvider>
-              <ChatSessionsProvider>
-                <PanelsProvider>
-                  <Surface />
-                </PanelsProvider>
-              </ChatSessionsProvider>
-            </ProposalsProvider>
-          </ViewProvider>
-        </EditorProvider>
-      </AgentEngineProvider>
-    </AgentToolsProvider>
+    <AccountQueries key={`${user.email}\u0000${user.name}`}>
+    <NavigationProvider>
+      <WorkspaceProvider>
+        {/* The engines a local API offers (Claude Code, Codex) and which one each
+            surface uses; a deployed API offers only the gateway. */}
+        <AgentEngineProvider>
+          <PanelsProvider>
+            <WorkspaceScope>
+              <AssistantCatalogProvider>
+                <EditorProvider>
+                  <DocumentUrlSync />
+                  {/* Pending agent changes are applied through the editor's own patch
+                      path once the author accepts them. These providers reset their
+                      tagged page state without remounting the scope. */}
+                  <ProposalsProvider>
+                    {/* The page's last reference audit, and "Check references". */}
+                    <ReferenceHealthProvider>
+                      <ChatSessionsProvider>
+                        <ReviewCommentsProvider><Surface /></ReviewCommentsProvider>
+                      </ChatSessionsProvider>
+                    </ReferenceHealthProvider>
+                  </ProposalsProvider>
+                </EditorProvider>
+              </AssistantCatalogProvider>
+            </WorkspaceScope>
+          </PanelsProvider>
+        </AgentEngineProvider>
+      </WorkspaceProvider>
+    </NavigationProvider>
+    </AccountQueries>
   )
 }
 
 /**
+ * One query cache for the signed-in account. Signing out unmounts it with
+ * everything it read, so the next account starts from an empty cache.
+ */
+function AccountQueries({ children }: { children: React.ReactNode }) {
+  const [queryClient] = useState(createAppQueryClient);
+  useEffect(() => registerPendingSave({
+    flush: () => flushAssistantSettingsWrites(queryClient),
+    end: () => stopAssistantSettingsWrites(queryClient),
+  }), [queryClient]);
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+}
+
+/**
  * The signed-in surface: the workspace, always, with Settings as a dialog
- * over it when the URL says `?view=profile`.
+ * over it when the URL says `?view=settings`.
  *
  * Frame: the sidebar on the left, the page (its topbar, then the canvas) in
  * the middle, and the right sidebar — the assistant and the page tools —
@@ -83,10 +119,12 @@ function Surface() {
   const { view, setView } = useView();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
   const regionRef = useRef<HTMLDivElement>(null);
 
   useDocumentTitle(view);
   useUnsavedGuard();
+  useStrayFileDropGuard();
   useAppShortcuts({
     onShowHelp: () => setShortcutsOpen(true),
     onOpenPalette: () => setPaletteOpen(true),
@@ -101,6 +139,7 @@ function Surface() {
             <Sidebar
               onOpenPalette={() => setPaletteOpen(true)}
               onShowShortcuts={() => setShortcutsOpen(true)}
+              onOpenTrash={() => setTrashOpen(true)}
             />
           </ErrorBoundary>
         }
@@ -110,6 +149,7 @@ function Surface() {
               <PageTopbar />
               <Canvas />
               <FloatingToolbar />
+              <FindCitationsHost />
               <SlashMenu />
             </DocumentLoadingBoundary>
           </ErrorBoundary>
@@ -117,15 +157,15 @@ function Surface() {
         aside={
           <ErrorBoundary label="this panel">
             <DocumentToolBoundary>
-              <ToolsAside />
+              <PanelsAside />
             </DocumentToolBoundary>
           </ErrorBoundary>
         }
       />
       <ErrorBoundary label="settings">
         <SettingsDialog
-          open={view === 'profile'}
-          onOpenChange={(open) => setView(open ? 'profile' : 'workspace')}
+          open={view === 'settings'}
+          onOpenChange={(open) => setView(open ? 'settings' : 'editor')}
         />
       </ErrorBoundary>
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
@@ -133,13 +173,18 @@ function Surface() {
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         onShowShortcuts={() => setShortcutsOpen(true)}
+        onOpenTrash={() => setTrashOpen(true)}
       />
+      <ErrorBoundary label="the Trash">
+        <TrashDialog open={trashOpen} onOpenChange={setTrashOpen} />
+      </ErrorBoundary>
     </>
   )
 }
 
 function DocumentLoadNotice() {
-  const { documentLoadNotice, clearDocumentLoadNotice } = useEditor();
+  const { documentLoadNotice } = useDocumentStatus();
+  const { clearDocumentLoadNotice } = useDocumentActions();
   const { toast } = useToast();
   const announced = useRef<number | null>(null);
 
@@ -158,7 +203,7 @@ function DocumentLoadNotice() {
 }
 
 function DocumentToolBoundary({ children }: { children: React.ReactNode }) {
-  const { loadingDocumentId } = useEditor();
+  const { loadingDocumentId } = useDocumentSession();
   const pending = Boolean(loadingDocumentId);
   return (
     <div

@@ -7,16 +7,37 @@ import {
   type ChatSessionsValue,
 } from '@/components/chat/chatSessionsState';
 import { ProposalsProvider } from '../ProposalsContext';
-import {
-  EditorActionsContext,
-  EditorContext,
-  type EditorContextValue,
-} from '../editorContextState';
+import { FakeEditorProviders, type EditorProbe } from './editorHarness';
 import {
   useProposals,
   type ProposalsContextValue,
 } from '../proposalsContextState';
 import type { ToolAction } from '../types';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
+
+/** The server's change sets: one append on each page's set. */
+vi.mock('@/data/documentHistory', async () => ({
+  ...(await vi.importActual<Record<string, unknown>>('@/data/documentHistory')),
+  getChangeSet: vi.fn(async (_workspaceId: string, documentId: string, changeSetId: string) => ({
+    changeSetId,
+    documentId,
+    status: 'pending',
+    operations: [{ op: 'write_blocks', position: 'append', blockId: null, blocks: [{ id: `${documentId}-block`, type: 'divider' }] }],
+    unmappableOperations: [],
+    baseEtag: 'cw:1',
+    toolCallId: `call-${documentId}`,
+    summary: null,
+    expiresAt: '2026-11-20T00:00:00Z',
+    proposedAt: '2026-11-14T10:00:00Z',
+    dependsOnChangeSetId: null,
+    applyPolicy: 'review',
+    autoBlockedReason: null,
+    operationDecisions: [],
+    operationTargets: null,
+  })),
+  listPendingChangeSets: vi.fn(async () => []),
+  decideChangeSetOperations: vi.fn(async () => ({})),
+}));
 
 let childMounts = 0;
 let childUnmounts = 0;
@@ -25,32 +46,39 @@ const captureRef = createRef<{
   chats: ChatSessionsValue;
 }>();
 
-const applyPatch = vi.fn(() => ({ blocks: [], desynced: [], touched: [] }));
-const adoptServerVersion = vi.fn();
+const applyPatch = vi.fn(() => ({ blocks: [], doc: { blocks: [] }, desynced: [], touched: [] }));
 const markRecentlyChanged = vi.fn();
 
-function editorValue(documentId: string): EditorContextValue {
+function editorValue(documentId: string): EditorProbe {
   return {
     documentId,
     blocks: [],
     applyPatch,
-    adoptServerVersion,
     markRecentlyChanged,
-  } as unknown as EditorContextValue;
+  } as unknown as EditorProbe;
 }
 
-/** A staged batch: one reviewable change, plus a document the agent created. */
+/** A stored change set with one reviewable change. */
 function proposal(documentId: string): ToolAction {
   return {
     tool: 'doc_edit',
     toolCallId: `call-${documentId}`,
     documentId,
-    version: 1,
     status: 'proposed',
-    actions: [
-      { op: 'create_document', documentId: `${documentId}-created` },
-      { op: 'append_block', block: { id: `${documentId}-block`, type: 'divider' } },
-    ],
+    actions: [],
+    changeSetId: `cs-${documentId}`,
+    proposalOperationCount: 1,
+  };
+}
+
+/** A page the agent created, announced by `doc_create`. */
+function created(documentId: string): ToolAction {
+  return {
+    tool: 'doc_create',
+    toolCallId: `call-${documentId}-create`,
+    documentId: `${documentId}-created`,
+    status: 'applied',
+    actions: [{ op: 'create_document', documentId: `${documentId}-created` }],
   };
 }
 
@@ -66,9 +94,10 @@ function failedProposal(documentId: string): ToolAction {
     ...proposal(documentId),
     toolCallId: `call-${documentId}-failed`,
     status: 'error',
+    changeSetId: null,
     message: 'Review failed',
     actions: [
-      { op: 'append_block', block: { id: `${documentId}-failed`, type: 'divider' } },
+      { op: 'write_blocks', position: 'append', blockId: null, blocks: [{ id: `${documentId}-failed`, type: 'divider' }] },
     ],
   };
 }
@@ -90,18 +119,15 @@ function CaptureDocumentState() {
 
 function Tree({ documentId }: { documentId: string }) {
   const value = editorValue(documentId);
-  // The fake carries both state and actions, so it feeds both halves of the
-  // split context.
+  // The fake carries every slice, so it feeds every editor context.
   return (
-    <EditorContext.Provider value={value}>
-      <EditorActionsContext.Provider value={value}>
-        <ProposalsProvider>
-          <ChatSessionsProvider>
-            <CaptureDocumentState />
-          </ChatSessionsProvider>
-        </ProposalsProvider>
-      </EditorActionsContext.Provider>
-    </EditorContext.Provider>
+    <FakeEditorProviders value={value}>
+      <ProposalsProvider>
+        <ChatSessionsProvider>
+          <CaptureDocumentState />
+        </ChatSessionsProvider>
+      </ProposalsProvider>
+    </FakeEditorProviders>
   );
 }
 
@@ -127,15 +153,16 @@ afterEach(() => {
 });
 
 describe('document-scoped providers', () => {
-  it('resets proposal and chat state without remounting descendants or accepting stale setters', () => {
-    localStorage.setItem('colwrite:chat:selected:doc-b', 'persisted-b');
+  it('resets proposal and chat state without remounting descendants or accepting stale setters', async () => {
+    localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:chat:doc-b`, 'persisted-b');
     const view = render(<Tree documentId="doc-a" />);
 
-    act(() => {
+    await act(async () => {
       currentReview().receive(proposal('doc-a'));
+      currentReview().receive(created('doc-a'));
       currentReview().receive(failedProposal('doc-a'));
       currentChats().setSelectedChatId('chat-a');
-      currentChats().setSelectedThreadId(7);
+      currentChats().setSelectedLeafId(7);
     });
 
     // Two batches arrived; only the one the server actually staged is
@@ -145,11 +172,11 @@ describe('document-scoped providers', () => {
     expect(currentReview().focusedChangeId).not.toBeNull();
     expect(currentReview().error).toBe('Review failed');
     expect(currentChats().selectedChatId).toBe('chat-a');
-    expect(currentChats().selectedThreadId).toBe(7);
+    expect(currentChats().selectedLeafId).toBe(7);
 
     const staleReceive = currentReview().receive;
     const staleSetChat = currentChats().setSelectedChatId;
-    const staleSetThread = currentChats().setSelectedThreadId;
+    const staleSetThread = currentChats().setSelectedLeafId;
 
     act(() => {
       view.rerender(<Tree documentId="doc-b" />);
@@ -162,10 +189,11 @@ describe('document-scoped providers', () => {
     expect(currentReview().focusedChangeId).toBeNull();
     expect(currentReview().error).toBeNull();
     expect(currentChats().selectedChatId).toBe('persisted-b');
-    expect(currentChats().selectedThreadId).toBeNull();
+    expect(currentChats().selectedLeafId).toBeNull();
 
-    act(() => {
+    await act(async () => {
       staleReceive(proposal('doc-a'));
+      staleReceive(created('doc-a'));
       staleSetChat('stale-chat');
       staleSetThread(99);
     });
@@ -173,7 +201,7 @@ describe('document-scoped providers', () => {
     expect(currentReview().pendingCount).toBe(0);
     expect(currentReview().invites).toEqual([]);
     expect(currentChats().selectedChatId).toBe('persisted-b');
-    expect(currentChats().selectedThreadId).toBeNull();
-    expect(localStorage.getItem('colwrite:chat:selected:doc-b')).toBe('persisted-b');
+    expect(currentChats().selectedLeafId).toBeNull();
+    expect(localStorage.getItem(`colwrite:ws:${TEST_WORKSPACE_ID}:chat:doc-b`)).toBe('persisted-b');
   });
 });

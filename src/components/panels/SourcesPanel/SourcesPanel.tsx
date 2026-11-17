@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   AlertTriangle,
-  BadgeCheck,
   BookOpen,
   Check,
+  ChevronRight,
   ClipboardCopy,
   Crosshair,
   Download,
@@ -15,6 +15,7 @@ import {
   Quote,
   RefreshCw,
   Search,
+  SearchCheck,
   Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -38,87 +39,99 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/components/ui/toastContext';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
+import { copyToClipboard } from '@/lib/clipboard';
 import {
-  canonicalCitationKey,
-  isVerifiedSource,
+  canonicalDoi,
+  citationStyleInfo,
+  identifierKey,
+  manualRecord,
+  referenceByline,
   referenceLink,
+  referenceMarks,
+  referenceNames,
+  referenceTitle,
+  referenceVenue,
+  referenceYear,
   useBibliography,
   useEditorActions,
-  useEditorState,
-  type CitationSource,
-  type Doc,
+  useEditorDoc,
+  usePageReadOnly,
+  type CslName,
+  type ReferenceRecord,
 } from '@/editor';
 import { parseBibtex, toBibtex } from '@/editor/bibtex';
 import { downloadBlob, exportFilename } from '@/export/download';
-import { resolveSource } from '@/services/sources';
-import { ApiError } from '@/services/contracts';
-import { revealCitationUsage, useCiteAtCursor } from '@/components/editor/References';
+import { resolveFailure, resolveSource } from '@/data/sources';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
+import {
+  CitationStylePicker,
+  ReferenceStatus,
+  findingMarks,
+  revealCitationUsage,
+  useCiteAndAnnounce,
+  useReferenceHealth,
+  type ReferenceFinding,
+} from '@/components/editor/References';
+import type { ReferenceAudit } from '@/data/references';
+import { shortDateTime } from '@/components/layout/editedLabel';
 import { usePanels } from '../panelsContextState';
 import { scrollBehavior } from '@/lib/motion';
 
 type Row = {
   key: string;
-  source: CitationSource;
+  record: ReferenceRecord | null;
   number?: number;
+  marker?: string | null;
   usages: number;
   firstUsage?: { blockId: string; childId: string };
   inLibrary: boolean;
-  verified: boolean;
 };
 
-const STYLES: ReadonlyArray<{ value: Doc['citationStyle'] | null; label: string }> = [
-  { value: null, label: 'Auto' },
-  { value: 'numeric', label: 'Numeric' },
-  { value: 'ieee', label: 'IEEE' },
-  { value: 'author-year', label: 'Author–year' },
-];
-
-/** What went wrong resolving an identifier, in the author's terms. */
-function resolveError(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.status === 400) return 'That is not a DOI, an arXiv id or a Semantic Scholar id.';
-    if (error.status === 404) return 'No record exists for that identifier. Check it for typos.';
-    if (error.status === 403) return error.message;
-    if (error.status === 503) return 'The registry could not be reached. Try again in a moment.';
-  }
-  return error instanceof Error ? error.message : 'The source could not be resolved.';
+/** The identifier the registries can check the entry by: its key, when it carries a scheme. */
+function resolvableIdentifier(row: Row): string | null {
+  return identifierKey(row.key) ?? (row.record?.csl.DOI ? `doi:${canonicalDoi(row.record.csl.DOI) ?? row.record.csl.DOI}` : null);
 }
 
-/** The identifier a registry can confirm, if the source has one. */
-function resolvableIdentifier(source: CitationSource): string | null {
-  const candidates = [source.doi, source.key, source.externalIds?.ArXiv, source.externalIds?.DOI];
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    if (/^10\.\d{4,9}\//i.test(canonicalCitationKey(candidate))) return candidate;
-    if (/^\d{4}\.\d{4,5}$/.test(canonicalCitationKey(candidate))) return candidate;
-    if (/^S2:/i.test(candidate)) return candidate;
-  }
-  return null;
+/** "Ada Lovelace; Charles Babbage" from the names, and back. */
+function namesText(names: readonly CslName[] | undefined): string {
+  return (names ?? [])
+    .map((name) => name.literal ?? [name.family, name.given].filter(Boolean).join(', '))
+    .join('; ');
 }
 
-function Byline({ source }: { source: CitationSource }) {
-  const parts = [source.authors, source.year, source.venue].filter(Boolean);
-  if (parts.length === 0) return null;
-  return <p className="mt-0.5 truncate text-xs text-muted-foreground">{parts.join(' · ')}</p>;
+function parseNames(value: string): CslName[] {
+  return value
+    .split(/\s*;\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const [family, given] = part.split(/\s*,\s*/, 2);
+      if (given) return { family: family ?? part, given };
+      const words = part.split(/\s+/);
+      return words.length > 1 ? { family: words.at(-1) ?? part, given: words.slice(0, -1).join(' ') } : { literal: part };
+    });
 }
 
 function SourceEditor({
-  source,
+  record,
+  rowKey,
   onSave,
   onCancel,
 }: {
-  source: CitationSource;
-  onSave: (patch: Partial<CitationSource>) => void;
+  record: ReferenceRecord | null;
+  rowKey: string;
+  onSave: (record: ReferenceRecord) => void;
   onCancel: () => void;
 }) {
   const [draft, setDraft] = useState({
-    title: source.title ?? '',
-    authors: source.authors ?? '',
-    year: source.year ?? '',
-    venue: source.venue ?? '',
-    url: source.url ?? '',
-    doi: source.doi ?? '',
+    title: record?.csl.title ?? '',
+    authors: namesText(record?.csl.author),
+    year: record ? referenceYear(record) ?? '' : '',
+    venue: record?.csl['container-title'] ?? '',
+    doi: record?.csl.DOI ?? '',
+    url: record?.csl.URL ?? '',
   });
   const field = (name: keyof typeof draft, label: string, placeholder?: string) => (
     <label className="block text-xs">
@@ -136,15 +149,24 @@ function SourceEditor({
       onSubmit={(event) => {
         event.preventDefault();
         // Changed details are the author's, not the registry's: the entry is
-        // no longer what a record said, so it stops claiming to be verified.
-        const changed = (Object.keys(draft) as Array<keyof typeof draft>).some(
-          (field) => (source[field] ?? '') !== draft[field],
-        );
-        onSave(changed ? { ...draft, provider: 'manual' } : draft);
+        // no longer what a record said, so it becomes `manual` and unchecked.
+        const year = Number(draft.year.trim());
+        const authors = parseNames(draft.authors);
+        const csl = {
+          ...(record?.csl ?? { type: 'document' as const }),
+          title: draft.title.trim() || rowKey,
+          ...(authors.length ? { author: authors } : { author: undefined }),
+          issued: Number.isInteger(year) && year > 0 ? { 'date-parts': [[year]] } : undefined,
+          'container-title': draft.venue.trim() || undefined,
+          DOI: canonicalDoi(draft.doi) ?? (draft.doi.trim() || undefined),
+          URL: draft.url.trim() || undefined,
+        };
+        const clean = Object.fromEntries(Object.entries(csl).filter(([, value]) => value !== undefined)) as Omit<ReferenceRecord['csl'], 'id'>;
+        onSave(manualRecord(rowKey, clean, record?.kind ?? 'other', record?.flags ?? []));
       }}
     >
       {field('title', 'Title')}
-      {field('authors', 'Authors', 'Ada Lovelace, Charles Babbage')}
+      {field('authors', 'Authors', 'Lovelace, Ada; Babbage, Charles')}
       <div className="grid grid-cols-[5rem_1fr] gap-2">
         {field('year', 'Year')}
         {field('venue', 'Venue', 'Journal or conference')}
@@ -171,26 +193,38 @@ function SourceRow({
   onRemove,
   verifying,
   highlighted,
+  readOnly = false,
+  finding,
+  titleOf,
 }: {
+  /** A viewer's row reads, links and copies; it never cites, verifies, edits or removes. */
+  readOnly?: boolean;
+  /** What the last reference check found about it. */
+  finding?: ReferenceFinding;
+  titleOf: (key: string) => string;
   row: Row;
-  onCite: () => void;
+  onCite: (() => void) | null;
   onVerify: (() => void) | null;
-  onEdit: (patch: Partial<CitationSource>) => void;
+  onEdit: (record: ReferenceRecord) => void;
   onRemove: () => void;
   verifying: boolean;
   highlighted: boolean;
 }) {
   const [editing, setEditing] = useState(false);
+  // Set when "Remove from sources" was chosen on a source that is still cited:
+  // removing the library entry would leave every citation in place, so the
+  // row would not go anywhere and the action would seem to do nothing.
+  const [stillCited, setStillCited] = useState(false);
   const { toast } = useToast();
-  const link = referenceLink(row.source);
+  const link = row.record ? referenceLink(row.record) : null;
+  const title = referenceTitle(row.record, row.key);
+  const byline = row.record ? referenceByline(row.record) : '';
+  const manual = row.record?.provider === 'manual';
 
   const copyBibtex = async () => {
-    try {
-      await navigator.clipboard.writeText(toBibtex([row.source]));
-      toast({ title: 'BibTeX copied' });
-    } catch {
-      toast({ title: 'Could not copy', variant: 'error' });
-    }
+    if (!row.record) return;
+    const copied = await copyToClipboard({ plain: toBibtex([row.record]) });
+    toast(copied ? { title: 'BibTeX copied' } : { title: 'Could not copy', variant: 'error' });
   };
 
   return (
@@ -203,31 +237,22 @@ function SourceRow({
     >
       <div className="flex items-start gap-2">
         <span className="mt-px w-6 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-          {row.number !== undefined ? `[${row.number}]` : ''}
+          {row.marker ?? (row.number !== undefined ? `[${row.number}]` : '')}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="line-clamp-2 text-sm font-medium leading-snug">{row.source.title || row.key}</p>
-          <Byline source={row.source} />
+          <p className="line-clamp-2 text-sm font-medium leading-snug">{title}</p>
+          {byline && <p className="mt-0.5 truncate text-xs text-muted-foreground">{byline}</p>}
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-            {row.verified ? (
-              <span
-                className="inline-flex items-center gap-1 text-success"
-                title="Metadata came from a registry or a source the assistant read"
-              >
-                <BadgeCheck aria-hidden="true" className="h-3.5 w-3.5" />
-                Verified
-              </span>
-            ) : (
-              <span
-                className="inline-flex items-center gap-1 text-warning"
-                title="Typed or imported — not confirmed against a registry"
-              >
-                <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
-                Unverified
-              </span>
-            )}
+            <ReferenceStatus record={row.record} />
+            {!row.record && <span className="text-warning">No details attached</span>}
+            {manual && <span title="Typed, imported or edited — not checked against a registry">Entered by hand</span>}
             <span>{row.usages > 0 ? `Cited ${row.usages === 1 ? 'once' : `${row.usages}×`}` : 'Not cited yet'}</span>
           </p>
+          {findingMarks(finding, titleOf).map((mark) => (
+            <p key={mark.kind} data-finding={mark.kind} className="mt-1 text-xs text-tint-yellow-fg">
+              <span className="font-medium">{mark.label}:</span> {mark.detail}
+            </p>
+          ))}
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -235,17 +260,19 @@ function SourceRow({
               type="button"
               variant="icon"
               size="icon-xs"
-              aria-label={`Actions for ${row.source.title || row.key}`}
+              aria-label={`Actions for ${title}`}
               className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 pointer-coarse:opacity-100"
             >
               <MoreHorizontal />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuItem onSelect={onCite}>
-              <Quote />
-              Cite at cursor
-            </DropdownMenuItem>
+            {!readOnly && onCite && (
+              <DropdownMenuItem onSelect={onCite}>
+                <Quote />
+                Cite at cursor
+              </DropdownMenuItem>
+            )}
             {row.firstUsage && (
               <DropdownMenuItem onSelect={() => row.firstUsage && revealCitationUsage(row.firstUsage)}>
                 <Crosshair />
@@ -260,24 +287,34 @@ function SourceRow({
                 </a>
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem onSelect={() => void copyBibtex()}>
-              <ClipboardCopy />
-              Copy BibTeX
-            </DropdownMenuItem>
-            {onVerify && (
-              <DropdownMenuItem onSelect={onVerify}>
-                <RefreshCw />
-                {row.verified ? 'Refresh from registry' : 'Verify against registry'}
+            {row.record && (
+              <DropdownMenuItem onSelect={() => void copyBibtex()}>
+                <ClipboardCopy />
+                Copy BibTeX
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem onSelect={() => setEditing(true)}>
-              <Pencil />
-              Edit details
-            </DropdownMenuItem>
-            {row.inLibrary && (
+            {onVerify && !readOnly && (
+              <DropdownMenuItem onSelect={onVerify}>
+                <RefreshCw />
+                Check against the registries
+              </DropdownMenuItem>
+            )}
+            {!readOnly && (
+              <DropdownMenuItem onSelect={() => setEditing(true)}>
+                <Pencil />
+                Edit details
+              </DropdownMenuItem>
+            )}
+            {row.inLibrary && !readOnly && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem destructive onSelect={onRemove}>
+                <DropdownMenuItem
+                  destructive
+                  onSelect={() => {
+                    if (row.usages > 0) setStillCited(true);
+                    else onRemove();
+                  }}
+                >
                   <Trash2 />
                   Remove from sources
                 </DropdownMenuItem>
@@ -288,15 +325,39 @@ function SourceRow({
       </div>
       {verifying && (
         <p className="mt-1 flex items-center gap-1.5 pl-8 text-xs text-muted-foreground">
-          <Spinner /> Checking the registry…
+          <Spinner /> Checking the registries…
         </p>
+      )}
+      {stillCited && row.usages > 0 && (
+        <div role="status" className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-8 text-xs text-muted-foreground">
+          <span>
+            Still cited {row.usages === 1 ? 'once' : `${row.usages} times`}: remove the citations first.
+          </span>
+          {row.firstUsage && (
+            <button
+              type="button"
+              className="rounded-xs font-medium text-link hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => row.firstUsage && revealCitationUsage(row.firstUsage)}
+            >
+              Show where
+            </button>
+          )}
+          <button
+            type="button"
+            className="rounded-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => setStillCited(false)}
+          >
+            Dismiss
+          </button>
+        </div>
       )}
       {editing && (
         <SourceEditor
-          source={row.source}
+          record={row.record}
+          rowKey={row.key}
           onCancel={() => setEditing(false)}
-          onSave={(patch) => {
-            onEdit(patch);
+          onSave={(record) => {
+            onEdit(record);
             setEditing(false);
           }}
         />
@@ -309,16 +370,76 @@ function SourceRow({
  * The document's sources: everything it cites, in reference-list order, and
  * everything the author keeps in its library for later.
  *
- * Each source says whether its metadata was *verified* — copied from a
- * registry or from a source the assistant actually read — or typed. Adding
- * by DOI or arXiv id resolves against the registry, never trusting what was
- * typed; imported BibTeX stays unverified until the author checks it.
+ * Each source shows its reference state where it matters (09 §5): a mark
+ * for one that needs review, with what differs, one no registry found, a
+ * retraction with its notice, a preprint with a published version. Adding
+ * by identifier goes through the resolver, never trusting what was typed;
+ * an entry typed, imported or edited by hand is `manual` until checked.
  */
+/**
+ * "Check references" (P2.UI-4): the page's references looked up again, and
+ * what the last check found, in its counts. The refresh it proposes is
+ * reviewed in the page like any change set.
+ */
+function ReferenceCheck({
+  report,
+  check,
+  checking,
+  error,
+}: {
+  report: ReferenceAudit | null;
+  check: (() => Promise<void>) | null;
+  checking: boolean;
+  error: string | null;
+}) {
+  const counts = report?.counts;
+  const found = counts
+    ? [
+        counts.retracted && `${counts.retracted} retracted`,
+        counts.stale && `${counts.stale} out of date`,
+        counts.duplicates && `${counts.duplicates} duplicate${counts.duplicates === 1 ? '' : 's'}`,
+        counts.orphans && `${counts.orphans} cited with no entry`,
+        counts.needs_review && `${counts.needs_review} to review`,
+        counts.not_found && `${counts.not_found} not found`,
+      ].filter(Boolean)
+    : [];
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <p className="min-w-0 text-xs text-muted-foreground" aria-live="polite">
+          {checking
+            ? 'Checking the references…'
+            : report
+              ? `Checked ${shortDateTime(Date.parse(report.checked_at))}: ${found.length ? found.join(' · ') : 'nothing to fix'}.`
+              : 'References not checked yet.'}
+        </p>
+        {check && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => void check()} disabled={checking} className="shrink-0">
+            {checking ? <Spinner /> : <SearchCheck aria-hidden="true" />}
+            Check references
+          </Button>
+        )}
+      </div>
+      {report && !report.outside_lookups && (
+        <p className="text-xs text-muted-foreground">Outside research is switched off in this workspace, so nothing was looked up.</p>
+      )}
+      {report?.change_set_id && (counts?.stale ?? 0) > 0 && (
+        <p className="text-xs text-muted-foreground">A refresh of the out-of-date records is proposed for review in the page.</p>
+      )}
+      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
 export function SourcesPanel() {
-  const { doc } = useEditorState();
+  const workspaceId = useWorkspaceId();
+  const { doc } = useEditorDoc();
   const { upsertSources, updateSource, removeSource, setCitationStyle } = useEditorActions();
+  // A viewer reads and exports the page's sources; the library is the page's, and theirs to read only.
+  const readOnly = usePageReadOnly();
   const bibliography = useBibliography();
-  const cite = useCiteAtCursor();
+  const health = useReferenceHealth();
+  const cite = useCiteAndAnnounce();
   const { toast } = useToast();
   const [identifier, setIdentifier] = useState('');
   const [adding, setAdding] = useState(false);
@@ -333,35 +454,26 @@ export function SourcesPanel() {
   const { intent } = usePanels();
 
   const library = useMemo(() => doc.sources ?? [], [doc.sources]);
-  const libraryKeys = useMemo(
-    () => new Set(library.map((source) => canonicalCitationKey(source.key))),
-    [library],
-  );
+  const libraryKeys = useMemo(() => new Set(library.map((source) => source.key)), [library]);
 
   const rows = useMemo(() => {
     const cited: Row[] = bibliography.entries.map((entry) => ({
       key: entry.key,
-      source: entry.source,
-      number: bibliography.style === 'author-year' ? undefined : entry.number,
+      record: entry.record,
+      number: entry.number,
+      marker: entry.marker,
       usages: entry.usages.length,
       firstUsage: entry.usages[0],
       inLibrary: libraryKeys.has(entry.key),
-      verified: entry.verified,
     }));
     const citedKeys = new Set(cited.map((row) => row.key));
     const saved: Row[] = library
-      .filter((source) => !citedKeys.has(canonicalCitationKey(source.key)))
-      .map((source) => ({
-        key: canonicalCitationKey(source.key),
-        source,
-        usages: 0,
-        inLibrary: true,
-        verified: isVerifiedSource(source),
-      }));
+      .filter((source) => !citedKeys.has(source.key))
+      .map((source) => ({ key: source.key, record: source, usages: 0, inLibrary: true }));
     const q = filter.trim().toLowerCase();
     const matches = (row: Row) =>
       !q ||
-      [row.source.title, row.source.authors, row.source.venue, row.source.year, row.key]
+      [row.key, ...(row.record ? [row.record.csl.title, ...referenceNames(row.record), referenceVenue(row.record), referenceYear(row.record)] : [])]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q));
     return { cited: cited.filter(matches), saved: saved.filter(matches), total: cited.length + saved.length };
@@ -373,7 +485,7 @@ export function SourcesPanel() {
   useEffect(() => {
     if (intent?.tab !== 'sources' || handledIntent.current === intent.id) return;
     handledIntent.current = intent.id;
-    const key = canonicalCitationKey(intent.sourceKey);
+    const key = intent.sourceKey;
     setFilter('');
     setHighlighted(key);
     requestAnimationFrame(() => {
@@ -385,8 +497,9 @@ export function SourcesPanel() {
     return () => window.clearTimeout(timer);
   }, [intent]);
 
-  const unverified = useMemo(
-    () => [...rows.cited, ...rows.saved].filter((row) => !row.verified).length,
+  /** References a reviewer reads first: retracted, needing review, not found. */
+  const attention = useMemo(
+    () => [...rows.cited, ...rows.saved].filter((row) => referenceMarks(row.record).some((mark) => mark.tone !== 'neutral')).length,
     [rows],
   );
 
@@ -397,40 +510,45 @@ export function SourcesPanel() {
     setAdding(true);
     setAddError(null);
     try {
-      const source = await resolveSource(value);
-      upsertSources([source]);
+      const { record } = await resolveSource(workspaceId, value);
+      upsertSources([record]);
       setIdentifier('');
-      toast({ title: 'Added to sources', description: source.title });
+      toast({ title: 'Added to sources', description: referenceTitle(record) });
     } catch (error) {
-      setAddError(resolveError(error));
+      setAddError(resolveFailure(error));
     } finally {
       setAdding(false);
     }
   };
 
   const verify = async (row: Row) => {
-    const id = resolvableIdentifier(row.source);
+    const id = resolvableIdentifier(row);
     if (!id) return;
     setVerifying(row.key);
     try {
-      const source = await resolveSource(id);
+      const { record } = await resolveSource(workspaceId, id, {
+        ...(row.record?.csl.title && row.record.provider === 'manual' ? { title: row.record.csl.title } : {}),
+      });
       // Stored under the row's own key, so every citation of it picks it up.
-      upsertSources([{ ...source, key: row.source.key }]);
-      toast({ title: 'Verified', description: source.title });
+      upsertSources([{ ...record, key: row.key }]);
+      toast({ title: 'Checked against the registries', description: referenceTitle(record) });
     } catch (error) {
-      toast({ title: 'Could not verify', description: resolveError(error), variant: 'error' });
+      toast({ title: 'Could not check it', description: resolveFailure(error), variant: 'error' });
     } finally {
       setVerifying(null);
     }
   };
 
-  const edit = (row: Row, patch: Partial<CitationSource>) => {
-    if (row.inLibrary) updateSource(row.source.key, patch);
-    else upsertSources([{ ...row.source, ...patch }]);
+  const edit = (row: Row, record: ReferenceRecord) => {
+    if (row.inLibrary) updateSource(row.key, record);
+    else upsertSources([record]);
   };
 
   const exportBibtex = () => {
-    const all = [...bibliography.entries.map((entry) => entry.source), ...rows.saved.map((row) => row.source)];
+    const all = [
+      ...bibliography.entries.flatMap((entry) => (entry.record ? [entry.record] : [])),
+      ...rows.saved.flatMap((row) => (row.record ? [row.record] : [])),
+    ];
     if (all.length === 0) return;
     downloadBlob(
       new Blob([toBibtex(all)], { type: 'application/x-bibtex' }),
@@ -449,8 +567,13 @@ export function SourcesPanel() {
     setImportText('');
     toast({
       title: `Imported ${sources.length} source${sources.length === 1 ? '' : 's'}`,
-      description: skipped ? `${skipped} entr${skipped === 1 ? 'y' : 'ies'} without a title were skipped.` : 'Verify them against their DOI or arXiv id from each entry’s menu.',
+      description: skipped ? `${skipped} entr${skipped === 1 ? 'y' : 'ies'} without a title were skipped.` : 'Check them against the registries from each entry’s menu.',
     });
+  };
+
+  const titleOf = (key: string) => {
+    const record = library.find((source) => source.key === key) ?? bibliography.byKey.get(key)?.record;
+    return referenceTitle(record, key);
   };
 
   const renderRows = (list: Row[]) => (
@@ -459,15 +582,15 @@ export function SourcesPanel() {
         <SourceRow
           key={row.key}
           row={row}
+          finding={health.findings.get(row.key)}
+          titleOf={titleOf}
           verifying={verifying === row.key}
           highlighted={highlighted === row.key}
-          onCite={() => {
-            const block = cite([row.source]);
-            if (block) toast({ title: 'Citation inserted' });
-          }}
-          onVerify={resolvableIdentifier(row.source) ? () => void verify(row) : null}
-          onEdit={(patch) => edit(row, patch)}
-          onRemove={() => removeSource(row.source.key)}
+          onCite={row.record ? () => void cite([row.record as ReferenceRecord]) : null}
+          onVerify={resolvableIdentifier(row) ? () => void verify(row) : null}
+          onEdit={(record) => edit(row, record)}
+          onRemove={() => removeSource(row.key)}
+          readOnly={readOnly}
         />
       ))}
     </ul>
@@ -476,6 +599,15 @@ export function SourcesPanel() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 space-y-2.5 px-3 pb-2 pt-3">
+        {readOnly ? (
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">You can view this page’s sources, not change them.</p>
+            <Button type="button" variant="ghost" size="sm" onClick={exportBibtex} disabled={rows.total === 0}>
+              <Download aria-hidden="true" />
+              Export .bib
+            </Button>
+          </div>
+        ) : (
         <form onSubmit={add}>
           <label htmlFor="source-identifier" className="sr-only">
             Add a source
@@ -490,7 +622,7 @@ export function SourcesPanel() {
                 id="source-identifier"
                 value={identifier}
                 onChange={(event) => setIdentifier(event.target.value)}
-                placeholder="Add by DOI, arXiv id or S2 id"
+                placeholder="Add by DOI, arXiv id or PMID"
                 className="h-9 pl-8"
                 aria-describedby={addError ? 'source-identifier-error' : undefined}
               />
@@ -525,34 +657,26 @@ export function SourcesPanel() {
             </p>
           )}
         </form>
+        )}
 
-        <div className="flex min-w-0 flex-wrap items-center gap-1">
-          <span aria-hidden="true" className="pr-0.5 text-xs text-muted-foreground">
-            Style
-          </span>
-          <div role="radiogroup" aria-label="Citation style" className="flex flex-wrap items-center gap-0.5">
-            {STYLES.map((option) => {
-              const active = (doc.citationStyle ?? null) === option.value;
-              return (
-                <button
-                  key={option.label}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  onClick={() => setCitationStyle(option.value)}
-                  className={cn(
-                    'h-6 whitespace-nowrap rounded-sm px-1.5 text-xs transition-colors duration-120 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                    active
-                      ? 'bg-active font-medium text-foreground'
-                      : 'text-muted-foreground hover:bg-hover hover:text-foreground',
-                  )}
-                >
-                  {option.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <ReferenceCheck report={health.report} check={readOnly ? null : health.check} checking={health.checking} error={health.error} />
+
+        {/* The page's style, with the processor's and the styles' credits. */}
+        <Collapsible>
+          <CollapsibleTrigger className="group/style -ml-1 flex max-w-full items-center gap-1 rounded-sm px-1 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0 transition-transform group-data-[state=open]/style:rotate-90" />
+            <span className="truncate">
+              Citation style: <span className="font-medium text-foreground">{doc.citationStyle ? citationStyleInfo(doc.citationStyle).name : `Auto (${citationStyleInfo(bibliography.style).name})`}</span>
+            </span>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-1.5">
+            <CitationStylePicker
+              value={doc.citationStyle ?? null}
+              onChange={(style) => !readOnly && setCitationStyle(style)}
+              disabled={readOnly}
+            />
+          </CollapsibleContent>
+        </Collapsible>
 
         {rows.total > 5 && (
           <div className="relative">
@@ -569,12 +693,12 @@ export function SourcesPanel() {
       </div>
 
       <div ref={listRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-1.5 pb-4">
-        {unverified > 0 && (
+        {attention > 0 && (
           <p className="mx-2 flex items-start gap-2 rounded-md bg-tint-yellow px-2.5 py-2 text-xs text-tint-yellow-fg">
             <AlertTriangle aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0" />
             <span>
-              {unverified} source{unverified === 1 ? ' is' : 's are'} not verified against a registry — reviewers
-              check those first. Verify each from its menu.
+              {attention} source{attention === 1 ? ' needs' : 's need'} a look — retracted, not found, or with details the
+              registries disagree on. Each says why.
             </span>
           </p>
         )}
@@ -587,7 +711,7 @@ export function SourcesPanel() {
         ) : (
           <>
             {rows.cited.length > 0 && (
-              <section aria-label="Cited in this document">
+              <section aria-label="Cited on this page">
                 <h3 className="px-2 pb-1 text-xs font-medium text-muted-foreground">Cited · {rows.cited.length}</h3>
                 {renderRows(rows.cited)}
               </section>
@@ -601,7 +725,7 @@ export function SourcesPanel() {
               </section>
             )}
             {rows.cited.length + rows.saved.length === 0 && (
-              <p className="px-2 text-sm text-muted-foreground">Nothing matches “{filter}”.</p>
+              <EmptyState size="inline" title={`Nothing matches “${filter}”`} />
             )}
           </>
         )}
@@ -612,8 +736,8 @@ export function SourcesPanel() {
           <DialogHeader>
             <DialogTitle>Import BibTeX</DialogTitle>
             <DialogDescription>
-              Paste entries from Zotero, Mendeley, Google Scholar or a .bib file. They join this document’s
-              sources as unverified until you check them against their DOI or arXiv id.
+              Paste entries from Zotero, Mendeley, Google Scholar or a .bib file. They join this page’s
+              sources as entered by hand, unchecked until you check them against the registries.
             </DialogDescription>
           </DialogHeader>
           <Textarea

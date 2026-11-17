@@ -23,11 +23,10 @@ const options: DocumentExportOptions = {
   ai_beat: 'omit',
   include_references: true,
 };
-const snapshot = { base_version: 1, local_revision: 1, dirty: false };
+const snapshot = { local_revision: 1, dirty: false };
 
 function doc(): Doc {
   return {
-    version: 1,
     name: 'Diagrams',
     blocks: [
       { id: 'flow', type: 'code', text: 'flowchart LR\n  A --> B', language: 'mermaid' },

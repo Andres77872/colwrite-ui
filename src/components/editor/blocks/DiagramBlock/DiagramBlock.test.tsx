@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
@@ -92,7 +93,7 @@ describe('DiagramBlock', () => {
     // No Done while there is nothing to show instead of the source.
     expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Flowchart' }));
-    expect(actions.updateCodeText).toHaveBeenCalledWith('d1', DIAGRAM_TEMPLATES[0].source);
+    expect(actions.updateCodeText).toHaveBeenCalledWith('d1', itemAt(DIAGRAM_TEMPLATES, 0).source);
     expect(mermaid.render).not.toHaveBeenCalled();
   });
 
@@ -116,6 +117,9 @@ describe('DiagramBlock', () => {
     expect(await screen.findByRole('img', { name: 'Diagram' })).toBeTruthy();
     expect(screen.queryByRole('textbox')).toBeNull();
 
+    // Revealed by hover with a mouse; on touch, globals.css shows
+    // `.block-action` for the active block instead, since nothing hovers.
+    expect(screen.getByRole('button', { name: 'Edit' }).classList.contains('block-action')).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     expect(screen.getByRole('textbox', { name: 'Diagram source, Mermaid' }).textContent).toBe('flowchart LR\n  A --> B');
     // The live preview sits under the source.

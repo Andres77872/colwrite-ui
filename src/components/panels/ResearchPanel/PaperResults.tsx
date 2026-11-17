@@ -1,17 +1,29 @@
-import { useMemo } from 'react';
-import { ScanSearch, Search, SearchX } from 'lucide-react';
-import type { ArxivResult } from '@/services/arxiv';
-import type { ColpaliArxivResult } from '@/services/colpali';
+import { useState } from 'react';
+import { useInfiniteQuery } from '@tanstack/react-query';
+import { ArrowLeft, GitFork, Network, Quote, SearchX, Sparkles } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { EmptyState } from '@/components/ui/empty-state';
-import { yearOf } from '@/editor';
+import { ListSkeleton } from '@/components/ui/list-skeleton';
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
-import { PaperRow, ResultsSkeleton, sourceFromArxiv, sourceFromColpali } from '../shared';
-import type { PaperSearch } from './usePaperSearch';
+import { referenceTitle } from '@/editor';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
+import {
+  PAPER_SOURCE_NAMES,
+  paperFailure,
+  paperGraphQuery,
+  paperSearchQuery,
+  type Paper,
+  type PaperRelation,
+  type PaperSearchParams,
+} from '@/data/papers';
+import { Disclosure, PaperRow } from '../shared';
 
 /**
- * The list under the query row, shared by every provider: a stale list fades
- * while a new search runs instead of reading as the answer to the new query.
+ * The list under the query row: a stale list fades while a new search runs
+ * instead of reading as the answer to the new query.
  */
 export function ResultList({
   loading,
@@ -31,7 +43,7 @@ export function ResultList({
           {summary}
         </p>
       )}
-      {loading && count === 0 && <ResultsSkeleton />}
+      {loading && count === 0 && <ListSkeleton rows={3} />}
       <div className={cn('flex flex-col', loading && count > 0 && 'pointer-events-none opacity-50 transition-opacity')}>
         {children}
       </div>
@@ -39,124 +51,203 @@ export function ResultList({
   );
 }
 
-export function ArxivResults({ state }: { state: PaperSearch<ArxivResult> }) {
-  const { results, loading, error, submittedQuery } = state;
-  const averageScore = useMemo(() => {
-    const scored = results.map((r) => r.score).filter((s): s is number => typeof s === 'number');
-    if (scored.length === 0) return null;
-    return Math.round((scored.reduce((a, b) => a + b, 0) / scored.length) * 100);
-  }, [results]);
+const RELATION_LABELS: Record<PaperRelation, string> = {
+  citations: 'Papers that cite this work',
+  references: 'References used by this work',
+  related: 'Related papers',
+};
 
+/** What the sources asked require of a page of their results: credit, and which could not answer. */
+function SourceNotes({ attribution, failed }: { attribution: readonly string[]; failed: readonly Paper['foundBy'][number][] }) {
+  if (attribution.length === 0 && failed.length === 0) return null;
+  return (
+    <div className="space-y-0.5 px-2 text-2xs text-muted-foreground">
+      {failed.length > 0 && (
+        <p role="status">
+          {failed.map((id) => PAPER_SOURCE_NAMES[id]).join(', ').replace(/^./, (c) => c.toUpperCase())} could not be reached, so
+          {failed.length === 1 ? ' its' : ' their'} results are missing.
+        </p>
+      )}
+      {attribution.map((line) => (
+        <p key={line} aria-label="Provider attribution">{line}</p>
+      ))}
+    </div>
+  );
+}
+
+function GraphMenu({ onExplore }: { onExplore: (relation: PaperRelation) => void }) {
   return (
     <>
-      {error && <Alert className="mx-2">{error}</Alert>}
-      <ResultList
-        loading={loading}
-        count={results.length}
-        summary={
-          <>
-            {results.length} paper{results.length === 1 ? '' : 's'}
-            {averageScore !== null && <> · {averageScore}% average relevance</>}
-          </>
-        }
-      >
-        {results.map((result, index) => (
-          <PaperRow
-            key={`${result.id}-${index}`}
-            title={result.title}
-            authors={result.authors}
-            meta={[yearOf(result.date)]}
-            tag={typeof result.score === 'number' ? `${Math.round(result.score * 100)}% match` : null}
-            summary={result.abstract}
-            source={sourceFromArxiv(result)}
-            links={[
-              { label: 'Open on arXiv', href: result.url },
-              { label: 'Open PDF', href: result.pdfUrl },
-              { label: 'Open DOI', href: result.doi ? `https://doi.org/${result.doi}` : null },
-            ]}
-          />
-        ))}
-      </ResultList>
-      {!loading && results.length === 0 && !error && (
-        submittedQuery ? (
-          <EmptyState
-            icon={SearchX}
-            title="No papers found"
-            description={`Nothing matched “${submittedQuery}”. Try broader keywords.`}
-          />
-        ) : (
-          <EmptyState
-            icon={Search}
-            title="Search arXiv"
-            description="Find papers to read and cite. Cite puts a citation where your cursor was."
-          />
-        )
-      )}
+      <DropdownMenuItem onSelect={() => onExplore('citations')}>
+        <Quote aria-hidden="true" />
+        Papers citing this
+      </DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => onExplore('references')}>
+        <GitFork aria-hidden="true" />
+        Its references
+      </DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => onExplore('related')}>
+        <Sparkles aria-hidden="true" />
+        Related papers
+      </DropdownMenuItem>
     </>
   );
 }
 
-export function ColpaliResults({ state }: { state: PaperSearch<ColpaliArxivResult> }) {
-  const { results, loading, error, submittedQuery } = state;
-  const hosts = useMemo(() => {
-    const found = new Set<string>();
-    for (const result of results) {
-      if (!result.url) continue;
-      try {
-        found.add(new URL(result.url).hostname.replace(/^www\./, ''));
-      } catch {
-        /* malformed URLs simply do not contribute a host */
-      }
-    }
-    return Array.from(found);
-  }, [results]);
-
+function CitationContexts({ contexts, paperTitle }: { contexts: string[]; paperTitle: string }) {
+  if (contexts.length === 0) return null;
   return (
-    <>
-      {error && <Alert className="mx-2">{error}</Alert>}
+    <Disclosure
+      className="text-xs"
+      triggerClassName="text-muted-foreground"
+      label={`Show ${contexts.length} citation context${contexts.length === 1 ? '' : 's'} for ${paperTitle}`}
+      summary={`Citation contexts (${contexts.length})`}
+    >
+      <ol className="mt-1 max-h-32 list-decimal space-y-1 overflow-y-auto pl-5 pr-1 text-foreground/80">
+        {contexts.map((context, index) => (
+          <li key={`${index}:${context}`}>
+            <blockquote className="leading-relaxed">“{context}”</blockquote>
+          </li>
+        ))}
+      </ol>
+    </Disclosure>
+  );
+}
+
+/** One work's citation graph, as a drill-in with a way back. */
+function GraphView({ seed, relation, limit, onClose }: { seed: Paper; relation: PaperRelation; limit: number; onClose: () => void }) {
+  const workspaceId = useWorkspaceId();
+  const graph = useInfiniteQuery(paperGraphQuery(workspaceId, seed.record.key, relation, limit));
+  const label = RELATION_LABELS[relation];
+  const pages = graph.data?.pages ?? [];
+  const items = pages.flatMap((page) => page.items);
+  const last = pages.at(-1);
+  return (
+    <section aria-label={label} className="flex flex-col gap-1">
+      <div className="flex items-start gap-1 px-1">
+        <Button variant="icon" size="icon-sm" onClick={onClose} aria-label={`Close ${label} for ${referenceTitle(seed.record)}`}>
+          <ArrowLeft aria-hidden="true" />
+        </Button>
+        <div className="min-w-0 pt-1">
+          <h3 className="text-sm font-medium">{label}</h3>
+          <p className="truncate text-xs text-muted-foreground">{referenceTitle(seed.record)}</p>
+        </div>
+      </div>
+      {graph.error && <Alert role="alert" className="mx-2">{paperFailure(graph.error)}</Alert>}
+      {items.map((item, index) => (
+        <PaperRow key={`${item.record.key}:${index}`} paper={item}>
+          {item.influential && <p className="font-medium text-foreground">Influential citation</p>}
+          {item.intents.length > 0 && <p>Citation intent: {item.intents.join(', ')}</p>}
+          <CitationContexts contexts={item.contexts} paperTitle={referenceTitle(item.record)} />
+        </PaperRow>
+      ))}
+      {graph.isPending && (
+        <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+          <Spinner />
+          Loading papers…
+        </div>
+      )}
+      {!graph.isPending && !graph.error && items.length === 0 && (
+        <p className="py-4 text-center text-sm text-muted-foreground">No papers were returned.</p>
+      )}
+      {graph.hasNextPage && items.length > 0 && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mx-2 text-muted-foreground"
+          disabled={graph.isFetchingNextPage}
+          aria-busy={graph.isFetchingNextPage || undefined}
+          onClick={() => void graph.fetchNextPage()}
+        >
+          {graph.isFetchingNextPage && <Spinner />}
+          {graph.isFetchingNextPage ? 'Loading more…' : 'Load more'}
+        </Button>
+      )}
+      {last && <SourceNotes attribution={last.attribution} failed={last.failed} />}
+    </section>
+  );
+}
+
+/**
+ * Paper search: the workspace's paper route, over every source the account
+ * and the workspace allow, one row per work, and each work's graph behind
+ * its "…".
+ */
+export function PaperResults({ params }: { params: Omit<PaperSearchParams, 'cursor'> | null }) {
+  const workspaceId = useWorkspaceId();
+  const [exploring, setExploring] = useState<{ seed: Paper; relation: PaperRelation } | null>(null);
+  const search = useInfiniteQuery({
+    ...paperSearchQuery(workspaceId, params ?? { query: '' }),
+    enabled: params !== null,
+  });
+  const [explored, setExplored] = useState(params);
+  if (explored !== params) {
+    // A new search closes the graph it was opened from.
+    setExplored(params);
+    setExploring(null);
+  }
+
+  if (exploring) {
+    return (
+      <GraphView
+        seed={exploring.seed}
+        relation={exploring.relation}
+        limit={params?.limit ?? 20}
+        onClose={() => setExploring(null)}
+      />
+    );
+  }
+
+  const pages = search.data?.pages ?? [];
+  const results = pages.flatMap((page) => page.items);
+  const last = pages.at(-1);
+  const loading = params !== null && search.isFetching && !search.isFetchingNextPage;
+  return (
+    <div className="flex flex-col gap-2">
+      {search.error && <Alert className="mx-2">{paperFailure(search.error)}</Alert>}
       <ResultList
         loading={loading}
         count={results.length}
-        summary={
-          <>
-            {results.length} page{results.length === 1 ? '' : 's'}
-            {hosts.length > 0 && <> · {hosts.join(', ')}</>}
-          </>
-        }
+        summary={`${results.length} paper${results.length === 1 ? '' : 's'}${search.hasNextPage ? ', more available' : ''}`}
       >
-        {results.map((result, index) => (
+        {results.map((paper) => (
           <PaperRow
-            key={`${result.id}-${result.page}-${index}`}
-            title={result.title}
-            authors={result.authors}
-            meta={[yearOf(result.date), result.version && `v${result.version.replace(/^v/i, '')}`]}
-            tag={`Page ${result.page}`}
-            summary={result.abstract}
-            thumbnailUrl={result.page_image}
-            source={sourceFromColpali(result)}
-            links={[
-              { label: 'Open on arXiv', href: result.url },
-              { label: 'Open PDF', href: result.id ? `https://arxiv.org/pdf/${result.id}.pdf` : null },
-              { label: 'Open DOI', href: result.doi ? `https://doi.org/${result.doi}` : null },
-            ]}
+            key={paper.record.key}
+            paper={paper}
+            menuItems={<GraphMenu onExplore={(relation) => setExploring({ seed: paper, relation })} />}
           />
         ))}
       </ResultList>
-      {!loading && results.length === 0 && !error && (
-        submittedQuery ? (
-          <EmptyState
-            icon={SearchX}
-            title="No pages found"
-            description={`Nothing matched “${submittedQuery}”. Try rephrasing the question.`}
-          />
-        ) : (
-          <EmptyState
-            icon={ScanSearch}
-            title="Search inside papers"
-            description="Ask a question and find the exact arXiv pages that answer it."
-          />
-        )
+
+      {results.length > 0 && search.hasNextPage && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mx-2 text-muted-foreground"
+          onClick={() => void search.fetchNextPage()}
+          disabled={search.isFetchingNextPage}
+          aria-busy={search.isFetchingNextPage || undefined}
+        >
+          {search.isFetchingNextPage && <Spinner />}
+          {search.isFetchingNextPage ? 'Loading more papers…' : 'Load more papers'}
+        </Button>
       )}
-    </>
+
+      {params !== null && !loading && !search.error && results.length === 0 && (
+        <EmptyState
+          icon={SearchX}
+          title="No papers found"
+          description={`Nothing matched “${params.query}”. Try broader keywords or fewer filters.`}
+        />
+      )}
+      {params === null && (
+        <EmptyState
+          icon={Network}
+          title="Search papers"
+          description="One search over OpenAlex, the arXiv index and Semantic Scholar, as your settings allow. Follow who cites a paper, and cite it."
+        />
+      )}
+      {last && <SourceNotes attribution={last.attribution} failed={last.failed} />}
+    </div>
   );
 }

@@ -1,7 +1,12 @@
+import { registerModuleReset } from '@/lib/moduleState';
+
 export const SLASH_MENU_EVENT = 'colwrite:open-slash-menu';
 export const SLASH_MENU_VISIBILITY_EVENT = 'colwrite:slash-menu-visibility';
 
 let slashMenuOpen = false;
+registerModuleReset(() => {
+  slashMenuOpen = false;
+});
 
 export function isSlashMenuOpen(): boolean {
   return slashMenuOpen;

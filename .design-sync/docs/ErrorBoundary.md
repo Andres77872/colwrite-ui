@@ -26,7 +26,7 @@ author was in the middle of writing.
       <ChatAssistant />
     </ErrorBoundary>
   }
-  aside={<ErrorBoundary label="this panel"><ToolsAside /></ErrorBoundary>}
+  aside={<ErrorBoundary label="this panel"><PanelsAside /></ErrorBoundary>}
 />
 ```
 

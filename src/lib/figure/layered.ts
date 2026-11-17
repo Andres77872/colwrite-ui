@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import type { FigureDiagnostic } from './types';
 
 /**
@@ -174,9 +175,9 @@ function assignRanks(items: LayeredItem[], index: Map<string, number>, edges: Cl
   const parent = items.map((_, i) => i);
   const find = (i: number): number => {
     let root = i;
-    while (parent[root] !== root) root = parent[root];
+    while (parent[root] !== root) root = itemAt(parent, root);
     while (parent[i] !== root) {
-      const next = parent[i];
+      const next = itemAt(parent, i);
       parent[i] = root;
       i = next;
     }
@@ -249,13 +250,13 @@ function assignRanks(items: LayeredItem[], index: Map<string, number>, edges: Cl
   }
 
   const leaderOf = items.map((_, i) => find(i));
-  const hintOf = (c: number) => items[c].rank;
+  const hintOf = (c: number) => itemAt(items, c).rank;
   items.forEach((item, i) => {
     if (leaderOf[i] !== i && item.rank !== null) {
       diagnostics.push(
         hintDiagnostic(
           'layout.rank-conflict',
-          `\`${item.id}\` takes its layer from \`${items[leaderOf[i]].id}\`, so its \`rank\` is ignored.`,
+          `\`${item.id}\` takes its layer from \`${itemAt(items, itemAt(leaderOf, i)).id}\`, so its \`rank\` is ignored.`,
           item,
           'rank',
         ),
@@ -271,7 +272,7 @@ function assignRanks(items: LayeredItem[], index: Map<string, number>, edges: Cl
   const lastWithOutputs = new Set<number>();
   for (const edge of edges) {
     if (!edge.constraint) continue;
-    const a = leaderOf[edge.from];
+    const a = itemAt(leaderOf, edge.from);
     const b = leaderOf[edge.to];
     if (a === b) continue; // Same layer: drawn flat.
     if (b !== edge.to) continue; // Into a follower: its layer comes from its leader.
@@ -286,15 +287,15 @@ function assignRanks(items: LayeredItem[], index: Map<string, number>, edges: Cl
     const key = `${a}>${b}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out[a].push(classEdges.length);
+    itemAt(out, a).push(classEdges.length);
     classEdges.push([a, b]);
   }
   for (const c of firstWithInputs) {
     diagnostics.push(
       hintDiagnostic(
         'layout.rank-conflict',
-        `\`${items[c].id}\` has rank "first" but has inputs in its container; those edges run against the flow.`,
-        items[c],
+        `\`${itemAt(items, c).id}\` has rank "first" but has inputs in its container; those edges run against the flow.`,
+        itemAt(items, c),
         'rank',
       ),
     );
@@ -303,8 +304,8 @@ function assignRanks(items: LayeredItem[], index: Map<string, number>, edges: Cl
     diagnostics.push(
       hintDiagnostic(
         'layout.rank-conflict',
-        `\`${items[c].id}\` has rank "last" but feeds other items in its container; those edges run against the flow.`,
-        items[c],
+        `\`${itemAt(items, c).id}\` has rank "last" but feeds other items in its container; those edges run against the flow.`,
+        itemAt(items, c),
         'rank',
       ),
     );
@@ -320,11 +321,11 @@ function assignRanks(items: LayeredItem[], index: Map<string, number>, edges: Cl
     const stack: Array<{ v: number; next: number }> = [{ v: start, next: 0 }];
     state[start] = 1;
     while (stack.length) {
-      const top = stack[stack.length - 1];
-      if (top.next < out[top.v].length) {
-        const e = out[top.v][top.next];
+      const top = itemAt(stack, stack.length - 1);
+      if (top.next < itemAt(out, top.v).length) {
+        const e = itemAt(itemAt(out, top.v), top.next);
         top.next += 1;
-        const w = classEdges[e][1];
+        const w = itemAt(classEdges, e)[1];
         if (state[w] === 1) reversed[e] = true;
         else if (state[w] === 0) {
           state[w] = 1;
@@ -346,8 +347,8 @@ function assignRanks(items: LayeredItem[], index: Map<string, number>, edges: Cl
     const key = `${from}>${to}`;
     if (dagSeen.has(key)) return;
     dagSeen.add(key);
-    succ[from].push(to);
-    indegree[to] += 1;
+    itemAt(succ, from).push(to);
+    indegree[to] = itemAt(indegree, to) + 1;
   });
   const lowerBound = (c: number): number => {
     const hint = hintOf(c);
@@ -358,35 +359,35 @@ function assignRanks(items: LayeredItem[], index: Map<string, number>, edges: Cl
   const queue: number[] = [];
   for (let c = 0; c < n; c += 1) if (leaderOf[c] === c && indegree[c] === 0) queue.push(c);
   for (let head = 0; head < queue.length; head += 1) {
-    const c = queue[head];
+    const c = itemAt(queue, head);
     const bound = lowerBound(c);
-    classRank[c] = Math.max(bound, need[c]);
+    classRank[c] = Math.max(bound, itemAt(need, c));
     const hint = hintOf(c);
-    if (typeof hint === 'number' && need[c] > bound) {
+    if (typeof hint === 'number' && itemAt(need, c) > bound) {
       diagnostics.push(
         hintDiagnostic(
           'layout.rank-conflict',
-          `\`${items[c].id}\` asks for rank ${hint}, but its inputs place it at rank ${need[c]} or later; the hint is ignored.`,
-          items[c],
+          `\`${itemAt(items, c).id}\` asks for rank ${hint}, but its inputs place it at rank ${need[c]} or later; the hint is ignored.`,
+          itemAt(items, c),
           'rank',
         ),
       );
     }
-    for (const d of succ[c]) {
-      need[d] = Math.max(need[d], classRank[c] + 1);
-      indegree[d] -= 1;
+    for (const d of itemAt(succ, c)) {
+      need[d] = Math.max(itemAt(need, d), classRank[c] + 1);
+      indegree[d] = itemAt(indegree, d) - 1;
       if (indegree[d] === 0) queue.push(d);
     }
   }
 
   // `last` goes on the deepest layer the others reach (or right after its inputs).
   let deepest = 0;
-  for (let c = 0; c < n; c += 1) if (leaderOf[c] === c) deepest = Math.max(deepest, classRank[c]);
+  for (let c = 0; c < n; c += 1) if (leaderOf[c] === c) deepest = Math.max(deepest, itemAt(classRank, c));
   for (let c = 0; c < n; c += 1) if (leaderOf[c] === c && hintOf(c) === 'last') classRank[c] = deepest;
 
   // Compact: layers nobody sits on are dropped, so the first layer is 0 and
   // a numeric hint never leaves an empty band.
-  const raw = items.map((_, i) => classRank[leaderOf[i]]);
+  const raw = items.map((_, i) => itemAt(classRank, itemAt(leaderOf, i)));
   const distinct = [...new Set(raw)].sort((a, b) => a - b);
   const dense = new Map(distinct.map((value, i) => [value, i]));
   return { ranks: raw.map((value) => dense.get(value) ?? 0), besideOf };
@@ -400,11 +401,11 @@ function assignRanks(items: LayeredItem[], index: Map<string, number>, edges: Cl
 function countCrossings(layers: number[][], vertices: Vertex[], pos: Int32Array): number {
   let total = 0;
   for (let r = 0; r + 1 < layers.length; r += 1) {
-    const size = layers[r + 1].length;
+    const size = itemAt(layers, r + 1).length;
     if (size < 2) continue;
     const segments: Array<[number, number, number]> = [];
-    for (const v of layers[r]) {
-      for (const link of vertices[v].down) segments.push([pos[v], pos[link.to], link.weight]);
+    for (const v of itemAt(layers, r)) {
+      for (const link of itemAt(vertices, v).down) segments.push([itemAt(pos, v), itemAt(pos, link.to), link.weight]);
     }
     if (segments.length < 2) continue;
     segments.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -413,9 +414,9 @@ function countCrossings(layers: number[][], vertices: Vertex[], pos: Int32Array)
     for (const [, lower, weight] of segments) {
       // Weight already inserted at lower positions ≤ `lower`.
       let atOrBelow = 0;
-      for (let i = lower + 1; i > 0; i -= i & -i) atOrBelow += tree[i];
+      for (let i = lower + 1; i > 0; i -= i & -i) atOrBelow += itemAt(tree, i);
       total += weight * (inserted - atOrBelow);
-      for (let i = lower + 1; i <= size; i += i & -i) tree[i] += weight;
+      for (let i = lower + 1; i <= size; i += i & -i) tree[i] = itemAt(tree, i) + weight;
       inserted += weight;
     }
   }
@@ -436,18 +437,18 @@ type Pull = { at: number; weight: number };
 
 /** Weighted median; an even split lands halfway, so a node fed by two sources centres between them. */
 function weightedMedian(pulls: Pull[]): number {
-  if (pulls.length === 1) return pulls[0].at;
+  if (pulls.length === 1) return itemAt(pulls, 0).at;
   const sorted = [...pulls].sort((a, b) => a.at - b.at);
   const total = sorted.reduce((sum, p) => sum + p.weight, 0);
   const half = total / 2;
   const eps = total * 1e-9;
   let cumulative = 0;
   for (let i = 0; i < sorted.length; i += 1) {
-    cumulative += sorted[i].weight;
-    if (Math.abs(cumulative - half) <= eps && i + 1 < sorted.length) return (sorted[i].at + sorted[i + 1].at) / 2;
-    if (cumulative > half) return sorted[i].at;
+    cumulative += itemAt(sorted, i).weight;
+    if (Math.abs(cumulative - half) <= eps && i + 1 < sorted.length) return (itemAt(sorted, i).at + itemAt(sorted, i + 1).at) / 2;
+    if (cumulative > half) return itemAt(sorted, i).at;
   }
-  return sorted[sorted.length - 1].at;
+  return itemAt(sorted, sorted.length - 1).at;
 }
 
 /**
@@ -464,19 +465,16 @@ function isotonic(targets: Float64Array, primary: Float64Array, secondary: Float
   const pwt: number[] = [];
   const sw: number[] = [];
   const swt: number[] = [];
-  const value = (b: number) => (pw[b] > 0 ? pwt[b] / pw[b] : swt[b] / sw[b]);
+  const value = (b: number) => (itemAt(pw, b) > 0 ? itemAt(pwt, b) / itemAt(pw, b) : itemAt(swt, b) / itemAt(sw, b));
   for (let i = 0; i < n; i += 1) {
     start.push(i);
-    pw.push(primary[i]);
-    pwt.push(primary[i] * targets[i]);
-    sw.push(secondary[i]);
-    swt.push(secondary[i] * targets[i]);
+    pw.push(itemAt(primary, i));
+    pwt.push(itemAt(primary, i) * itemAt(targets, i));
+    sw.push(itemAt(secondary, i));
+    swt.push(itemAt(secondary, i) * itemAt(targets, i));
     while (start.length > 1 && value(start.length - 2) > value(start.length - 1)) {
       const last = start.length - 1;
-      pw[last - 1] += pw[last];
-      pwt[last - 1] += pwt[last];
-      sw[last - 1] += sw[last];
-      swt[last - 1] += swt[last];
+      for (const sums of [pw, pwt, sw, swt]) sums[last - 1] = itemAt(sums, last - 1) + itemAt(sums, last);
       start.pop();
       pw.pop();
       pwt.pop();
@@ -486,9 +484,9 @@ function isotonic(targets: Float64Array, primary: Float64Array, secondary: Float
   }
   const out = new Float64Array(n);
   for (let b = 0; b < start.length; b += 1) {
-    const end = b + 1 < start.length ? start[b + 1] : n;
+    const end = start[b + 1] ?? n;
     const v = value(b);
-    for (let i = start[b]; i < end; i += 1) out[i] = v;
+    for (let i = itemAt(start, b); i < end; i += 1) out[i] = v;
   }
   return out;
 }
@@ -558,7 +556,7 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
   const vertices: Vertex[] = list.map((item, i) => ({
     id: item.id,
     dummy: false,
-    rank: ranks[i],
+    rank: itemAt(ranks, i),
     main: nonNegative(item.main),
     before: nonNegative(item.before),
     after: nonNegative(item.after),
@@ -573,8 +571,8 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
   const pairKey = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
   const chains = new Map<string, Chain>();
   for (const edge of clean) {
-    const ra = ranks[edge.from];
-    const rb = ranks[edge.to];
+    const ra = itemAt(ranks, edge.from);
+    const rb = itemAt(ranks, edge.to);
     if (ra === rb) {
       if (edge.labelCross > 0) {
         const key = pairKey(edge.from, edge.to);
@@ -584,7 +582,7 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
     }
     if (edge.labelMain > 0) {
       for (let g = Math.min(ra, rb); g < Math.max(ra, rb); g += 1) {
-        gapNeed[g] = Math.max(gapNeed[g], edge.labelMain + LABEL_ROOM);
+        gapNeed[g] = Math.max(itemAt(gapNeed, g), edge.labelMain + LABEL_ROOM);
       }
     }
     if (ra > rb) continue; // Against the flow: routed around the outside.
@@ -602,13 +600,13 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
     }
   }
   const link = (a: number, b: number, weight: number) => {
-    vertices[a].down.push({ to: b, weight });
-    vertices[b].up.push({ to: a, weight });
+    itemAt(vertices, a).down.push({ to: b, weight });
+    itemAt(vertices, b).up.push({ to: a, weight });
   };
   let chainSeq = 0;
   for (const chain of chains.values()) {
     let previous = chain.from;
-    for (let r = ranks[chain.from] + 1; r < ranks[chain.to]; r += 1) {
+    for (let r = itemAt(ranks, chain.from) + 1; r < itemAt(ranks, chain.to); r += 1) {
       const dummy = vertices.length;
       vertices.push({
         id: '',
@@ -619,8 +617,8 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
         after: dummyGap / 2 + chain.roomAfter,
         // A pinned channel starts at its end of the layer; the sweeps only
         // move it inwards, next to the items it runs beside.
-        key: chain.channel === 'before' ? -Infinity : chain.channel === 'after' ? Infinity : list[chain.from].order,
-        key2: list[chain.to].order,
+        key: chain.channel === 'before' ? -Infinity : chain.channel === 'after' ? Infinity : itemAt(list, chain.from).order,
+        key2: itemAt(list, chain.to).order,
         seq: chainSeq,
         up: [],
         down: [],
@@ -634,11 +632,11 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
 
   /* 5. Ordering */
   let layers: number[][] = Array.from({ length: layerCount }, () => []);
-  vertices.forEach((vertex, v) => layers[vertex.rank].push(v));
+  vertices.forEach((vertex, v) => itemAt(layers, vertex.rank).push(v));
   for (const layer of layers) {
     layer.sort((a, b) => {
-      const va = vertices[a];
-      const vb = vertices[b];
+      const va = itemAt(vertices, a);
+      const vb = itemAt(vertices, b);
       return (
         compareNumbers(va.key, vb.key) ||
         Number(va.dummy) - Number(vb.dummy) ||
@@ -682,11 +680,11 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
     const down = sweep % 2 === 0;
     for (let step = 1; step < layerCount; step += 1) {
       const r = down ? step : layerCount - 1 - step;
-      const layer = layers[r];
+      const layer = itemAt(layers, r);
       const sortable: Array<{ v: number; i: number; bc: number }> = [];
       const fixed: Array<{ v: number; i: number }> = [];
       layer.forEach((v, i) => {
-        const links = down ? vertices[v].up : vertices[v].down;
+        const links = down ? itemAt(vertices, v).up : itemAt(vertices, v).down;
         if (links.length === 0) {
           fixed.push({ v, i });
           return;
@@ -694,7 +692,7 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
         let sum = 0;
         let weight = 0;
         for (const l of links) {
-          sum += pos[l.to] * l.weight;
+          sum += itemAt(pos, l.to) * l.weight;
           weight += l.weight;
         }
         sortable.push({ v, i, bc: sum / weight });
@@ -704,10 +702,10 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
       const next: number[] = [];
       let f = 0;
       for (const entry of sortable) {
-        while (f < fixed.length && fixed[f].i <= next.length) next.push(fixed[f++].v);
+        while (f < fixed.length && itemAt(fixed, f).i <= next.length) next.push(itemAt(fixed, f++).v);
         next.push(entry.v);
       }
-      while (f < fixed.length) next.push(fixed[f++].v);
+      while (f < fixed.length) next.push(itemAt(fixed, f++).v);
       layers[r] = pullBeside(next);
       updatePositions(layers[r], pos);
     }
@@ -723,8 +721,8 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
 
   /* 6. Cross positions */
   const separation = (a: number, b: number): number => {
-    const va = vertices[a];
-    const vb = vertices[b];
+    const va = itemAt(vertices, a);
+    const vb = itemAt(vertices, b);
     let gap = va.dummy || vb.dummy ? dummyGap : itemGap;
     if (!va.dummy && !vb.dummy) {
       const room = flatRoom.get(pairKey(a, b));
@@ -734,43 +732,43 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
   };
   const offsets = layers.map((layer) => {
     const c = new Float64Array(layer.length);
-    for (let k = 1; k < layer.length; k += 1) c[k] = c[k - 1] + separation(layer[k - 1], layer[k]);
+    for (let k = 1; k < layer.length; k += 1) c[k] = itemAt(c, k - 1) + separation(itemAt(layer, k - 1), itemAt(layer, k));
     return c;
   });
 
   const x = new Float64Array(vertices.length);
   layers.forEach((layer, r) => {
     if (layer.length === 0) return;
-    const c = offsets[r];
-    const left = -vertices[layer[0]].before;
-    const right = c[layer.length - 1] + vertices[layer[layer.length - 1]].after;
+    const c = itemAt(offsets, r);
+    const left = -itemAt(vertices, itemAt(layer, 0)).before;
+    const right = itemAt(c, layer.length - 1) + itemAt(vertices, itemAt(layer, layer.length - 1)).after;
     const shift = -(left + right) / 2;
     layer.forEach((v, k) => {
-      x[v] = c[k] + shift;
+      x[v] = itemAt(c, k) + shift;
     });
   });
 
   const solveLayer = (r: number, down: boolean) => {
-    const layer = layers[r];
+    const layer = itemAt(layers, r);
     const n = layer.length;
     const targets = new Float64Array(n);
     const primary = new Float64Array(n);
     const secondary = new Float64Array(n);
-    const c = offsets[r];
+    const c = itemAt(offsets, r);
     layer.forEach((v, k) => {
-      const vertex = vertices[v];
+      const vertex = itemAt(vertices, v);
       const links = down ? vertex.up : vertex.down;
       // Real–real and dummy–dummy links align first; a long edge's ends
       // (real–dummy) only settle what those leave free.
       const strong: Pull[] = [];
       const weak: Pull[] = [];
       for (const l of links) {
-        const other = vertices[l.to];
+        const other = itemAt(vertices, l.to);
         if (other.dummy === vertex.dummy) {
-          strong.push({ at: x[l.to], weight: l.weight * (vertex.dummy ? LONG_EDGE_STRAIGHTNESS : 1) });
-        } else weak.push({ at: x[l.to], weight: l.weight });
+          strong.push({ at: itemAt(x, l.to), weight: l.weight * (vertex.dummy ? LONG_EDGE_STRAIGHTNESS : 1) });
+        } else weak.push({ at: itemAt(x, l.to), weight: l.weight });
       }
-      let target = x[v];
+      let target = itemAt(x, v);
       if (strong.length) {
         target = weightedMedian(strong);
         primary[k] = strong.reduce((sum, p) => sum + p.weight, 0);
@@ -778,11 +776,11 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
         target = weightedMedian(weak);
         secondary[k] = weak.reduce((sum, p) => sum + p.weight, 0);
       } else secondary[k] = FREE_WEIGHT;
-      targets[k] = target - c[k];
+      targets[k] = target - itemAt(c, k);
     });
     const solved = isotonic(targets, primary, secondary);
     layer.forEach((v, k) => {
-      x[v] = solved[k] + c[k];
+      x[v] = itemAt(solved, k) + itemAt(c, k);
     });
   };
   for (let pass = 0; pass < POSITION_PASSES && layerCount > 1; pass += 1) {
@@ -794,27 +792,27 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
   // a real neighbour never move, so a snap cannot break an alignment; the
   // snapped item may push a tight run of unaligned neighbours along with it.
   const aligned = (v: number) =>
-    [...vertices[v].up, ...vertices[v].down].some((l) => !vertices[l.to].dummy && Math.abs(x[l.to] - x[v]) < 1e-6);
+    [...itemAt(vertices, v).up, ...itemAt(vertices, v).down].some((l) => !itemAt(vertices, l.to).dummy && Math.abs(itemAt(x, l.to) - itemAt(x, v)) < 1e-6);
   const snap = (layer: number[], k: number, delta: number): void => {
     const step = delta > 0 ? 1 : -1;
-    const moved: Array<[number, number]> = [[layer[k], x[layer[k]] + delta]];
+    const moved: Array<[number, number]> = [[itemAt(layer, k), itemAt(x, itemAt(layer, k)) + delta]];
     for (let j = k + step; j >= 0 && j < layer.length; j += step) {
-      const [prev, prevAt] = moved[moved.length - 1];
-      const cur = layer[j];
-      const at = step > 0 ? Math.max(x[cur], prevAt + separation(prev, cur)) : Math.min(x[cur], prevAt - separation(cur, prev));
+      const [prev, prevAt] = itemAt(moved, moved.length - 1);
+      const cur = itemAt(layer, j);
+      const at = step > 0 ? Math.max(itemAt(x, cur), prevAt + separation(prev, cur)) : Math.min(itemAt(x, cur), prevAt - separation(cur, prev));
       if (at === x[cur]) break;
-      if (!vertices[cur].dummy && aligned(cur)) return;
+      if (!itemAt(vertices, cur).dummy && aligned(cur)) return;
       moved.push([cur, at]);
     }
     for (const [v, at] of moved) x[v] = at;
   };
   for (const layer of layers) {
     layer.forEach((v, k) => {
-      if (vertices[v].dummy || aligned(v)) return;
+      if (itemAt(vertices, v).dummy || aligned(v)) return;
       let delta: number | null = null;
-      for (const l of [...vertices[v].up, ...vertices[v].down]) {
-        if (vertices[l.to].dummy) continue;
-        const d = x[l.to] - x[v];
+      for (const l of [...itemAt(vertices, v).up, ...itemAt(vertices, v).down]) {
+        if (itemAt(vertices, l.to).dummy) continue;
+        const d = itemAt(x, l.to) - itemAt(x, v);
         if (Math.abs(d) <= SNAP_DISTANCE && (delta === null || Math.abs(d) < Math.abs(delta))) delta = d;
       }
       if (delta !== null) snap(layer, k, delta);
@@ -824,8 +822,8 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
   let minCross = Infinity;
   let maxCross = -Infinity;
   vertices.forEach((vertex, v) => {
-    minCross = Math.min(minCross, x[v] - vertex.before);
-    maxCross = Math.max(maxCross, x[v] + vertex.after);
+    minCross = Math.min(minCross, itemAt(x, v) - vertex.before);
+    maxCross = Math.max(maxCross, itemAt(x, v) + vertex.after);
   });
 
   /* 7. Main positions */
@@ -833,18 +831,18 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
     let size = 0;
     let real = false;
     for (const v of layer) {
-      if (vertices[v].dummy) continue;
+      if (itemAt(vertices, v).dummy) continue;
       real = true;
-      size = Math.max(size, vertices[v].main);
+      size = Math.max(size, itemAt(vertices, v).main);
     }
     return real ? size : layer.length ? dummyGap : 0;
   });
   const bands: Array<[number, number]> = [];
   let cursor = 0;
   for (let r = 0; r < layerCount; r += 1) {
-    if (r > 0) cursor += Math.max(rankGap, gapNeed[r - 1]);
-    bands.push([cursor, cursor + thickness[r]]);
-    cursor += thickness[r];
+    if (r > 0) cursor += Math.max(rankGap, itemAt(gapNeed, r - 1));
+    bands.push([cursor, cursor + itemAt(thickness, r)]);
+    cursor += itemAt(thickness, r);
   }
 
   const result: LayeredResult = {
@@ -857,9 +855,9 @@ export function layeredLayout(items: LayeredItem[], edges: LayeredEdge[], option
     diagnostics,
   };
   list.forEach((item, i) => {
-    const vertex = vertices[i];
-    result.cross.set(item.id, x[i] - minCross);
-    result.main.set(item.id, bands[vertex.rank][0] + (thickness[vertex.rank] - vertex.main) / 2);
+    const vertex = itemAt(vertices, i);
+    result.cross.set(item.id, itemAt(x, i) - minCross);
+    result.main.set(item.id, itemAt(bands, vertex.rank)[0] + (itemAt(thickness, vertex.rank) - vertex.main) / 2);
     result.rank.set(item.id, vertex.rank);
   });
   return result;

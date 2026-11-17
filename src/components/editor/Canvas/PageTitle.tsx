@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { focusPageTitle, useDocumentTitle } from '@/editor';
+import { focusPageTitle, useDocumentTitle, usePageReadOnly } from '@/editor';
 
 function isCaretAtEnd(el: HTMLElement): boolean {
   const selection = window.getSelection();
@@ -17,7 +17,8 @@ function isCaretAtEnd(el: HTMLElement): boolean {
  * It renames through the same `useDocumentTitle` the topbar breadcrumb reads,
  * and commits on blur or Enter rather than per keystroke, so a rename is one
  * save and one history entry. Enter and ↓ at the end continue into the first
- * block, as if the title were the line above it.
+ * block, as if the title were the line above it. On a read-only page (a
+ * viewer) it is the page's heading and nothing more.
  */
 export function PageTitle({
   onContinue,
@@ -31,13 +32,14 @@ export function PageTitle({
   blank?: boolean;
 }) {
   const { draftTitle, rename } = useDocumentTitle();
+  const readOnly = usePageReadOnly();
   const fieldRef = useRef<HTMLSpanElement | null>(null);
 
   // A new page starts with the caret in its title, as in Notion: "New page"
   // (sidebar, ⌘K, the page menu, "Start blank") used to leave focus on the
   // body, so the first words typed went nowhere. Only an untitled, empty
   // page, and only when focus is not already in something else being typed.
-  const untitledBlank = blank && draftTitle === '';
+  const untitledBlank = blank && draftTitle === '' && !readOnly;
   // Armed when another page opens, for a moment: a page whose content is
   // deleted later must not pull the caret up into its title.
   const armedUntil = useRef(0);
@@ -62,7 +64,7 @@ export function PageTitle({
   }, [pageKey, untitledBlank]);
 
   // Uncontrolled while focused, so a rename arriving from elsewhere (the
-  // agent's update_meta, another tab) never moves the caret mid-word.
+  // agent's set_meta, another tab) never moves the caret mid-word.
   useLayoutEffect(() => {
     const el = fieldRef.current;
     if (!el || document.activeElement === el) return;
@@ -79,7 +81,9 @@ export function PageTitle({
         role="textbox"
         aria-label="Page title"
         aria-multiline="false"
-        contentEditable="plaintext-only"
+        aria-readonly={readOnly || undefined}
+        contentEditable={readOnly ? false : 'plaintext-only'}
+        tabIndex={readOnly ? 0 : undefined}
         suppressContentEditableWarning
         spellCheck
         data-placeholder="Untitled"
@@ -96,6 +100,13 @@ export function PageTitle({
         }}
         onKeyDown={(event) => {
           const el = event.currentTarget;
+          if (readOnly) {
+            if (event.key === 'ArrowDown' || event.key === 'Enter') {
+              event.preventDefault();
+              onContinue();
+            }
+            return;
+          }
           if (event.key === 'Escape') {
             event.preventDefault();
             el.textContent = draftTitle;
@@ -103,8 +114,15 @@ export function PageTitle({
             el.blur();
             return;
           }
+          if (event.key === 'Enter' && event.shiftKey) {
+            // A title is one line. Shift+Enter used to put a line break in
+            // it, which the sidebar and the tab title then showed as a space
+            // or not at all.
+            event.preventDefault();
+            return;
+          }
           const continues =
-            (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) ||
+            (event.key === 'Enter' && !event.nativeEvent.isComposing) ||
             (event.key === 'ArrowDown' && isCaretAtEnd(el));
           if (!continues) return;
           event.preventDefault();
@@ -112,7 +130,9 @@ export function PageTitle({
           el.blur();
           onContinue();
         }}
-        onBlur={(event) => void rename(event.currentTarget.textContent ?? '')}
+        onBlur={(event) => {
+          if (!readOnly) void rename(event.currentTarget.textContent ?? '');
+        }}
       />
     </h1>
   );

@@ -1,6 +1,5 @@
 import { AlertCircle, CheckCircle2, Clock, Loader2, ScanLine } from 'lucide-react';
 import type { ElementType } from 'react';
-import type { ExtractionStatus } from '@/services/resources';
 
 type BadgeVariant = 'success' | 'warning' | 'destructive' | 'secondary' | 'info';
 
@@ -25,9 +24,11 @@ export type ExtractionDescriptor = {
  * reads "Failed" in one place and "Not ready" in the other is two bugs to a
  * user reporting it. The wording is deliberately about consequence — whether
  * the assistant can read the file — rather than about the pipeline stage,
- * which is not something a writer has any reason to model.
+ * which is not something a writer has any reason to model. The contract
+ * types the status as a string; `ExtractionStatus` in `@/data/resources`
+ * lists the values the API writes.
  */
-export function describeExtraction(status: ExtractionStatus | null): ExtractionDescriptor {
+export function describeExtraction(status: string | null | undefined): ExtractionDescriptor {
   switch (status) {
     case 'ready':
       return {

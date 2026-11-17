@@ -1,4 +1,5 @@
 import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ElementType } from 'react';
+import { AssistantCatalogContext } from '@/components/preferences/assistantCatalogContextState';
 import {
   ArrowDownToLine,
   ArrowUp,
@@ -12,94 +13,62 @@ import {
   Square,
   StickyNote,
   Trash2,
+  X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { menuItem, menuItemDestructive, menuLabel, menuSeparator, menuSurface } from '@/components/ui/menuStyles';
-import { useEditorActions, useEditorState, type Block, type CitationChild } from '@/editor';
-import { streamAgentChat } from '@/services/agentChat';
-import type { AgentSource } from '@/services/streamParser';
-import { AgentToolsContext } from '@/components/preferences/agentToolsContextState';
-import { useAgentEngine } from '@/components/preferences/agentEngineContextState';
+import {
+  useDocumentActions,
+  useDocumentId,
+  useEditorActions,
+  useEditorDoc,
+  usePageReadOnly,
+} from '@/editor';
 import { ProposedBlockView, ProposedRewriteView } from '../Review/ProposedBlockView';
 import { previewBibliography } from '../Review/diffText';
-import { toolRunningLabel } from '../ChatAssistant/AgentActivity/toolMeta';
+import { AgentActivity } from '../ChatAssistant/AgentActivity';
+import { AnswerSources } from '../ChatAssistant/AnswerSources';
 import {
-  AgentStatusLine,
-  advanceProgress,
-  progressForStatus,
-  type AgentProgress,
-} from '../AgentProgress';
+  interruptRuns,
+  withToolArgs,
+  withToolEnd,
+  withToolStart,
+  type ToolRecord,
+} from '../ChatAssistant/transcript';
+import { AgentStatusLine } from '../AgentProgress';
+import { useAgentRun } from '../AgentRun';
+import { modKeyLabel } from '@/components/layout/Shortcuts/shortcuts';
+import { copyToClipboard } from '@/lib/clipboard';
+import { canHighlight, clearHighlight, setHighlight } from '@/lib/highlights';
 import { serializeEditableHtml } from '../../common/Editable/editableHtml';
 import { restoreCaretOffset } from '../../common/Editable/caret';
 import {
-  ASK_AI_PRESETS,
-  buildAskAiMessage,
+  askAiPresets,
   customPreset,
   figureProblems,
   presetGroupsFor,
   presetsFor,
   type AskAiPreset,
-  type AskAiTargetKind,
 } from './presets';
 import { asNotes, resultBlocks } from './result';
-
-/** What an open prompt acts on, captured when it opens. */
-export type AskAiTarget = {
-  /** Distinguishes one opening from the next (the panel remounts per target). */
-  key: string;
-  kind: AskAiTargetKind;
-  /** The blocks the result would replace, in document order. */
-  blockIds: string[];
-  /** The block the panel sits under. */
-  anchorId: string;
-  /** The target as markdown, citations as `[@key]` markers. */
-  markdown: string;
-  /** The target as plain text (widgets as short stand-ins), for one-line summaries. */
-  text: string;
-  /**
-   * For `block` and `selection`: the target as a block (a selection as the
-   * block cut down to it), what a rewrite is diffed against — widgets and all.
-   */
-  diffBase?: Block;
-  /** For `selection`: the selected range inside the block. */
-  range?: Range;
-  /** For `empty`: the text just above the caret, as context. */
-  anchorText?: string;
-  /** Whether any target block is locked — replacing is then off the table. */
-  locked: boolean;
-  /** Citations present in the target, the only ones a result may carry. */
-  citations: Map<string, CitationChild>;
-  preset?: string;
-  /** The target is one structured-figure block: it gets the figure presets. */
-  figure?: boolean;
-};
+import { askAiRequest, targetRefusal, type AskAiTarget } from './target';
 
 const HIGHLIGHT = 'ask-ai-target';
 
-type HighlightRegistry = { set: (name: string, value: unknown) => void; delete: (name: string) => void };
-
-function highlights(): HighlightRegistry | null {
-  const registry = (globalThis.CSS as unknown as { highlights?: HighlightRegistry } | undefined)?.highlights;
-  const HighlightCtor = (globalThis as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
-  return registry && HighlightCtor ? registry : null;
-}
+const NO_ACTIVITY: ToolRecord = { runs: [] };
 
 /** Keep a selection visibly marked while focus is in the prompt. */
 function markRange(range: Range | undefined): () => void {
-  const registry = highlights();
-  if (!range || !registry) return () => {};
-  const HighlightCtor = (globalThis as unknown as { Highlight: new (...ranges: Range[]) => unknown }).Highlight;
-  registry.set(HIGHLIGHT, new HighlightCtor(range));
-  return () => registry.delete(HIGHLIGHT);
+  if (!range || !canHighlight()) return () => {};
+  setHighlight(HIGHLIGHT, range);
+  // The highlight owns the target now. A retained native selection can keep
+  // the formatting toolbar open over the prompt on touch browsers.
+  window.getSelection()?.removeAllRanges();
+  return () => clearHighlight(HIGHLIGHT);
 }
 
 /** `⌘↵` on Apple platforms, `Ctrl+↵` everywhere else. */
-function modEnterLabel(): string {
-  const apple =
-    typeof navigator !== 'undefined' &&
-    /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent);
-  return apple ? '⌘↵' : 'Ctrl+↵';
-}
+const modEnterLabel = () => modKeyLabel('↵');
 
 type Phase = 'prompt' | 'running' | 'done' | 'error';
 
@@ -147,29 +116,111 @@ type MenuRow = {
  * `aria-activedescendant`, like the slash menu.
  */
 export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: () => void }) {
-  const { documentId, doc, blocks: documentBlocks } = useEditorState();
+  const refusal = targetRefusal(target);
+  return refusal ? (
+    <AskAiRefusal target={target} reason={refusal} onClose={onClose} />
+  ) : (
+    <AskAiPrompt target={target} onClose={onClose} />
+  );
+}
+
+/** Put the caret back at the end of the block the panel was opened on. */
+function useFocusBack(anchorId: string) {
+  const { refs } = useEditorActions();
+  return useCallback(() => {
+    requestAnimationFrame(() => {
+      const el = refs.current[anchorId];
+      if (!el) return;
+      // Another control or a newly opened prompt may already own focus.
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== el) return;
+      el.focus({ preventScroll: true });
+      restoreCaretOffset(el, Number.MAX_SAFE_INTEGER);
+    });
+  }, [anchorId, refs]);
+}
+
+/**
+ * A target Ask AI will not send: a block hidden from the assistant, or one
+ * past the server's bounds. It says why and runs nothing.
+ */
+function AskAiRefusal({ target, reason, onClose }: { target: AskAiTarget; reason: string; onClose: () => void }) {
+  const focusBack = useFocusBack(target.anchorId);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    closeRef.current?.focus({ preventScroll: true });
+  }, []);
+  const close = () => {
+    onClose();
+    focusBack();
+  };
+  return (
+    <div
+      role="dialog"
+      aria-label="Ask AI"
+      className="ask-ai-panel relative mb-2 mt-1"
+      style={{ marginLeft: 'var(--doc-gutter)' }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+      }}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <div className="flex min-h-11 items-center gap-2 rounded-lg bg-popover px-3 shadow-md ring-1 ring-ai/25">
+        <Sparkles aria-hidden="true" className="size-[18px] shrink-0 text-ai" />
+        <p role="alert" className="min-w-0 flex-1 py-2 text-sm text-muted-foreground">
+          {reason}
+        </p>
+        <button
+          ref={closeRef}
+          type="button"
+          aria-label="Close Ask AI"
+          title="Close Ask AI"
+          onClick={close}
+          className="-mr-1 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
+        >
+          <X aria-hidden="true" className="size-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AskAiPrompt({ target, onClose }: { target: AskAiTarget; onClose: () => void }) {
+  const { doc, blocks: documentBlocks } = useEditorDoc();
+  const documentId = useDocumentId();
+  const { ensureRemoteDocument, hasPendingEdits, saveRemote } = useDocumentActions();
+  const readOnly = usePageReadOnly();
   const {
     refs,
-    ensureRemoteDocument,
     replaceBlocks,
     insertBlocksAfter,
     addParagraphChild,
     updateHtml,
     markRecentlyChanged,
   } = useEditorActions();
-  const agentTools = useContext(AgentToolsContext);
-  const engines = useAgentEngine();
+  const agent = useAgentRun({
+    surface: 'inline',
+    document: { documentId, ensureRemoteDocument, hasPendingEdits, saveRemote },
+  });
+  const { progress, sources, start: startRun, stop: stopRun } = agent;
   const [query, setQuery] = useState('');
   const [submenu, setSubmenu] = useState<AskAiPreset | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [phase, setPhase] = useState<Phase>('prompt');
   const [result, setResult] = useState('');
-  const [sources, setSources] = useState<AgentSource[]>([]);
-  /** What the running request is doing, and since when; null when idle. */
-  const [progress, setProgress] = useState<AgentProgress | null>(null);
+  /** The run's tool calls, for the compact activity list under the result. */
+  const [activity, setActivity] = useState<ToolRecord>(NO_ACTIVITY);
   const [error, setError] = useState<string | null>(null);
+  /** The author stopped the reply part-way: what is shown is unfinished. */
+  const [stopped, setStopped] = useState(false);
   const [preset, setPreset] = useState<AskAiPreset | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  /** Said once when a run ends, is stopped, or its result is copied: never the result itself. */
+  const [announcement, setAnnouncement] = useState('');
+  /** The browser refused the copy: the way that always works is shown beside it. */
+  const [copyFailed, setCopyFailed] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const stopRef = useRef<HTMLButtonElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -226,41 +277,49 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
     );
   }, []);
 
-  const citationsEnabled = agentTools?.isToolEnabled('search_citations') ?? false;
+  // The server's presets, with its labels, groups and states (the catalog),
+  // after the figure presets the client still writes.
+  const catalogPresets = useContext(AssistantCatalogContext)?.presets;
+  const allPresets = useMemo(() => askAiPresets(catalogPresets ?? []), [catalogPresets]);
   const options = useMemo(() => {
     const figure = target.figure === true;
-    const base = submenu?.children ? [...submenu.children] : presetsFor(target.kind, query, figure);
-    const usable = base.filter((option) => !option.citations || citationsEnabled);
+    const usable = submenu?.children ? [...submenu.children] : presetsFor(allPresets, target.kind, query, figure);
     // Typing something that is not a preset makes it the instruction.
     if (!submenu && query.trim()) return [customPreset(query.trim(), target.kind, figure), ...usable];
     if (submenu) return usable;
     // In the order the groups are drawn, so the arrow keys walk the list as seen.
     const order = presetGroupsFor(target.kind).map((group) => group.id);
     return usable.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
-  }, [submenu, target.kind, target.figure, query, citationsEnabled]);
+  }, [allPresets, submenu, target.kind, target.figure, query]);
 
   const blocks = useMemo(
     () =>
       preset
-        ? resultBlocks({ text: result, citationTags: preset.citations === true, citations: target.citations, sources })
+        ? resultBlocks({ text: result, citations: target.citations, sources })
         : [],
     [preset, result, target.citations, sources],
   );
 
-  const focusBack = useCallback(() => {
-    requestAnimationFrame(() => {
-      const el = refs.current[target.anchorId];
-      if (!el) return;
-      el.focus({ preventScroll: true });
-      restoreCaretOffset(el, Number.MAX_SAFE_INTEGER);
-    });
-  }, [refs, target.anchorId]);
+  const focusBack = useFocusBack(target.anchorId);
 
   const close = useCallback((restoreFocus = true) => {
-    abortRef.current?.abort();
+    stopRun();
     onClose();
     if (restoreFocus) focusBack();
-  }, [focusBack, onClose]);
+  }, [focusBack, onClose, stopRun]);
+
+  // A prompt should yield to the document on an outside press. Keep a run
+  // or an unapplied reply open until it is explicitly closed or discarded.
+  useEffect(() => {
+    if (phase !== 'prompt') return;
+    const onOutsidePointerDown = (event: PointerEvent) => {
+      const panel = panelRef.current;
+      if (!panel || !(event.target instanceof Node) || panel.contains(event.target)) return;
+      close(false);
+    };
+    document.addEventListener('pointerdown', onOutsidePointerDown, true);
+    return () => document.removeEventListener('pointerdown', onOutsidePointerDown, true);
+  }, [close, phase]);
 
   const run = useCallback(
     async (chosen: AskAiPreset, previous?: string) => {
@@ -270,116 +329,72 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
         setQuery('');
         return;
       }
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
       setPreset(chosen);
       setPhase('running');
       setResult('');
-      setSources([]);
+      setActivity(NO_ACTIVITY);
       setError(null);
-      // Nothing is written yet, so this is not "writing": the model reads
-      // the passage (and a citation preset searches) before the first word.
-      setProgress({
-        phase: chosen.citations ? 'tool' : 'thinking',
-        label: chosen.citations ? 'Searching for sources…' : 'Thinking…',
-        since: Date.now(),
-      });
+      setStopped(false);
+      setAnnouncement('');
+      setCopyFailed(false);
       setQuery('');
       setSubmenu(null);
       setActiveIndex(0);
 
-      const docId = documentId ?? (await ensureRemoteDocument());
-      if (!docId) {
+      let text = '';
+      const outcome = await startRun({
+        request: {
+          ...askAiRequest({
+            preset: chosen,
+            target,
+            previous,
+            // Compiled now, from the source the figure holds, so the line
+            // numbers match what the model reads.
+            problems:
+              chosen.id === 'figure-fix' && target.figure && target.diffBase?.type === 'code'
+                ? figureProblems(target.diffBase.text)
+                : undefined,
+          }),
+        },
+        handlers: {
+          onToken: (token) => {
+            text += token;
+            setResult(text);
+          },
+          onToolCallStart: (tool, toolCallId, display) =>
+            setActivity((record) => withToolStart(record, { id: toolCallId || `${tool}:${record.runs.length}`, tool, display }, Date.now())),
+          onToolCallArgs: (event) => setActivity((record) => withToolArgs(record, event)),
+          onToolCallEnd: (event) => setActivity((record) => withToolEnd(record, event)),
+        },
+      });
+      // Stopped by the author (who keeps what arrived) or by the panel going away.
+      if (outcome.status === 'stopped') return;
+      setActivity(interruptRuns);
+      if (outcome.status === 'failed') {
         setPhase('error');
-        setError('The document could not be saved, so the assistant cannot see it yet.');
+        setError(outcome.error.message);
         return;
       }
-
-      let text = '';
-      let failed: string | null = null;
-      const engineRequest = engines.requestFor('inline');
-      const moveTo = (next: Pick<AgentProgress, 'phase' | 'label'>) => {
-        if (!controller.signal.aborted) setProgress((current) => advanceProgress(current, next));
-      };
-      try {
-        const outcome = await streamAgentChat(
-          {
-            message: buildAskAiMessage({
-              preset: chosen,
-              target: target.kind,
-              markdown: target.markdown,
-              anchorText: target.anchorText,
-              previous,
-              // Compiled now, from the source the passage quotes, so the
-              // line numbers match what the model reads.
-              problems:
-                chosen.id === 'figure-fix' && target.figure && target.diffBase?.type === 'code'
-                  ? figureProblems(target.diffBase.text)
-                  : undefined,
-            }),
-            document_id: docId,
-            mode: 'rewrite',
-            ephemeral: true,
-            ...engineRequest,
-          },
-          {
-            onToken: (token) => {
-              text += token;
-              setResult(text);
-              setProgress({ phase: 'writing', label: 'Writing…', since: Date.now() });
-            },
-            onSources: (found) => setSources((current) => [...current, ...found]),
-            onReasoning: () => moveTo({ phase: 'thinking', label: 'Thinking…' }),
-            onStatus: (state, detail) => {
-              const next = progressForStatus(state, detail);
-              if (next) moveTo(next);
-            },
-            onToolCallStart: (tool) => moveTo({ phase: 'tool', label: `${toolRunningLabel(tool)}…` }),
-            onToolCallEnd: () => {
-              // Back to the model; an end that trails the answer (a duplicate
-              // one) must not relabel text that is already streaming.
-              if (!controller.signal.aborted) {
-                setProgress((current) =>
-                  current?.phase === 'tool' ? advanceProgress(current, { phase: 'thinking', label: 'Thinking…' }) : current,
-                );
-              }
-            },
-            onError: (code, message) => {
-              failed = message;
-              engines.noteRunError(code);
-            },
-          },
-          { signal: controller.signal },
-        );
-        if (controller.signal.aborted) return;
-        if (failed || outcome.terminal !== 'done') {
-          setPhase('error');
-          setError(failed ?? 'The connection closed before the assistant finished.');
-          return;
-        }
-        setPhase('done');
-        setProgress(null);
-      } catch (caught) {
-        if (controller.signal.aborted) return;
-        setPhase('error');
-        setError(caught instanceof Error ? caught.message : 'The assistant could not be reached.');
-      }
+      setPhase('done');
+      setAnnouncement(text.trim() ? 'The result is ready.' : 'The assistant returned nothing to insert.');
     },
-    [documentId, engines, ensureRemoteDocument, target],
+    [startRun, target],
   );
 
   const stop = useCallback(() => {
-    abortRef.current?.abort();
+    stopRun();
+    setActivity(interruptRuns);
     setPhase(result ? 'done' : 'prompt');
-    setProgress(null);
+    setStopped(Boolean(result));
+    setAnnouncement(result ? 'Stopped before it finished. The text is incomplete.' : 'Stopped.');
     setActiveIndex(0);
-  }, [result]);
+  }, [result, stopRun]);
 
   /** Put the result into the document. */
   const apply = useCallback(
     (how: 'replace' | 'below' | 'note') => {
-      if (blocks.length === 0) return;
+      // A viewer's result is theirs to copy; it never goes into the page.
+      if (blocks.length === 0 || readOnly) return;
       let inserted: string[];
       if (how === 'note') {
         inserted = insertBlocksAfter(target.anchorId, asNotes(blocks));
@@ -387,11 +402,12 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
         inserted = insertBlocksAfter(target.anchorId, blocks);
       } else if (target.kind === 'selection' && target.range) {
         const [blockId] = target.blockIds;
-        const el = refs.current[blockId];
+        const el = blockId ? refs.current[blockId] : undefined;
         const range = target.range;
         const intact = el && range.startContainer.isConnected && el.contains(range.commonAncestorContainer);
-        const single = blocks.length === 1 && blocks[0].type === 'paragraph' && !blocks[0].variant;
-        if (intact && el) {
+        const [only] = blocks;
+        const single = blocks.length === 1 && only?.type === 'paragraph' && !only.variant ? only : null;
+        if (intact && el && blockId) {
           // A selection made by double-click or drag often carries the space
           // after the last word; the reply comes back trimmed. Keep the
           // selection's own edges so the sentence does not run together.
@@ -399,14 +415,14 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
           const lead = /^\s*/.exec(selected)?.[0] ?? '';
           const trail = /\s*$/.exec(selected)?.[0] ?? '';
           range.deleteContents();
-          if (single && blocks[0].type === 'paragraph') {
+          if (single) {
             // One paragraph back: it takes the selection's place in the
             // sentence, widgets and all.
             const template = document.createElement('template');
-            template.innerHTML = blocks[0].html;
+            template.innerHTML = single.html;
             if (lead) template.content.prepend(lead);
             if (trail) template.content.append(trail);
-            for (const child of blocks[0].children ?? []) addParagraphChild(blockId, child);
+            for (const child of single.children ?? []) addParagraphChild(blockId, child);
             range.insertNode(template.content);
             updateHtml(blockId, serializeEditableHtml(el as HTMLDivElement));
             inserted = [blockId];
@@ -432,19 +448,19 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
         });
       }
     },
-    [addParagraphChild, blocks, insertBlocksAfter, markRecentlyChanged, onClose, refs, replaceBlocks, target, updateHtml],
+    [addParagraphChild, blocks, insertBlocksAfter, markRecentlyChanged, onClose, readOnly, refs, replaceBlocks, target, updateHtml],
   );
 
   const copy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(result);
-    } catch {
-      /* the text is still on screen to select by hand */
-    }
+    // Through the copy command where the Clipboard API is missing (a
+    // plain-HTTP page on the network), and said either way.
+    const copied = await copyToClipboard({ plain: result });
+    setCopyFailed(!copied);
+    setAnnouncement(copied ? 'Copied.' : '');
   }, [result]);
 
   const use = preset?.use ?? 'replace';
-  const canReplace = !target.locked;
+  const canReplace = !target.locked && !readOnly;
   const primary: 'replace' | 'below' | 'note' =
     use === 'note' ? 'note' : use === 'insert' || !canReplace ? 'below' : 'replace';
   const empty = blocks.length === 0;
@@ -458,6 +474,8 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
         icon: option.icon,
         submenu: Boolean(option.children),
         action: { type: 'preset', preset: option },
+        // A preset the server would not run here says why, in its words.
+        ...(option.unavailable ? { disabled: true, hint: option.unavailable } : {}),
       }));
     }
     if (phase === 'running') return [];
@@ -471,6 +489,11 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
       hint: 'Esc',
     };
     if (phase === 'error') return [retry, discard];
+    // Read-only here: the result can be copied, and nothing else.
+    if (readOnly) {
+      const copyRow: MenuRow = { id: 'copy', label: 'Copy', icon: Copy, action: { type: 'copy' }, hint: stopped ? undefined : modEnterLabel(), disabled: empty };
+      return stopped ? [retry, copyRow, discard] : [copyRow, retry, discard];
+    }
 
     const actions: MenuRow[] = [];
     if (primary === 'replace') {
@@ -502,8 +525,12 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
       disabled: empty,
     });
     if (primary === 'note') actions.push({ id: 'copy', label: 'Copy', icon: Copy, action: { type: 'copy' } });
+    // A reply the author stopped is cut off mid-sentence. It can still be
+    // used, but "Try again" leads and no shortcut applies it: the first row
+    // and ⌘↵ used to replace the selection with the truncated text.
+    if (stopped) return [retry, ...actions.map((action) => ({ ...action, hint: undefined })), discard];
     return [...actions, retry, discard];
-  }, [empty, options, phase, preset, primary, target.kind]);
+  }, [empty, options, phase, preset, primary, readOnly, stopped, target.kind]);
 
   // Fit (and make room) whenever the menu appears or changes length; keep it
   // fitted while the page scrolls or the window resizes.
@@ -540,7 +567,7 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
     } else close();
   };
 
-  type PanelKey = Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'preventDefault' | 'stopPropagation'>;
+  type PanelKey = Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'target' | 'preventDefault' | 'stopPropagation'>;
   /**
    * A typed prompt as a preset. On a figure it asks for the figure back, and
    * so does a refinement of a result that was a figure ("add a legend" after
@@ -561,9 +588,14 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
       else close();
       return;
     }
+    // Enter and Space on Close, Stop and Back belong to those buttons.
+    if (event.target instanceof Element && event.target.closest('button')) return;
     if (phase === 'done' && mod && event.key === 'Enter') {
       event.preventDefault();
-      apply(primary);
+      if (!stopped) {
+        if (readOnly) void copy();
+        else apply(primary);
+      }
       return;
     }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -598,14 +630,21 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
   // StrictMode rehearses) aborts the first run and starts it again rather
   // than leaving the panel stuck on a progress line with nothing behind it.
   const runRef = useRef(run);
+  const stopRunRef = useRef(stopRun);
   useLayoutEffect(() => {
     runRef.current = run;
+    stopRunRef.current = stopRun;
   });
+  // An entry point that names its preset (the toolbar's menu) runs it once
+  // the catalog has it, a variant in a submenu included.
+  const named = target.preset
+    ? allPresets.flatMap((candidate) => [candidate, ...(candidate.children ?? [])])
+      .find((candidate) => candidate.id === target.preset && !candidate.unavailable)
+    : undefined;
   useEffect(() => {
-    const found = target.preset ? ASK_AI_PRESETS.find((candidate) => candidate.id === target.preset) : undefined;
-    if (found) void runRef.current(found);
-    return () => abortRef.current?.abort();
-  }, [target.preset]);
+    if (named) void runRef.current(named);
+    return () => stopRunRef.current();
+  }, [named]);
 
   /**
    * Keep focus in the panel across a run.
@@ -633,7 +672,8 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
    * A safety net for a stray blur: if focus falls to <body> while the panel
    * is open, Escape still closes (or stops) it and Mod+Enter still applies —
    * and any navigation key brings focus back to the field it belongs in.
-   * Keys aimed anywhere else (the page, another field) are left alone.
+   * Escape also works after keyboard focus returns to the document. Other
+   * fields and controls keep their own keys.
    */
   const keyHandlerRef = useRef(onKeyDown);
   useLayoutEffect(() => {
@@ -641,8 +681,14 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
   });
   useEffect(() => {
     const onDocumentKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       const active = document.activeElement;
-      if (active && active !== document.body) return;
+      if (active && active !== document.body) {
+        const inDocument =
+          panelRef.current?.closest('.canvas')?.contains(active) &&
+          active.matches('.editable, .code-editable, [contenteditable]:not([contenteditable="false"])');
+        if (event.key !== 'Escape' || !inDocument) return;
+      }
       const mod = event.metaKey || event.ctrlKey;
       const handled =
         event.key === 'Escape' ||
@@ -684,13 +730,18 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
 
   // A rewrite of one block reads best as a diff against what it replaces;
   // anything structural (a list, several blocks) is shown as the new blocks.
-  const showDiff =
+  // One rewritten heading or plain paragraph is shown as a diff of the text.
+  const [onlyBlock] = blocks;
+  const diffBlock =
     phase === 'done' &&
     primary === 'replace' &&
     target.kind !== 'empty' &&
     target.kind !== 'blocks' &&
     blocks.length === 1 &&
-    (blocks[0].type === 'heading' || (blocks[0].type === 'paragraph' && !blocks[0].variant));
+    onlyBlock &&
+    (onlyBlock.type === 'heading' || (onlyBlock.type === 'paragraph' && !onlyBlock.variant))
+      ? onlyBlock
+      : null;
 
   const sections: Array<{ id: string; label: string; rows: MenuRow[] }> =
     phase !== 'prompt'
@@ -718,7 +769,8 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
     [blocks, doc.citationStyle, doc.sources, documentBlocks, primary, target.anchorId, target.blockIds, target.kind],
   );
 
-  const hasResult = blocks.length > 0 || Boolean(error) || (phase === 'done' && empty);
+  const hasActivity = activity.runs.length > 0 || sources.length > 0;
+  const hasResult = blocks.length > 0 || Boolean(error) || (phase === 'done' && empty) || hasActivity;
   const canSend = query.trim().length > 0;
 
   return (
@@ -736,11 +788,11 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
           className="mb-2 max-h-[50vh] overflow-y-auto border-l-2 border-ai/50 py-1 pl-4 pr-1"
           aria-live="off"
         >
-          {showDiff ? (
+          {diffBlock ? (
             <ProposedRewriteView
               before={target.diffBase ?? target.text}
-              after={blocks[0]}
-              block={blocks[0]}
+              after={diffBlock}
+              block={diffBlock}
               bibliography={bibliography}
             />
           ) : blocks.length > 0 ? (
@@ -750,9 +802,25 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
               ))}
             </div>
           ) : null}
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+          {stopped && phase === 'done' && !empty && !error && (
+            <p className="mt-1.5 text-sm text-muted-foreground">Stopped before it finished. This text is incomplete.</p>
+          )}
           {phase === 'done' && empty && !error && (
             <p className="text-sm text-muted-foreground">The assistant returned nothing to insert.</p>
+          )}
+          {hasActivity && (
+            // What the run did, compact: the calls fold once it ends, and
+            // the sources behind the result can be cited or kept.
+            <div className="mt-2 border-t border-border pt-1.5 text-sm">
+              <AgentActivity runs={activity.runs} live={phase === 'running'} />
+              {/* An inline run has no conversation: its own sources are all its markers can name. */}
+              <AnswerSources messageId={target.key} text={result} sources={sources} known={sources} />
+            </div>
           )}
         </div>
       )}
@@ -841,6 +909,15 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
               </button>
             </>
           )}
+          <button
+            type="button"
+            aria-label="Close Ask AI"
+            title="Close Ask AI"
+            onClick={() => close()}
+            className="-mr-1 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
+          >
+            <X aria-hidden="true" className="size-4" />
+          </button>
         </div>
 
         {/* Suggestions or result actions, floating over the text below like any
@@ -913,7 +990,13 @@ export function AskAiPanel({ target, onClose }: { target: AskAiTarget; onClose: 
           </p>
         )}
       </div>
-      {target.locked && phase === 'done' && (
+      {/* Always in the page, so what fills it is heard. */}
+      <p aria-live="polite" className={copyFailed ? 'mt-1.5 text-xs text-muted-foreground' : 'sr-only'}>
+        {copyFailed ? `Couldn’t copy. Select the text and press ${modKeyLabel('C')}.` : announcement}
+      </p>
+      {readOnly && phase === 'done' ? (
+        <p className="mt-1.5 text-xs text-muted-foreground">You can view this page, not edit it: copy the result to use it elsewhere.</p>
+      ) : target.locked && phase === 'done' && (
         <p className="mt-1.5 text-xs text-muted-foreground">Locked blocks are never replaced.</p>
       )}
     </div>

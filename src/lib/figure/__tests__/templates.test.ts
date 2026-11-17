@@ -1,3 +1,4 @@
+import { itemAt, takeItems } from '@/lib/itemAt';
 import katex from 'katex';
 import { describe, expect, it } from 'vitest';
 import { FIGURE_TEMPLATES, type FigureTemplate } from '../templates';
@@ -195,7 +196,9 @@ function shorthandEdges(text: string): EdgeInfo[] {
   if (arrows.length === 0) throw new Error(`"${text}" has no arrow`);
   const edges: EdgeInfo[] = [];
   arrows.forEach((arrow, index) => {
-    const [sources, targets] = arrow.reversed ? [groups[index + 1], groups[index]] : [groups[index], groups[index + 1]];
+    const before = groups[index] ?? [];
+    const after = groups[index + 1] ?? [];
+    const [sources, targets] = arrow.reversed ? [after, before] : [before, after];
     if (sources.length === 0 || targets.length === 0) throw new Error(`"${text}" has an empty endpoint`);
     for (const from of sources) {
       for (const to of targets) {
@@ -371,7 +374,7 @@ describe.each(FIGURE_TEMPLATES.map((template) => [template.id, template] as cons
       expect(line, `line ${index + 1} has trailing whitespace`).toBe(line.trimEnd());
       const indent = line.length - line.trimStart().length;
       const closes = /^[}\]]/.test(line.trimStart()) ? 1 : 0;
-      expect(indent, `line ${index + 1}: ${line.trim()}`).toBe(2 * (depths[index] - closes));
+      expect(indent, `line ${index + 1}: ${line.trim()}`).toBe(2 * (itemAt(depths, index) - closes));
     });
   });
 
@@ -444,13 +447,13 @@ describe.each(FIGURE_TEMPLATES.map((template) => [template.id, template] as cons
       if (typeof cells === 'number') {
         [rows, cols] = [1, cells];
       } else if (Array.isArray(cells) && cells.every((cell) => typeof cell === 'number')) {
-        [rows, cols] = cells as number[];
+        [rows, cols] = takeItems(cells as number[], 2);
       } else if (Array.isArray(cells) && cells.every((cell) => typeof cell === 'string')) {
         [rows, cols] = [1, cells.length];
       } else {
         const grid = cells as string[][];
         rows = grid.length;
-        cols = grid[0].length;
+        cols = itemAt(grid, 0).length;
         for (const row of grid) {
           expect(row.length, `${where}: ragged text grid`).toBe(cols);
           for (const cell of row) expect(typeof cell).toBe('string');
@@ -609,7 +612,7 @@ function templateSpec(id: string): JsonObject {
 }
 
 function chainLabels(spec: JsonObject, ids: string[]): string[] {
-  for (let i = 1; i < ids.length; i += 1) expect(hasEdge(spec, ids[i - 1], ids[i]), `${ids[i - 1]} -> ${ids[i]}`).toBe(true);
+  for (let i = 1; i < ids.length; i += 1) expect(hasEdge(spec, itemAt(ids, i - 1), itemAt(ids, i)), `${ids[i - 1]} -> ${ids[i]}`).toBe(true);
   return ids.map((id) => String(item(spec, id).label));
 }
 
@@ -755,7 +758,7 @@ describe('paper fidelity', () => {
     chainLabels(spec, ['x', 'encoder', 'z', 'decoder', 'xhat']);
     expect(item(spec, 'encoder').shape).toBe('funnel');
     expect(item(spec, 'decoder').shape).toBe('expand');
-    const rows = (id: string) => (item(spec, id).cells as number[])[0];
+    const rows = (id: string) => itemAt(item(spec, id).cells as number[], 0);
     expect(rows('z')).toBeLessThan(rows('x'));
     expect(rows('xhat')).toBe(rows('x'));
     // The loss compares input and reconstruction; both inputs are dashed (training only).
@@ -770,14 +773,14 @@ describe('paper fidelity', () => {
     expect(spec.layout).toBe('row');
     const panels = (spec.nodes as JsonObject[]).map((panel) => {
       expect(panel.panel).toBe(true);
-      const [grid] = panel.children as JsonObject[];
+      const [grid] = takeItems(panel.children as JsonObject[], 1);
       expect(grid).toMatchObject({ shape: 'tensor', cells: [8, 8] });
       return grid;
     });
     expect(panels.map((grid) => grid.mask ?? null)).toEqual(['full', 'causal', null]);
     const window = 3;
     const expected = Array.from({ length: 8 }, (_, i) => Array.from({ length: 8 }, (_, j) => (j <= i && j > i - window ? 1 : 0)));
-    expect(panels[2].values).toEqual(expected);
+    expect(panels[2]?.values).toEqual(expected);
   });
 
   it('vit: one token per patch plus the [class] token, into an L× pre-norm encoder and an MLP head', () => {

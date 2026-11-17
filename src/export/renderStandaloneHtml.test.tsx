@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import type { Doc } from '@/editor/types';
 import kitchenSinkFixture from './fixtures/kitchen-sink.json';
@@ -10,6 +11,7 @@ import {
 } from './renderStandaloneHtml';
 import { sanitizeInlineFragment } from './sanitize';
 import type { DocumentExportOptions } from './types';
+import { reference } from '@/__tests__/agentSource';
 
 const options: DocumentExportOptions = {
   profile: 'paper',
@@ -19,7 +21,26 @@ const options: DocumentExportOptions = {
   ai_beat: 'omit',
   include_references: true,
 };
-const snapshot = { base_version: 4, local_revision: 12, dirty: true };
+const snapshot = { local_revision: 12, dirty: true };
+
+it('renders a self-contained AI draft with citations and draft references, or omits it completely', () => {
+  const record = reference('doi:10.1000/draft', { title: 'Durable draft evidence', year: 2026 });
+  const doc: Doc = { blocks: [{
+    id: 'p', type: 'paragraph', html: '<span data-child-id="draft"></span>',
+    children: [{ id: 'draft', type: 'aiBeat', message: 'Write', prompt: 'Private',
+      output: { text: 'Supported [@doi:10.1000/draft]. Unknown [S9].', sources: [record] } }],
+  }] };
+  const html = renderStandaloneHtml(doc, { ...options, ai_beat: 'draft-card' }, snapshot);
+  expect(html).toContain('class="citation">[1]</span>');
+  expect(html).toContain('Durable draft evidence');
+  expect(html).toContain('Unknown [S9]');
+  expect(html).not.toContain('[@doi:');
+  expect(html).not.toContain('Private');
+  expect(html.match(/<main\b/g)).toHaveLength(1);
+  const omitted = renderStandaloneHtml(doc, options, snapshot);
+  expect(omitted).not.toContain('Durable draft evidence');
+  expect(omitted).not.toContain('Supported');
+});
 
 const canonicalFixtures = [
   kitchenSinkFixture,
@@ -30,7 +51,6 @@ const canonicalFixtures = [
 
 function kitchenSink(): Doc {
   return {
-    version: 4,
     name: 'Kitchen sink',
     blocks: [
       { id: 'h1', type: 'heading', level: 1, html: 'Results <em>and analysis</em>' },
@@ -50,15 +70,13 @@ function kitchenSink(): Doc {
           {
             id: 'citation',
             type: 'citation',
-            keys: ['10.1000/example'],
-            style: 'author-year',
+            keys: ['doi:10.1000/example'],
+            style: 'apa',
             locator: 'p. 4',
-            sources: [{
-              key: '10.1000/example',
-              authors: 'Doe, Jane',
-              year: '2025',
-              url: 'https://example.test/paper',
-            }],
+            sources: [reference('doi:10.1000/example', {
+              title: 'Example paper', authors: 'Jane Doe', year: 2025, url: 'https://example.test/paper', doi: '10.1000/example',
+              state: 'verified', flags: ['retracted'], notices: [{ type: 'retraction', date: '2026-01-02' }],
+            })],
           },
           { id: 'inline-equation', type: 'equation', latex: 'E=mc^2' },
           {
@@ -98,7 +116,7 @@ function kitchenSink(): Doc {
             type: 'aiBeat',
             message: 'Try another transition',
             prompt: 'private style prompt',
-            output: 'Draft output',
+            output: { text: 'Draft output', sources: [] },
           },
         ],
       },
@@ -145,7 +163,6 @@ describe('renderStandaloneHtml', () => {
     expect(html).toContain("default-src 'none'");
     expect(html).toContain('font-src data:');
     expect(html).toContain('data:font/woff2;base64');
-    expect(html).toContain('name="colwrite-document-version" content="4"');
     expect(html).toContain('name="colwrite-local-revision" content="12"');
     expect(html).toContain('name="colwrite-export-profile" content="paper"');
     expect(html).not.toMatch(/(?:src|url)\s*=\s*["']https?:/i);
@@ -157,7 +174,7 @@ describe('renderStandaloneHtml', () => {
 
   it('rejects duplicate placeholders instead of losing or inventing content', () => {
     const doc = kitchenSink();
-    const paragraph = doc.blocks[1];
+    const paragraph = itemAt(doc.blocks, 1);
     if (paragraph.type !== 'paragraph') throw new Error('fixture is invalid');
     paragraph.html += '<span data-child-id="citation"></span>';
 
@@ -166,21 +183,20 @@ describe('renderStandaloneHtml', () => {
 
   it('links every citation to its reference entry, and the entry back to each usage', () => {
     const doc = kitchenSink();
-    const paragraph = doc.blocks[1];
+    const paragraph = itemAt(doc.blocks, 1);
     if (paragraph.type !== 'paragraph') throw new Error('fixture is invalid');
     // A second citation of the same paper: one entry, two back-links.
     paragraph.html += '<span data-child-id="citation-again"></span>';
     paragraph.children?.push({
       id: 'citation-again',
       type: 'citation',
-      keys: ['10.1000/example'],
-      style: 'author-year',
-      sources: [{ key: '10.1000/example' }],
+      keys: ['doi:10.1000/example'],
+      style: 'apa',
     });
 
     const html = renderStandaloneHtml(doc, options, snapshot);
 
-    expect(html).toContain('<section class="references"');
+    expect(html).toContain('<section class="references hanging-indent"');
     expect(html).toContain('id="ref-1"');
     expect(html).toContain('href="#ref-1"');
     expect(html).toContain('id="cite-citation"');
@@ -190,21 +206,24 @@ describe('renderStandaloneHtml', () => {
     expect(html).toContain('https://doi.org/10.1000/example');
     // One paper cited twice is one row.
     expect(html.match(/class="reference-item"/g)).toHaveLength(1);
+    // Printed in the page's CSL style, the retraction said in the entry itself.
+    expect(html).toContain('Doe, J. (2025). <i>Example paper</i>.');
+    expect(html).toContain('[Retracted: Retraction published on 2026-01-02.]');
+    expect(html).toContain('(Doe, 2025, p. 4)');
   });
 
-  it('sets an author–year citation off from the word before it, as the page does', () => {
+  it('sets a parenthetical citation off from the word before it, as the page does', () => {
     const doc: Doc = {
-      version: 1,
       name: 'Spacing',
-      citationStyle: 'author-year',
+      citationStyle: 'apa',
       blocks: [
         {
           id: 'p',
           type: 'paragraph',
           html: 'lengths<span data-child-id="c1"></span> and (<span data-child-id="c2"></span>)',
           children: [
-            { id: 'c1', type: 'citation', keys: ['k1'], sources: [{ key: 'k1', authors: 'Ashish Vaswani', year: '2017' }] },
-            { id: 'c2', type: 'citation', keys: ['k1'], sources: [{ key: 'k1', authors: 'Ashish Vaswani', year: '2017' }] },
+            { id: 'c1', type: 'citation', keys: ['k1'], sources: [reference('k1', { title: 'Attention', authors: 'Ashish Vaswani', year: 2017 })] },
+            { id: 'c2', type: 'citation', keys: ['k1'], sources: [reference('k1', { title: 'Attention', authors: 'Ashish Vaswani', year: 2017 })] },
           ],
         },
       ],
@@ -247,7 +266,7 @@ describe('renderStandaloneHtml', () => {
       const html = renderStandaloneHtml(
         fixture,
         options,
-        { base_version: fixture.version, local_revision: 0, dirty: false },
+        { local_revision: 0, dirty: false },
       );
 
       expect(html).toMatch(/^<!doctype html>/);
@@ -289,7 +308,6 @@ describe('structured figures', () => {
 
   function figureDoc(): Doc {
     return {
-      version: 1,
       name: 'Figures',
       blocks: [
         { id: 'f1', type: 'code', language: 'figure', text: spec('The first figure.') },
@@ -318,7 +336,6 @@ describe('structured figures', () => {
 
   it('sizes only the figure\'s own svg, never the KaTeX glyphs drawn inside it', () => {
     const doc: Doc = {
-      version: 1,
       blocks: [
         {
           id: 'f',
@@ -364,7 +381,6 @@ describe('structured figures', () => {
 
   it('never loads a remote image, which the page\'s CSP would block anyway', () => {
     const doc: Doc = {
-      version: 1,
       blocks: [
         {
           id: 'f',
@@ -386,7 +402,6 @@ describe('structured figures', () => {
 
   it('never lets markup in a label reach the page', () => {
     const doc: Doc = {
-      version: 1,
       blocks: [
         {
           id: 'x',

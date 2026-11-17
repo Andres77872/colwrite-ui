@@ -1,3 +1,4 @@
 export { AgentActivity } from './AgentActivity';
-export { toolRunningLabel } from './toolMeta';
-export type { ToolRun, ToolRunState } from './toolMeta';
+export { toolNaming } from './toolMeta';
+export { useToolNamer } from './useToolNamer';
+export type { ToolNaming, ToolRun, ToolRunState } from './toolMeta';

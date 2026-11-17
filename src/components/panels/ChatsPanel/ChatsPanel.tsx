@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { ChatItem } from '@/services/chats';
+import type { ChatItem } from '@/data/chats';
 import { useChatSessions } from '@/components/chat/chatSessionsState';
 import { cn } from '@/lib/utils';
 import { formatDateTime } from '@/lib/text';
@@ -9,8 +9,7 @@ import { menuItem, menuLabel } from '@/components/ui/menuStyles';
 import {
   AlertCircle,
   Check,
-  ChevronLeft,
-  ChevronRight,
+  ChevronDown,
   Clock,
   MessageSquare,
   Pencil,
@@ -18,10 +17,11 @@ import {
   Search,
   Trash2,
 } from 'lucide-react';
-import { CHATS_PAGE_SIZE, chatLabel, type ChatHistory } from './useChatHistory';
+import { chatLabel, type ChatHistory } from './useChatHistory';
+import { EmptyState } from '@/components/ui/empty-state';
 
 /** "now", "5m", "3h", "Yesterday", "Sep 20" — the list has room for one word. */
-function relativeTime(value: string | null): string {
+function relativeTime(value: string | null | undefined): string {
   if (!value) return '';
   const then = new Date(value);
   const ms = Date.now() - then.getTime();
@@ -46,6 +46,7 @@ type ChatsPanelProps = {
   /** Told after a conversation is deleted. */
   onDeleted?: (chat: ChatItem) => void;
   className?: string;
+  unreadChats?: ReadonlySet<string>;
 };
 
 /**
@@ -55,20 +56,20 @@ type ChatsPanelProps = {
  * title, a one-word time, and rename/delete on hover or focus. Touch screens
  * have no hover, so there rename/delete are always shown instead of the time.
  */
-export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, className }: ChatsPanelProps) {
+export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, className, unreadChats }: ChatsPanelProps) {
   const { selectedChatId } = useChatSessions();
 
   const [query, setQuery] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
-  const { items, loading, listError, page, totalPages, count } = chats;
+  const { items, loading, listError, hasMore } = chats;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return items;
     return items.filter(
-      (c) => (c.title ?? '').toLowerCase().includes(q) || c.chat_id.includes(q),
+      (c) => (c.title ?? '').toLowerCase().includes(q) || c.id.includes(q),
     );
   }, [items, query]);
 
@@ -121,13 +122,13 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
 
           {!showSkeleton &&
             filtered.map((chat) => {
-              const isSelected = chat.chat_id === selectedChatId;
-              const isRenaming = renamingId === chat.chat_id;
+              const isSelected = chat.id === selectedChatId;
+              const isRenaming = renamingId === chat.id;
               const label = chatLabel(chat);
 
               if (isRenaming) {
                 return (
-                  <li key={chat.chat_id} className="flex items-center gap-1 px-1 py-0.5">
+                  <li key={chat.id} className="flex items-center gap-1 px-1 py-0.5">
                     <input
                       autoFocus
                       className="h-7 min-w-0 flex-1 rounded-md bg-subtle px-2 text-sm outline-none ring-1 ring-inset ring-border-strong focus:ring-2 focus:ring-primary"
@@ -137,7 +138,7 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') {
                           event.preventDefault();
-                          commitRename(chat.chat_id);
+                          commitRename(chat.id);
                         }
                         if (event.key === 'Escape') {
                           event.preventDefault();
@@ -145,7 +146,7 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
                           setRenameValue('');
                         }
                       }}
-                      onBlur={() => commitRename(chat.chat_id)}
+                      onBlur={() => commitRename(chat.id)}
                     />
                     <Button
                       variant="icon"
@@ -153,7 +154,7 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
                       // Without this, blur fires first and commits the rename
                       // before the click ever reaches the button.
                       onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => commitRename(chat.chat_id)}
+                      onClick={() => commitRename(chat.id)}
                       aria-label="Save chat title"
                     >
                       <Check />
@@ -164,7 +165,7 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
 
               return (
                 <li
-                  key={chat.chat_id}
+                  key={chat.id}
                   className={cn(
                     'group relative flex items-center rounded-md transition-colors duration-120',
                     isSelected ? 'bg-active' : 'hover:bg-hover',
@@ -175,6 +176,7 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
                     onClick={() => onSelect(chat)}
                     aria-current={isSelected ? 'true' : undefined}
                     title={formatDateTime(chat.updated_at) || undefined}
+                    aria-label={unreadChats?.has(chat.id) ? `${label}, reply finished elsewhere` : undefined}
                     className={cn(
                       'flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       // Touch has no hover: the actions stay shown in place of
@@ -186,6 +188,7 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
                     <span className={cn('min-w-0 flex-1 truncate', !chat.title?.trim() && 'text-muted-foreground')}>
                       {label}
                     </span>
+                    {unreadChats?.has(chat.id) && <span className="shrink-0 text-xs text-ai">New reply</span>}
                     <span className="shrink-0 text-xs text-muted-foreground tabular-nums group-focus-within:invisible group-hover:invisible [@media(hover:none)]:hidden">
                       {relativeTime(chat.updated_at)}
                     </span>
@@ -196,7 +199,7 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
                       size="icon-xs"
                       className={TOUCH_ACTION}
                       onClick={() => {
-                        setRenamingId(chat.chat_id);
+                        setRenamingId(chat.id);
                         setRenameValue(chat.title ?? '');
                       }}
                       aria-label={`Rename ${label}`}
@@ -245,14 +248,12 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
         )}
 
         {chats.documentId && !loading && !listError && items.length === 0 && (
-          <p className="px-2 py-3 text-center text-xs text-muted-foreground">
-            No chats yet. Conversations about this document are kept here.
-          </p>
+          <EmptyState size="inline" title="No chats yet" description="Conversations about this page are kept here." />
         )}
 
         {!chats.documentId && (
           <p className="px-2 py-3 text-center text-xs text-muted-foreground">
-            A conversation is kept with a document. Asking saves this document first.
+            A conversation is kept with a page. Asking saves this page first.
           </p>
         )}
 
@@ -261,29 +262,17 @@ export function ChatsPanel({ history: chats, onNewChat, onSelect, onDeleted, cla
         )}
       </div>
 
-      {totalPages > 1 && (
-        <div className="flex flex-shrink-0 items-center justify-between border-t border-border px-1.5 py-1">
-          <Button
-            variant="icon"
-            size="icon-xs"
-            onClick={() => chats.setPage(Math.max(1, page - 1))}
-            disabled={page <= 1 || loading}
-            aria-label="Previous page"
+      {hasMore && !listError && (
+        <div className="flex-shrink-0 border-t border-border p-1.5">
+          <button
+            type="button"
+            className={cn(menuItem, 'w-full text-left text-muted-foreground')}
+            onClick={chats.showMore}
+            disabled={loading}
           >
-            <ChevronLeft />
-          </Button>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            {Math.min(count, (page - 1) * CHATS_PAGE_SIZE + 1)}–{Math.min(page * CHATS_PAGE_SIZE, count)} of {count}
-          </span>
-          <Button
-            variant="icon"
-            size="icon-xs"
-            onClick={() => chats.setPage(Math.min(totalPages, page + 1))}
-            disabled={page >= totalPages || loading}
-            aria-label="Next page"
-          >
-            <ChevronRight />
-          </Button>
+            {loading ? <Spinner className="h-3.5 w-3.5" /> : <ChevronDown aria-hidden="true" />}
+            Show more chats
+          </button>
         </div>
       )}
     </div>

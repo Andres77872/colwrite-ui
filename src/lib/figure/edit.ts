@@ -28,10 +28,7 @@ const IDENTIFIER_KEY = /^[A-Za-z_$][\w$-]*$/;
 type Found = { node: JsonNode; path: string };
 
 function lastMember(object: JsonObjectNode, key: string): JsonMember | null {
-  for (let i = object.members.length - 1; i >= 0; i--) {
-    if (object.members[i].key === key) return object.members[i];
-  }
-  return null;
+  return [...object.members].reverse().find((member) => member.key === key) ?? null;
 }
 
 /** Whether `member` is `key` in any spelling normalisation accepts for it (`Tone`, `font_size`). */
@@ -41,10 +38,7 @@ function spells(member: JsonMember, key: string): boolean {
 
 /** The member normalisation reads for `key`: the last one, in any spelling. */
 function effectiveMember(object: JsonObjectNode, key: string): JsonMember | null {
-  for (let i = object.members.length - 1; i >= 0; i--) {
-    if (spells(object.members[i], key)) return object.members[i];
-  }
-  return null;
+  return [...object.members].reverse().find((member) => spells(member, key)) ?? null;
 }
 
 /** The node spanning exactly [start, end), or null. */
@@ -313,13 +307,12 @@ function setKey(source: string, object: JsonObjectNode, key: string, value: Json
   }
 
   const head = `${keyText(key, style)}${style.colon}`;
-  const members = object.members;
-  if (members.length === 0) {
+  const last = object.members.at(-1);
+  if (!last) {
     // Not reachable through an id (an addressable object has an `id` member); kept total.
     return applyEdits(source, [{ start: object.start, end: object.end, text: `{ ${head}${valueText(value, style, 0, true)} }` }]);
   }
 
-  const last = members[members.length - 1];
   const trailingComma = commaAfter(source, last.end, object.end - 1);
   if (!style.multiLine) {
     const member = head + valueText(value, style, 0, true);
@@ -358,10 +351,8 @@ function deleteKey(source: string, object: JsonObjectNode, key: string): string 
   // Duplicates go last first; after each removal the object is read again,
   // since what "last member" means has changed. Its start never moves.
   while (current) {
-    let index = -1;
-    for (let i = current.members.length - 1; i >= 0 && index < 0; i--) {
-      if (spells(current.members[i], key)) index = i;
-    }
+    const last = effectiveMember(current, key);
+    const index = last ? current.members.lastIndexOf(last) : -1;
     if (index < 0) return text;
     text = removeMember(text, current, index);
     const reread = parseFigureSource(text).ast;
@@ -373,8 +364,9 @@ function deleteKey(source: string, object: JsonObjectNode, key: string): string 
 function removeMember(source: string, object: JsonObjectNode, index: number): string {
   const members = object.members;
   const member = members[index];
-  const prev = index > 0 ? members[index - 1] : null;
-  const next = index + 1 < members.length ? members[index + 1] : null;
+  if (!member) return source;
+  const prev = members[index - 1] ?? null;
+  const next = members[index + 1] ?? null;
   const own = ownLineIndent(source, member.start) !== null;
   const wholeLine = (from: number): Edit | null => {
     const tail = lineTail(source, from);
@@ -426,7 +418,7 @@ function expandShorthand(
   if (value === undefined) {
     if (index < 0) return source;
     entries.splice(index, 1);
-  } else if (index >= 0) {
+  } else if (entries[index]) {
     entries[index][1] = value;
   } else {
     entries.push([key, value]);
@@ -559,6 +551,7 @@ function dropOverridden(node: JsonObjectNode, entries: DocEntry[]): DocEntry[] {
   const kept: DocEntry[] = [];
   node.members.forEach((member, i) => {
     const entry = entries[i];
+    if (!entry) return;
     const comments = carried.get(member.key) ?? [];
     if (lastMember(node, member.key) !== member) {
       carried.set(member.key, [...comments, ...entry.leading, ...entry.trailing]);
@@ -672,7 +665,7 @@ function encodeJsonString(value: string): string {
           ? short
           : `\\u${c.toString(16).padStart(4, '0')}`;
     } else if (c >= 0xd800 && c <= 0xdbff && isLowSurrogate(value.charCodeAt(i + 1))) {
-      out += value[i] + value[i + 1];
+      out += value.slice(i, i + 2);
       math.push(c);
       i++;
       math.push(value.charCodeAt(i));

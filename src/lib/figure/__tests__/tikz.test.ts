@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import { FIGURE_METRICS, figureFont } from '../constants';
 import { figureMathHtml } from '../math';
@@ -285,7 +286,7 @@ function bracesBalanced(tex: string): boolean {
 function environmentsBalanced(tex: string): boolean {
   const stack: string[] = [];
   for (const match of stripComments(tex).matchAll(/\\(begin|end)\{([^}]*)\}/g)) {
-    if (match[1] === 'begin') stack.push(match[2]);
+    if (match[1] === 'begin') stack.push(itemAt(match, 2));
     else if (stack.pop() !== match[2]) return false;
   }
   return stack.length === 0;
@@ -329,7 +330,7 @@ function pdfLatexReadable(tex: string): boolean {
 
 /** The control words of TeX code outside comments. */
 function controlWords(tex: string): string[] {
-  return [...stripComments(tex).matchAll(/\\([A-Za-z@]+)/g)].map((m) => m[1]);
+  return [...stripComments(tex).matchAll(/\\([A-Za-z@]+)/g)].map((m) => m[1] ?? '');
 }
 
 function expectWellFormed(tex: string): void {
@@ -345,7 +346,7 @@ function expectWellFormed(tex: string): void {
 }
 
 function definedColors(tex: string): Map<string, string> {
-  return new Map([...tex.matchAll(/\\definecolor\{(\w+)\}\{HTML\}\{([0-9A-F]{6})\}/g)].map((m) => [m[1], m[2]]));
+  return new Map([...tex.matchAll(/\\definecolor\{(\w+)\}\{HTML\}\{([0-9A-F]{6})\}/g)].map((m) => [m[1] ?? '', m[2] ?? '']));
 }
 
 function hex(css: string): string {
@@ -983,7 +984,7 @@ describe('figureToTikz — nodes', () => {
 
   it('draws a cylinder with Bézier caps and the front rim of its top', () => {
     const out = one('db', { shape: 'cylinder', tone: 'gray' }, {}, { x: 0, y: 0, width: 40, height: 40 });
-    const body = statements(out, '\\draw[fill=cwfGrayFill')[0];
+    const body = itemAt(statements(out, '\\draw[fill=cwfGrayFill'), 0);
     expect(body).toMatch(/^\\draw\[fill=cwfGrayFill, draw=cwfGrayStroke, line width=0\.75pt, line join=round\] \(0,6\) \.\. controls/);
     expect(body).toContain('.. (20,0) ..');
     expect(body).toContain('.. (40,6) -- (40,34) .. controls');
@@ -1086,7 +1087,7 @@ describe('figureToTikz — nodes', () => {
     expect(filled).toContain('(0,0) rectangle (11,11)');
     expect(filled).toContain('(33,33) rectangle (44,44)');
     expect(filled).not.toContain('(11,0) rectangle');
-    const grid = statements(out, '\\draw[draw=cwfBlueStroke!45!cwfBlueFill')[0];
+    const grid = itemAt(statements(out, '\\draw[draw=cwfBlueStroke!45!cwfBlueFill'), 0);
     expect(grid).toContain('line width=0.45pt');
     expect(grid.match(/--/g)).toHaveLength(6);
     expect(out).toContain('\\draw[draw=cwfBlueStroke, line width=0.75pt] (0,0) rectangle (44,44);');

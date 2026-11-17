@@ -7,11 +7,14 @@ import { isDiagramBlock, isFigureBlock } from '@/editor/blockKinds';
 import { MermaidDiagram } from '@/components/common/MermaidDiagram';
 import { StructuredFigure } from '@/components/common/StructuredFigure';
 import { citationLabel, type Bibliography } from '@/editor/citations';
+import { referenceNames, referenceYear } from '@/editor/referenceRecords';
+import { CslText } from '../References/CslText';
 import { useBibliography } from '@/editor/bibliographyContextState';
 import { diffWords } from '@/lib/diff';
 import { BarChart3, Sigma, Sparkles, Table2 } from 'lucide-react';
 import { InlineTrigger } from '../blocks/ParagraphBlock/Inlines/shared/InlineShell';
 import { createWidgetTable, diffPieces, diffableText, edgeIsSpace } from './diffText';
+import { AssetImage } from '@/components/common/AssetImage';
 
 /**
  * A block the author has not accepted yet, rendered as the document renders it.
@@ -63,10 +66,9 @@ function describeCitation(child: Extract<ParagraphChild, { type: 'citation' }>):
   const keys = child.keys ?? [];
   const described = keys.map((key) => {
     const source = child.sources?.find((candidate) => candidate.key === key);
-    if (!source?.title) return key;
-    const surname = source.authors?.split(/,|;| and /)[0]?.trim().split(/\s+/).pop();
-    const who = [surname, source.year].filter(Boolean).join(' ');
-    return who ? `${who} — ${source.title}` : source.title;
+    if (!source) return key;
+    const who = [referenceNames(source, true)[0], referenceYear(source)].filter(Boolean).join(' ');
+    return who ? `${who} — ${source.csl.title}` : source.csl.title;
   });
   return described.length ? described.join('; ') : 'Citation';
 }
@@ -90,7 +92,7 @@ function CitationMark({ child }: { child: Extract<ParagraphChild, { type: 'citat
       className="diff-widget cursor-default"
       onMouseDown={(event) => event.preventDefault()}
     >
-      {citationLabel(child, bibliography)}
+      <CslText markup={citationLabel(child, bibliography)} links={false} />
     </InlineTrigger>
   );
 }
@@ -229,6 +231,12 @@ function ProposedBlockBody({ block, className }: { block: Block | null; classNam
     );
   }
 
+  if (block.type === 'image') return <figure className={className}>
+    <AssetImage assetId={block.assetId} alt={block.alt} className="h-auto max-w-full" fitColumn />
+    {block.caption && <figcaption className="mt-2 text-sm">{block.caption}</figcaption>}
+    {block.origin.kind === 'generated' && <p className="text-xs text-muted-foreground">AI-generated image</p>}
+  </figure>;
+
   const children = block.type === 'paragraph' ? block.children : undefined;
   const empty = !block.html || !block.html.trim();
   return (
@@ -353,6 +361,7 @@ export function ProposedRewriteView({
     return { segments: diffWords(beforeText, afterText), table: widgets };
   }, [before, after]);
   const changed = segments.some((segment) => segment.type !== 'equal');
+  if (block?.type === 'image') return <ProposedBlockView block={block} bibliography={bibliography} />;
 
   if (!changed) {
     return (

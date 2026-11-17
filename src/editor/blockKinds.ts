@@ -3,6 +3,7 @@ import {
   Heading1,
   Heading2,
   Heading3,
+  Image,
   Lightbulb,
   List,
   ListOrdered,
@@ -42,6 +43,7 @@ export type BlockKindId =
   | 'code'
   | 'diagram'
   | 'figure'
+  | 'image'
   | 'divider';
 
 export type BlockKind = {
@@ -68,17 +70,21 @@ export const BLOCK_KINDS: readonly BlockKind[] = [
   { id: 'code', label: 'Code', description: 'Code or preformatted text', icon: Code2, keywords: ['snippet', 'pre', 'monospace', 'algorithm', 'pseudocode'], markdown: '```' },
   { id: 'diagram', label: 'Diagram', description: 'Mermaid flowchart or sequence', icon: Workflow, keywords: ['mermaid', 'flowchart', 'sequence', 'uml', 'class', 'state', 'er', 'gantt', 'mindmap', 'timeline', 'pie', 'graph', 'chart'] },
   { id: 'figure', label: 'Figure', description: 'Architecture, mechanism or pipeline figure', icon: Shapes, keywords: ['figure', 'architecture', 'model', 'network', 'attention', 'transformer', 'layer', 'block', 'pipeline', 'workflow', 'tensor', 'panel', 'tikz', 'diagram', 'structure', 'illustration'] },
+  { id: 'image', label: 'Image', description: 'Upload an image with alt text', icon: Image, keywords: ['photo', 'picture', 'upload'] },
   { id: 'divider', label: 'Divider', description: 'Separate sections with a rule', icon: Minus, keywords: ['hr', 'rule', 'separator', 'line'], markdown: '---' },
 ] as const;
 
 const KIND_BY_ID = new Map(BLOCK_KINDS.map((kind) => [kind.id, kind]));
 
 export function blockKind(id: BlockKindId): BlockKind {
-  return KIND_BY_ID.get(id) ?? BLOCK_KINDS[0];
+  const kind = KIND_BY_ID.get(id);
+  // `BlockKindId` is the union of the ids above, so this is a missing row.
+  if (!kind) throw new Error(`No block kind "${id}"`);
+  return kind;
 }
 
 /** Kinds a text block can be turned into in place. */
-export const TURN_INTO_KINDS: readonly BlockKind[] = BLOCK_KINDS.filter((kind) => kind.id !== 'divider');
+export const TURN_INTO_KINDS: readonly BlockKind[] = BLOCK_KINDS.filter((kind) => kind.id !== 'divider' && kind.id !== 'image');
 
 /**
  * Whether a block is a Mermaid diagram.
@@ -115,6 +121,7 @@ export function figureNumbers(
 ): Map<string, number> {
   const numbers = new Map<string, number>();
   for (const block of blocks) {
+    if (block.type === 'image' && block.caption?.trim()) numbers.set(block.id, numbers.size + 1);
     if (block.type !== 'code' || !isFigureBlock(block)) continue;
     if (captionOf(block.text)) numbers.set(block.id, numbers.size + 1);
   }
@@ -128,6 +135,8 @@ export function kindOf(block: Block): BlockKindId {
       return block.level === 1 ? 'h1' : block.level === 3 ? 'h3' : 'h2';
     case 'divider':
       return 'divider';
+    case 'image':
+      return 'image';
     case 'code':
       return isDiagramBlock(block) ? 'diagram' : isFigureBlock(block) ? 'figure' : 'code';
     case 'paragraph':
@@ -210,9 +219,11 @@ export function htmlToText(html: string): string {
  * the same result for the same conversion.
  */
 export function convertBlock(block: Block, kind: BlockKindId): Block {
+  // Uploading is an explicit action, not a way to manufacture an asset id.
+  if (kind === 'image') return block;
   const meta = keepMeta(block);
   const sourceHtml = block.type === 'paragraph' || block.type === 'heading' ? block.html : '';
-  const sourceText = block.type === 'code' ? block.text : htmlToText(sourceHtml);
+  const sourceText = block.type === 'code' ? block.text : block.type === 'image' ? block.caption ?? block.alt : htmlToText(sourceHtml);
 
   if (kind === 'divider') return { ...meta, id: block.id, type: 'divider' };
 
@@ -246,7 +257,8 @@ export function convertBlock(block: Block, kind: BlockKindId): Block {
 
   const html = block.type === 'code' ? textToHtml(block.text) : sourceHtml;
 
-  if (kind in HEADING_LEVELS) {
+  const level = HEADING_LEVELS[kind];
+  if (level) {
     // A heading renders no widgets, so a paragraph that holds some keeps its
     // words but not the widgets.
     const hasWidgets = block.type === 'paragraph' && (block.children ?? []).length > 0;
@@ -254,7 +266,7 @@ export function convertBlock(block: Block, kind: BlockKindId): Block {
       ...meta,
       id: block.id,
       type: 'heading',
-      level: HEADING_LEVELS[kind],
+      level,
       html: hasWidgets ? textToHtml(htmlToText(html).replace(/\n/g, ' ')) : html,
     };
   }

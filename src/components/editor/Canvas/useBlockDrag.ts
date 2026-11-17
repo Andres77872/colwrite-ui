@@ -124,14 +124,11 @@ export function useBlockDrag({
     const rows = blockRows(containerRef.current);
     if (!s || !line?.parentElement || rows.length === 0) return;
 
-    let index = rows.length;
-    for (let i = 0; i < rows.length; i++) {
-      const rect = rows[i].getBoundingClientRect();
-      if (y < rect.top + rect.height / 2) {
-        index = i;
-        break;
-      }
-    }
+    const before = rows.findIndex((row) => {
+      const rect = row.getBoundingClientRect();
+      return y < rect.top + rect.height / 2;
+    });
+    const index = before === -1 ? rows.length : before;
     s.index = index;
 
     const from = rows.indexOf(s.row);
@@ -141,10 +138,14 @@ export function useBlockDrag({
     }
     // In the 2px between two rows: just above the row it would precede, or
     // just below the last one.
-    const edge =
-      index < rows.length
-        ? rows[index].getBoundingClientRect().top - 1
-        : rows[rows.length - 1].getBoundingClientRect().bottom + 1;
+    const above = rows[index];
+    const last = rows.at(-1);
+    const edge = above
+      ? above.getBoundingClientRect().top - 1
+      : last
+        ? last.getBoundingClientRect().bottom + 1
+        : null;
+    if (edge === null) return;
     line.style.translate = `0 ${edge - line.parentElement.getBoundingClientRect().top}px`;
     line.hidden = false;
   };

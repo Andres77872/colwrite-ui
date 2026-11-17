@@ -61,6 +61,7 @@ function tokenFor(table: WidgetTable, child: ParagraphChild): string {
 
 /** Plain text of a block for diffing, widgets as tokens registered in `table`. */
 export function diffableText(block: Block | null | undefined, table: WidgetTable): string {
+  if (block?.type === 'image') return [block.alt, block.caption].filter(Boolean).join('\n');
   if (block?.type === 'code') return block.text.trim();
   if (!block || !('html' in block)) return '';
   const children = block.type === 'paragraph' ? block.children ?? [] : [];
@@ -105,7 +106,7 @@ export function diffPieces(value: string, table: WidgetTable): DiffPiece[] {
 export function edgeIsSpace(value: string, edge: 'start' | 'end'): boolean {
   const text = value.split(JOIN).join('');
   if (!text) return true;
-  return /\s/.test(edge === 'start' ? text[0] : text[text.length - 1]);
+  return /\s/.test(edge === 'start' ? text.charAt(0) : text.charAt(text.length - 1));
 }
 
 /* ----------------------------------------

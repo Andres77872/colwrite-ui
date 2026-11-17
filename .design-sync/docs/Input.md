@@ -6,8 +6,8 @@ keywords: [input, text field, search, form control, textbox, password, number]
 # Input
 
 The single-line text field. Every typed value in Colwrite goes through it — the
-document title, profile fields, folder names, the search boxes over arXiv,
-Semantic Scholar and your own PDFs. There are no bare `<input>` elements in the
+document title, profile fields, folder names, the search boxes over papers
+and your own PDFs. There are no bare `<input>` elements in the
 app; adding one means re-deriving the border, focus ring, disabled treatment and
 placeholder colour this already has.
 

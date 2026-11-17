@@ -1,5 +1,6 @@
 import { useCallback, useRef } from 'react';
 import { lastInputWasPointer } from '@/lib/inputModality';
+import { registerModuleReset } from '@/lib/moduleState';
 
 /**
  * Focus return for dialogs that are opened from code rather than from a
@@ -64,6 +65,9 @@ export function restoreFocus({ target, range }: FocusSnapshot): boolean {
  */
 let handoff: { snapshot: Snapshot; at: number } | null = null;
 const HANDOFF_TTL_MS = 1000;
+registerModuleReset(() => {
+  handoff = null;
+});
 
 function takeHandoff(): Snapshot | null {
   const pending = handoff;

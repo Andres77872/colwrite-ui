@@ -17,14 +17,13 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { APP_TAGLINE } from '@/components/common/Brand';
-import { toolMeta } from '@/components/panels/toolsConfig';
+import { panelMeta } from '@/components/panels/sidebarPanels';
 import {
   AiActionMenuMock,
   AskAiResultMock,
-  ArxivResultMock,
+  PaperResultMock,
   ChangeCardMock,
   CitationPill,
-  ColpaliResultMock,
   EditorMock,
   EquationChip,
   LibraryMock,
@@ -176,7 +175,7 @@ export function HeroSection({ onSignIn }: { onSignIn: () => void }) {
             The writing environment where AI edits wait for your approval
           </h1>
           <p className="mt-4 max-w-xl text-md leading-relaxed text-muted-foreground">
-            ColWrite is a focused editor for scientific documents — blocks, citations and LaTeX
+            ColWrite is a focused editor for scientific papers — blocks, citations and LaTeX
             inline — with an assistant that drafts and rewrites, but saves nothing until you
             accept the suggestion.
           </p>
@@ -189,7 +188,7 @@ export function HeroSection({ onSignIn }: { onSignIn: () => void }) {
             </Button>
           </div>
           <p className="mt-4 text-xs text-muted-foreground">
-            {APP_TAGLINE} · Autosave as you type · Documents as clean JSON
+            {APP_TAGLINE} · Autosave as you type · Pages as clean JSON
           </p>
         </div>
 
@@ -288,7 +287,7 @@ export function InlineWidgetsSection() {
       <SectionHeading
         id="editor-heading"
         eyebrow="Block editor"
-        title="A document model made for papers"
+        title="A page model made for papers"
         lead="Paragraphs, headings and dividers — with rich widgets that sit inline in the text. Press / inside a paragraph to insert any of them."
       />
       <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -340,9 +339,9 @@ export function AiActionsSection() {
           <div className="mt-6">
             <BulletList
               items={[
-                'Built-in actions to edit, explain and research a passage — improve, fix grammar, shorten, lengthen, simplify, change tone, translate, find citations, check claims.',
+                'Built-in actions to edit, explain and research a passage — improve, fix grammar, shorten, lengthen, simplify, change tone, translate, check claims.',
                 'The result streams in under the original. Replace the selection, insert it below, try again, or type a follow-up in the same bar.',
-                'Nothing is written to the document until you choose to keep it.',
+                'Nothing is written to the page until you choose to keep it.',
               ]}
             />
           </div>
@@ -388,7 +387,7 @@ export function ReviewSection() {
             id="review-heading"
             eyebrow="Review workflow"
             title="The assistant proposes. You dispose."
-            lead="Ask the assistant to rewrite, restructure or draft — every edit lands in the document as a suggested change, right where it would appear."
+            lead="Ask the assistant to rewrite, restructure or draft — every edit lands on the page as a suggested change, right where it would appear."
           />
           <div className="mt-6">
             <BulletList
@@ -396,7 +395,7 @@ export function ReviewSection() {
                 'Word-level diffs show exactly what moved — additions, rewrites, deletions, moves and title changes.',
                 'Accept or reject each change where it lands, or step through the batch from the suggestions pill in the top bar.',
                 'Dependent changes stay locked until the change they build on is accepted.',
-                'Chat with the document: reference it with #, then ask for suggestions, rewrites, structure, summaries or references.',
+                'Chat with the page: reference it with #, then ask for suggestions, rewrites, structure, summaries or references.',
               ]}
             />
           </div>
@@ -411,17 +410,17 @@ export function ReviewSection() {
    ---------------------------------------- */
 
 export function ResearchSection() {
-  const arxiv = toolMeta('arxiv');
-  const colpali = toolMeta('colpali');
-  const library = toolMeta('library');
+  const scholar = panelMeta('papers');
+  const library = panelMeta('library');
+  const sources = panelMeta('sources');
 
   return (
     <Section id="research" labelledBy="research-heading">
       <SectionHeading
         id="research-heading"
         eyebrow="Research tools"
-        title="Literature work without leaving the document"
-        lead="The right sidebar keeps the assistant, research, your sources and the document's history one click from the text. Find papers, pull up the exact page that answers a question, and keep your PDFs at hand."
+        title="Literature work without leaving the page"
+        lead="The right sidebar keeps the assistant, research, your sources and the page's history one click from the text. Find papers, check a claim against the literature, and keep your PDFs and sources at hand."
       />
       <SidebarTabsMock className="mt-6" />
 
@@ -441,7 +440,7 @@ export function ResearchSection() {
         <figcaption className="absolute inset-x-4 bottom-4 grid gap-2 sm:inset-x-6 sm:bottom-6 sm:grid-cols-3">
           {[
             ['01', 'Find relevant papers'],
-            ['02', 'Retrieve the exact page'],
+            ['02', 'Check claims against the literature'],
             ['03', 'Write with the evidence in view'],
           ].map(([step, label]) => (
             <span
@@ -456,15 +455,13 @@ export function ResearchSection() {
       </figure>
 
       <div className="mt-8 grid gap-3 lg:grid-cols-3">
-        <FeatureCard icon={arxiv.icon} title={arxiv.label} description={arxiv.description}>
-          <ArxivResultMock />
-        </FeatureCard>
-        <FeatureCard icon={colpali.icon} title={colpali.label} description={colpali.description}>
-          <ColpaliResultMock />
+        <FeatureCard icon={scholar.icon} title={scholar.label} description={scholar.description}>
+          <PaperResultMock />
         </FeatureCard>
         <FeatureCard icon={library.icon} title={library.label} description={library.description}>
           <LibraryMock />
         </FeatureCard>
+        <FeatureCard icon={sources.icon} title={sources.label} description={sources.description} />
       </div>
     </Section>
   );
@@ -475,7 +472,7 @@ export function ResearchSection() {
    ---------------------------------------- */
 
 export function ControlSection() {
-  const json = toolMeta('json');
+  const json = panelMeta('json');
 
   return (
     <Section id="control" labelledBy="control-heading">
@@ -483,7 +480,7 @@ export function ControlSection() {
         id="control-heading"
         eyebrow="Control"
         title="You set the assistant's boundaries"
-        lead="The AI sees and touches only what you allow — per block, per document, down to the raw JSON."
+        lead="The AI sees and touches only what you allow — per block, per page, down to the raw JSON."
       />
       <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <FeatureCard
@@ -494,12 +491,12 @@ export function ControlSection() {
         <FeatureCard
           icon={Lock}
           title="Lock block"
-          description="Locked blocks are never modified — even when you ask the assistant to restructure the whole document."
+          description="Locked blocks are never modified — even when you ask the assistant to restructure the whole page."
         />
         <FeatureCard
           icon={json.icon}
           title={json.label}
-          description="Documents are a clean JSON tree — the same format the assistant reads and writes. Inspect it, edit it, apply it back."
+          description="Pages are a clean JSON tree — the same format the assistant reads and writes. Inspect it, edit it, apply it back."
         />
         <FeatureCard
           icon={Save}

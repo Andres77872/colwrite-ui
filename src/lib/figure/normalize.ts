@@ -133,14 +133,14 @@ function editDistance(a: string, b: string, cap: number): number {
     let rowMin = i;
     for (let j = 1; j <= b.length; j += 1) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      const value = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost);
+      const value = Math.min((previous[j] ?? Infinity) + 1, (current[j - 1] ?? Infinity) + 1, (previous[j - 1] ?? Infinity) + cost);
       current.push(value);
       rowMin = Math.min(rowMin, value);
     }
     if (rowMin > cap) return cap + 1;
     previous = current;
   }
-  return previous[b.length];
+  return previous[b.length] ?? cap + 1;
 }
 
 /**
@@ -708,7 +708,7 @@ const UNICODE_ARROWS = new Map<string, Omit<Arrow, 'start' | 'end' | 'line'>>([
  * and `---` without heads are plain lines.
  */
 function arrowAt(text: string, i: number): Arrow | null {
-  const unicode = UNICODE_ARROWS.get(text[i]);
+  const unicode = UNICODE_ARROWS.get(text.charAt(i));
   if (unicode) return { start: i, end: i + 1, line: 'solid', ...unicode };
   let j = i;
   const left = text[j] === '<';
@@ -745,8 +745,8 @@ function endpointsOf(text: string, offset: number): ShorthandEndpoint[] {
     if (raw) {
       const start = offset + cursor + lead;
       const suffix = SIDE_SUFFIX.exec(raw);
-      const side = suffix ? resolveSide(suffix[2]) : null;
-      endpoints.push({ name: side && suffix ? suffix[1].trim() : raw, raw, side, start, end: start + raw.length });
+      const side = suffix ? resolveSide(suffix[2] ?? '') : null;
+      endpoints.push({ name: side && suffix ? (suffix[1] ?? '').trim() : raw, raw, side, start, end: start + raw.length });
     }
     cursor += part.length + 1;
   }
@@ -759,7 +759,7 @@ function endpointIsName(text: string, isName: (name: string) => boolean): boolea
   if (!raw) return false;
   if (isName(raw)) return true;
   const suffix = SIDE_SUFFIX.exec(raw);
-  return !!suffix && resolveSide(suffix[2]) !== null && isName(suffix[1].trim());
+  return !!suffix && resolveSide(suffix[2] ?? '') !== null && isName((suffix[1] ?? '').trim());
 }
 
 function arrowText(text: string, arrow: Arrow): string {
@@ -804,31 +804,37 @@ function scanShorthand(text: string, isName?: (name: string) => boolean): Shorth
   if (label === null) {
     // `a -> b:label`: a colon in the last endpoint starts the label — unless
     // the endpoint as written is an id, as with a dot before a side suffix.
-    const last = segments[segments.length - 1];
-    const at = last.text.indexOf(':');
-    if (at >= 0 && !(isName && endpointIsName(last.text.slice(last.text.lastIndexOf(',') + 1), isName))) {
+    const last = segments.at(-1);
+    const at = last ? last.text.indexOf(':') : -1;
+    if (last && at >= 0 && !(isName && endpointIsName(last.text.slice(last.text.lastIndexOf(',') + 1), isName))) {
       label = last.text.slice(at + 1);
       labelStart = last.start + at + 1;
       segments[segments.length - 1] = { text: last.text.slice(0, at), start: last.start };
     }
   }
   const groups = segments.map((segment) => endpointsOf(segment.text, segment.start));
-  for (let k = 0; k < arrows.length; k += 1) {
-    if (groups[k].length === 0) {
-      return { error: `Missing a node before ${quote(arrowText(body, arrows[k]))} in ${quote(text.trim())}.` };
+  // Segment k is before arrow k, segment k + 1 after it.
+  const sides: Array<{ before: ShorthandEndpoint[]; after: ShorthandEndpoint[] }> = [];
+  for (const [k, arrow] of arrows.entries()) {
+    const before = groups[k] ?? [];
+    const after = groups[k + 1] ?? [];
+    if (before.length === 0) {
+      return { error: `Missing a node before ${quote(arrowText(body, arrow))} in ${quote(text.trim())}.` };
     }
-    if (groups[k + 1].length === 0) {
-      return { error: `Missing a node after ${quote(arrowText(body, arrows[k]))} in ${quote(text.trim())}.` };
+    if (after.length === 0) {
+      return { error: `Missing a node after ${quote(arrowText(body, arrow))} in ${quote(text.trim())}.` };
     }
+    sides.push({ before, after });
   }
   const trimmedLabel = label?.trim() ? label.trim() : null;
   const labelOffset = trimmedLabel && label ? labelStart + (label.length - label.trimStart().length) : -1;
   return arrows.map((arrow, k) => {
     const reversed = arrow.left && !arrow.right;
     const isLast = k === arrows.length - 1;
+    const { before, after } = sides[k] ?? { before: [], after: [] };
     return {
-      from: reversed ? groups[k + 1] : groups[k],
-      to: reversed ? groups[k] : groups[k + 1],
+      from: reversed ? after : before,
+      to: reversed ? before : after,
       line: arrow.line,
       weight: arrow.weight,
       arrow: arrow.left && arrow.right ? 'both' : arrow.left || arrow.right ? 'end' : 'none',
@@ -1123,11 +1129,13 @@ function makeResolver(drafts: Draft[], dropped: ReadonlySet<string>): Resolver {
     if (dropped.has(name)) return { kind: 'dropped' };
     const lower = name.toLowerCase();
     const caseless = byLowerId.get(lower) ?? [];
-    if (caseless.length === 1) return { kind: 'ok', draft: caseless[0] };
+    const [onlyId] = caseless;
+    if (onlyId && caseless.length === 1) return { kind: 'ok', draft: onlyId };
     if (caseless.length > 1) return { kind: 'ambiguous', ids: caseless.map((d) => d.id), by: 'id' };
     const text = name.replace(/\s+/g, ' ');
     for (const list of [byLabel.get(text) ?? [], byLowerLabel.get(text.toLowerCase()) ?? []]) {
-      if (list.length === 1) return { kind: 'ok', draft: list[0] };
+      const [onlyLabel] = list;
+      if (onlyLabel && list.length === 1) return { kind: 'ok', draft: onlyLabel };
       if (list.length > 1) return { kind: 'ambiguous', ids: list.map((d) => d.id), by: 'label' };
     }
     return { kind: 'unknown', suggestion: suggestId(name, ids) };
@@ -1353,9 +1361,9 @@ function safeImageSrc(value: string): string | null {
   const text = value.trim();
   const data = /^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml);base64,([\s\S]*)$/i.exec(text);
   if (data) {
-    const payload = data[2].replace(/\s+/g, '');
+    const payload = (data[2] ?? '').replace(/\s+/g, '');
     if (!payload || !/^[A-Za-z0-9+/]+={0,2}$/.test(payload)) return null;
-    return `data:image/${data[1].toLowerCase()};base64,${payload}`;
+    return `data:image/${(data[1] ?? '').toLowerCase()};base64,${payload}`;
   }
   try {
     const url = new URL(text);
@@ -1394,7 +1402,7 @@ function dimsOf(node: JsonNode): [number, number] | null {
   }
   if (node.kind === 'array' && node.items.length === 2) {
     const [a, b] = node.items;
-    if (a.kind === 'number' && b.kind === 'number') return [a.value, b.value];
+    if (a?.kind === 'number' && b?.kind === 'number') return [a.value, b.value];
     return null;
   }
   if (node.kind === 'object') {
@@ -1887,7 +1895,7 @@ function buildGroup(ctx: Context, draft: Draft, resolve: Resolver): GroupModel {
 /** `(a)`, `(b)`, …, `(z)`, `(aa)`, `(ab)`, … */
 function panelLetter(index: number): string {
   const letters = 'abcdefghijklmnopqrstuvwxyz';
-  return index < 26 ? letters[index] : letters[Math.floor(index / 26) - 1] + letters[index % 26];
+  return index < 26 ? letters.charAt(index) : letters.charAt(Math.floor(index / 26) - 1) + letters.charAt(index % 26);
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -1974,14 +1982,15 @@ function sourceOffsets(raw: string, decoded: string): number[] | null {
   let j = 0;
   while (j < decoded.length) {
     if (i >= raw.length) return null;
-    const c = raw[i];
+    const c = raw.charAt(i);
     if (c === '\\' && i + 1 < raw.length) {
-      const e = raw[i + 1];
+      const e = raw.charAt(i + 1);
       const hex = e === 'u' ? raw.slice(i + 2, i + 6) : '';
+      const control = CONTROL_ESCAPES[e];
       let width = 0;
       if ('"\'\\/'.includes(e) && decoded[j] === e) width = 2;
       else if (/^[0-9a-fA-F]{4}$/.test(hex) && decoded[j] === String.fromCharCode(parseInt(hex, 16))) width = 6;
-      else if (CONTROL_ESCAPES[e] !== undefined && decoded[j] === CONTROL_ESCAPES[e]) width = 2;
+      else if (control !== undefined && decoded[j] === control) width = 2;
       if (width) {
         offsets.push(i);
         i += width;
@@ -2021,7 +2030,9 @@ function textRange(ctx: Context, node: JsonNode, from: number, to: number): [num
         offsets = sourceOffsets(ctx.source.slice(base, node.end - 1), node.value);
         ctx.offsets.set(node, offsets);
       }
-      if (offsets && to < offsets.length) return [base + offsets[from], base + offsets[to]];
+      const start = offsets?.[from];
+      const end = offsets?.[to];
+      if (start !== undefined && end !== undefined) return [base + start, base + end];
     } else if (node.end - node.start - 2 === node.value.length) {
       return [base + from, base + to];
     }
@@ -2242,8 +2253,8 @@ function readEdgeEntry(ctx: Context, sink: EdgeSink, node: JsonNode, path: strin
   if (node.kind === 'object') return readEdgeObject(ctx, sink, node, path, null);
   if (node.kind === 'array' && node.items.length >= 2 && node.items.length <= 3) {
     const [a, b, c] = node.items;
-    const ends = [a, b].map((end) => (end.kind === 'string' || end.kind === 'number' ? end : null));
-    if (ends[0] && ends[1] && (!c || c.kind === 'string')) {
+    const isEnd = (end: JsonNode | undefined) => end?.kind === 'string' || end?.kind === 'number';
+    if (a && b && isEnd(a) && isEnd(b) && (!c || c.kind === 'string')) {
       const where: Where = { path, range: nodeRange(node) };
       const refs = (end: JsonNode, i: number): EndpointRef[] =>
         endpointsOf(end.kind === 'string' ? end.value : String((end as { value: number }).value), 0).map((e) => ({
@@ -2471,7 +2482,9 @@ function identifyItems(ctx: Context, entries: Entry[]): { drafts: Draft[]; dropp
   }
   const ownerOf = new Map<string, Entry>();
   for (const [id, list] of byId) {
-    let owner = list[0];
+    const [first] = list;
+    if (!first) continue;
+    let owner = first;
     for (const entry of list) if (ownership(entry) > ownership(owner)) owner = entry;
     ownerOf.set(id, owner);
     for (const entry of list) {
@@ -2705,8 +2718,8 @@ function arrangeGroups(ctx: Context, entries: Entry[], drafts: Draft[], top: Top
 
   // Walk the tree rather than the declaration order, which is not top-down once items move.
   const queue: Array<{ parent: Draft | null; direction: Direction }> = [{ parent: null, direction: root.direction }];
-  for (let head = 0; head < queue.length; head += 1) {
-    const { parent, direction } = queue[head];
+  for (let next = queue[0], head = 0; next; head += 1, next = queue[head]) {
+    const { parent, direction } = next;
     for (const draft of members.get(parent) ?? []) {
       const model = draft.model;
       if (model?.kind !== 'group') continue;

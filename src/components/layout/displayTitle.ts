@@ -1,16 +1,16 @@
-import { DEFAULT_DOCUMENT_TITLE } from '@/editor';
+// Straight from the module, not the `@/editor` barrel that tests replace.
+import { isDefaultTitle } from '@/editor/useDocumentTitle';
 
 /** What chrome calls a page with no name of its own, as Notion does. */
 export const UNTITLED_LABEL = 'Untitled';
 
 /**
- * True while a document still carries no name, or the stored default one.
- * The stored name stays "Untitled document" (exports and the API use it);
- * only the chrome shows the shorter, muted "Untitled".
+ * True while a page still carries no name, or the stored default one.
+ * The stored name stays "Untitled page" (exports use it); only the chrome
+ * shows the shorter, muted "Untitled".
  */
 export function isUntitledName(name: string | null | undefined): boolean {
-  const trimmed = name?.trim() ?? '';
-  return !trimmed || trimmed === DEFAULT_DOCUMENT_TITLE;
+  return isDefaultTitle(name);
 }
 
 /** The name to show for a document in the sidebar, breadcrumb, palette and tab title. */

@@ -619,8 +619,9 @@ function arrangeLine(kids: Laid[], alongX: boolean, reverse: boolean, gap: numbe
       : Math.max(0, ...sequence.map((k) => crossSize(k.bounds)));
   let cursor = 0;
   sequence.forEach((kid, i) => {
-    if (i > 0) {
-      const need = room(sequence[i - 1], kid);
+    const previous = sequence[i - 1];
+    if (previous) {
+      const need = room(previous, kid);
       cursor += Math.max(gap, alongX ? need.width : need.height);
     }
     const b = kid.bounds;
@@ -643,45 +644,55 @@ function arrangeGrid(kids: Laid[], columns: number, gap: number, room: EdgeRoom 
   if (kids.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
   const cols = Math.max(1, Math.min(kids.length, Math.floor(columns) || 1));
   const rows = Math.ceil(kids.length / cols);
+  // Every track array has one entry per column (row); `size` reads one.
+  const size = (track: number[], index: number) => track[index] ?? 0;
+  const widen = (track: number[], index: number, value: number) => {
+    track[index] = Math.max(size(track, index), value);
+  };
   const colW = new Array<number>(cols).fill(0);
   const rowH = new Array<number>(rows).fill(0);
   kids.forEach((kid, i) => {
-    colW[i % cols] = Math.max(colW[i % cols], kid.bounds.width);
-    rowH[Math.floor(i / cols)] = Math.max(rowH[Math.floor(i / cols)], kid.bounds.height);
+    widen(colW, i % cols, kid.bounds.width);
+    widen(rowH, Math.floor(i / cols), kid.bounds.height);
   });
   const colGap = new Array<number>(cols).fill(gap);
   const rowGap = new Array<number>(rows).fill(gap);
   kids.forEach((a, i) => {
-    for (let j = i + 1; j < kids.length; j += 1) {
-      const need = room(a, kids[j]);
-      if (need.width === 0 && need.height === 0) continue;
+    kids.slice(i + 1).forEach((b, offset) => {
+      const j = i + 1 + offset;
+      const need = room(a, b);
+      if (need.width === 0 && need.height === 0) return;
       const dc = Math.abs((i % cols) - (j % cols));
       const dr = Math.abs(Math.floor(i / cols) - Math.floor(j / cols));
       const c = Math.min(i % cols, j % cols);
       const r = Math.min(Math.floor(i / cols), Math.floor(j / cols));
       // Side by side the label sits along a horizontal run, stacked along a
       // vertical one; a diagonal neighbour only needs a lane through both.
-      if (dr === 0 && dc === 1) colGap[c] = Math.max(colGap[c], need.width);
-      else if (dc === 0 && dr === 1) rowGap[r] = Math.max(rowGap[r], need.height);
+      if (dr === 0 && dc === 1) widen(colGap, c, need.width);
+      else if (dc === 0 && dr === 1) widen(rowGap, r, need.height);
       else if (dc === 1 && dr === 1) {
-        colGap[c] = Math.max(colGap[c], MIN_EDGE_GAP);
-        rowGap[r] = Math.max(rowGap[r], MIN_EDGE_GAP);
+        widen(colGap, c, MIN_EDGE_GAP);
+        widen(rowGap, r, MIN_EDGE_GAP);
       }
-    }
+    });
   });
-  const colX = colW.map((_, c) => colW.slice(0, c).reduce((sum, w, k) => sum + w + colGap[k], 0));
-  const rowY = rowH.map((_, r) => rowH.slice(0, r).reduce((sum, h, k) => sum + h + rowGap[k], 0));
+  const colX = colW.map((_, c) => colW.slice(0, c).reduce((sum, w, k) => sum + w + size(colGap, k), 0));
+  const rowY = rowH.map((_, r) => rowH.slice(0, r).reduce((sum, h, k) => sum + h + size(rowGap, k), 0));
   kids.forEach((kid, i) => {
     const c = i % cols;
     const r = Math.floor(i / cols);
     const b = kid.bounds;
-    shiftLaid(kid, colX[c] + (colW[c] - b.width) / 2 - b.x, rowY[r] + (rowH[r] - b.height) / 2 - b.y);
+    shiftLaid(
+      kid,
+      size(colX, c) + (size(colW, c) - b.width) / 2 - b.x,
+      size(rowY, r) + (size(rowH, r) - b.height) / 2 - b.y,
+    );
   });
   return {
     x: 0,
     y: 0,
-    width: colX[cols - 1] + colW[cols - 1],
-    height: rowY[rows - 1] + rowH[rows - 1],
+    width: size(colX, cols - 1) + size(colW, cols - 1),
+    height: size(rowY, rows - 1) + size(rowH, rows - 1),
   };
 }
 
@@ -696,8 +707,9 @@ function makeUniform(ctx: Context, group: GroupModel, kids: Laid[], depth: numbe
   const targets: Array<{ index: number; node: NodeModel; size: number }> = [];
   kids.forEach((kid, index) => {
     const { item } = kid;
-    if (item.kind !== 'node' || !BOX_LIKE.has(item.shape) || item[axis] !== null) return;
-    targets.push({ index, node: item, size: kid.nodes[0].shape[axis] });
+    const laid = kid.nodes[0];
+    if (item.kind !== 'node' || !laid || !BOX_LIKE.has(item.shape) || item[axis] !== null) return;
+    targets.push({ index, node: item, size: laid.shape[axis] });
   });
   if (targets.length < 2) return;
   const size = Math.max(...targets.map((t) => t.size));
@@ -737,12 +749,16 @@ function alignPanelCaptions(kids: Laid[]): void {
     .filter((kid) => kid.item.kind === 'group' && kid.groups[0]?.panel)
     .sort((a, b) => a.anchor.y - b.anchor.y);
   const align = (row: Laid[]) => {
-    if (row.length < 2) return;
-    const line = Math.max(...row.map((kid) => kid.groups[0].panel!.y));
+    // Each of these is a group with a panel caption (filtered above).
+    const captioned = row.flatMap((kid) => {
+      const group = kid.groups[0];
+      return group?.panel ? [{ kid, group, caption: group.panel }] : [];
+    });
+    if (captioned.length < 2) return;
+    const line = Math.max(...captioned.map(({ caption }) => caption.y));
     const moved = new Map<Laid, { panel: LabelBox; bounds: Rect }>();
-    for (const kid of row) {
-      const g = kid.groups[0];
-      const panel = at(g.panel!, g.panel!.x, line);
+    for (const { kid, group: g, caption } of captioned) {
+      const panel = at(caption, caption.x, line);
       moved.set(kid, { panel, bounds: unionAll(g.box, g.label, g.repeat, panel) });
     }
     for (const [kid, { bounds }] of moved) {
@@ -751,8 +767,10 @@ function alignPanelCaptions(kids: Laid[]): void {
       }
     }
     for (const [kid, { panel, bounds }] of moved) {
-      kid.groups[0].panel = panel;
-      kid.groups[0].bounds = bounds;
+      const group = kid.groups[0];
+      if (!group) continue;
+      group.panel = panel;
+      group.bounds = bounds;
       kid.bounds = bounds;
     }
   };

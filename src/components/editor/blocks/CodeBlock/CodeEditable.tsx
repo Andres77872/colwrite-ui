@@ -5,6 +5,7 @@ import {
   useActiveBlock,
   useEditorActions,
   type CodeBlock as CodeBlockModel,
+  usePageReadOnly,
 } from '@/editor';
 import {
   caretLineInfo,
@@ -134,7 +135,9 @@ export function CodeEditable({
   const lastCommitted = useRef(block.text);
   /** True between compositionstart and compositionend (IME input). */
   const composingRef = useRef(false);
-  const locked = block.locked === true;
+  // A read-only page (a viewer) is every block locked.
+  const readOnly = usePageReadOnly();
+  const locked = block.locked === true || readOnly;
 
   // Same rule as the prose editables: state is written into the DOM while the
   // block is not being typed in, or when it changed from elsewhere.
@@ -184,10 +187,9 @@ export function CodeEditable({
 
   const neighbour = (dir: -1 | 1): string | null => {
     const ids = getBlockIds();
-    for (let j = ids.indexOf(block.id) + dir; j >= 0 && j < ids.length; j += dir) {
-      if (refs.current[ids[j]]) return ids[j];
-    }
-    return null;
+    const at = ids.indexOf(block.id);
+    const candidates = dir < 0 ? ids.slice(0, Math.max(at, 0)).reverse() : ids.slice(at + 1);
+    return candidates.find((candidate) => refs.current[candidate]) ?? null;
   };
 
   const focusBlock = (id: string, offset: number) => {

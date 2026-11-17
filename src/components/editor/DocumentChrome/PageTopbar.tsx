@@ -1,19 +1,39 @@
-import { useEffect, useRef } from 'react';
+import { useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import { scrollBehavior } from '@/lib/motion';
 import { lastInputWasPointer } from '@/lib/inputModality';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useToast } from '@/components/ui/toastContext';
-import { useDocumentTitle, useEditor } from '@/editor';
+import { useDocumentActions, useDocumentId, useDocumentStatus, useDocumentTitle, usePageReadOnly } from '@/editor';
 import { usePanels } from '@/components/panels/panelsContextState';
 import { modifierLabel } from '@/components/layout/Shortcuts';
 import { useSidebarToggle } from '@/components/layout/useShellLayout';
 import { UNTITLED_LABEL } from '@/components/layout/displayTitle';
+import { CollectionBreadcrumbs } from '@/components/panels/Library/CollectionBreadcrumbs';
+import { revealInTree } from '@/components/layout/Sidebar/PagesTree/treeReveal';
+import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
+import { pagePlacementQuery } from '@/data/documents';
+import { collectionDetailQuery } from '@/data/resources';
+import { workspaceQuery } from '@/data/workspaces';
 import { ReviewPill } from '../Review/ReviewPill';
 import { PageMenu } from './PageMenu';
-import { PAGE_TOOLS } from './pageTools';
-import { ChevronsRight, FileText, Menu, Sparkles } from 'lucide-react';
+import { PAGE_PANELS } from './pagePanels';
+import { SaveRecoveryBar } from './SaveRecoveryBar';
+import { TrashedPageBar } from './TrashedPageBar';
+import { ViewOnlyBadge, ViewOnlyBar } from './ViewOnlyBar';
+import {
+  ChevronsRight,
+  CloudCheck,
+  CloudOff,
+  CloudUpload,
+  FileText,
+  HardDrive,
+  Library,
+  Menu,
+  Sparkles,
+  Trash2,
+} from 'lucide-react';
 
 /**
  * PageTopbar — the page's one 44px bar, on the page's own background.
@@ -29,11 +49,12 @@ import { ChevronsRight, FileText, Menu, Sparkles } from 'lucide-react';
 export function PageTopbar() {
   const toggle = useSidebarToggle();
   const { title, isUntitled, focusPageTitle } = useDocumentTitle();
-  const { activeTool, isOpen, isDesktop, setTool, close, assistantOpen, toggleAssistant } = usePanels();
+  const { activePanel, isOpen, panelsDocked, setPanel, close, assistantOpen, toggleAssistant } = usePanels();
   // Docked, the right sidebar's own tab strip is the control for its tabs;
   // repeating them here only squeezed the breadcrumb.
-  const showToolButtons = !(isOpen && isDesktop);
+  const showToolButtons = !(isOpen && panelsDocked);
   const modifier = modifierLabel();
+  const readOnly = usePageReadOnly();
 
   const focusTitle = () => {
     if (focusPageTitle()) return;
@@ -42,8 +63,9 @@ export function PageTopbar() {
   };
 
   return (
-    // A size container, so Ask AI can drop its label when the page column
-    // gets narrow and the title keeps the room.
+    <>
+    {/* A size container, so Ask AI can drop its label when the page column
+        gets narrow and the title keeps the room. */}
     <div className="@container/topbar flex h-11 shrink-0 items-center gap-1 bg-background px-3">
       {toggle.visible && (
         <Tooltip>
@@ -59,21 +81,23 @@ export function PageTopbar() {
         </Tooltip>
       )}
 
-      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center">
-        <button
-          type="button"
-          onClick={focusTitle}
-          className="flex h-6 min-w-0 items-center gap-1.5 rounded-md px-1.5 text-sm text-foreground transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          title="Rename page"
-        >
-          <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-          <span className={cn('truncate', isUntitled && 'text-muted-foreground')}>
-            {isUntitled ? UNTITLED_LABEL : title}
-          </span>
-        </button>
-      </nav>
+      <PageBreadcrumb
+        current={
+          <button
+            type="button"
+            onClick={focusTitle}
+            aria-current="page"
+            className="flex h-6 min-w-0 items-center gap-1.5 rounded-md px-1.5 text-sm text-foreground transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+            <span className={cn('max-w-[40ch] truncate', isUntitled && 'text-muted-foreground')}>
+              {isUntitled ? UNTITLED_LABEL : title}
+            </span>
+          </button>
+        }
+      />
 
-      <SaveStatus />
+      {readOnly ? <ViewOnlyBadge /> : <SaveStatus />}
 
       <div className="ml-auto flex shrink-0 items-center gap-0.5">
         {/* Pending AI suggestions: the count, and the batch review menu. */}
@@ -96,8 +120,8 @@ export function PageTopbar() {
             <span className="ml-2 text-tooltip-foreground/60">{modifier}+Shift+J</span>
           </TooltipContent>
         </Tooltip>
-        {showToolButtons && PAGE_TOOLS.map(({ id, label, icon: Icon }) => {
-          const active = isOpen && activeTool === id;
+        {showToolButtons && PAGE_PANELS.map(({ id, label, icon: Icon }) => {
+          const active = isOpen && activePanel === id;
           return (
             <Tooltip key={id}>
               <TooltipTrigger asChild>
@@ -110,11 +134,11 @@ export function PageTopbar() {
                       close();
                       return;
                     }
-                    setTool(id);
+                    setPanel(id);
                     // Docked, the sidebar hides these buttons, so the one
                     // just pressed unmounts and focus would fall to <body>.
                     // A keyboard user is taken into the panel instead.
-                    if (isDesktop && !lastInputWasPointer()) focusOpenedTool();
+                    if (panelsDocked && !lastInputWasPointer()) focusOpenedTool();
                   }}
                   aria-label={label}
                   aria-pressed={active}
@@ -130,6 +154,48 @@ export function PageTopbar() {
         <PageMenu />
       </div>
     </div>
+    <TrashedPageBar />
+    <ViewOnlyBar />
+    <SaveRecoveryBar />
+    </>
+  );
+}
+
+/**
+ * Workspace › … › Chapter 2 › the page (08 §2.2). Where the page lives comes
+ * from the editor's read and from every move, so the path follows a move
+ * with no reload; a move made elsewhere arrives with the tree's refresh. A
+ * collection crumb shows that collection in the sidebar tree.
+ */
+function PageBreadcrumb({ current }: { current: ReactNode }) {
+  const workspaceId = useWorkspaceId();
+  const documentId = useDocumentId();
+  const toggle = useSidebarToggle();
+  const workspace = useQuery(workspaceQuery(workspaceId));
+  const placement = useQuery({ ...pagePlacementQuery(workspaceId, documentId ?? ''), enabled: documentId !== null });
+  const homeId = documentId ? (placement.data?.collectionId ?? null) : null;
+  const home = useQuery({ ...collectionDetailQuery(workspaceId, homeId ?? 0), enabled: homeId !== null });
+  const path = homeId !== null ? (home.data?.path ?? []) : [];
+
+  const reveal = (collectionId: number) => {
+    if (toggle.visible) toggle.open();
+    revealInTree({ kind: 'collection', id: collectionId, expand: true, focus: true });
+  };
+
+  return (
+    <CollectionBreadcrumbs
+      label="Breadcrumb"
+      className="flex items-center pb-0"
+      path={path}
+      root={
+        <>
+          <Library aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="max-w-32 truncate">{workspace.data?.name ?? 'Workspace'}</span>
+        </>
+      }
+      current={current}
+      onSelectCollection={reveal}
+    />
   );
 }
 
@@ -160,36 +226,71 @@ function focusOpenedTool(attempt = 0) {
 }
 
 /**
- * The quiet save readout: "Saving…", "Saved", "Unsaved" — or a loud
- * "Not saved" with a retry, because a document that has silently stopped
- * saving must never look like one that is fine.
+ * The save readout: "Saving…", "Saved", "Unsaved" — or a loud "Not saved",
+ * because a document that has silently stopped saving must never look like
+ * one that is fine.
+ *
+ * It is on every screen size. Phones used to show nothing at all until a save
+ * failed, so there was no way to tell a saved page from one about to be lost;
+ * they now get the same states as an icon.
+ *
+ * Only a failure and the recovery from it are announced. The readout was a
+ * live region, which read "Unsaved", "Saving…", "Saved" to a screen reader
+ * every few seconds of writing. A failure is not a toast either: a toast
+ * leaves, and this has to stay until it is fixed.
  */
 function SaveStatus() {
-  const { documentId, lastSavedAt, isAutoSaving, saveError, hasPendingEdits, save } = useEditor();
-  const { toast } = useToast();
+  const documentId = useDocumentId();
+  const { lastSavedAt, isAutoSaving, saveError, saveConflict, inTrash } = useDocumentStatus();
+  const { hasPendingEdits, save } = useDocumentActions();
 
-  // Announce each distinct autosave failure once; the readout stays as the
-  // steady-state indicator.
-  const announcedSaveError = useRef<string | null>(null);
-  useEffect(() => {
-    if (!saveError) {
-      announcedSaveError.current = null;
-      return;
-    }
-    if (announcedSaveError.current === saveError) return;
-    announcedSaveError.current = saveError;
-    toast({ title: 'Autosave failed', description: saveError, variant: 'error' });
-  }, [saveError, toast]);
+  // Follows the failure state per document, to tell "saving works again" from
+  // "another document opened".
+  const failing = Boolean(saveError);
+  const [seen, setSeen] = useState({ documentId, failing, recovered: false });
+  if (seen.documentId !== documentId || seen.failing !== failing) {
+    setSeen({
+      documentId,
+      failing,
+      recovered: seen.documentId === documentId && seen.failing && !failing,
+    });
+  }
+  const announcement = saveError
+    ? `Not saved. ${saveError}`
+    : seen.recovered
+      ? 'Saving is working again.'
+      : '';
+  const announcer = (
+    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+      {announcement}
+    </span>
+  );
+
+  // Nothing is saved while the page is in the Trash; the bar below says why.
+  if (inTrash) {
+    return (
+      <span className="flex shrink-0 items-center gap-1 px-1.5 text-xs text-destructive" title="Restore the page to save it">
+        {announcer}
+        <Trash2 aria-hidden="true" className="size-3.5" />
+        <span className="max-sm:sr-only">In the Trash</span>
+      </span>
+    );
+  }
 
   if (saveError) {
     return (
-      <span className="flex shrink-0 items-center gap-1 text-xs" aria-live="polite">
-        <span className="text-destructive" title={saveError}>
+      <span className="flex shrink-0 items-center gap-1 text-xs">
+        {announcer}
+        <span className="flex items-center gap-1 text-destructive" title={saveError}>
+          <CloudOff aria-hidden="true" className="size-3.5" />
           Not saved
         </span>
-        <Button variant="link" size="xs" className="h-6 px-1" onClick={save}>
-          Retry
-        </Button>
+        {/* A refused save cannot be retried into working; the bar below has the choices. */}
+        {!saveConflict && (
+          <Button variant="link" size="xs" className="h-6 px-1" onClick={save}>
+            Retry
+          </Button>
+        )}
       </span>
     );
   }
@@ -200,21 +301,25 @@ function SaveStatus() {
   const savedAt = lastSavedAt
     ? new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : null;
-  const [text, detail] = isAutoSaving
-    ? ['Saving…', null]
+  const [text, detail, Icon] = isAutoSaving
+    ? (['Saving…', null, CloudUpload] as const)
     : !documentId
-      ? ['Saved locally', 'Not on the server yet']
+      ? (['Saved locally', 'Not on the server yet', HardDrive] as const)
       : pending
-        ? ['Unsaved', 'Saves automatically in a few seconds']
-        : ['Saved', savedAt ? `Saved at ${savedAt}` : 'In sync with the server'];
+        ? (['Unsaved', 'Saves automatically in a few seconds', CloudUpload] as const)
+        : (['Saved', savedAt ? `Saved at ${savedAt}` : 'In sync with the server', CloudCheck] as const);
 
   return (
     <span
-      className="shrink-0 px-1.5 text-xs text-muted-foreground max-sm:hidden"
-      aria-live="polite"
+      className="flex shrink-0 items-center px-1.5 text-xs text-muted-foreground"
       title={detail ?? undefined}
     >
-      {text}
+      {announcer}
+      <Icon
+        aria-hidden="true"
+        className={cn('size-4 sm:hidden', (isAutoSaving || pending) && documentId && 'opacity-60')}
+      />
+      <span className="max-sm:sr-only">{text}</span>
     </span>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { useEditorActions } from '@/editor';
+import { useDocumentActions, useEditorActions } from '@/editor';
+import { useNewPage } from '@/actions/useNewPage';
 import { usePanels } from '@/components/panels/panelsContextState';
 import { useSidebarToggle } from '../useShellLayout';
 import { matchShortcut, type ShortcutId } from './shortcuts';
@@ -24,11 +25,17 @@ function modalIsOpen(): boolean {
  * Undo in the title field, the chat composer or a search box is that field's
  * own undo. The document journal used to take Mod+Z from every one of them —
  * rewinding the paper while the author was correcting a search.
+ *
+ * The page title sits inside the canvas but is not a block: it commits when
+ * it loses focus, so the journal knows nothing of what is being typed there.
+ * Mod+Z in it used to revert the last edit to the body, possibly off screen,
+ * and leave the typo in the title.
  */
-function inForeignTextField(target: EventTarget | null): boolean {
+export function inForeignTextField(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
   if (!element?.closest) return false;
   if (element.closest('input, textarea, select')) return true;
+  if (element.closest('[data-page-title]')) return true;
   const editable = element.closest('[contenteditable="true"], [contenteditable="plaintext-only"]');
   return Boolean(editable && !editable.closest('.canvas'));
 }
@@ -57,10 +64,14 @@ export function useAppShortcuts({
   onShowHelp: () => void;
   onOpenPalette?: () => void;
 }) {
-  const { toggle, toggleAssistant, activeTool } = usePanels();
+  const { toggle, toggleAssistant, activePanel, setPanel } = usePanels();
   const sidebar = useSidebarToggle();
   const toggleSidebar = sidebar.toggle;
-  const { save, undo, redo } = useEditorActions();
+  const { save } = useDocumentActions();
+  const { undo, redo } = useEditorActions();
+  // The shared action: one creation in flight, whichever control started it.
+  // Until collections exist, "new page here" is a new page.
+  const { newPage, disabled: newPageDisabled } = useNewPage();
 
   useEffect(() => {
     const run: Record<ShortcutId, () => void> = {
@@ -69,6 +80,13 @@ export function useAppShortcuts({
       'toggle-sidebar': toggleSidebar,
       'toggle-assistant': toggleAssistant,
       'command-palette': () => onOpenPalette?.(),
+      'new-page': () => {
+        // A switch or a creation already owns the editor; the key is still
+        // claimed, so a repeat does nothing rather than reach the browser.
+        if (!newPageDisabled) void newPage();
+      },
+      // Opens it, like the sidebar's Library row; it does not toggle.
+      library: () => setPanel('library'),
       save,
       undo,
       redo,
@@ -94,18 +112,21 @@ export function useAppShortcuts({
       const leavingAside =
         (shortcut.id === 'toggle-tools' || shortcut.id === 'toggle-assistant') && focusIsInAside();
       run[shortcut.id]();
-      if (leavingAside) returnFocusFromAside(activeTool);
+      if (leavingAside) returnFocusFromAside(activePanel);
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
-    activeTool,
+    activePanel,
+    newPage,
+    newPageDisabled,
     onShowHelp,
     onOpenPalette,
     save,
     undo,
     redo,
+    setPanel,
     toggle,
     toggleAssistant,
     toggleSidebar,

@@ -1,6 +1,7 @@
 import { captureFocus, restoreFocus, type FocusSnapshot } from '@/hooks/useReturnFocus';
+import { registerModuleReset } from '@/lib/moduleState';
 import type { SidebarTab } from '@/components/panels/panelsContextState';
-import { toolMeta } from '@/components/panels/toolsConfig';
+import { panelMeta } from '@/components/panels/sidebarPanels';
 
 /**
  * Focus across the docked right sidebar, for the shortcuts that close it.
@@ -16,6 +17,12 @@ const ASIDE = 'aside[aria-label="Tools"]';
 
 let beforeAside: FocusSnapshot | null = null;
 let installed = false;
+
+// The snapshot holds a node of the signed-out session's page and its caret.
+// The listener stays installed: it belongs to the document, not the session.
+registerModuleReset(() => {
+  beforeAside = null;
+});
 
 function aside(): HTMLElement | null {
   return document.querySelector<HTMLElement>(ASIDE);
@@ -57,7 +64,7 @@ function opener(tab: SidebarTab): HTMLElement | null {
       ? buttons.find((button) => button.textContent?.trim() === 'Ask AI')
       : tab === 'json'
         ? undefined
-        : buttons.find((button) => button.getAttribute('aria-label') === toolMeta(tab).label);
+        : buttons.find((button) => button.getAttribute('aria-label') === panelMeta(tab).label);
   return found ?? main.querySelector<HTMLElement>('button[aria-label="Page options"]');
 }
 

@@ -73,7 +73,7 @@ describe('theme', () => {
 
   it('applies a stored preference over the system', async () => {
     stubSystemScheme(true);
-    localStorage.setItem('colwrite:theme', 'light');
+    localStorage.setItem('colwrite:device:theme', 'light');
     const theme = await loadTheme();
     theme.initTheme();
 
@@ -82,7 +82,7 @@ describe('theme', () => {
 
   it('ignores an unknown stored value', async () => {
     stubSystemScheme(true);
-    localStorage.setItem('colwrite:theme', 'sepia');
+    localStorage.setItem('colwrite:device:theme', 'sepia');
     const theme = await loadTheme();
     theme.initTheme();
 
@@ -100,7 +100,7 @@ describe('theme', () => {
 
     act(() => result.current.setPreference('dark'));
 
-    expect(localStorage.getItem('colwrite:theme')).toBe('dark');
+    expect(localStorage.getItem('colwrite:device:theme')).toBe('dark');
     expect(document.documentElement.dataset.theme).toBe('dark');
     expect(result.current).toMatchObject({ preference: 'dark', resolved: 'dark' });
   });
@@ -142,7 +142,7 @@ describe('theme', () => {
     const forced = renderHook(() => theme.useForcedTheme('dark'));
     expect(document.documentElement.dataset.theme).toBe('dark');
     // The stored preference is the author's and is left alone.
-    expect(localStorage.getItem('colwrite:theme')).toBeNull();
+    expect(localStorage.getItem('colwrite:device:theme')).toBeNull();
 
     forced.unmount();
     expect(document.documentElement.dataset.theme).toBe('light');

@@ -6,18 +6,21 @@ import {
   formatNumber,
   seriesColor,
 } from '@/components/editor/blocks/ParagraphBlock/Inlines/GraphInline/chartScale';
-import type { ActivityDay } from '@/services/userProfile';
+import type { ActivityDay } from '@/data/userProfile';
+import { formatCost } from '@/lib/text';
 import { Activity, BarChart3, Table2 } from 'lucide-react';
 
 /**
- * Three measures of the same unit (events), so they stack on one axis.
+ * Three measures of the same unit (events), so they stack on one axis. A
+ * day's cost is another unit: it is said in the tooltip, the column's name
+ * and the table, never stacked.
  * The order is fixed — a hue belongs to a measure, and hiding one must never
  * repaint the others.
  */
 const SERIES = [
-  { key: 'document_events', label: 'Document edits', slot: 0 },
-  { key: 'agent_run_events', label: 'Assistant runs', slot: 1 },
-  { key: 'resource_events', label: 'Resources', slot: 2 },
+  { key: 'document_events', label: 'Page edits', spoken: 'page edits', slot: 0 },
+  { key: 'assistant_run_events', label: 'Assistant runs', spoken: 'assistant runs', slot: 1 },
+  { key: 'resource_events', label: 'PDFs', spoken: 'PDF events', slot: 2 },
 ] as const;
 
 type SeriesKey = (typeof SERIES)[number]['key'];
@@ -27,6 +30,8 @@ type DenseDay = {
   date: Date;
   total: number;
   values: Record<SeriesKey, number>;
+  /** What the assistant's model calls cost that day, in USD. */
+  cost: number;
 };
 
 const PLOT_HEIGHT = 128;
@@ -59,14 +64,15 @@ function densify(activity: ActivityDay[], days: number): DenseDay[] {
     const entry = byDay.get(key);
     const values = {
       document_events: entry?.document_events ?? 0,
-      agent_run_events: entry?.agent_run_events ?? 0,
+      assistant_run_events: entry?.assistant_run_events ?? 0,
       resource_events: entry?.resource_events ?? 0,
     };
     return {
       key,
       date,
       values,
-      total: values.document_events + values.agent_run_events + values.resource_events,
+      total: values.document_events + values.assistant_run_events + values.resource_events,
+      cost: entry?.cost ?? 0,
     };
   });
 }
@@ -94,6 +100,9 @@ export function ActivityChart({
   const [asTable, setAsTable] = useState(false);
 
   const series = useMemo(() => densify(activity, days), [activity, days]);
+  const firstDay = series[0];
+  const lastDay = series.at(-1);
+  const hoveredDay = hovered === null ? undefined : series[hovered];
   const max = useMemo(
     () => series.reduce((peak, day) => Math.max(peak, day.total), 0),
     [series],
@@ -139,7 +148,7 @@ export function ActivityChart({
           title="No activity yet"
           // Interpolated: this said "last 30 days" while the heading right above
           // it read from `days`, so any other window contradicted itself.
-          description={`Edits, assistant runs, and resource activity from the last ${days} days appear here.`}
+          description={`Edits, assistant runs, and PDF activity from the last ${days} days appear here.`}
         />
       </section>
     );
@@ -202,11 +211,11 @@ export function ActivityChart({
               </div>
 
               <div className="mt-1.5 flex justify-between text-2xs text-muted-foreground">
-                <span>{shortDate(series[0].date)}</span>
-                <span>{shortDate(series[series.length - 1].date)}</span>
+                <span>{firstDay && shortDate(firstDay.date)}</span>
+                <span>{lastDay && shortDate(lastDay.date)}</span>
               </div>
 
-              {hovered !== null && <Tooltip day={series[hovered]} index={hovered} count={series.length} />}
+              {hoveredDay && <Tooltip day={hoveredDay} index={hovered ?? 0} count={series.length} />}
             </div>
           </div>
         </div>
@@ -237,8 +246,8 @@ function Column({
     day.total === 0
       ? `${shortDate(day.date)}: no activity`
       : `${shortDate(day.date)}: ${day.total} event${day.total === 1 ? '' : 's'} — ${present
-          .map((entry) => `${day.values[entry.key]} ${entry.label.toLowerCase()}`)
-          .join(', ')}`;
+          .map((entry) => `${day.values[entry.key]} ${entry.spoken}`)
+          .join(', ')}${day.cost > 0 ? `; cost ${formatCost(day.cost)}` : ''}`;
   // The surface gaps are part of the column's height, so the scale has to pay
   // for them. Scaling against the full plot height instead let the busiest
   // day's stack finish a few pixels above its own axis maximum.
@@ -320,6 +329,12 @@ function Tooltip({ day, index, count }: { day: DenseDay; index: number; count: n
           </li>
         ))}
       </ul>
+      {day.cost > 0 && (
+        <p className="mt-1.5 flex justify-between border-t border-border pt-1.5 text-2xs">
+          <span className="text-muted-foreground">Cost</span>
+          <span className="tabular-nums">{formatCost(day.cost)}</span>
+        </p>
+      )}
     </div>
   );
 }
@@ -328,6 +343,8 @@ function ActivityTable({ series }: { series: DenseDay[] }) {
   // The table twin only lists days that happened — a run of empty rows is
   // noise, and the chart already shows the gaps.
   const rows = series.filter((day) => day.total > 0).reverse();
+  // A cost column only where some day reported one.
+  const costs = rows.some((day) => day.cost > 0);
 
   return (
     <div className="mt-3 max-h-64 overflow-y-auto">
@@ -341,6 +358,7 @@ function ActivityTable({ series }: { series: DenseDay[] }) {
                 {entry.label}
               </th>
             ))}
+            {costs && <th scope="col" className="py-1.5 pl-2 text-right font-medium">Cost</th>}
           </tr>
         </thead>
         <tbody>
@@ -354,6 +372,7 @@ function ActivityTable({ series }: { series: DenseDay[] }) {
                   {day.values[entry.key]}
                 </td>
               ))}
+              {costs && <td className="py-1.5 pl-2 text-right tabular-nums">{formatCost(day.cost)}</td>}
             </tr>
           ))}
         </tbody>

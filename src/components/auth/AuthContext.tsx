@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  login,
-  logout as logoutApi,
-  getProfile,
-  UNAUTHORIZED_EVENT,
-  type UnauthorizedDetail,
-} from '@/services';
-import { clearCachedDocs } from '@/editor/storage';
+import { login, logout as logoutApi, getMe } from '@/data/auth';
+import { UNAUTHORIZED_EVENT, type UnauthorizedDetail } from '@/api/authEvents';
+import { USER_PROFILE_KEY, clearUserStorage, readJson, writeJson } from '@/lib/storageKeys';
+import { resetModuleState } from '@/lib/moduleState';
+import { endPendingSaves, flushPendingSaves } from '@/lib/pendingSaves';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,25 +27,15 @@ import {
 } from './authContextState';
 export type { AuthStatus, User } from './authContextState';
 
-const STORAGE_KEY = 'cw_user';
-const LEGACY_TOKEN_KEY = 'session_token';
-
 function readCachedUser(): User | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as User) : null;
-  } catch {
-    /* corrupt entry — start signed out */
-    return null;
-  }
+  // A missing or corrupt entry starts signed out.
+  const cached = readJson(USER_PROFILE_KEY);
+  return cached && typeof cached === 'object' ? (cached as User) : null;
 }
 
 function persistUser(user: User): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
-  } catch {
-    /* session still works for this tab */
-  }
+  // A refused write: the session still works for this tab.
+  writeJson(USER_PROFILE_KEY, user);
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -61,16 +48,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   const clearLocalSession = useCallback(() => {
-    // Document drafts are account data. Every session teardown must clear
-    // them, including expiry and a failed boot-time identity check—not only
-    // an intentional logout.
-    clearCachedDocs();
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-      localStorage.removeItem(LEGACY_TOKEN_KEY);
-    } catch {
-      /* storage blocked — the rest of the teardown still applies */
-    }
+    // The open page stops saving first, so neither a pending autosave nor the
+    // editor's unmount writes a draft back after the storage is cleared.
+    endPendingSaves();
+    // Everything kept for the account (profile, drafts, review records, chat
+    // selections) goes with every session teardown, including expiry and a
+    // failed boot-time identity check, not only an intentional logout.
+    clearUserStorage();
+    resetModuleState();
     setUser(null);
     setStatus('anonymous');
   }, []);
@@ -82,12 +67,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        const profile = await getProfile();
+        const { identity } = await getMe();
         if (cancelled) return;
         const confirmed: User = {
-          name: profile.username || cachedUser.name,
-          email: profile.email || cachedUser.email || '',
-          userType: profile.user_type ?? cachedUser.userType ?? null,
+          name: identity.username || cachedUser.name,
+          email: identity.email || cachedUser.email || '',
+          userType: identity.user_type || cachedUser.userType || null,
         };
         persistUser(confirmed);
         setUser(confirmed);
@@ -116,10 +101,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [clearLocalSession]);
 
   const logout = useCallback(() => {
-    // Best-effort server call; local state is cleared either way. Only the
-    // server can clear the HttpOnly cookie, so a failure here leaves the
-    // session alive on the API until it expires.
-    logoutApi().catch(() => {});
+    // Edits still inside the autosave window are sent first, while the
+    // session can still save them. Edits the server does not take leave with
+    // the rest of the account's local data: nothing of it stays here.
+    void flushPendingSaves().then(() => {
+      // Best-effort server call; local state is cleared either way. Only the
+      // server can clear the HttpOnly cookie, so a failure here leaves the
+      // session alive on the API until it expires.
+      logoutApi().catch(() => {});
+      clearLocalSession();
+      setNotice(null);
+    });
+  }, [clearLocalSession]);
+
+  const endSession = useCallback(() => {
     clearLocalSession();
     setNotice(null);
   }, [clearLocalSession]);
@@ -153,9 +148,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       openAuth: () => setAuthOpen(true),
       closeAuth: () => setAuthOpen(false),
       logout,
+      endSession,
       loginWithCredentials,
     }),
-    [user, status, logout, loginWithCredentials],
+    [user, status, logout, endSession, loginWithCredentials],
   );
 
   return (
@@ -234,7 +230,7 @@ function AuthDialog({
             <BrandMark size="lg" />
             <div>
               <DialogTitle>Welcome to {APP_NAME}</DialogTitle>
-              <DialogDescription>Sign in to open your documents.</DialogDescription>
+              <DialogDescription>Sign in to open your pages.</DialogDescription>
             </div>
           </div>
         </DialogHeader>
@@ -332,7 +328,7 @@ function AuthDialog({
           <div>
             <p className="text-sm font-medium text-warning">Alpha software</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Accounts and documents may be reset without notice while ColWrite is in development.
+              Accounts and pages may be reset without notice while ColWrite is in development.
             </p>
           </div>
         </div>

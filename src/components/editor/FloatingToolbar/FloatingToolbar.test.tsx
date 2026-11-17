@@ -8,21 +8,33 @@ import {
   it,
   vi,
 } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useImperativeHandle, useLayoutEffect } from 'react';
 import type { Doc, ParagraphBlock as ParagraphBlockType } from '@/editor/types';
 import { ASK_AI_EVENT, type AskAiRequest } from '../AskAi/askAiEvents';
 import { PanelsContext, type PanelsContextValue } from '@/components/panels/panelsContextState';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
 
-const { EditorProvider, useEditor } = await import('@/editor');
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const { EditorProvider } = await import('@/editor');
+const { useEditorProbe } = await import('@/editor/__tests__/editorHarness');
 const { Editable } = await import('@/components/common/Editable');
 const { FloatingToolbar } = await import('./FloatingToolbar');
 
@@ -54,11 +66,11 @@ afterAll(() => {
   });
 });
 
-const editorRef = createRef<ReturnType<typeof useEditor>>();
+const editorRef = createRef<ReturnType<typeof useEditorProbe>>();
 let committedDocs: Doc[] = [];
 
 function Harness() {
-  const editor = useEditor();
+  const editor = useEditorProbe();
   useImperativeHandle(editorRef, () => editor, [editor]);
 
   // A layout effect observes every committed provider state, including any
@@ -79,7 +91,6 @@ function Harness() {
 
 async function mountEditor(panels?: Partial<PanelsContextValue>, html = 'Evidence claim') {
   const doc: Doc = {
-    version: 1,
     name: 'Floating toolbar test',
     blocks: [
       {
@@ -91,7 +102,7 @@ async function mountEditor(panels?: Partial<PanelsContextValue>, html = 'Evidenc
       },
     ],
   };
-  localStorage.setItem('colwrite:doc:local', JSON.stringify({ documentId: null, doc }));
+  localStorage.setItem(`colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`, JSON.stringify({ documentId: null, doc }));
 
   const editor = (
     <EditorProvider>
@@ -222,6 +233,114 @@ describe('FloatingToolbar keyboard operation', () => {
       selectText(editable, 0, 'Evidence'.length);
     });
     expect(await screen.findByRole('toolbar', { name: 'Text formatting' })).toBeTruthy();
+  });
+});
+
+describe('FloatingToolbar from the keyboard (Alt+F10)', () => {
+  const altF10 = (target: Element) => fireEvent.keyDown(target, { key: 'F10', altKey: true });
+
+  it('moves focus from the selected text into the toolbar, arrows along it, and Escape returns', async () => {
+    const { editable } = await mountEditor();
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+    const toolbar = await screen.findByRole('toolbar', { name: 'Text formatting' });
+    expect(toolbar.getAttribute('aria-keyshortcuts')).toBe('Alt+F10');
+
+    // Claimed before the editor sees it.
+    const editorKey = vi.fn();
+    editable.addEventListener('keydown', editorKey);
+    expect(altF10(editable)).toBe(false);
+    expect(editorKey).not.toHaveBeenCalled();
+
+    const items = Array.from(toolbar.querySelectorAll<HTMLElement>('[data-toolbar-item]'));
+    expect(document.activeElement).toBe(items[0]);
+    expect(items[0]?.getAttribute('aria-label')).toMatch(/^Ask AI/);
+
+    // One tab stop, arrows between the buttons.
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(items[1]);
+    await waitFor(() => expect(items[1]?.tabIndex).toBe(0));
+    expect(items[0]?.tabIndex).toBe(-1);
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'End' });
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('More AI actions');
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(items[0]);
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
+    expect(document.activeElement).toBe(editable);
+    expect(document.getSelection()?.toString()).toBe('Evidence');
+  });
+
+  it('reaches the controls that have no chord of their own: strikethrough and inline code', async () => {
+    const { editable } = await mountEditor();
+    const exec = vi.fn(() => true);
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: exec });
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+    await screen.findByRole('toolbar', { name: 'Text formatting' });
+
+    altF10(editable);
+    const strike = screen.getByRole('button', { name: 'Strikethrough' });
+    while (document.activeElement !== strike) {
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowRight' });
+    }
+    // Enter and Space activate a button through `click` with no detail.
+    fireEvent.click(strike, { detail: 0 });
+    expect(exec).toHaveBeenCalledWith('strikeThrough', false, undefined);
+    Reflect.deleteProperty(document, 'execCommand');
+  });
+
+  it('brings back a toolbar Escape dismissed, for the same selection', async () => {
+    const { editable } = await mountEditor();
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+    await screen.findByRole('toolbar', { name: 'Text formatting' });
+    fireEvent.keyDown(editable, { key: 'Escape' });
+    expect(screen.queryByRole('toolbar')).toBeNull();
+    expect(document.getSelection()?.toString()).toBe('Evidence');
+
+    act(() => {
+      altF10(editable);
+    });
+
+    const toolbar = await screen.findByRole('toolbar', { name: 'Text formatting' });
+    await waitFor(() => expect(toolbar.contains(document.activeElement)).toBe(true));
+  });
+
+  it('does nothing without selected text', async () => {
+    const { editable } = await mountEditor();
+    act(() => {
+      editable.focus();
+      document.getSelection()?.collapse(editable.firstChild, 2);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    // Not claimed: the key is left to the browser.
+    expect(altF10(editable)).toBe(true);
+    expect(screen.queryByRole('toolbar')).toBeNull();
+    expect(document.activeElement).toBe(editable);
+  });
+
+  it('cancelling the link field puts focus back in the text with the selection', async () => {
+    const { editable } = await mountEditor();
+    act(() => {
+      editable.focus();
+      selectText(editable, 0, 'Evidence'.length);
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /^Add link/ }));
+    const field = screen.getByRole('textbox', { name: 'Link address' });
+    expect(document.activeElement).toBe(field);
+
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(screen.queryByRole('textbox', { name: 'Link address' })).toBeNull();
+    expect(document.activeElement).toBe(editable);
+    expect(document.getSelection()?.toString()).toBe('Evidence');
   });
 });
 
@@ -370,11 +489,11 @@ describe('FloatingToolbar actions', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Cite/ }));
 
     await waitFor(() => {
-      const block = paragraph(editorRef.current?.doc ?? { version: 1, blocks: [] });
+      const block = paragraph(editorRef.current?.doc ?? { blocks: [] });
       expect(block.children).toHaveLength(1);
     });
     const finalBlock = paragraph(editorRef.current!.doc);
-    expect(finalBlock.children?.[0]).toMatchObject({ type: 'citation', keys: [], style: 'numeric' });
+    expect(finalBlock.children?.[0]).toMatchObject({ type: 'citation', keys: [] });
     // Straight after the cited words, not at the start of the paragraph.
     expect(finalBlock.html).toMatch(/^Evidence<span data-child-id="[^"]+"/);
 
@@ -385,7 +504,7 @@ describe('FloatingToolbar actions', () => {
       const childIds = new Set((block.children ?? []).map((entry) => entry.id));
       const placeholderIds = Array.from(
         block.html.matchAll(/data-child-id="([^"]+)"/g),
-        (match) => match[1],
+        ([, id]) => id ?? '',
       );
       for (const id of placeholderIds) expect(childIds.has(id)).toBe(true);
     }

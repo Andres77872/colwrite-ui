@@ -1,7 +1,7 @@
 import { memo, useCallback, useRef, useState, type FocusEvent, type MouseEvent } from 'react';
 import { BookOpen, Check, ChevronDown, Pencil, Shapes, Sparkles, WandSparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useEditorActions, type CodeBlock as CodeBlockModel } from '@/editor';
+import { useEditorActions, usePageReadOnly, type CodeBlock as CodeBlockModel } from '@/editor';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,7 +72,9 @@ export const FigureBlock = memo(function FigureBlock({
   const [compiled, setCompiled] = useState<CompiledFigure | null>(null);
   const [selection, setSelection] = useState<FigureSelection | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
-  const locked = block.locked === true;
+  // A read-only page (a viewer) only ever shows the figure.
+  const readOnly = usePageReadOnly();
+  const locked = block.locked === true || readOnly;
   const empty = block.text.trim() === '';
   const starter = isStarter(block.text);
   // A starter has nothing to show at rest, so it opens on its source and the
@@ -353,7 +355,9 @@ export const FigureBlock = memo(function FigureBlock({
         <button
           type="button"
           onClick={openSource}
-          className="absolute left-1 top-1 inline-flex h-7 items-center gap-1 rounded-md bg-card px-2 text-xs text-muted-foreground opacity-0 shadow-sm ring-1 ring-border transition-[opacity,background-color] duration-120 hover:bg-hover hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/figure-block:opacity-100"
+          // `block-action`: shown without hover on touch, for the active
+          // block, with a 44px target (globals.css).
+          className="block-action absolute left-1 top-1 inline-flex h-7 items-center gap-1 rounded-md bg-card px-2 text-xs text-muted-foreground opacity-0 shadow-sm ring-1 ring-border transition-[opacity,background-color] duration-120 hover:bg-hover hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/figure-block:opacity-100"
         >
           <Pencil aria-hidden="true" className="h-3.5 w-3.5" />
           Edit

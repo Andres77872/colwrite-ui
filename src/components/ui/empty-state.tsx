@@ -6,8 +6,11 @@ interface EmptyStateProps {
   title: string;
   description?: ReactNode;
   action?: ReactNode;
-  /** `panel` suits narrow side panels; `page` suits the main canvas. */
-  size?: 'panel' | 'page';
+  /**
+   * `inline` is one quiet line inside a list (the sidebar); `panel` suits
+   * side panels; `page` suits the main canvas.
+   */
+  size?: 'inline' | 'panel' | 'page';
   className?: string;
 }
 
@@ -27,6 +30,15 @@ export function EmptyState({
   size = 'panel',
   className,
 }: EmptyStateProps) {
+  if (size === 'inline') {
+    return (
+      <div className={cn('px-2 py-1.5 text-sm text-muted-foreground', className)}>
+        <p>{title}</p>
+        {description && <p className="mt-0.5 text-xs">{description}</p>}
+        {action && <div className="mt-1 flex flex-wrap gap-2">{action}</div>}
+      </div>
+    );
+  }
   return (
     <div
       className={cn(

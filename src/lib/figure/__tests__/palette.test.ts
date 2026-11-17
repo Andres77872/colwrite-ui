@@ -1,3 +1,4 @@
+import { takeItems } from '@/lib/itemAt';
 import { describe, expect, it } from 'vitest';
 import { edgeColor, figurePalette, toneHex, type FigurePalette } from '../palette';
 import type { Tone } from '../types';
@@ -27,17 +28,17 @@ function linear(channel: number): number {
 }
 
 function luminance(hex: string): number {
-  const [r, g, b] = channels(hex).map(linear);
+  const [r, g, b] = takeItems(channels(hex).map(linear), 3);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
 function contrast(a: string, b: string): number {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  const [hi, lo] = takeItems([luminance(a), luminance(b)].sort((x, y) => y - x), 2);
   return (hi + 0.05) / (lo + 0.05);
 }
 
 function lab(hex: string): { L: number; C: number; h: number } {
-  const [r, g, b] = channels(hex).map(linear);
+  const [r, g, b] = takeItems(channels(hex).map(linear), 3);
   const X = (0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047;
   const Y = 0.2126729 * r + 0.7151522 * g + 0.072175 * b;
   const Z = (0.0193339 * r + 0.119192 * g + 0.9503041 * b) / 1.08883;

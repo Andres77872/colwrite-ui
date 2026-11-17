@@ -8,7 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import { cn } from '@/lib/utils';
-import { parseRefParts, type RefPart } from './refParts';
+import { parseRefs, type ChatRefTag } from '../ChatRefTags/refTags';
 import {
   indexOfSelection,
   positionOfIndex,
@@ -40,7 +40,7 @@ type ChatTaggedInputProps = {
   onRemoveRef?: (start: number, refText: string) => void;
   onKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
   /** What a reference chip says. Defaults to its kind and a shortened id. */
-  labelForRef?: (part: RefPart) => string;
+  labelForRef?: (part: ChatRefTag) => string;
   /**
    * Whether the reference picker owns the keyboard right now. Enter belongs to
    * the highlighted option then, not to the message.
@@ -214,7 +214,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
         if (event.key === 'Backspace' && !composing) {
           const caret = getCaretRange();
           if (!caret || caret.start !== caret.end || caret.start === 0) return;
-          const chip = parseRefParts(value).find(
+          const chip = parseRefs(value).parts.find(
             (part) => typeof part !== 'string' && part.end === caret.start,
           );
           if (typeof chip === 'string' || !chip) return;
@@ -246,7 +246,7 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
       setEmpty(value.length === 0);
       if (renderedRef.current === value || composingRef.current) return;
 
-      const nodes = parseRefParts(value).map((part) => {
+      const nodes = parseRefs(value).parts.map((part) => {
         if (typeof part === 'string') return part;
 
         const chip = document.createElement('span');
@@ -255,14 +255,14 @@ export const ChatTaggedInput = forwardRef<ChatTaggedInputHandle, ChatTaggedInput
         chip.dataset.refText = part.refText;
         chip.dataset.start = String(part.start);
         chip.title =
-          part.kind === 'document' ? `Document ${part.docId}` : `Block ${part.blockId ?? ''}`;
+          part.kind === 'document' ? `Page ${part.docId}` : `Block ${part.blockId ?? ''}`;
 
         const label = document.createElement('span');
         label.className = 'ref-chip-label';
         label.textContent = labelForRef
           ? labelForRef(part)
           : part.kind === 'document'
-            ? `Doc ${shorten(part.docId ?? '')}`
+            ? `Page ${shorten(part.docId ?? '')}`
             : `Block ${shorten(part.blockId ?? '')}`;
 
         const remove = document.createElement('button');

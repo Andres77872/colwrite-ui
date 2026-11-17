@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { ActivityDay } from '@/services/userProfile';
+import type { ActivityDay } from '@/data/userProfile';
 import { ActivityChart } from '../ActivityChart';
 
 afterEach(cleanup);
@@ -16,8 +16,8 @@ function daysAgo(offset: number): string {
 }
 
 const SAMPLE: ActivityDay[] = [
-  { day: daysAgo(1), document_events: 4, agent_run_events: 2, resource_events: 1 },
-  { day: daysAgo(5), document_events: 9, agent_run_events: 0, resource_events: 0 },
+  { day: daysAgo(1), document_events: 4, assistant_run_events: 2, resource_events: 1, cost: 0.035 },
+  { day: daysAgo(5), document_events: 9, assistant_run_events: 0, resource_events: 0, cost: 0 },
 ];
 
 describe('ActivityChart', () => {
@@ -30,7 +30,7 @@ describe('ActivityChart', () => {
   it('always shows a legend, so identity never rests on colour alone', () => {
     render(<ActivityChart activity={SAMPLE} days={30} />);
 
-    for (const label of ['Document edits', 'Assistant runs', 'Resources']) {
+    for (const label of ['Page edits', 'Assistant runs', 'PDFs']) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
   });
@@ -38,7 +38,7 @@ describe('ActivityChart', () => {
   it('totals each series in the legend', () => {
     render(<ActivityChart activity={SAMPLE} days={30} />);
 
-    // 4 + 9 document edits across the window.
+    // 4 + 9 page edits across the window.
     expect(screen.getByText('13')).toBeTruthy();
   });
 
@@ -77,9 +77,9 @@ describe('ActivityChart', () => {
       columnLabels().some(
         (label) =>
           label.includes(': 7 events — ') &&
-          label.includes('4 document edits') &&
+          label.includes('4 page edits') &&
           label.includes('2 assistant runs') &&
-          label.includes('1 resources'),
+          label.includes('1 PDF events'),
       ),
     ).toBe(true);
     expect(columnLabels().some((label) => label.includes(': 9 events — '))).toBe(true);
@@ -94,7 +94,18 @@ describe('ActivityChart', () => {
     fireEvent.focus(busiest!);
 
     const tooltip = screen.getByRole('status');
-    expect(within(tooltip).getByText('Resources')).toBeTruthy();
+    expect(within(tooltip).getByText('PDFs')).toBeTruthy();
+    // The day's cost is said, not stacked: it is another unit.
+    expect(tooltip.textContent).toContain('Cost$0.0350');
+  });
+
+  it('names a day’s cost with its events, and lists it in the table where any day had one', () => {
+    render(<ActivityChart activity={SAMPLE} days={30} />);
+    expect(columnLabels().some((label) => label.includes(': 7 events — ') && label.endsWith('; cost $0.0350'))).toBe(true);
+    expect(columnLabels().some((label) => label.includes(': 9 events — ') && !label.includes('cost'))).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Table' }));
+    const table = screen.getByRole('table');
+    expect(within(table).getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual(['Day', 'Page edits', 'Assistant runs', 'PDFs', 'Cost']);
   });
 
   it('offers a table twin so values are reachable without hovering', () => {

@@ -1,3 +1,4 @@
+import { itemAt } from '@/lib/itemAt';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FIGURE_MATH_CLASS, FIGURE_MATH_CSS, FIGURE_METRICS, figureFont } from '../constants';
 import { estimateMath, figureMathHtml } from '../math';
@@ -377,9 +378,9 @@ describe('createDomMeasurer', () => {
     const measurer = createDomMeasurer(document)!;
     expect(measurer.math('W^Q', figureFont('sans', 12, 600, true))).toEqual({ width: 42, height: 20 });
     expect(seen).toHaveLength(1);
-    expect(seen[0].html).toContain('class="katex"');
+    expect(seen[0]?.html).toContain('class="katex"');
     expect(seen[0]).toMatchObject({ fontSize: '12px', fontWeight: '600', fontStyle: 'italic' });
-    expect(seen[0].fontFamily).toContain('Inter');
+    expect(seen[0]?.fontFamily).toContain('Inter');
 
     const host = document.querySelector<HTMLElement>('div[data-cwfig-measure]')!;
     expect(host.className).toBe(FIGURE_MATH_CLASS);
@@ -419,7 +420,7 @@ describe('createDomMeasurer', () => {
     stubCanvas();
     const seen = stubLayout(50, 15);
     createDomMeasurer(document)!.math('\\frac{a', SANS);
-    expect(seen[0].html).toContain('katex-error');
+    expect(seen[0]?.html).toContain('katex-error');
   });
 
   it('injects the maths CSS once and shares one host between measurers', () => {
@@ -429,8 +430,8 @@ describe('createDomMeasurer', () => {
     createDomMeasurer(document)!.math('b', SANS);
     const styles = document.querySelectorAll('#cwfig-measure-style');
     expect(styles).toHaveLength(1);
-    expect(styles[0].textContent).toBe(FIGURE_MATH_CSS);
-    expect(styles[0].parentElement).toBe(document.head);
+    expect(styles[0]?.textContent).toBe(FIGURE_MATH_CSS);
+    expect(styles[0]?.parentElement).toBe(document.head);
     expect(document.querySelectorAll('div[data-cwfig-measure]')).toHaveLength(1);
   });
 
@@ -566,7 +567,7 @@ describe('getFigureMeasurer and font changes', () => {
     microtask.mockRestore();
     expect(after).toHaveBeenCalledTimes(1);
     expect(scheduled).toHaveLength(1);
-    expect(() => scheduled[0]()).toThrow('boom');
+    expect(() => itemAt(scheduled, 0)()).toThrow('boom');
   });
 });
 

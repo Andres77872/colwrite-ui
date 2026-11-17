@@ -26,6 +26,21 @@ describe('serializeEditableHtml', () => {
     );
   });
 
+  it('writes block markup the browser made as the API stores it', () => {
+    // Expected values are the API's sanitizer output for the same html
+    // (`sanitize_inline_html`), so the typed paragraph is saved as stored.
+    expect(serializeEditableHtml(rootWith('Typed<div>new line</div><div><br></div>'))).toBe(
+      'Typed<span class="legacy-block">new line</span><span class="legacy-block"><br></span>',
+    );
+    expect(serializeEditableHtml(rootWith('<p dir="ltr">a</p><h2 class="x">Results</h2>tail'))).toBe(
+      '<span class="legacy-block">a</span><span class="legacy-block">Results</span>tail',
+    );
+    // A widget's own markup is emptied out, not rewritten.
+    expect(serializeEditableHtml(rootWith('<span data-child-id="c1"><div>chrome</div></span>'))).toBe(
+      '<span data-child-id="c1" contenteditable="false"></span>',
+    );
+  });
+
   it('leaves the live DOM untouched while it serializes', () => {
     const root = rootWith('<span data-child-id="c1"><button>widget chrome</button></span>');
     serializeEditableHtml(root);

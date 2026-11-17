@@ -1,5 +1,5 @@
 import { FIGURE_METRICS, figureFont } from './constants';
-import { cylinderCap, documentWave, shapeOutline } from './geometry';
+import { cylinderCap, documentWave, polylineSegments, shapeOutline } from './geometry';
 import { parseLabel } from './labels';
 import { figureMathHtml } from './math';
 import { figurePalette, type FigurePalette, type ToneColors } from './palette';
@@ -128,17 +128,16 @@ function centre(rect: Rect): Point {
 function htmlHex(css: string): string {
   const value = css.trim().toLowerCase();
   let rgba: number[] | null = null;
-  const hex = /^#([0-9a-f]{3,8})$/.exec(value);
-  if (hex && hex[1].length !== 5 && hex[1].length !== 7) {
-    const digits = hex[1];
+  const digits = /^#([0-9a-f]{3,8})$/.exec(value)?.[1];
+  if (digits && digits.length !== 5 && digits.length !== 7) {
     const pairs =
       digits.length <= 4 ? [...digits].map((d) => d + d) : (digits.match(/../g) ?? []);
-    rgba = pairs.map((pair) => parseInt(pair, 16));
-    if (rgba.length === 4) rgba[3] /= 255;
+    // The fourth pair is the alpha, 0–255.
+    rgba = pairs.map((pair, i) => (i === 3 ? parseInt(pair, 16) / 255 : parseInt(pair, 16)));
   } else {
     const fn = /^rgba?\(([^)]*)\)$/.exec(value);
     if (fn) {
-      const parts = fn[1].split(/[\s,/]+/).filter(Boolean);
+      const parts = (fn[1] ?? '').split(/[\s,/]+/).filter(Boolean);
       rgba = parts.slice(0, 4).map((part, i) => {
         const n = parseFloat(part);
         if (part.endsWith('%')) return i === 3 ? n / 100 : (n / 100) * 255;
@@ -151,7 +150,7 @@ function htmlHex(css: string): string {
     }
   }
   if (!rgba || rgba.length < 3 || rgba.some((n) => !Number.isFinite(n))) return '000000';
-  const alpha = rgba.length > 3 ? Math.min(1, Math.max(0, rgba[3])) : 1;
+  const alpha = Math.min(1, Math.max(0, rgba[3] ?? 1));
   return rgba
     .slice(0, 3)
     .map((channel) => {
@@ -686,11 +685,12 @@ function mathProblem(tex: string, packages: Set<string>): string | null {
       if (name === 'begin' || name === 'end') {
         const env = /^\s*\{([^{}]*)\}/.exec(tex.slice(i + 1));
         if (!env) return BREAKS_TIKZ;
-        const envPackage = MATH_ENVIRONMENTS.get(env[1]);
-        if (envPackage === undefined) return `uses the ${env[1]} environment, which an export never opens`;
+        const envName = env[1] ?? '';
+        const envPackage = MATH_ENVIRONMENTS.get(envName);
+        if (envPackage === undefined) return `uses the ${envName} environment, which an export never opens`;
         if (envPackage) packages.add(envPackage);
-        if (name === 'begin') envs.push(env[1]);
-        else if (envs.pop() !== env[1]) return BREAKS_TIKZ;
+        if (name === 'begin') envs.push(envName);
+        else if (envs.pop() !== envName) return BREAKS_TIKZ;
       }
       continue;
     }
@@ -1304,9 +1304,7 @@ function orthogonalPath(points: Point[], startArrow: number, endArrow: number): 
   // 0.1px rounding. Dropping it keeps PGF from rounding a phantom corner.
   const pts: Point[] = [];
   for (const p of points) {
-    while (pts.length >= 2) {
-      const a = pts[pts.length - 2];
-      const b = pts[pts.length - 1];
+    for (let a = pts.at(-2), b = pts.at(-1); a && b; a = pts.at(-2), b = pts.at(-1)) {
       const span = Math.hypot(p.x - a.x, p.y - a.y);
       const along = (b.x - a.x) * (p.x - a.x) + (b.y - a.y) * (p.y - a.y);
       const off = Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) / (span || 1);
@@ -1315,39 +1313,49 @@ function orthogonalPath(points: Point[], startArrow: number, endArrow: number): 
     }
     pts.push(p);
   }
-  const lengths = pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y));
-  const visible = lengths.slice();
-  visible[0] = Math.max(0, visible[0] - startArrow);
-  visible[visible.length - 1] = Math.max(0, visible[visible.length - 1] - endArrow);
+  const lengths = polylineSegments(pts).map(([a, b]) => Math.hypot(b.x - a.x, b.y - a.y));
+  // What each segment shows once the arrowheads at the two ends take theirs.
+  const last = lengths.length - 1;
+  const visible = lengths.map((length, i) =>
+    Math.max(0, length - (i === 0 ? startArrow : 0) - (i === last ? endArrow : 0)),
+  );
   const { cornerRadius } = FIGURE_METRICS.edge;
   const radii = pts.slice(1, -1).map((_, i) => {
-    const r = Math.min(cornerRadius, visible[i] / 2, visible[i + 1] / 2) * PT;
+    const r = Math.min(cornerRadius, (visible[i] ?? 0) / 2, (visible[i + 1] ?? 0) / 2) * PT;
     const rounded = Math.round(r * 100) / 100;
     return rounded < 0.05 ? 0 : rounded;
   });
+  const [first, second, ...rest] = pts;
+  if (!first || !second) return { path: first ? c(first) : '', radius: 0 };
   let current = radii[0] ?? 0;
-  let path = `${c(pts[0])} -- ${c(pts[1])}`;
-  for (let k = 1; k < pts.length - 1; k += 1) {
-    const r = radii[k - 1];
+  let path = `${c(first)} -- ${c(second)}`;
+  rest.forEach((point, j) => {
+    const r = radii[j] ?? 0;
     let option = '';
     if (r !== current) {
       option = r === 0 ? '[sharp corners] ' : `[rounded corners=${r}pt] `;
       current = r;
     }
-    path += ` ${option}-- ${c(pts[k + 1])}`;
-  }
+    path += ` ${option}-- ${c(point)}`;
+  });
   return { path, radius: radii[0] ?? 0 };
 }
 
 /** The edge's path from its scene points; null when nothing drawable is left. */
 function edgePath(edge: SceneEdge, arrowLength: number): { path: string; radius: number } | null {
   const raw = edge.points.map((p) => ({ x: round1(p.x), y: round1(p.y) }));
-  const points = raw.filter((p, i) => i === 0 || !samePoint(p, raw[i - 1]));
+  const points = raw.filter((p, i) => {
+    const previous = raw[i - 1];
+    return !previous || !samePoint(p, previous);
+  });
   if (points.length < 2) return null;
-  if (edge.model.route === 'curved' && raw.length >= 4 && (raw.length - 1) % 3 === 0) {
-    let path = c(raw[0]);
-    for (let i = 1; i + 2 < raw.length; i += 3) {
-      path += ` .. controls ${c(raw[i])} and ${c(raw[i + 1])} .. ${c(raw[i + 2])}`;
+  const [start, ...curve] = raw;
+  if (edge.model.route === 'curved' && start && curve.length >= 3 && curve.length % 3 === 0) {
+    // A cubic Bézier run: two control points, then the point it reaches.
+    let path = c(start);
+    for (let i = 0; i < curve.length; i += 3) {
+      const [first, second, end] = curve.slice(i, i + 3);
+      if (first && second && end) path += ` .. controls ${c(first)} and ${c(second)} .. ${c(end)}`;
     }
     return { path, radius: 0 };
   }

@@ -214,8 +214,9 @@ function textLabel(box: LabelBox, color: string, halo: string | undefined, inher
   const x = align === 'left' ? box.x : align === 'right' ? box.x + box.width : box.x + box.width / 2;
   let lineTop = top;
   const spans = box.label.lines.map((line, i) => {
-    const baseline = lineTop + heights[i] / 2 + font.size * 0.35;
-    lineTop += heights[i];
+    const height = heights[i] ?? 0;
+    const baseline = lineTop + height / 2 + font.size * 0.35;
+    lineTop += height;
     const text = line.map((segment) => segment.value).join('');
     if (!text.trim()) return null;
     return (
@@ -279,7 +280,7 @@ function mathLabel(box: LabelBox, color: string, halo: string | undefined): Reac
         {box.label.lines.map((line, i) => (
           <div
             key={i}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: justify, height: `${r2(heights[i])}px` }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: justify, height: `${r2(heights[i] ?? 0)}px` }}
           >
             <span
               style={{ whiteSpace: 'pre', ...(halo ? { backgroundColor: halo, borderRadius: 2 } : {}) }}

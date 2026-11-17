@@ -1,33 +1,32 @@
+import { itemAt } from '@/lib/itemAt';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { ToastProvider } from '@/components/ui/toast';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
-import { ViewProvider } from '@/components/layout/ViewContext';
-import type { UserOverview } from '@/services/userProfile';
-import { makeResource } from '@/services/__tests__/resourceFixtures';
+import { NavigationProvider } from '@/components/layout/NavigationContext';
+import { http, server, serverError } from '@/__tests__/server';
+import type { UpdateUserProfileRequest } from '@/api/schema';
+import type { UserMe } from '@/data/userProfile';
+import type { WorkspaceUsage } from '@/data/workspaces';
 
-const switchTo = vi.fn<(_id: string) => Promise<boolean>>(async () => true);
-const getOverview = vi.fn<() => Promise<UserOverview>>();
-const updateProfile = vi.fn();
-const editorState = {
-  documentId: null as string | null,
-  loadingDocumentId: null as string | null,
-};
+/**
+ * The server: `GET /users/me`, `PATCH /users/me` with its body, and the
+ * workspace's `GET /workspaces/{w}/usage` by its query. A stand-in that
+ * throws is the server failing.
+ */
+const getMe = vi.fn<() => Promise<UserMe>>();
+const getUsage = vi.fn<(query: Record<string, string>) => Promise<WorkspaceUsage>>();
+const updateProfile = vi.fn<(body: UpdateUserProfileRequest) => Promise<UserMe>>();
+const setPanel = vi.fn();
 
-// The editor context is mocked rather than mounted: the dashboard only uses
-// it to open a document, and a real EditorProvider would pull the whole
-// document-loading stack into a test about rendering an account page.
-vi.mock('@/editor', () => ({ useEditor: () => ({ ...editorState, switchTo }) }));
-vi.mock('@/services/userProfile', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/services/userProfile')>();
-  return {
-    ...actual,
-    getOverview: () => getOverview(),
-    updateProfile: (changes: unknown) => updateProfile(changes),
-  };
-});
+// Settings no longer opens pages, so it never reads the editor. The module
+// is stubbed only because the navigation provider imports it for its URL
+// sync, which this test does not mount.
+vi.mock('@/editor', () => ({}));
+vi.mock('@/components/panels/panelsContextState', () => ({ usePanels: () => ({ setPanel }) }));
 vi.mock('@/components/preferences', () => ({
-  AgentToolsPreferences: ({ leading }: { leading?: React.ReactNode }) => (
+  AssistantPreferences: ({ leading }: { leading?: React.ReactNode }) => (
     <section aria-label="Agent preferences">
       {leading}
       Agent capability controls
@@ -39,8 +38,8 @@ vi.mock('@/components/preferences', () => ({
 
 const { ProfileView } = await import('../ProfileView');
 
-const OVERVIEW: UserOverview = {
-  identity: { user_id: 'usr-1', username: 'ada', user_type: 'consumer' },
+const ME: UserMe = {
+  identity: { user_id: 'usr-1', username: 'ada', email: 'ada@example.test', user_type: 'consumer' },
   profile: {
     user_id: 'usr-1',
     username: 'ada',
@@ -52,30 +51,36 @@ const OVERVIEW: UserOverview = {
     timezone: 'UTC',
     avatar_url: null,
     preferences: null,
-    last_seen_at: '2026-07-20T10:00:00',
-    created_at: '2026-01-05T09:00:00',
-    updated_at: '2026-07-20T10:00:00',
+    last_seen_at: '2026-07-20T10:00:00Z',
+    created_at: '2026-01-05T09:00:00Z',
+    updated_at: '2026-07-20T10:00:00Z',
   },
+};
+
+const USAGE: WorkspaceUsage = {
+  days: 30,
   summary: {
     documents_active: 3,
     documents_deleted: 1,
-    first_document_at: '2026-01-06T09:00:00',
-    last_document_at: '2026-07-19T18:00:00',
+    first_document_at: '2026-01-06T09:00:00Z',
+    last_document_at: '2026-07-19T18:00:00Z',
     document_saves: 128,
     chats_total: 6,
     chat_messages_total: 42,
-    agent_runs_total: 17,
-    agent_runs_completed: 15,
-    agent_runs_failed: 2,
-    last_agent_run_at: '2026-07-19T18:00:00',
+    assistant_runs_total: 17,
+    assistant_runs_completed: 15,
+    assistant_runs_failed: 2,
+    last_assistant_run_at: '2026-07-19T18:00:00Z',
     tokens_input: 120_000,
     tokens_output: 34_000,
+    tokens_cached: 80_000,
+    cost: 0.4213,
     llm_calls_total: 51,
     tool_calls_total: 88,
     tool_calls_failed: 3,
     resources_active: 2,
     resources_bytes: 3_145_728,
-    last_resource_at: '2026-07-18T12:00:00',
+    last_resource_at: '2026-07-18T12:00:00Z',
     resources_extracted: 1,
     collections_active: 1,
   },
@@ -86,24 +91,21 @@ const OVERVIEW: UserOverview = {
       call_count: 40,
       error_count: 1,
       avg_duration_ms: 210,
-      last_used_at: '2026-07-19T18:00:00',
+      last_used_at: '2026-07-19T18:00:00Z',
     },
   ],
-  documents: [
+  pages: [
     {
-      document_id: '507f1f77bcf86cd799439011',
+      id: '507f1f77bcf86cd799439011',
       name: 'Thesis draft',
-      version: 12,
-      created_at: '2026-01-06T09:00:00',
-      updated_at: '2026-07-19T18:00:00',
-      chat_count: 3,
-      agent_run_count: 9,
-      save_count: 64,
-      resource_count: 1,
+      updated_at: '2026-07-19T18:00:00Z',
+      saves: 64,
+      chats: 3,
+      assistant_runs: 9,
+      pdfs: 1,
     },
   ],
-  resources: [makeResource()],
-  collections: [],
+  storage: { pdfs: 2, pdf_bytes: 3_145_728 },
 };
 
 /** Radix tabs activate on mousedown. */
@@ -115,32 +117,42 @@ function renderProfile() {
   return render(
     <ToastProvider>
       <ConfirmProvider>
-        <ViewProvider>
+        <NavigationProvider>
           <ProfileView />
-        </ViewProvider>
+        </NavigationProvider>
       </ConfirmProvider>
     </ToastProvider>,
   );
 }
 
 beforeEach(() => {
-  switchTo.mockClear();
-  switchTo.mockResolvedValue(true);
-  editorState.documentId = null;
-  editorState.loadingDocumentId = null;
-  getOverview.mockReset();
+  window.history.replaceState(null, '', '/?view=settings');
+  setPanel.mockReset();
+  getMe.mockReset().mockResolvedValue(ME);
+  getUsage.mockReset().mockResolvedValue(USAGE);
   updateProfile.mockReset();
-  getOverview.mockResolvedValue(OVERVIEW);
+  server.use(
+    http.get('/users/me', ({ response }) => getMe().then((body) => response(200).json(body), serverError)),
+    http.get('/workspaces/{workspace_id}/usage', ({ request, response }) =>
+      getUsage(Object.fromEntries(new URL(request.url).searchParams)).then((body) => response(200).json(body), serverError)),
+    http.patch('/users/me', async ({ request, response }) =>
+      updateProfile(await request.json()).then((body) => response(200).json(body), serverError)),
+  );
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.history.replaceState(null, '', '/');
+  vi.restoreAllMocks();
+});
 
 describe('ProfileView', () => {
-  it('loads the whole dashboard in a single request', async () => {
+  it('reads the person and the shown workspace’s usage, one request each', async () => {
     renderProfile();
 
     await screen.findByRole('heading', { name: 'Ada Lovelace' });
-    expect(getOverview).toHaveBeenCalledTimes(1);
+    expect(getMe).toHaveBeenCalledTimes(1);
+    expect(getUsage).toHaveBeenCalledExactlyOnceWith({ days: '30' });
   });
 
   it('lays the account out as labelled rows, editable in place', async () => {
@@ -169,7 +181,8 @@ describe('ProfileView', () => {
 
   it('offers a save bar once a field changes, and saves every field', async () => {
     updateProfile.mockResolvedValue({
-      profile: { ...OVERVIEW.profile, headline: 'Parsing at scale' },
+      identity: ME.identity,
+      profile: { ...ME.profile, headline: 'Parsing at scale' },
     });
     renderProfile();
     await screen.findByRole('heading', { name: 'Ada Lovelace' });
@@ -180,7 +193,7 @@ describe('ProfileView', () => {
     fireEvent.click(within(bar).getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(updateProfile).toHaveBeenCalledTimes(1));
-    expect(updateProfile.mock.calls[0][0]).toMatchObject({
+    expect(updateProfile.mock.calls[0]?.[0]).toMatchObject({
       display_name: 'Ada Lovelace',
       headline: 'Parsing at scale',
       affiliation: 'Analytical Engine Lab',
@@ -200,17 +213,20 @@ describe('ProfileView', () => {
     expect(screen.queryByRole('region', { name: 'Unsaved changes' })).toBeNull();
   });
 
-  it('lays settings out as panes with a navigation list', async () => {
+  it('lays settings out as six panes with a navigation list', async () => {
     renderProfile();
     await screen.findByRole('heading', { name: 'Ada Lovelace' });
 
     expect(screen.getByRole('tablist').getAttribute('aria-orientation')).toBe('vertical');
+    // Pages are managed in the sidebar and PDFs in the Library: no pane
+    // lists either.
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       'Account',
       'Preferences',
       'AI & tools',
+      'Workspace',
+      'Members',
       'Usage',
-      'Documents & files',
     ]);
   });
 
@@ -257,90 +273,93 @@ describe('ProfileView', () => {
 
     await screen.findByRole('heading', { name: 'Ada Lovelace' });
     openPane('Usage');
-    // Scoped: "Documents" is both a tile label and a section heading.
     const tiles = within(screen.getByRole('region', { name: 'Usage summary' }));
-    expect(tiles.getByText('Documents')).toBeTruthy();
+    expect(tiles.getByText('Pages')).toBeTruthy();
     expect(tiles.getByText('Tokens')).toBeTruthy();
     // 120,000 in + 34,000 out, compacted.
     expect(tiles.getByText('154K')).toBeTruthy();
-    expect(tiles.getByText('120K in · 34K out')).toBeTruthy();
+    expect(tiles.getByText('120K in · 34K out · 80K cached')).toBeTruthy();
+    // The runs, with how many did not finish.
+    expect(tiles.getByText('Assistant runs')).toBeTruthy();
+    expect(tiles.getByText('2 did not finish')).toBeTruthy();
+    // What the providers reported the assistant's model calls cost.
+    expect(tiles.getByText('Cost')).toBeTruthy();
+    expect(tiles.getByText('$0.42')).toBeTruthy();
+    expect(tiles.getByText('Over 51 model calls')).toBeTruthy();
+    // The PDF count is Storage's, not a tile.
+    expect(tiles.queryByText('PDFs')).toBeNull();
+  });
+
+  it('shows activity by page as usage, with no save counter and no way to open the page', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    openPane('Usage');
+
+    const table = screen.getByRole('table', { name: 'Saves, chats and assistant runs for each page' });
+    const row = within(table).getByRole('row', { name: /Thesis draft/ });
+    expect(within(row).getAllByRole('cell').map((cell) => cell.textContent)).toEqual(['64', '3', '9']);
+    expect(row.textContent).not.toMatch(/\bv\d+\b/);
+    // Pages are opened from the sidebar; Settings keeps no page list.
+    expect(screen.queryByRole('button', { name: /Thesis draft/ })).toBeNull();
+    // Three active pages, one row: the table says it shows only the latest.
+    expect(screen.getByText('The 1 most recently edited of 3 pages.')).toBeTruthy();
+  });
+
+  it('summarises storage and opens the Library over the editor', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    openPane('Usage');
+
+    const storage = within(screen.getByRole('region', { name: 'Storage' }));
+    expect(storage.getByText('2 PDFs')).toBeTruthy();
     // Uploaded bytes are shown as a size, not a raw count.
-    expect(tiles.getByText('3.0 MB')).toBeTruthy();
+    expect(storage.getByText(/3\.0 MB/)).toBeTruthy();
+    expect(storage.getByText('1 of 2 converted to text · 1 collection')).toBeTruthy();
+    expect(screen.queryByText('reference.pdf')).toBeNull();
+
+    fireEvent.click(storage.getByRole('button', { name: 'Open Library' }));
+    expect(setPanel).toHaveBeenCalledWith('library');
+    // Settings closes: the Library is a tab beside the page, behind the dialog.
+    expect(new URLSearchParams(window.location.search).get('view')).toBeNull();
   });
 
-  it('lists documents with the activity only MySQL knows', async () => {
+  it('says plainly when there are no pages or PDFs yet, and still offers the Library', async () => {
+    getUsage.mockResolvedValue({
+      ...USAGE,
+      summary: { ...USAGE.summary, documents_active: 0, resources_active: 0, resources_bytes: 0 },
+      pages: [],
+      storage: { pdfs: 0, pdf_bytes: 0 },
+    });
     renderProfile();
-    openPane('Documents & files');
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    openPane('Usage');
 
-    await screen.findByText('Thesis draft');
-    expect(screen.getByText('64')).toBeTruthy();
-    expect(screen.getByText('assistant runs')).toBeTruthy();
+    expect(screen.getByText('No pages yet')).toBeTruthy();
+    expect(screen.queryByRole('table', { name: /each page/ })).toBeNull();
+    const storage = within(screen.getByRole('region', { name: 'Storage' }));
+    expect(storage.getByText('0 PDFs')).toBeTruthy();
+    expect(storage.getByText('Upload PDFs in the Library to use them on your pages.')).toBeTruthy();
+    expect(storage.getByRole('button', { name: 'Open Library' })).toBeTruthy();
   });
 
-  it('opens a document and returns to the editor', async () => {
+  it('refreshes activity by page, not only the tiles', async () => {
     renderProfile();
-    openPane('Documents & files');
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    openPane('Usage');
+    expect(screen.getByText('Thesis draft')).toBeTruthy();
 
-    // "Open" alone is not a name a screen-reader user can act on in a list of
-    // documents, so each button names its document.
-    const open = await screen.findByRole('button', { name: 'Open Thesis draft' });
-    open.click();
-
-    await waitFor(() => expect(switchTo).toHaveBeenCalledWith('507f1f77bcf86cd799439011'));
-  });
-
-  it('makes the document name itself open the document', async () => {
-    renderProfile();
-    openPane('Documents & files');
-
-    const name = await screen.findByRole('button', { name: 'Thesis draft' });
-    name.click();
-
-    await waitFor(() => expect(switchTo).toHaveBeenCalledWith('507f1f77bcf86cd799439011'));
-  });
-
-  it('shows pending feedback without marking the requested row current', async () => {
-    editorState.documentId = 'another-document';
-    editorState.loadingDocumentId = '507f1f77bcf86cd799439011';
-    renderProfile();
-    openPane('Documents & files');
-
-    const name = await screen.findByRole('button', { name: 'Thesis draft' });
-    expect(name.getAttribute('aria-current')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Open Thesis draft' }).textContent).toContain('Opening…');
-
-    name.click();
-    expect(switchTo).not.toHaveBeenCalled();
-  });
-
-  it('lists uploaded PDFs with their size', async () => {
-    renderProfile();
-    openPane('Documents & files');
-
-    await screen.findByText('reference.pdf');
-    expect(screen.getByText(/1\.0 MB/)).toBeTruthy();
-  });
-
-  it('refreshes the lists, not only the tiles', async () => {
-    renderProfile();
-    openPane('Documents & files');
-    await screen.findByText('Thesis draft');
-
-    getOverview.mockResolvedValue({
-      ...OVERVIEW,
-      documents: [{ ...OVERVIEW.documents[0], name: 'Renamed elsewhere' }],
-      resources: [{ ...OVERVIEW.resources[0], filename: 'newer.pdf' }],
+    getUsage.mockResolvedValue({
+      ...USAGE,
+      pages: [{ ...itemAt(USAGE.pages, 0), name: 'Renamed elsewhere' }],
     });
     screen.getByRole('button', { name: /refresh/i }).click();
 
-    // The list sections seed their paging state from props, so a refresh only
-    // reaches them if they are remounted for the new fetch.
     await screen.findByText('Renamed elsewhere');
-    expect(screen.getByText('newer.pdf')).toBeTruthy();
+    expect(screen.queryByText('Thesis draft')).toBeNull();
   });
 
   it('reports a failed load in place, with a way to retry', async () => {
-    getOverview.mockRejectedValue(new Error('Service unavailable'));
+    getMe.mockRejectedValue(new Error('Service unavailable'));
     renderProfile();
 
     await screen.findByRole('alert');
@@ -348,13 +367,45 @@ describe('ProfileView', () => {
     expect(screen.getByRole('button', { name: /try again/i })).toBeTruthy();
   });
 
-  it('keeps agent preferences reachable when overview loading fails', async () => {
-    getOverview.mockRejectedValue(new Error('Overview unavailable'));
+  it('keeps the account when the usage fails to load', async () => {
+    getUsage.mockRejectedValue(new Error('Usage unavailable'));
     renderProfile();
-    await screen.findByText('Overview unavailable');
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    openPane('Usage');
+
+    expect(await screen.findByText('Usage unavailable')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeTruthy();
+  });
+
+  it('keeps agent preferences reachable when the profile fails to load', async () => {
+    getMe.mockRejectedValue(new Error('Profile unavailable'));
+    renderProfile();
+    await screen.findByText('Profile unavailable');
 
     openPane('AI & tools');
 
     expect(await screen.findByRole('region', { name: 'Agent preferences' })).toBeTruthy();
+  });
+
+  it('switches Usage between this workspace and every workspace of the account', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Ada Lovelace' });
+    openPane('Usage');
+
+    const scope = await screen.findByRole('radiogroup', { name: 'Usage of' });
+    const thisOne = within(scope).getByRole('radio', { name: 'This workspace' });
+    expect(thisOne.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(within(scope).getByRole('radio', { name: 'All workspaces' }));
+
+    expect(await screen.findByRole('heading', { name: 'By workspace' })).toBeTruthy();
+    expect(screen.getByText('Counting every workspace you are in.')).toBeTruthy();
+    // Each workspace's runs and cost, from the mock's account usage.
+    const byWorkspace = within(screen.getByRole('heading', { name: 'By workspace' }).closest('section') as HTMLElement).getByRole('table');
+    expect(within(byWorkspace).getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual(
+      ['Workspace', 'Pages', 'Assistant runs', 'Cost', 'PDFs', 'Storage'],
+    );
+    expect(within(byWorkspace).getAllByRole('row')[1]?.textContent).toContain('$1.68');
+    // The pages table is one workspace's; the account-wide view has none.
+    expect(screen.queryByRole('heading', { name: /Activity by page/ })).toBeNull();
   });
 });

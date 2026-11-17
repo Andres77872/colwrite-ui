@@ -3,7 +3,7 @@ import type { EquationChild } from '@/editor';
 import type { InlineWidgetProps } from '../types';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { useEditor } from '@/editor';
+import { useEditorDoc } from '@/editor';
 import { katexStatus, onKatexStatus, renderLatex, type KatexStatus } from '@/lib/katex';
 import {
   InlineTrigger,
@@ -61,7 +61,7 @@ function useKatexStatus(): KatexStatus {
 function EquationInlineContent(props: InlineWidgetProps<EquationChild>) {
   const { child } = props;
   const { patch, remove } = useInlineChild(props);
-  const { blocks } = useEditor();
+  const { blocks } = useEditorDoc();
   const status = useKatexStatus();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 

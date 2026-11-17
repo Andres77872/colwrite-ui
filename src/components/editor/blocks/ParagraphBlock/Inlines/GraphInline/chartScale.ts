@@ -31,7 +31,7 @@ export const MAX_PIE_SLICES = 6;
 export function seriesColor(index: number, overrides?: string[]): string {
   const override = overrides?.[index];
   if (override && override.trim()) return override.trim();
-  return SERIES_VARS[index % SERIES_VARS.length];
+  return SERIES_VARS[index % SERIES_VARS.length] ?? SERIES_VARS[0];
 }
 
 export type Tick = { value: number; label: string };

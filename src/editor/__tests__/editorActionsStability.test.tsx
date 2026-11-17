@@ -1,21 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render } from '@testing-library/react';
+import { mockDocumentList } from '@/data/__tests__/documentFixtures';
+import { act, cleanup } from '@testing-library/react';
+import { renderWithQueryClient as render } from '@/__tests__/queryClient';
 import { createRef, useEffect, useImperativeHandle } from 'react';
 import type { Block } from '../types';
-import type { EditorActionsContextValue, EditorStateContextValue } from '../editorContextState';
+import type { EditorActionsContextValue } from '../editorContextState';
+import type { EditorDocValue } from '../documentSessionState';
+import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 
-vi.mock('@/services', () => ({
-  createDocument: vi.fn(async () => ({ document_id: 'created-doc', version: 1 })),
-  saveDocument: vi.fn(async () => ({ status: 'ok', message: '', version: 2 })),
-  loadDocument: vi.fn(async () => ({ version: 1, blocks: [], name: 'Doc' })),
-  deleteDocument: vi.fn(async () => ({ status: 'ok', message: '' })),
-  listDocuments: vi.fn(async () => ({ documents: [], count: 0, status: 'ok', message: '' })),
+vi.mock('@/data/documents', async () => ({
+  ...(await vi.importActual<typeof import('@/data/documents')>('@/data/documents')),
+  createDocument: vi.fn(async () => ({ id: 'created-doc', doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'created-doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  saveDocument: vi.fn(async () => ({ etag: 'cw:2', updatedAt: null })),
+  getDocument: vi.fn(async () => ({ doc: { blocks: [], name: 'Doc' }, etag: 'cw:1', updatedAt: null, placement: { documentId: 'doc', collectionId: null, sortKey: 'V', placementEtag: '"cwp:1"', treeVersion: null } })),
+  deleteDocument: vi.fn(async () => {}),
 }));
 
-const { EditorProvider, useEditorActions, useEditorState } = await import('@/editor');
+// The first-run probe reads the server's page list: there is none yet.
+beforeEach(() => {
+  mockDocumentList();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const { EditorProvider, useEditorActions, useEditorDoc } = await import('@/editor');
 
 const actionsRef = createRef<EditorActionsContextValue>();
-const stateRef = createRef<EditorStateContextValue>();
+const stateRef = createRef<EditorDocValue>();
 
 /**
  * Committed renders per subscription. Counted in an effect rather than the
@@ -33,7 +45,7 @@ function ActionsProbe() {
 }
 
 function StateProbe() {
-  const state = useEditorState();
+  const state = useEditorDoc();
   useImperativeHandle(stateRef, () => state, [state]);
   useEffect(() => {
     renders.state += 1;
@@ -57,7 +69,7 @@ beforeEach(() => {
   renders.actions = 0;
   renders.state = 0;
   localStorage.setItem(
-    'colwrite:doc:local',
+    `colwrite:ws:${TEST_WORKSPACE_ID}:doc:local`,
     JSON.stringify({
       documentId: null,
       doc: {

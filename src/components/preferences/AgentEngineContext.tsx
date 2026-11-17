@@ -1,86 +1,60 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { assistantSettingsQuery, useUpdateAssistantSettings, type AssistantDefaults } from '@/data/assistant';
 import {
-  checkAgentEngine,
+  agentEnginesQuery,
   engineModelProblem,
-  getAgentEngines,
-  type AgentEngineCatalog,
+  gatewayModelsFor,
+  useCheckAgentEngine,
   type AgentEngineId,
   type AgentEngineStatus,
-} from '@/services/agentEngines';
-import { errorMessage } from '@/services/contracts';
+  type GatewayModelTier,
+} from '@/data/agentEngines';
+import { errorMessage } from '@/api/errors';
 import {
   AgentEngineContext,
-  DEFAULT_ENGINE_PREFS,
-  effectiveEngine,
-  isAgentEnginePrefs,
+  preferencesOf,
   resolveEngineRequest,
   type AgentEngineContextValue,
   type AgentEngineSurface,
 } from './agentEngineContextState';
 
-const PREFS_KEY = 'colwrite:agent-engine:v1';
-
 /**
  * The agent engines this server offers, and which one each surface uses.
  *
- * The server decides what may run: a deployed API reports only `legacy`, and
+ * The server decides what may run: a deployed API reports only `gateway`, and
  * a local one reports the `claude` / `codex` CLIs with their sign-in state.
  * This provider never signs anyone in — when a CLI needs a login it shows the
  * command to run in a terminal and re-checks when asked.
  */
 export function AgentEngineProvider({ children }: { children: ReactNode }) {
-  const [prefs, setPrefs] = usePersistentState(PREFS_KEY, DEFAULT_ENGINE_PREFS, isAgentEnginePrefs);
-  const [catalog, setCatalog] = useState<AgentEngineCatalog | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const settings = useQuery(assistantSettingsQuery());
+  const preferencesReady = settings.data !== undefined;
+  const defaults = settings.data?.defaults;
+  const prefs = useMemo(() => preferencesOf(defaults), [defaults]);
+  const { mutate: update, isPending: savingPreferences, error: saveError } = useUpdateAssistantSettings();
+  const preferenceError = saveError ? errorMessage(saveError, 'Could not save your assistant preferences.') : null;
+  const saveDefaults = useCallback((changes: AssistantDefaults) => {
+    if (preferencesReady) update({ defaults: changes });
+  }, [preferencesReady, update]);
+  const engines = useQuery(agentEnginesQuery());
+  const catalog = engines.data ?? null;
+  const loading = engines.isFetching;
+  // The catalog failed to load: the default engine keeps working.
+  const error = engines.isError ? errorMessage(engines.error, 'Could not load the agent engines') : null;
+  const refetchEngines = engines.refetch;
+  const refresh = useCallback(async () => {
+    await refetchEngines();
+  }, [refetchEngines]);
+
   const [checking, setChecking] = useState<AgentEngineId | null>(null);
   const [checkError, setCheckError] = useState<Partial<Record<AgentEngineId, string>>>({});
-  const requestEpoch = useRef(0);
-
-  const refresh = useCallback(async () => {
-    const epoch = ++requestEpoch.current;
-    setLoading(true);
-    try {
-      const next = await getAgentEngines();
-      if (epoch !== requestEpoch.current) return;
-      setCatalog(next);
-      setError(null);
-    } catch (caught) {
-      if (epoch !== requestEpoch.current) return;
-      // An older API without engines: the default engine keeps working.
-      setError(errorMessage(caught, 'Could not load the agent engines'));
-    } finally {
-      if (epoch === requestEpoch.current) setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void refresh();
-    }, 0);
-    return () => {
-      window.clearTimeout(timer);
-      requestEpoch.current += 1;
-    };
-  }, [refresh]);
-
+  const checkEngine = useCheckAgentEngine().mutateAsync;
   const check = useCallback(async (engine: AgentEngineId): Promise<AgentEngineStatus | null> => {
     setChecking(engine);
     setCheckError((previous) => ({ ...previous, [engine]: undefined }));
     try {
-      const status = await checkAgentEngine(engine);
-      // A re-check supersedes any list request still in flight.
-      requestEpoch.current += 1;
-      setCatalog((previous) =>
-        previous
-          ? {
-              ...previous,
-              engines: previous.engines.map((item) => (item.engine === engine ? status : item)),
-            }
-          : previous,
-      );
-      return status;
+      return await checkEngine(engine);
     } catch (caught) {
       setCheckError((previous) => ({
         ...previous,
@@ -90,35 +64,44 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
     } finally {
       setChecking((current) => (current === engine ? null : current));
     }
-  }, []);
+  }, [checkEngine]);
 
   const setChatEngine = useCallback(
-    (engine: AgentEngineId) => setPrefs((previous) => ({ ...previous, chat: engine })),
-    [setPrefs],
+    (engine: AgentEngineId) => saveDefaults({ chat_engine: engine === 'gateway' ? null : engine }),
+    [saveDefaults],
   );
-  const setInlineEngine = useCallback(
-    (engine: AgentEngineId | 'chat') => setPrefs((previous) => ({ ...previous, inline: engine })),
-    [setPrefs],
+  const setSurfaceEngine = useCallback(
+    (surface: 'inline' | 'review', engine: AgentEngineId | 'chat') => saveDefaults({
+      [surface === 'inline' ? 'inline_engine' : 'review_engine']: engine === 'chat' ? null : engine,
+    }),
+    [saveDefaults],
+  );
+  const setGatewayModel = useCallback(
+    (tier: GatewayModelTier, model: string): string | null => {
+      const trimmed = model.trim();
+      if (trimmed && !gatewayModelsFor(catalog, tier).includes(trimmed)) {
+        return 'Choose one of the models configured on this server.';
+      }
+      saveDefaults({ [tier === 'lite' ? 'gateway_lite' : 'gateway_main']: trimmed || null });
+      return null;
+    },
+    [catalog, saveDefaults],
   );
   const setModel = useCallback(
     (engine: AgentEngineId, model: string): string | null => {
+      if (engine === 'gateway') return setGatewayModel('main', model);
       const trimmed = model.trim();
       const problem = engineModelProblem(engine, trimmed);
       if (problem) return problem;
-      setPrefs((previous) => {
-        const models = { ...previous.models };
-        if (trimmed) models[engine] = trimmed;
-        else delete models[engine];
-        return { ...previous, models };
-      });
+      saveDefaults({ [engine === 'claude' ? 'claude_model' : 'codex_model']: trimmed || null });
       return null;
     },
-    [setPrefs],
+    [setGatewayModel, saveDefaults],
   );
 
   const noteRunError = useCallback(
     (code: string) => {
-      if (code.startsWith('ENGINE_')) void refresh();
+      if (code.startsWith('ENGINE_') || code === 'MODEL_NOT_CONFIGURED') void refresh();
     },
     [refresh],
   );
@@ -130,13 +113,17 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       prefs,
+      preferencesReady,
+      savingPreferences,
+      preferenceError,
       selectable: catalog?.runtime === 'local',
       statusOf: (engine) => statuses.get(engine) ?? null,
-      engineFor: (surface: AgentEngineSurface) => effectiveEngine(prefs, catalog, surface),
       requestFor: (surface: AgentEngineSurface) => resolveEngineRequest(prefs, catalog, surface),
       setChatEngine,
-      setInlineEngine,
+      setSurfaceEngine,
+      saveDefaults,
       setModel,
+      setGatewayModel,
       checking,
       checkError,
       check,
@@ -152,10 +139,15 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
     loading,
     noteRunError,
     prefs,
+    preferencesReady,
+    savingPreferences,
+    preferenceError,
     refresh,
     setChatEngine,
-    setInlineEngine,
+    setSurfaceEngine,
+    saveDefaults,
     setModel,
+    setGatewayModel,
   ]);
 
   return <AgentEngineContext.Provider value={value}>{children}</AgentEngineContext.Provider>;

@@ -3,7 +3,7 @@ import { FileText, Library, MessageSquare, Plus, RefreshCw, X } from 'lucide-rea
 
 // PanelHeader is a 44px title bar with a bottom hairline and no surface of its
 // own, so each cell sits it on top of the panel body it belongs to. Ported from
-// ToolsAside (icon + close) and the sidebar.
+// PanelsAside (icon + close) and the sidebar.
 
 const PANEL_SURFACE = 'flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card';
 

@@ -646,6 +646,12 @@
      some air from the sidebar hairline. */
   .canvas {
     container: canvas / inline-size;
+    /* The canvas is what scrolls; the page topbar sits above it, outside.
+       What can cover the top of the page from inside is the sticky review
+       notice strip, which Canvas measures into `--canvas-sticky-top`, so
+       focus and scrollIntoView land below it (WCAG 2.2 SC 2.4.11), with a
+       little air at either edge for the focus ring. */
+    scroll-padding-block: calc(var(--canvas-sticky-top, 0px) + 8px) 8px;
   }
 
   .document-container {
@@ -691,6 +697,13 @@
     .document-container,
     .document-container[data-full-width] {
       --doc-pad: 20px;
+    }
+
+    /* The handle column is a 24px handle plus 4px of air, which 20px of
+       padding could not hold: the handle ran off the left edge. The start
+       side keeps room for it; the end side stays at the phone margin. */
+    .document-container {
+      padding-inline-start: max(var(--doc-pad), 32px);
     }
 
     /* A desktop with both sidebars docked, not a phone: keep a margin the
@@ -816,7 +829,10 @@
     opacity: 1;
   }
 
-  .block-row:hover > .block-marks {
+  /* The marks give way to the controls wherever those show: hover, keyboard
+     focus or an open menu. */
+  .block-row:hover > .block-marks,
+  .block-row:has(> .block-controls:is(:focus-within, [data-open])) > .block-marks {
     opacity: 0;
   }
 
@@ -836,14 +852,15 @@
     }
 
     /* The "+" is hidden here by its own `@max-[600px]/canvas:hidden`
-       utility: a rule in this layer lost to the button's `flex`. */
-
-    .block-controls {
-      padding-right: 1px;
-    }
+       utility: a rule in this layer lost to the button's `flex`. The handle
+       fits the start padding set under "Page geometry". */
 
     .block-row[data-active] > .block-controls {
       opacity: 1;
+    }
+
+    .block-row[data-active] > .block-marks {
+      opacity: 0;
     }
   }
 
@@ -855,6 +872,23 @@
 
   .editable:focus-visible {
     @apply outline-none;
+  }
+
+  /* Paragraph columns. On a desktop page the author's count is kept as set.
+     On a narrower canvas (a tablet, a phone, a window with both sidebars)
+     each column keeps a readable width instead, so the paragraph drops
+     columns, down to one on a phone, rather than squeezing six of them into
+     a few words each. The count itself is inline (ParagraphBlock). */
+  @container canvas (width < 820px) {
+    .paragraph-block.multi-column .editable {
+      column-width: 13em;
+    }
+  }
+
+  /* Block markup the API flattened inside a paragraph (`span.legacy-block`,
+     from a `<div>` or `<p>`): still its own line, as the export draws it. */
+  :is(.block-content, .editable) .legacy-block {
+    display: block;
   }
 
   /* The space the API leaves after a table or chart: kept in the text,
@@ -1094,6 +1128,12 @@
 
   /* The page text a composer selection chip stands for, kept marked while
      focus is in the composer (see chatContextHighlight.ts). */
+  ::highlight(review-comment) {
+    background-color: var(--color-diff-add);
+    text-decoration: underline;
+    text-decoration-color: var(--color-primary);
+  }
+
   ::highlight(chat-context) {
     background-color: var(--color-selection);
   }
@@ -1146,5 +1186,197 @@
   .resizing * {
     user-select: none !important;
     cursor: col-resize !important;
+  }
+}
+
+/* ============================================
+   FOCUS, TOUCH AND TARGET SIZES
+
+   In the utilities layer on purpose: these rules adjust elements whose size,
+   opacity and outline are set by utility classes (`w-[18px]`, `opacity-0`,
+   `outline-none`, `h-6`, `text-sm`), and a rule in the components layer
+   loses to any utility. Each selector outranks the single class it beats.
+
+   Motion: nothing here animates; the one prefers-reduced-motion rule in the
+   base layer covers every element and pseudo-element.
+   ============================================ */
+
+@layer utilities {
+  /* ----------------------------------------
+     Focus that would otherwise not show
+     ---------------------------------------- */
+
+  /* The empty page is a tab stop of its own (typing there starts the first
+     block). It is the scroll container, so the ring is drawn inside it. */
+  .canvas:focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: -2px;
+  }
+
+  /* A locked block takes focus (so arrow keys can pass through it) but has
+     no caret, which is what marks focus in editable text. It gets the ring. */
+  :is(.editable, .code-editable):is([aria-readonly="true"], [contenteditable="false"]):focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* ----------------------------------------
+     Every pointer: targets of at least 24×24 (WCAG 2.2 SC 2.5.8)
+     ---------------------------------------- */
+
+  /* The block handle was 18px wide. Its menu anchor follows its width. */
+  .block-controls > button[aria-haspopup="menu"],
+  .block-controls > span[aria-hidden="true"] {
+    width: var(--block-control-w, 24px);
+  }
+
+  /* The to-do box is drawn at 16px; its target is the 24px marker square. */
+  .list-marker > [role="checkbox"] {
+    position: relative;
+  }
+
+  .list-marker > [role="checkbox"]::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+  }
+
+  /* ----------------------------------------
+     Touch (a coarse primary pointer)
+
+     Nothing hovers, so what hover reveals is shown for the block being
+     worked on (the active row: the caret's, or the one last tapped). Primary
+     controls get a 44px target, mostly through a pseudo-element so the
+     drawing keeps its size, and text fields are 16px, below which iPhone
+     Safari zooms the page in on focus.
+     ---------------------------------------- */
+
+  @media (pointer: coarse) {
+    /* Keep the inline AI panel's dismissal easy to tap beside Send/Stop. */
+    .ask-ai-panel button[aria-label="Close Ask AI"] {
+      width: 44px;
+      height: 44px;
+    }
+
+    .block-row[data-active] > .block-controls,
+    .block-row[data-active] .block-action,
+    .block-row[data-active] :is(.mermaid-diagram, .structured-figure) > .opacity-0 {
+      opacity: 1;
+    }
+
+    .block-row[data-active] > .block-marks {
+      opacity: 0;
+    }
+
+    /* With no hovering input at all, a control that is not showing must not
+       take a tap either: an invisible "+" in the margin added a block, an
+       invisible download button downloaded. Keyboard focus still reaches
+       them (an iPad with a keyboard), and an iPad with a trackpad, which
+       can hover, keeps the desktop behaviour. */
+    @media (any-hover: none) {
+      .block-row:not([data-active]) > .block-controls:not(:focus-within, [data-open]),
+      .block-row:not([data-active]) .block-action:not(:focus-visible),
+      .block-row:not([data-active]) :is(.mermaid-diagram, .structured-figure) > .opacity-0:not(:focus-within) {
+        pointer-events: none;
+      }
+    }
+
+    /* "+" and handle: as wide as the page margin allows (24–40px each, the
+       margin is 60–96px on a tablet) and 44px tall, the extra height drawn
+       by a pseudo-element in the empty margin above and below. */
+    .block-row > .block-controls {
+      --block-control-w: clamp(24px, calc((var(--doc-pad) - 12px) / 2), 40px);
+      gap: 4px;
+    }
+
+    .block-controls > button {
+      position: relative;
+      width: var(--block-control-w);
+    }
+
+    .block-controls > button::after {
+      content: "";
+      position: absolute;
+      inset: -10px 0;
+    }
+
+    /* A phone: the handle alone. At 20px from the screen edge it sat where a
+       swipe means "back"; the start margin is wider so the handle is a 44px
+       square that stops short of the text. */
+    @container canvas (width < 600px) {
+      .document-container {
+        padding-inline-start: max(var(--doc-pad), 48px);
+      }
+
+      .block-row > .block-controls {
+        --block-control-w: 40px;
+      }
+
+      .block-controls > button::after {
+        inset: -10px 0 -10px -4px;
+      }
+    }
+
+    /* The pages tree: rows are 44px tall (`pointer-coarse:min-h-11`), and a
+       row's "+" and "…" (selected by their names and `aria-haspopup`, which
+       the row markup keeps) are 44px targets drawn at 28px. */
+    .pages-tree [role="treeitem"] button:is([aria-haspopup="menu"], [aria-label^="New page in"]) {
+      position: relative;
+    }
+
+    .pages-tree [role="treeitem"] button:is([aria-haspopup="menu"], [aria-label^="New page in"])::after {
+      content: "";
+      position: absolute;
+      inset: -8px -4px;
+    }
+
+    /* Diagram and figure "Edit": 44px tall over the drawing. */
+    .block-action::after {
+      content: "";
+      position: absolute;
+      inset: -8px;
+    }
+
+    /* To-do box: drawn at 20px, a 32×44 target that keeps clear of the
+       handle on its left and the text on its right. */
+    .list-marker > [role="checkbox"] {
+      width: 20px;
+      height: 20px;
+    }
+
+    .list-marker > [role="checkbox"]::after {
+      inset: -12px -6px;
+    }
+
+    /* A suggestion's Accept and Reject were 24px tall and 2px apart, with
+       their words shown only on hover. Selected by their names, since the
+       review card's markup is its own. The word is shown; the keyboard hint
+       beside it (`aria-hidden`) stays hidden, as there is rarely a keyboard. */
+    .review-change button:is([aria-label^="Accept:"], [aria-label^="Reject:"]) {
+      min-height: 44px;
+      min-width: 44px;
+      padding-inline: 10px;
+    }
+
+    .review-change button[aria-label^="Accept:"] + button[aria-label^="Reject:"] {
+      margin-inline-start: 8px;
+    }
+
+    .review-change button:is([aria-label^="Accept:"], [aria-label^="Reject:"]) > span.hidden:not([aria-hidden="true"]) {
+      display: inline;
+    }
+
+    /* Every text field, including the hand-rolled ones and the assistant's
+       composer. The document's own text keeps its size (16px, or 14px when
+       the author picks small text). */
+    :is(
+      input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="hidden"]),
+      textarea,
+      select,
+      .chat-composer-input
+    ) {
+      font-size: 16px;
+    }
   }
 }

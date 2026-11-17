@@ -1,10 +1,10 @@
 import {
-  AgentToolsContext,
+  AssistantCatalogContext,
   BibliographyContext,
   CitationInline,
   EditorContext,
   LiteralEditor,
-  agentToolsAllEnabled,
+  assistantCatalogAllOn,
   buildBibliography,
 } from 'colwrite-ui';
 
@@ -17,8 +17,8 @@ import {
 // map. The mutators are no-ops because a static card has nothing to write back
 // to.
 //
-// It ALSO calls useEditor() internally (for the document-wide "apply this style
-// everywhere" action), so props alone are not enough — without an EditorContext
+// It ALSO calls useEditor() internally (for the page's citation style, which
+// its picker sets), so props alone are not enough — without an EditorContext
 // above it the widget throws outright. A literal value is supplied, never the
 // real provider.
 //
@@ -28,9 +28,9 @@ import {
 // bibliography from it with the same `buildBibliography` the editor uses — so
 // the numbering on the card is the numbering in a document.
 //
-// Same for useAgentTools(), which gates its arXiv and Semantic Scholar lookup
-// affordances: the real provider fails closed offline, so the all-enabled
-// literal is what shows the widget's full surface.
+// Same for the assistant catalog, which gates its paper search: the real
+// provider fails closed offline, so the all-enabled literal is what shows the
+// widget's full surface.
 
 const refs = { current: {} as Record<string, HTMLDivElement | null> };
 const noop = () => {};
@@ -60,44 +60,41 @@ function Sentence({ children, cites }: { children: React.ReactNode; cites: Child
   return (
     <LiteralEditor value={{ blocks, documentId: 'doc-1', refs } as unknown as Ctx}>
       <BibliographyContext.Provider value={buildBibliography(blocks)}>
-        <AgentToolsContext.Provider value={agentToolsAllEnabled}>
+        <AssistantCatalogContext.Provider value={assistantCatalogAllOn}>
           <p className="max-w-[40rem] text-sm leading-relaxed text-muted-foreground">{children}</p>
-        </AgentToolsContext.Provider>
+        </AssistantCatalogContext.Provider>
       </BibliographyContext.Provider>
     </LiteralEditor>
   );
 }
 
-const HOFFMANN = {
-  key: 'hoffmann2022',
-  title: 'Training Compute-Optimal Large Language Models',
-  authors: 'Hoffmann, J., Borgeaud, S., Mensch, A.',
-  year: '2022',
-  venue: 'NeurIPS',
-  provider: 'arxiv' as const,
-};
+/** A reference record: a CSL-JSON item with ColWrite's fields beside it. */
+const record = (key: string, title: string, author: Array<[string, string]>, year: number, venue?: string) => ({
+  key,
+  kind: 'paper' as const,
+  provider: 'openalex' as const,
+  state: 'verified' as const,
+  flags: [] as never[],
+  csl: {
+    id: key,
+    type: 'paper-conference' as const,
+    title,
+    author: author.map(([family, given]) => ({ family, given })),
+    issued: { 'date-parts': [[year]] },
+    ...(venue ? { 'container-title': venue } : {}),
+  },
+});
 
-const KAPLAN = {
-  key: 'kaplan2020',
-  title: 'Scaling Laws for Neural Language Models',
-  authors: 'Kaplan, J., McCandlish, S.',
-  year: '2020',
-};
-
-const VASWANI = {
-  key: 'vaswani2017',
-  title: 'Attention Is All You Need',
-  authors: 'Vaswani, A., Shazeer, N.',
-  year: '2017',
-  venue: 'NeurIPS',
-};
+const HOFFMANN = record('hoffmann2022', 'Training Compute-Optimal Large Language Models', [['Hoffmann', 'Jordan'], ['Borgeaud', 'Sebastian'], ['Mensch', 'Arthur']], 2022, 'NeurIPS');
+const KAPLAN = record('kaplan2020', 'Scaling Laws for Neural Language Models', [['Kaplan', 'Jared'], ['McCandlish', 'Sam']], 2020);
+const VASWANI = record('vaswani2017', 'Attention Is All You Need', [['Vaswani', 'Ashish'], ['Shazeer', 'Noam']], 2017, 'NeurIPS');
 
 export function Resolved() {
   const child: Child = {
     id: 'c1',
     type: 'citation',
     keys: ['hoffmann2022'],
-    style: 'author-year',
+    style: 'apa',
     sources: [HOFFMANN],
   };
   return (
@@ -113,7 +110,7 @@ export function MultipleKeys() {
     id: 'c2',
     type: 'citation',
     keys: ['kaplan2020', 'hoffmann2022'],
-    style: 'numeric',
+    style: 'nlm-citation-sequence-brackets',
     sources: [KAPLAN, HOFFMANN],
   };
   return (
@@ -134,7 +131,7 @@ export function RepeatedSource() {
     id: 'c5',
     type: 'citation',
     keys: ['kaplan2020'],
-    style: 'numeric',
+    style: 'nlm-citation-sequence-brackets',
     sources: [KAPLAN],
   };
   const second: Child = { ...first, id: 'c6', locator: 'p. 8' };
@@ -152,7 +149,7 @@ export function WithPrefixAndLocator() {
     id: 'c3',
     type: 'citation',
     keys: ['vaswani2017'],
-    style: 'author-year',
+    style: 'apa',
     prefix: 'see',
     locator: 'ch. 3',
     sources: [VASWANI],
@@ -166,7 +163,7 @@ export function WithPrefixAndLocator() {
 
 /** No source attached: `[?]`, in the destructive tone, rather than a number. */
 export function Unresolved() {
-  const child: Child = { id: 'c4', type: 'citation', keys: [], style: 'numeric' };
+  const child: Child = { id: 'c4', type: 'citation', keys: [], style: 'nlm-citation-sequence-brackets' };
   return (
     <Sentence cites={[child]}>
       We follow the matched-budget protocol <CitationInline {...wiring} child={child} /> throughout

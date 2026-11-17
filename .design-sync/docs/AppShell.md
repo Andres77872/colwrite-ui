@@ -19,7 +19,7 @@ assistant at all.
     header={<Topbar />}
     left={<Sidebar />}
     main={<Canvas />}
-    right={<ToolsAside />}
+    right={<PanelsAside />}
     aside={<ToolsRail />}
   />
 </PanelsProvider>
