@@ -275,6 +275,17 @@ describe('applyOperations', () => {
     expect(doc.name).toBe('Both');
     expect(touched).toEqual(['n']);
   });
+
+  it('only allows removing a source after an earlier operation removed its citation', () => {
+    const remove: ToolOperation = { op: 'remove_sources', keys: ['cited'] };
+    const rewriteCitation = rewrite('p', makeBlock('p'));
+    const refused = applyOperations(page, [remove, rewriteCitation]);
+    expect(refused.desynced).toEqual([remove]);
+    expect(refused.doc.sources).toEqual(page.sources);
+    const applied = applyOperations(page, [rewriteCitation, remove]);
+    expect(applied.desynced).toEqual([]);
+    expect(applied.doc.sources?.map((source) => source.key)).toEqual(['spare']);
+  });
 });
 
 // ── coerceBlock ──

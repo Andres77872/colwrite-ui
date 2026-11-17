@@ -29,9 +29,9 @@
  */
 
 import { kindLabel } from './blockKinds';
-import type { Block, ParagraphChild, ToolAction, ToolOperation } from './types';
+import type { Block, Doc, ParagraphChild, ToolAction, ToolOperation } from './types';
 import type { ChangeSetGroupResponse } from '@/api/schema';
-import { applyPatchToBlocks, coerceBlock } from './docOps';
+import { applyOperations, applyPatchToBlocks, coerceBlock } from './docOps';
 import { attributeText } from './placeholderIds';
 import { uid } from '../lib/uid';
 
@@ -1227,7 +1227,7 @@ export type AcceptPlan = {
 export function resolveAcceptPlan(
   changes: ProposedChange[],
   sets: ChangeSet[],
-  blocks: Block[],
+  doc: Doc,
 ): AcceptPlan {
   const rank = changeSequence(sets);
   const queue = [...changes].sort(
@@ -1238,27 +1238,30 @@ export function resolveAcceptPlan(
   const applied: ProposedChange[] = [];
   const desynced: ProposedChange[] = [];
 
-  let projected = blocks;
+  let projected = doc;
   // Statuses advance as the plan is built, so each change is positioned
   // against the siblings the ones before it have just put in the document.
   let projectedSets = sets;
   const after = linkPrecedence(sets);
 
-  for (const change of queue) {
+  for (const entry of queue) {
+    // Each step can rebase a later change's fingerprints. Use the current
+    // projected change, not the snapshot taken before the first operation.
+    const change = projectedSets.flatMap((set) => set.changes).find((candidate) => candidate.id === entry.id) ?? entry;
     // A filtered group may omit a pending prerequisite or a positional
     // predecessor. The presence of its target alone is not permission to
     // skip that decision. Simulate statuses and bases together as we proceed.
-    if (!isReady(change, projectedSets, projected, after)) {
+    if (!isReady(change, projectedSets, projected.blocks, after)) {
       desynced.push(change);
       continue;
     }
-    const op = resolveAcceptOp(change, projectedSets, projected);
+    const op = resolveAcceptOp(change, projectedSets, projected.blocks);
     if (!op) {
       desynced.push(change);
       continue;
     }
 
-    const outcome = applyPatchToBlocks(projected, [op]);
+    const outcome = applyOperations(projected, [op]);
     if (outcome.desynced.length > 0) {
       desynced.push(change);
       continue;
@@ -1266,18 +1269,25 @@ export function resolveAcceptPlan(
 
     ops.push(op);
     applied.push(change);
-    const before = projected;
-    projected = outcome.blocks;
-    projectedSets = projectedSets.map((set) => ({
-      ...set,
-      changes: set.changes.map((candidate) =>
-        candidate.id === change.id ? { ...candidate, status: 'accepted' as const } : candidate,
-      ),
-    }));
-    projectedSets = rebaseAfterAccept(projectedSets, before, projected, outcome.touched);
+    const before = projected.blocks;
+    projected = outcome.doc;
+    projectedSets = markChanges(projectedSets, new Set([change.id]), 'accepted');
+    projectedSets = rebaseAfterAccept(projectedSets, before, projected.blocks, outcome.touched);
   }
 
   return { ops, applied, desynced };
+}
+
+/** The same eligibility check for the review menu and for applying a bulk decision. */
+export function planBulkAccept(changes: ProposedChange[], sets: ChangeSet[], doc: Doc) {
+  const candidates = changes.filter((change) => change.status === 'pending' && !change.op.newInformation);
+  const landedIds = new Set<string>();
+  for (const change of candidates) {
+    if (change.kind === 'insert' && alreadyInDocument(change, doc.blocks)) landedIds.add(change.id);
+  }
+  const queue = candidates.filter((change) => !landedIds.has(change.id));
+  const plan = resolveAcceptPlan(queue, markChanges(sets, landedIds, 'accepted'), doc);
+  return { ...plan, landedIds, stale: plan.desynced.filter((change) => isStale(change, doc.blocks)) };
 }
 
 /* ----------------------------------------

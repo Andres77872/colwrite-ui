@@ -405,16 +405,15 @@ function citedKeys(blocks: readonly Block[]): Set<string> {
 }
 
 /**
- * Apply operations to the whole page: the blocks (`applyPatchToBlocks`),
- * then its name, citation style and library, with the server's refusals: a
+ * Apply operations to the whole page in authoring order, with the server's refusals: a
  * source already in the library is not added again, one still cited on the
  * page is not removed, and a refresh names only works the library holds,
  * each once (`_apply_update_sources`).
  */
 export function applyOperations(doc: Doc, ops: ToolOperation[]): ApplyPatchResult & { doc: Doc } {
-  const outcome = applyPatchToBlocks(doc.blocks, ops);
-  let next: Doc = { ...doc, blocks: outcome.blocks };
-  const desynced = [...outcome.desynced];
+  let next = doc;
+  const desynced: ToolOperation[] = [];
+  const touched: string[] = [];
   for (const op of ops) {
     switch (op.op) {
       case 'set_meta':
@@ -427,7 +426,8 @@ export function applyOperations(doc: Doc, ops: ToolOperation[]): ApplyPatchResul
       case 'add_sources': {
         const library = next.sources ?? [];
         const held = new Set(library.map((source) => source.key));
-        if (op.sources.some((source) => held.has(source.key))) {
+        const keys = op.sources.map((source) => source.key);
+        if (keys.some((key) => held.has(key)) || new Set(keys).size !== keys.length) {
           desynced.push(op);
           break;
         }
@@ -461,11 +461,20 @@ export function applyOperations(doc: Doc, ops: ToolOperation[]): ApplyPatchResul
         next = { ...next, sources: refreshed };
         break;
       }
-      default:
+      case 'create_document':
         break;
+      default: {
+        const result = applyPatchToBlocks(next.blocks, [op]);
+        if (result.desynced.length > 0) desynced.push(op);
+        else {
+          next = { ...next, blocks: result.blocks };
+          for (const id of result.touched) touched.push(id);
+        }
+        break;
+      }
     }
   }
-  return { ...outcome, doc: next, desynced };
+  return { blocks: next.blocks, touched, doc: next, desynced };
 }
 
 /** Above this many reordered blocks, only the smaller group is reported. */

@@ -1,3 +1,4 @@
+import { parseFragment } from 'parse5';
 import type { CslItem, CslName, ReferenceRecord, ReferenceNotice } from './types';
 
 /* ----------------------------------------
@@ -95,7 +96,13 @@ function nameText(name: CslName, familyOnly = false): string | null {
 }
 
 export function referenceTitle(record: Pick<ReferenceRecord, 'csl' | 'key'> | null | undefined, fallback = ''): string {
-  return record?.csl.title?.trim() || fallback || record?.key || '';
+  const title = record?.csl.title?.trim();
+  if (!title) return fallback || record?.key || '';
+  if (!title.includes('&')) return title;
+  // Web titles sometimes arrive with escaped characters. Decode once for
+  // display only; literal angle brackets are text, not markup to parse.
+  const text = title.replace(/&(?!#(?:\d+|x[\da-f]+);|[a-z][a-z0-9]*;)/gi, '&amp;').replaceAll('<', '&lt;');
+  return parseFragment(text).childNodes.map((node) => 'value' in node ? node.value : '').join('');
 }
 
 /** The people named for the work: its authors, else its editors. */

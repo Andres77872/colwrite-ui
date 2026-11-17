@@ -131,6 +131,8 @@ export type DocumentActionsValue = {
    * Resolves `false` in that case.
    */
   flushPendingSave: () => Promise<boolean>;
+  /** Run after the server has saved the current page revision, not after a refused save or a restore. */
+  afterDocumentSaved: (documentId: string, run: () => void) => void;
   createRemote: (docOverride?: Doc) => Promise<string>;
   /**
    * Create a document and open it, at the top level or in a collection. A

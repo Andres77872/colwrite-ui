@@ -9,8 +9,8 @@ import { useProposals } from '@/editor/proposalsContextState';
 import {
   describeChange,
   groupChanges,
-  isStale,
   pendingInDocumentOrder,
+  planBulkAccept,
   wordingChanges,
   type ChangeSet,
   type ProposedChange,
@@ -102,13 +102,13 @@ function useArrivalAnnouncement(sets: readonly ChangeSet[]): string {
  * announced, and the one place its batch controls live.
  *
  * The pill opens a small review menu — step through the changes (‹ 1 of 3 ›),
- * jump to any of them from the list, or decide the lot with Accept all /
- * Reject all. It replaced a floating bar that pinned the same controls over
+ * jump to any of them from the list, accept eligible changes, or reject
+ * the lot. It replaced a floating bar that pinned the same controls over
  * the first lines of the page, where it covered the text being reviewed and
  * repeated the count the topbar already showed.
  */
 export function ReviewPill() {
-  const { blocks } = useEditorDoc();
+  const { doc, blocks } = useEditorDoc();
   const { sets, pendingCount, acceptAll, acceptWording, acceptGroup, rejectGroup, rejectAll, focusChange, focusedChangeId } = useProposals();
   // A viewer steps through the suggestions and decides none of them.
   const readOnly = usePageReadOnly();
@@ -133,6 +133,13 @@ export function ReviewPill() {
   const current = pending.findIndex((change) => change.id === focusedChangeId);
   const plural = `${pendingCount} change${pendingCount === 1 ? '' : 's'}`;
   const label = `${pendingCount} suggestion${pendingCount === 1 ? '' : 's'}`;
+  const flagged = pending.filter((change) => change.op.newInformation);
+  const bulk = open && !readOnly ? planBulkAccept(pending, sets, doc) : null;
+  const eligible = bulk ? bulk.applied.length + bulk.landedIds.size : 0;
+  const blocked = bulk?.desynced.length ?? 0;
+  const nextIndividual = flagged.length > 0
+    ? flagged[(flagged.findIndex((change) => change.id === focusedChangeId) + 1) % flagged.length]
+    : undefined;
 
   const step = (delta: 1 | -1) => {
     if (pending.length === 0) return;
@@ -145,26 +152,20 @@ export function ReviewPill() {
     if (change) focusChange(change.id);
   };
 
-  // Both act on every pending change at once and there is no undo, so both
-  // ask first — rejecting all used to discard a whole batch on one click.
   const onAcceptAll = async () => {
+    if (!bulk || eligible === 0) return;
     setOpen(false);
-    // Suggestions written against text the author has changed since are
-    // left out of Accept all (see `acceptAll`), so the question says so.
-    const stale = pending.filter((change) => isStale(change, blocks)).length;
-    const flagged = pending.filter((change) => change.op.newInformation).length;
+    const description = [
+      `${eligible} eligible ${eligible === 1 ? 'suggestion' : 'suggestions'} can be accepted together.`,
+      flagged.length > 0 ? `${flagged.length} with new information will still need individual review.` : null,
+      blocked > 0 ? `${blocked} that can’t be applied yet will also stay pending.` : null,
+    ].filter(Boolean).join(' ');
     const ok = await confirm({
-      title: `Accept all ${plural}?`,
-      description: flagged > 0
-        ? `Changes with new information (${flagged}) stay pending for individual review. Only unflagged, current changes whose earlier decisions are settled can be applied.`
-        : stale === 0
-        ? 'Every pending suggestion will be applied to the page.'
-        : stale === 1
-          ? 'Every pending suggestion will be applied to the page, except 1 whose text changed after it was suggested.'
-          : `Every pending suggestion will be applied to the page, except ${stale} whose text changed after they were suggested.`,
-      confirmLabel: 'Accept all',
+      title: `Accept ${eligible} eligible ${eligible === 1 ? 'change' : 'changes'}?`,
+      description,
+      confirmLabel: 'Accept eligible',
     });
-    if (ok) acceptAll();
+    if (ok) acceptAll(new Set([...bulk.landedIds, ...bulk.applied.map((change) => change.id)]));
   };
 
   const onAcceptWording = async () => {
@@ -251,6 +252,17 @@ export function ReviewPill() {
 
           <div role="separator" className={menuSeparator} />
 
+          {nextIndividual && (
+            <div className="flex items-center gap-2 px-2 py-1">
+              <p className="flex-1 text-xs text-muted-foreground">
+                {flagged.length} with new information {flagged.length === 1 ? 'needs' : 'need'} individual review.
+              </p>
+              <Button size="sm" variant="ghost" onClick={() => focusChange(nextIndividual.id)}>
+                Review flagged
+              </Button>
+            </div>
+          )}
+
           {sets.some((set) => set.groups.length > 0) && (
             <div className="max-h-52 space-y-2 overflow-y-auto px-1 py-1" aria-label="Suggestion groups">
               {sets.map((set) => (
@@ -297,8 +309,10 @@ export function ReviewPill() {
           {readOnly && (
             <p className="px-2 py-1 text-xs text-muted-foreground">Viewers can’t accept or reject changes. An editor decides them.</p>
           )}
-          {pending.some((change) => change.op.newInformation) && (
-            <p className="px-2 py-1 text-xs text-muted-foreground">New information stays for individual review.</p>
+          {blocked > 0 && (
+            <p className="px-2 py-1 text-xs text-muted-foreground">
+              {blocked} {blocked === 1 ? 'suggestion can’t' : 'suggestions can’t'} be applied yet. See the cards for details.
+            </p>
           )}
           {wordingChanges(sets).length > 0 && (
             <Button size="sm" variant="ghost" className="w-full justify-start" disabled={readOnly}
@@ -311,11 +325,11 @@ export function ReviewPill() {
               size="sm"
               variant="ghost"
               className="flex-1 text-diff-add-fg hover:bg-diff-add hover:text-diff-add-fg"
-              disabled={readOnly || pending.every((change) => change.op.newInformation)}
+              disabled={readOnly || eligible === 0}
               onClick={() => void onAcceptAll()}
             >
               <Check />
-              Accept all
+              Accept eligible{eligible > 0 ? ` (${eligible})` : ''}
             </Button>
             <Button
               size="sm"

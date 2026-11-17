@@ -34,6 +34,7 @@ export function PageTitle({
   const { draftTitle, rename } = useDocumentTitle();
   const readOnly = usePageReadOnly();
   const fieldRef = useRef<HTMLSpanElement | null>(null);
+  const shownTitle = useRef('');
 
   // A new page starts with the caret in its title, as in Notion: "New page"
   // (sidebar, ⌘K, the page menu, "Start blank") used to leave focus on the
@@ -63,12 +64,13 @@ export function PageTitle({
     return () => cancelAnimationFrame(frame);
   }, [pageKey, untitledBlank]);
 
-  // Uncontrolled while focused, so a rename arriving from elsewhere (the
-  // agent's set_meta, another tab) never moves the caret mid-word.
+  // Preserve uncommitted typing, not just focus. A suggested title that
+  // lands while the empty title happens to be focused should still show up.
   useLayoutEffect(() => {
     const el = fieldRef.current;
-    if (!el || document.activeElement === el) return;
+    if (!el || (document.activeElement === el && el.textContent !== shownTitle.current)) return;
     if (el.textContent !== draftTitle) el.textContent = draftTitle;
+    shownTitle.current = draftTitle;
     el.toggleAttribute('data-empty', draftTitle === '');
   }, [draftTitle]);
 
@@ -110,6 +112,7 @@ export function PageTitle({
           if (event.key === 'Escape') {
             event.preventDefault();
             el.textContent = draftTitle;
+            shownTitle.current = draftTitle;
             el.toggleAttribute('data-empty', draftTitle === '');
             el.blur();
             return;
@@ -131,7 +134,15 @@ export function PageTitle({
           onContinue();
         }}
         onBlur={(event) => {
-          if (!readOnly) void rename(event.currentTarget.textContent ?? '');
+          if (readOnly) return;
+          const el = event.currentTarget;
+          const text = el.textContent ?? '';
+          if (text !== shownTitle.current) void rename(text);
+          else if (text !== draftTitle) {
+            el.textContent = draftTitle;
+            shownTitle.current = draftTitle;
+            el.toggleAttribute('data-empty', draftTitle === '');
+          }
         }}
       />
     </h1>

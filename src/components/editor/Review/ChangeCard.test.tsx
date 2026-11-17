@@ -206,9 +206,22 @@ describe('what a change rests on', () => {
 
   it('says in plain words when it adds something the page does not hold', () => {
     card({ ...writeAfter('p', para('n', 'Accuracy rose to 97 percent.')), newInformation: true });
-    expect(screen.getByText(/Adds a number or a claim the page doesn’t have yet/)).toBeTruthy();
+    expect(screen.getByText(/Adds a number, claim, or citation the page doesn’t have yet/)).toBeTruthy();
     expect(screen.getByText('No source recorded.')).toBeTruthy();
     expect(screen.getByText('Passage not recorded.')).toBeTruthy();
+  });
+
+  it('distinguishes adding sources from adding claims and displays escaped web titles as text', () => {
+    const key = 'url:https://example.org/research';
+    card({
+      op: 'add_sources',
+      sources: [reference(key, { title: 'Research &amp; Writing' })],
+      basis: [key],
+      newInformation: true,
+    });
+    expect(screen.getByText('Research & Writing')).toBeTruthy();
+    expect(screen.getByText('Adds new sources. Review this suggestion individually.')).toBeTruthy();
+    expect(screen.queryByText(/Based on|Passage not recorded/)).toBeNull();
   });
 
   it('shows a flagged operation’s exact recorded passage without treating it as proof of support', async () => {

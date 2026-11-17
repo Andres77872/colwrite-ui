@@ -17,6 +17,7 @@ import {
   pendingCount,
   proposedBlocks,
   rebaseAfterAccept,
+  resolveAcceptPlan,
   resumeReview,
 } from '../proposals';
 import { append, deleteBlocks, moveBlock, paragraph, replaceText, rewrite, setMeta, writeAfter, writeBefore } from './operations';
@@ -357,6 +358,18 @@ describe('a suggestion whose block changed or went away', () => {
     expect(isStale(itemAt(itemAt(accepted, 0).changes, 1), after)).toBe(true);
     const rebased = rebaseAfterAccept(accepted, blocks, after, ['p']);
     expect(isStale(itemAt(itemAt(rebased, 0).changes, 1), after)).toBe(false);
+  });
+
+  it('applies successive rewrites of the same block in one bulk plan', () => {
+    const first = batch(rewriteP('First pass'));
+    const second = buildChangeSet(action({
+      changeSetId: 'cs-2',
+      actions: [rewriteP('Second pass'), deleteBlocks('p')],
+    }), blocks);
+    const plan = resolveAcceptPlan([...first.changes, ...second.changes], [first, second], { blocks });
+
+    expect(plan.desynced).toEqual([]);
+    expect(plan.ops).toEqual([rewriteP('First pass'), rewriteP('Second pass'), deleteBlocks('p')]);
   });
 
   it('keeps a suggestion stale when an accept lands on a block the author had already edited', () => {

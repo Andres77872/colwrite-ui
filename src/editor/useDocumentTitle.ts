@@ -59,9 +59,9 @@ export function useDocumentTitle(): DocumentTitle {
       if (normalized === title) return;
       setDocName(normalized);
       try {
-        // Pass the new name explicitly: `doc` in this closure still holds the
-        // previous title when the save fires.
-        await saveRemote({ ...doc, name: normalized });
+        // Save the current body, not the one from the render that began this
+        // rename. It may be missing edits made in the meantime.
+        await saveRemote();
       } catch (error) {
         toast({
           title: 'Renamed locally, but the save failed',
@@ -70,7 +70,7 @@ export function useDocumentTitle(): DocumentTitle {
         });
       }
     },
-    [doc, saveRemote, setDocName, title, toast],
+    [saveRemote, setDocName, title, toast],
   );
 
   return { title, draftTitle: isUntitled ? '' : title, isUntitled, rename, focusPageTitle };

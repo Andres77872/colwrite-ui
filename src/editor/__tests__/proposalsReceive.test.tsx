@@ -843,6 +843,25 @@ describe('a durable batch whose decisions the server records', () => {
     expect(rejectChangeSet).not.toHaveBeenCalled();
   });
 
+  it('rechecks pending status when a bulk confirmation is answered later', async () => {
+    listPendingChangeSets.mockResolvedValue([stored()]);
+    const live = { blocks: [para('A'), para('B')] };
+    const view = mountLive(live);
+    await settle();
+
+    const confirm = review().acceptAll;
+    const selected = new Set(review().pending.map((change) => change.id));
+    await act(async () => review().reject(rewriteOf('A').id));
+    view.rerender();
+
+    await act(async () => confirm(selected));
+    expect(live.blocks[0]).toMatchObject({ html: 'A' });
+    expect(sent()).toEqual([
+      [{ opIndex: 0, decision: 'rejected' }],
+      [{ opIndex: 1, decision: 'accepted' }, { opIndex: 2, decision: 'accepted' }],
+    ]);
+  });
+
   it('sends decisions one request at a time, in the order they were made', async () => {
     listPendingChangeSets.mockResolvedValue([stored()]);
     const view = mountLive({ blocks: [para('A'), para('B')] });

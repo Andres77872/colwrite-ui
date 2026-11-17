@@ -354,6 +354,8 @@ describe('an Auto turn', () => {
 
     await waitFor(() => expect(editor().blocks.map((block) => block.id)).toEqual(['a', 'b', 'n']));
     expect(editor().blocks[0]).toMatchObject({ html: 'a, tighter' });
+    expect(decideChangeSetOperations).not.toHaveBeenCalled();
+    await act(async () => { expect(await editor().flushPendingSave()).toBe(true); });
     expect(decideChangeSetOperations).toHaveBeenCalledWith(
       'doc-1',
       'cs-1',
@@ -398,7 +400,7 @@ describe('an Auto turn', () => {
     // The first set is applied; the one after the read is not.
     await waitFor(() => expect(editor().blocks.map((block) => block.id)).toEqual(['a', 'b', 'n']));
     await waitFor(() => expect(getChangeSet).toHaveBeenCalledWith('doc-1', 'cs-2'));
-    await act(async () => {});
+    await act(async () => { expect(await editor().flushPendingSave()).toBe(true); });
     expect(editor().blocks[0]).toMatchObject({ html: 'a, tighter' });
     expect(editor().blocks[1]).toMatchObject({ html: 'b' });
     expect(decideChangeSetOperations).toHaveBeenCalledTimes(1);

@@ -6,6 +6,7 @@ const switchTo = vi.fn<(_id: string) => Promise<boolean>>();
 const dismissInvite = vi.fn();
 const editorState = {
   blocks: [],
+  get doc() { return { blocks: this.blocks }; },
   loadingDocumentId: null as string | null,
   readOnly: false,
 };
@@ -121,11 +122,11 @@ describe('changes an Auto turn left waiting', () => {
     Object.assign(reviewState, { invites: [{ id: 'invite-1', documentId: 'created-doc', receivedAt: 1 }], waiting: [], sets: [] });
   });
 
-  it('says how many are waiting, and offers Apply all and Review', () => {
+  it('says how many are waiting, and offers Apply eligible and Review', () => {
     render(<ReviewBar />);
     expect(screen.getByRole('status').textContent).toContain('2 changes from an Auto turn are waiting');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply eligible (2)' }));
     expect(reviewState.applyWaiting).toHaveBeenCalledOnce();
 
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));

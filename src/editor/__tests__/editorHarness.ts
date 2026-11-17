@@ -78,7 +78,13 @@ export function FakeEditorProviders({
 }): ReactNode {
   return createElement(TestWorkspace, {
     children: EDITOR_CONTEXTS.reduceRight<ReactNode>(
-      (inner, context) => createElement(context.Provider, { value }, inner),
+      (inner, context) => createElement(context.Provider, {
+        value: context === DocumentActionsContext
+          ? { afterDocumentSaved: (_id: string, run: () => void) => run(), hasPendingEdits: () => false, ...value }
+          : context === EditorDocContext && !value.doc
+            ? { get doc() { return { blocks: value.blocks ?? [] }; }, get blocks() { return value.blocks ?? []; } }
+            : value,
+      }, inner),
       children,
     ),
   });

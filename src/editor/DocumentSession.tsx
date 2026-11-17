@@ -262,6 +262,7 @@ export function DocumentSessionProvider({
   const [dirtyTick, setDirtyTick] = useState(0);
   const editRevisionRef = useRef(0);
   const persistedRevisionRef = useRef(0);
+  const afterSaveRef = useRef<Array<{ revision: number; run: () => void }>>([]);
   const saveInFlightRef = useRef<Promise<void> | null>(null);
   // Creating, deleting and restoring change what the page lists hold, so they
   // read again; a save patches the open row instead.
@@ -450,6 +451,7 @@ export function DocumentSessionProvider({
     if (options.persistedRevision === undefined) {
       editRevisionRef.current = 0;
       persistedRevisionRef.current = 0;
+      afterSaveRef.current = [];
       setDirtyTick(0);
     } else {
       persistedRevisionRef.current = options.persistedRevision;
@@ -652,6 +654,9 @@ export function DocumentSessionProvider({
         );
         // The local copy is based on the new head now.
         if (!endedRef.current) saveDoc(workspaceId, docRef.current, targetId, res.etag);
+        const ready = afterSaveRef.current.filter(({ revision }) => revision <= revisionAtStart);
+        afterSaveRef.current = afterSaveRef.current.filter(({ revision }) => revision > revisionAtStart);
+        if (!endedRef.current) for (const { run } of ready) run();
       }
       setSaveError(null);
       setLastSavedAt(Date.now());
@@ -856,6 +861,13 @@ export function DocumentSessionProvider({
     if (failure) reportSaveFailure(failure.cause);
     return failure === null;
   }, [flushEdits, hasUnflushedEdits, reportSaveFailure]);
+
+  const afterDocumentSaved = useCallback((id: string, run: () => void) => {
+    if (endedRef.current || documentIdRef.current !== id || loadedForIdRef.current !== id) return;
+    const revision = editRevisionRef.current;
+    if (revision <= persistedRevisionRef.current) run();
+    else afterSaveRef.current.push({ revision, run });
+  }, []);
 
   // A deliberate sign-out flushes through here before the account's storage
   // is cleared, then ends the session so nothing is written back after it.
@@ -1180,6 +1192,7 @@ export function DocumentSessionProvider({
     save,
     saveRemote,
     flushPendingSave,
+    afterDocumentSaved,
     createRemote,
     createAndSwitch,
     ensureRemoteDocument,
@@ -1199,6 +1212,7 @@ export function DocumentSessionProvider({
     save,
     saveRemote,
     flushPendingSave,
+    afterDocumentSaved,
     createRemote,
     createAndSwitch,
     ensureRemoteDocument,

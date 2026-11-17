@@ -9,8 +9,9 @@ import {
 } from 'react';
 import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import { useActiveBlock, useEditorActions } from './editorContextState';
-import { useDocumentSession, useEditorDoc } from './documentSessionState';
+import { useDocumentActions, useDocumentSession, useEditorDoc } from './documentSessionState';
 import type { Block, Doc, ToolAction, ToolOperation } from './types';
+import { applyOperations } from './docOps';
 import {
   decideChangeSetOperations,
   decisionRefusal,
@@ -34,6 +35,7 @@ import {
   pendingChanges,
   pendingInDocumentOrder,
   planAutoApply,
+  planBulkAccept,
   pruneSettledSets,
   rebaseAfterAccept,
   rejectChange,
@@ -167,9 +169,8 @@ registerModuleReset(() => decisionChains.clear());
 /**
  * Record decisions on the server.
  *
- * One request at a time per change set, so the record keeps the order the
- * decisions were made in: a rejection replayed on the next load re-anchors
- * its continuations by that order.
+ * One request at a time per change set. Rejections must replay in order so
+ * their continuations are re-anchored the same way on the next load.
  *
  * A decision that could not be sent waits in this browser and is sent again
  * when the change set is next staged. One the server refuses for good is
@@ -190,6 +191,9 @@ function sendDecisions(
   origin: DecisionOrigin = 'manual',
 ): Promise<void> {
   if (decisions.length === 0) return Promise.resolve();
+  // A page reload can interrupt even a request that has not failed yet.
+  // Only decisions safe to retry (including accepts of saved content) get here.
+  saveReview(workspaceId, documentId, changeSetId, { decisions: [...decisions] });
   const send = async () => {
     let rest = [...decisions];
     while (rest.length > 0) {
@@ -205,12 +209,12 @@ function sendDecisions(
       } catch (cause) {
         const refusal = decisionRefusal(cause);
         if (refusal.kind === 'transient') {
-          saveReview(workspaceId, documentId, changeSetId, { decisions: rest });
           return;
         }
         if (refusal.kind === 'final') break;
         const others = rest.filter(([opIndex]) => opIndex !== refusal.opIndex);
         if (others.length === rest.length) break;
+        forgetDecisions(workspaceId, documentId, changeSetId, [refusal.opIndex]);
         rest = others;
       }
     }
@@ -448,7 +452,8 @@ function focusDecidedBlock(fallback: FocusFallback): void {
  */
 export function ProposalsProvider({ children }: { children: ReactNode }) {
   const { doc, blocks } = useEditorDoc();
-  const { documentId, restoreEpoch, restoreReason, readOnly } = useDocumentSession();
+  const { documentId, loadingDocumentId, restoreEpoch, restoreReason, readOnly } = useDocumentSession();
+  const { afterDocumentSaved, hasPendingEdits } = useDocumentActions();
   const workspaceId = useWorkspaceId();
   /**
    * A read-only page (a viewer, D6): the suggestions are shown, and nothing
@@ -608,16 +613,16 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     const sets = [...setsRef.current.filter((candidate) => candidate.id !== set.id), set];
 
     const outcome = batch(() => {
-      let base = blocksRef.current;
+      let base = docRef.current;
       // Twice at most: the author can type between the render these blocks
       // come from and now, and the plan is then made again on the live ones.
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const { apply } = planAutoApply(set, sets, base, activeIdRef.current);
+        const { apply } = planAutoApply(set, sets, base.blocks, activeIdRef.current);
         const plan = resolveAcceptPlan(apply, sets, base);
         if (plan.ops.length === 0) return null;
-        const result = applyPatch(plan.ops, { persist: true, base });
+        const result = applyPatch(plan.ops, { persist: true, base: base.blocks });
         if (result.stale) {
-          base = result.blocks;
+          base = result.doc;
           continue;
         }
         const missed = new Set(result.desynced);
@@ -626,7 +631,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
             const op = plan.ops[index];
             return op !== undefined && !missed.has(op);
           }),
-          before: base,
+          before: base.blocks,
           after: result.blocks,
           page: result.doc,
           touched: result.touched,
@@ -688,14 +693,16 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     });
 
     if (outcome) markRecentlyChanged(outcome.touched);
-    void sendDecisions(
-      workspaceId,
-      setDocumentId,
-      changeSetId,
-      applied.flatMap((change): ReviewDecision[] => (change.opIndex === undefined ? [] : [[change.opIndex, 'accepted']])),
-      'auto',
-    );
-  }, [applyPatch, batch, markRecentlyChanged, updateForDocument, workspaceId]);
+    if (applied.length > 0) {
+      afterDocumentSaved(setDocumentId, () => void sendDecisions(
+        workspaceId,
+        setDocumentId,
+        changeSetId,
+        applied.flatMap((change): ReviewDecision[] => (change.opIndex === undefined ? [] : [[change.opIndex, 'accepted']])),
+        'auto',
+      ));
+    }
+  }, [afterDocumentSaved, applyPatch, batch, markRecentlyChanged, updateForDocument, workspaceId]);
 
   /**
    * A change of an Auto set held because the caret was in its block is
@@ -731,7 +738,8 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       built: ChangeSet,
       { restaged, server, auto = null }: { restaged: boolean; server: ServerReview; auto?: AutoStaging },
     ) => {
-      const resumed = resumeDurableSet(workspaceId, built, restaged ? blocksRef.current : null, server, !readOnlyRef.current);
+      const savedBlocks = restaged && !hasPendingEdits() ? blocksRef.current : null;
+      const resumed = resumeDurableSet(workspaceId, built, savedBlocks, server, !readOnlyRef.current);
       const first = resumed.changes.find((change) => change.status === 'pending');
       // Nothing left to decide: the decisions `resumeDurableSet` sent retire it.
       if (!first) return;
@@ -748,7 +756,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         focusedChangeId: restaged ? current.focusedChangeId : current.focusedChangeId ?? first.id,
       }));
     },
-    [applyAutoSet, updateForDocument, workspaceId],
+    [applyAutoSet, hasPendingEdits, updateForDocument, workspaceId],
   );
 
   /**
@@ -830,7 +838,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
    * `reviewDecisions.ts`).
    */
   useEffect(() => {
-    if (!ownerDocumentId) return;
+    if (!ownerDocumentId || loadingDocumentId) return;
     let cancelled = false;
     const epochAtStart = restoreEpochRef.current;
     void (async () => {
@@ -892,7 +900,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [ownerDocumentId, relistTick, stageDurableSet, updateForDocument, workspaceId]);
+  }, [loadingDocumentId, ownerDocumentId, relistTick, stageDurableSet, updateForDocument, workspaceId]);
 
   // A restore moved the document onto another version of its tree. Every
   // staged change was computed against the pre-restore content — its anchors
@@ -1023,7 +1031,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
           // Positioned against the batch siblings already in the document
           // rather than replayed literally, so the result does not depend on
           // the order the author happened to click in. See `resolveAcceptOp`.
-          let plan = resolveAcceptPlan([target], state.sets, blocks);
+          let plan = resolveAcceptPlan([target], state.sets, doc);
           if (plan.ops.length === 0) {
             settled = false;
           } else {
@@ -1037,7 +1045,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
               // outcome.
               const liveBlocks = outcome.blocks;
               base = liveBlocks;
-              plan = resolveAcceptPlan([target], state.sets, liveBlocks);
+              plan = resolveAcceptPlan([target], state.sets, outcome.doc);
               outcome = plan.ops.length > 0
                 ? applyPatch(plan.ops, { persist: true, base: liveBlocks })
                 : { blocks: liveBlocks, doc: outcome.doc, desynced: [], touched: [] };
@@ -1053,7 +1061,9 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
             // and reject it. Marking it accepted while applying nothing threw
             // the operation away and told them it had landed.
             applyError =
-              'That change refers to a part of the page that is no longer there, so it was not applied. Reject it to clear it.';
+              target.kind === 'sources'
+                ? 'The sources or citations on the page have changed, so this suggestion could not be applied. Reject it to clear it.'
+                : 'That change could not be applied. Its target may be unavailable or locked, or an earlier suggestion still needs a decision.';
           }
         }
       }
@@ -1087,7 +1097,11 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
 
       // Durable batches outlive this page. Without a record, a reload stages
       // every one of their operations again, decided or not.
-      rememberDecisions(workspaceId, state.sets, decided);
+      if (decided.length > 0) {
+        const record = () => rememberDecisions(workspaceId, state.sets, decided);
+        if (status === 'accepted' && ownerDocumentId) afterDocumentSaved(ownerDocumentId, record);
+        else record();
+      }
 
       // The card that held focus is gone with its buttons; focus moves on to
       // the next suggestion once the decision is on screen (see the effect
@@ -1101,8 +1115,10 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       }
     },
     [
+      afterDocumentSaved,
       applyPatch,
       blocks,
+      doc,
       markRecentlyChanged,
       ownerDocumentId,
       state.sets,
@@ -1119,34 +1135,31 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
    * against text the author has changed since. `open` is in authoring order.
    */
   const acceptOpen = useCallback((open: ProposedChange[]) => {
-    if (open.length === 0) return;
+    const ids = new Set(open.map((change) => change.id));
+    const sets = setsRef.current;
+    // Keep which suggestions the author saw before confirming, but use their
+    // current statuses and fingerprints. New or already-decided changes
+    // must not be picked up by a delayed confirmation.
+    const selected = pendingChanges(sets).filter((change) => ids.has(change.id));
+    if (selected.length === 0) return;
 
-    // A suggestion written against text the author has changed since stays
-    // for them to look at: applying it would overwrite that text unseen.
-    const stale = open.filter((change) => isStale(change, blocks));
-    // Inserts already in the document are decided without applying them.
-    const landedIds = new Set(open.filter((change) => hasLanded(change, blocks)).map((change) => change.id));
-    const queue = open.filter(
-      (change) => !landedIds.has(change.id) && !stale.some((candidate) => candidate.id === change.id),
-    );
-    const sets = markChanges(state.sets, landedIds, 'accepted');
-
-    let plan = resolveAcceptPlan(queue, sets, blocks);
+    let page = docRef.current;
+    let plan = planBulkAccept(selected, sets, page);
     let applyDesynced = 0;
     let appliedIds = new Set<string>();
     let landed: { before: Block[]; after: Block[]; touched: string[] } | null = null;
     if (plan.ops.length > 0) {
-      let base = blocks;
-      let outcome = applyPatch(plan.ops, { persist: true, base: blocks });
+      let base = page.blocks;
+      let outcome = applyPatch(plan.ops, { persist: true, base });
       if (outcome.stale) {
         // Same recompute-and-retry as `settle`: the document moved between
         // render and click, so the plan's positions no longer match it.
-        const liveBlocks = outcome.blocks;
-        base = liveBlocks;
-        plan = resolveAcceptPlan(queue, sets, liveBlocks);
+        page = outcome.doc;
+        base = page.blocks;
+        plan = planBulkAccept(selected, sets, page);
         outcome = plan.ops.length > 0
-          ? applyPatch(plan.ops, { persist: true, base: liveBlocks })
-          : { blocks: liveBlocks, doc: outcome.doc, desynced: [], touched: [] };
+          ? applyPatch(plan.ops, { persist: true, base })
+          : { blocks: base, doc: page, desynced: [], touched: [] };
       }
       markRecentlyChanged(outcome.touched);
       // Ops that desynced at apply time count as failures too — simulation
@@ -1162,13 +1175,13 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     // Only what this run actually decided. Clearing every set discarded a
     // batch that had arrived while the confirmation dialog was open — the
     // author never saw it, and it was counted as reviewed.
-    const decided = new Set([...landedIds, ...appliedIds]);
-    const failed = plan.desynced.length + applyDesynced;
+    const decided = new Set([...plan.landedIds, ...appliedIds]);
+    const failed = plan.desynced.length - plan.stale.length + applyDesynced;
     const messages = [
       failed > 0
-        ? `${failed} change${failed === 1 ? '' : 's'} could not be applied — a target is unavailable or locked, or an earlier decision is still pending.`
+        ? `${failed} change${failed === 1 ? '' : 's'} could not be applied — its content is unavailable or locked, or an earlier decision is still pending.`
         : null,
-      stale.length > 0 ? staleSkippedError(stale.length) : null,
+      plan.stale.length > 0 ? staleSkippedError(plan.stale.length) : null,
     ].filter((message): message is string => message !== null);
 
     const decide = (current: ChangeSet[]): ChangeSet[] => {
@@ -1181,34 +1194,32 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     updateForDocument((current) => ({
       ...current,
       sets: pruneSettledSets(decide(current.sets)),
-      focusedChangeId: null,
-      error: messages.length > 0 ? messages.join(' ') : current.error,
+      focusedChangeId: current.focusedChangeId !== null && decided.has(current.focusedChangeId)
+        ? null
+        : current.focusedChangeId,
+      error: messages.length > 0 ? messages.join(' ') : null,
     }));
 
-    rememberDecisions(
-      workspaceId,
-      state.sets,
-      orderedChanges(state.sets)
+    if (ownerDocumentId && decided.size > 0) {
+      const decisions = orderedChanges(sets)
         .filter((change) => decided.has(change.id))
-        .map((change) => [change.id, 'accepted'] as const),
-    );
+        .map((change) => [change.id, 'accepted'] as const);
+      afterDocumentSaved(ownerDocumentId, () => rememberDecisions(workspaceId, sets, decisions));
+    }
   }, [
+    afterDocumentSaved,
     applyPatch,
-    blocks,
     markRecentlyChanged,
-    state.sets,
+    ownerDocumentId,
     updateForDocument,
     workspaceId,
   ]);
 
-  const acceptAll = useCallback(() => {
+  const acceptAll = useCallback<ProposalsContextValue['acceptAll']>((eligibleIds) => {
     if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
-    // Original authoring order, across batches: a later batch may build on an
-    // earlier one, and replaying them out of order puts blocks in the wrong
-    // place even though each operation on its own is valid.
-    batch(() => acceptOpen(orderedChanges(state.sets).filter(
-      (change) => change.status === 'pending' && !change.op.newInformation,
-    )));
+    // The planner restores authoring order across batches, even though the
+    // menu shows the suggestions in reading order.
+    batch(() => acceptOpen(pendingChanges(state.sets).filter((change) => eligibleIds?.has(change.id) ?? true)));
   }, [acceptOpen, batch, ownerDocumentId, state.sets]);
 
   const acceptWording = useCallback(() => {
@@ -1219,11 +1230,11 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
   const acceptGroup = useCallback<ProposalsContextValue['acceptGroup']>((setId, kind) => {
     if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
     const set = state.sets.find((candidate) => candidate.id === setId);
-    if (set) batch(() => acceptOpen(groupChanges(set, kind).filter((change) => !change.op.newInformation)));
+    if (set) batch(() => acceptOpen(groupChanges(set, kind)));
   }, [acceptOpen, batch, ownerDocumentId, state.sets]);
 
   /**
-   * "Apply all" on the changes an Auto turn left waiting: one undo step, and
+   * Apply eligible changes an Auto turn left waiting: one undo step, and
    * the author's own decision. What it cannot apply stays as ordinary
    * suggestions, no longer singled out.
    */
@@ -1231,10 +1242,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
     const waiting = new Set(state.sets.filter((set) => set.autoWaiting).map((set) => set.id));
     if (waiting.size === 0) return;
-    batch(() => acceptOpen(
-      orderedChanges(state.sets.filter((set) => waiting.has(set.id)))
-        .filter((change) => change.status === 'pending' && !change.op.newInformation),
-    ));
+    batch(() => acceptOpen(pendingChanges(state.sets.filter((set) => waiting.has(set.id)))));
     updateForDocument((current) => ({
       ...current,
       sets: current.sets.map((set) => (waiting.has(set.id) ? { ...set, autoWaiting: false } : set)),
@@ -1392,8 +1400,9 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
   // card asks for it on every render.
   const precedence = useMemo(() => linkPrecedence(state.sets), [state.sets]);
   const ready = useCallback(
-    (change: ProposedChange) => isReady(change, state.sets, blocks, precedence),
-    [blocks, precedence, state.sets],
+    (change: ProposedChange) => isReady(change, state.sets, blocks, precedence)
+      && (change.kind !== 'sources' || applyOperations(doc, [change.op]).desynced.length === 0),
+    [blocks, doc, precedence, state.sets],
   );
   const dismissInvite = useCallback((inviteId: string) => {
     updateForDocument((current) => ({

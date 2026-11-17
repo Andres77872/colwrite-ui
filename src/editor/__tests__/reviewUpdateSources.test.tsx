@@ -82,6 +82,7 @@ describe('a refresh of the page’s references (update_sources)', () => {
     // The reference list reads the library's record at once, its new mark with it.
     expect(document.querySelector(`[data-reference-key="${LEPIKHIN.key}"] [data-mark="corrected"]`)).toBeTruthy();
 
+    await act(async () => { expect(await editor().flushPendingSave()).toBe(true); });
     act(() => editor().undo());
     expect(editor().doc.sources?.find((source) => source.key === LEPIKHIN.key)).toEqual(before);
 

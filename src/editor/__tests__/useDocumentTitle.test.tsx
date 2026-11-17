@@ -48,7 +48,7 @@ describe('useDocumentTitle', () => {
     await act(() => result.current.rename('  Sparse   routing '));
 
     expect(editor.setDocName).toHaveBeenCalledWith('Sparse routing');
-    expect(editor.saveRemote).toHaveBeenCalledWith(expect.objectContaining({ name: 'Sparse routing' }));
+    expect(editor.saveRemote).toHaveBeenCalledWith();
   });
 
   it('does nothing when the name is unchanged or blank on an untitled page', async () => {

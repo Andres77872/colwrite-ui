@@ -53,7 +53,7 @@ export type ProposalsContextValue = {
   receive: (action: ToolAction, options?: ReceiveOptions) => void;
   accept: (changeId: string) => void;
   reject: (changeId: string) => void;
-  acceptAll: () => void;
+  acceptAll: (eligibleIds?: ReadonlySet<string>) => void;
   acceptWording: () => void;
   acceptGroup: (setId: string, kind: ChangeSet['groups'][number]['kind']) => void;
   rejectGroup: (setId: string, kind: ChangeSet['groups'][number]['kind']) => void;
@@ -75,7 +75,7 @@ export type ProposalsContextValue = {
    * closed when they arrived, or Auto had been turned off.
    */
   waiting: ProposedChange[];
-  /** Apply the waiting changes as one undo step ("Apply all"). */
+  /** Apply eligible waiting changes as one undo step. */
   applyWaiting: () => void;
 };
 

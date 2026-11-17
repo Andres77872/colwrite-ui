@@ -15,11 +15,11 @@ import {
   proposedBlocks,
   type ProposedChange,
 } from '@/editor/proposals';
-import type { Block, ReferenceRecord } from '@/editor/types';
+import type { Block } from '@/editor/types';
 import { coerceBlock } from '@/editor/docOps';
 import { RecordedPassage } from './RecordedPassage';
 import { citationStyleInfo } from '@/editor/csl/styles';
-import { referenceChanges, type ReferenceChange } from '@/editor/referenceRecords';
+import { referenceChanges, referenceTitle, type ReferenceChange } from '@/editor/referenceRecords';
 import { ProposedBlockView, ProposedRewriteView, STRIKE_WIDGETS } from './ProposedBlockView';
 import { previewBibliography } from './diffText';
 import { ArrowDownUp, BookMarked, Check, CircleAlert, Eye, History, Lock, Pencil, Plus, TextCursorInput, Trash2, X } from 'lucide-react';
@@ -66,9 +66,7 @@ const CHANGE_FIELDS: Record<ReferenceChange['field'], string> = {
 };
 
 /** A library entry as a reader names it: its title, else its key. */
-function sourceName(source: ReferenceRecord | undefined, key: string): string {
-  return source?.csl.title?.trim() || key;
-}
+const sourceName = referenceTitle;
 
 /** One-line preview of a block, for naming a move's destination. */
 function shortText(text: string, max = 42): string {
@@ -225,10 +223,14 @@ function ChangeBody({ change }: { change: ProposedChange }) {
  */
 function EvidenceNote({ change }: { change: ProposedChange }) {
   const { doc } = useEditorDoc();
-  const keys = (change.op.basis ?? []).filter((entry) => entry !== 'author');
-  if (!change.op.newInformation && keys.length === 0) return null;
-  const library = new Map((doc?.sources ?? []).map((source) => [source.key, source]));
   const op = change.op;
+  const added = op.op === 'add_sources' ? new Set(op.sources.map((source) => source.key)) : null;
+  // The additions are already listed above. Repeating their raw keys as
+  // evidence (or asking for a citation passage) made a library edit look
+  // like a factual claim.
+  const keys = (op.basis ?? []).filter((key) => key !== 'author' && !added?.has(key));
+  if (!op.newInformation && keys.length === 0) return null;
+  const library = new Map((doc?.sources ?? []).map((source) => [source.key, source]));
   const written = op.op === 'write_blocks' ? op.blocks : op.op === 'replace_text' ? [op.block] : [];
   const citations = written.flatMap((raw) => {
     const block = coerceBlock(raw);
@@ -240,11 +242,13 @@ function EvidenceNote({ change }: { change: ProposedChange }) {
   const passages = [...new Map(citations.flatMap((citation) => citation.passage
     ? [[`${citation.passage.chat_id ?? ''}:${citation.passage.id}`, citation.passage] as const] : [])).values()];
   return (
-    <div className="mt-0.5 space-y-0.5 text-xs text-muted-foreground">
-      {change.op.newInformation && (
+    <div className="mt-0.5 space-y-0.5 break-words text-xs text-muted-foreground">
+      {op.newInformation && (
         <p className="flex items-start gap-1">
           <CircleAlert aria-hidden="true" className="mt-px h-3 w-3 shrink-0 text-warning" />
-          <span>Adds a number or a claim the page doesn’t have yet. Check it before accepting.</span>
+          <span>{added
+            ? 'Adds new sources. Review this suggestion individually.'
+            : 'Adds a number, claim, or citation the page doesn’t have yet. Review this suggestion individually.'}</span>
         </p>
       )}
       {keys.length > 0 && (
@@ -253,11 +257,11 @@ function EvidenceNote({ change }: { change: ProposedChange }) {
           <span>Based on {keys.map((key) => sourceName(library.get(key), key)).join('; ')}</span>
         </p>
       )}
-      {change.op.newInformation && keys.length === 0 && citations.length === 0 && <p>No source recorded.</p>}
+      {op.newInformation && !added && keys.length === 0 && citations.length === 0 && <p>No source recorded.</p>}
       {passages.length > 0
         ? <ul aria-label="Recorded passages">{passages.map((passage) =>
           <li key={`${passage.chat_id ?? ''}:${passage.id}`}><RecordedPassage passage={passage} /></li>)}</ul>
-        : change.op.newInformation && <p>Passage not recorded.</p>}
+        : op.newInformation && !added && <p>Passage not recorded.</p>}
     </div>
   );
 }
@@ -340,6 +344,11 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
       return 'The block this was written for is no longer on the page.';
     }
     if (stale) return 'The text changed after this was suggested.';
+    if (change.targetBlockIds.some((id) => blocks.some((block) => block.id === id && (block.locked || block.aiHidden)))
+      || (change.kind === 'move' && blocks.some((block) => block.id === change.anchorBlockId && (block.locked || block.aiHidden)))) {
+      return 'This change would edit a locked block or one hidden from the assistant.';
+    }
+    if (change.kind === 'sources') return 'The sources or citations no longer match this suggestion.';
     return 'Decide the change above it first — the two would not combine cleanly.';
   })();
   const BlockedIcon = stale && !isReady ? History : Lock;

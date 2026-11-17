@@ -2,16 +2,16 @@ import { Button } from '@/components/ui/button';
 import { useConfirm } from '@/components/ui/confirmContext';
 import { useDocumentActions, useDocumentSession, useEditorDoc } from '@/editor';
 import { useProposals } from '@/editor/proposalsContextState';
-import { pendingInDocumentOrder } from '@/editor/proposals';
+import { pendingInDocumentOrder, planBulkAccept } from '@/editor/proposals';
 import { AlertCircle, FileText, X, Zap } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 
 /**
  * Notices from the assistant that are not suggestions: a document it created
- * ("Open it" / "Stay here"), an Auto turn's changes left waiting ("Apply all"
- * / "Review") and a review action that failed.
+ * ("Open it" / "Stay here"), an Auto turn's changes left waiting and a
+ * review action that failed.
  *
- * The pending-suggestion count, stepper and Accept all / Reject all used to
+ * The pending-suggestion count, stepper and bulk actions used to
  * float here too, pinned over the first lines of the page. They now live in
  * the topbar's "N suggestions" pill (`ReviewPill`), so the page carries one
  * review indicator and nothing covers the text while it is being read.
@@ -19,7 +19,7 @@ import { Spinner } from '@/components/ui/spinner';
 export function ReviewBar() {
   const { loadingDocumentId, readOnly } = useDocumentSession();
   const { switchTo } = useDocumentActions();
-  const { blocks } = useEditorDoc();
+  const { doc, blocks } = useEditorDoc();
   const {
     sets,
     pendingCount,
@@ -43,6 +43,8 @@ export function ReviewBar() {
   };
 
   const plural = `${pendingCount} change${pendingCount === 1 ? '' : 's'}`;
+  const waitingPlan = waiting.length > 0 && !readOnly ? planBulkAccept(waiting, sets, doc) : null;
+  const eligible = waitingPlan ? waitingPlan.applied.length + waitingPlan.landedIds.size : 0;
 
   /**
    * Open the document the assistant just created.
@@ -100,10 +102,11 @@ export function ReviewBar() {
           <span className="min-w-0 flex-1 pr-1">
             {waiting.length} {waiting.length === 1 ? 'change' : 'changes'} from an Auto turn{' '}
             {waiting.length === 1 ? 'is' : 'are'} waiting
+            {waiting.some((change) => change.op.newInformation) && ' · New information needs individual review'}
           </span>
-          {!readOnly && (
+          {!readOnly && eligible > 0 && (
             <Button size="xs" className="h-7 px-2 text-sm" onClick={applyWaiting}>
-              Apply all
+              Apply eligible ({eligible})
             </Button>
           )}
           <Button

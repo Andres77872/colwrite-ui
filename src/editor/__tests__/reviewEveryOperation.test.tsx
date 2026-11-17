@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createRef, useImperativeHandle } from 'react';
 import { createTestQueryClient } from '@/__tests__/queryClient';
 import { TestWorkspace } from '@/__tests__/workspace';
-import { FIXTURE_DOCUMENT_ID, changeSetsOf, storeProposedEdits } from '@/dev/msw/fixtures';
+import { ConfirmProvider } from '@/components/ui/confirm-dialog';
+import { ReviewPill } from '@/components/editor/Review/ReviewPill';
+import { ChangeCard } from '@/components/editor/Review/ChangeCard';
+import { http, problem, recordRequests, server } from '@/__tests__/server';
+import { FIXTURE_DOCUMENT_ID, changeSetsOf, liveDocument, storeProposedEdits } from '@/dev/msw/fixtures';
 import type { Doc } from '../types';
 import { useProposals, type ProposalsContextValue } from '../proposalsContextState';
 
@@ -32,13 +36,24 @@ function Capture() {
 const editor = () => editorRef.current!;
 const review = () => reviewRef.current!;
 
-function mount() {
+function ReviewSurface() {
+  const { pending } = useProposals();
+  return (
+    <ConfirmProvider>
+      <ReviewPill />
+      {pending.map((change) => <ChangeCard key={change.id} change={change} />)}
+    </ConfirmProvider>
+  );
+}
+
+function mount(showReview = false) {
   return render(
     <QueryClientProvider client={createTestQueryClient()}>
       <TestWorkspace initialDocumentId={FIXTURE_DOCUMENT_ID}>
         <EditorProvider>
           <ProposalsProvider>
             <Capture />
+            {showReview && <ReviewSurface />}
           </ProposalsProvider>
         </EditorProvider>
       </TestWorkspace>
@@ -107,6 +122,7 @@ describe('a change set with every operation kind, against the mock', () => {
     expect(done.sources?.map((source) => source.key)).toEqual([
       'arxiv:1706.03762', 'arxiv:2101.03961', 'arxiv:2006.16668', 'doi:10.5555/jsm.2019.042', 'doi:10.48550/arxiv.1706.03762', 'arxiv:2202.08906',
     ]);
+    await act(async () => { expect(await editor().flushPendingSave()).toBe(true); });
 
     // Each accept is one undo step: undoing walks back through them in turn.
     for (let step = steps.length - 1; step > 0; step -= 1) {
@@ -124,5 +140,57 @@ describe('a change set with every operation kind, against the mock', () => {
       ]);
       expect(record?.status).toBe('superseded');
     }, { timeout: 5_000 });
+  }, 20_000);
+
+  it('keeps flagged cards, waits for the accepted page to save, and reopens with only undecided operations', async () => {
+    const { change_set_id: id } = storeProposedEdits(FIXTURE_DOCUMENT_ID, { apply_policy: 'review', auto_blocked_reason: null });
+    const record = () => changeSetsOf(FIXTURE_DOCUMENT_ID).find((set) => set.change_set_id === id)!;
+    const savedPage = () => liveDocument(FIXTURE_DOCUMENT_ID)!;
+    const originalName = savedPage().name;
+    const sent = recordRequests();
+    const posts = () => sent.filter((request) => request.method === 'POST' && request.url.endsWith(`/change-sets/${id}/decisions`));
+    let view = mount(true);
+    fireEvent.click(await screen.findByRole('button', { name: '9 suggestions, review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Accept eligible (7)' }));
+    const confirmation = screen.getByRole('alertdialog', { name: 'Accept 7 eligible changes?' });
+    expect(within(confirmation).getByText(/2 with new information will still need individual review/)).toBeTruthy();
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Accept eligible' }));
+    await screen.findByRole('button', { name: '2 suggestions, review' });
+    expect(review().pending.map((change) => change.opIndex)).toEqual([6, 8]);
+    expect(editor().doc.name).toBe('Sparse Routing for Long-Context Pretraining at Scale');
+    expect(editor().doc.blocks.find((block) => block.id === 'p-2')).toMatchObject({ html: expect.stringContaining('while keeping quality') });
+
+    server.use(http.put('/workspaces/{workspace_id}/documents/{document_id}',
+      () => problem('stale_head', 'Someone saved a newer version.'), { once: true }));
+    await act(async () => { expect(await editor().flushPendingSave()).toBe(false); });
+    expect(posts()).toHaveLength(0);
+    expect(record().decisions).toEqual([]);
+    expect(savedPage().name).toBe(originalName);
+    expect(editor().saveConflict).toBe(true);
+
+    await act(async () => editor().resolveSaveConflict('mine'));
+    await waitFor(() => expect(record().decisions.map((decision) => decision.index)).toEqual([0, 1, 2, 3, 4, 5, 7]));
+    expect(savedPage().name).toBe(editor().doc.name);
+    expect(record().status).toBe('pending');
+    expect(posts()).toHaveLength(1);
+
+    view.unmount();
+    view = mount(true);
+    await screen.findByRole('button', { name: '2 suggestions, review' });
+    expect(review().pending.map((change) => change.opIndex)).toEqual([6, 8]);
+    expect(editor().doc.name).toBe('Sparse Routing for Long-Context Pretraining at Scale');
+    fireEvent.click(screen.getByRole('button', { name: /^Accept: Add a source/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Accept: Add paragraph/ }));
+    expect(screen.queryAllByRole('group')).toHaveLength(0);
+    await act(async () => { expect(await editor().flushPendingSave()).toBe(true); });
+    await waitFor(() => expect(record().status).toBe('superseded'));
+    expect(savedPage().sources?.some((source) => source.key === 'arxiv:2202.08906')).toBe(true);
+    expect(savedPage().blocks.some((block) => block.id === 'p-6')).toBe(true);
+
+    view.unmount();
+    mount(true);
+    await waitFor(() => expect(editor().loadingDocumentId).toBeNull());
+    expect(editor().doc.blocks.some((block) => block.id === 'p-6')).toBe(true);
+    expect(screen.queryByRole('button', { name: /suggestions?, review/ })).toBeNull();
   }, 20_000);
 });

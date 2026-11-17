@@ -2,14 +2,14 @@ import type { ReviewDecision } from './proposals';
 import { keysWithPrefix, readItem, removeItem, reviewKey, reviewPrefix, writeJson } from '@/lib/storageKeys';
 
 /**
- * Decisions made on a durable change set that could not be sent, remembered
+ * Decisions made on a durable change set that have not been acknowledged, remembered
  * in this browser under the workspace the page is in.
  *
  * The API records a decision per operation and says whether each target
  * block is still the one the operation was written for
  * (`operation_decisions`, `operation_targets`). What is left for this record
- * is a decision the request could not deliver: it waits here, in the order
- * it was made, and is sent again when the change set is next staged.
+ * is a decision waiting for the server to acknowledge it: it can be sent
+ * again when the change set is next staged.
  *
  * Nothing here is authoritative. A record that is missing, unreadable or
  * blocked by the browser only means the batch is staged as the server has

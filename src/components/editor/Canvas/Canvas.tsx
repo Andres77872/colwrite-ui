@@ -242,14 +242,11 @@ export function Canvas() {
   const selected = useMemo(() => new Set(selectedBlockIds), [selectedBlockIds]);
   const numbers = useMemo(() => listNumbers(blocks), [blocks]);
   const figures = useMemo(() => figureNumbers(blocks, (source) => figureMeta(source).caption), [blocks]);
-  const { sets } = useProposals();
+  const { sets, pendingCount } = useProposals();
   const newPage = useNewPage();
 
-  // The document with every pending change folded into it at the position it
-  // would take. One projection drives the whole canvas, so what the author
-  // reads top to bottom is what `Accept all` produces — including chained
-  // inserts, which used to pile up at the bottom of the page claiming their
-  // block had been deleted.
+  // Preview each pending change at the position it would take if accepted,
+  // including chained inserts anchored to another suggestion.
   //
   // The canvas re-renders for reasons that change none of the inputs — the
   // creating spinner, selection — so each projection is memoized on what it
@@ -277,7 +274,8 @@ export function Canvas() {
   // A page with nothing written on it yet: no blocks, or the one empty line a
   // new document starts with.
   const [onlyBlock] = blocks;
-  const isBlank = isEmpty || (blocks.length === 1 && onlyBlock !== undefined && isBlankParagraph(onlyBlock));
+  const isBlank = pendingCount === 0
+    && (isEmpty || (blocks.length === 1 && onlyBlock !== undefined && isBlankParagraph(onlyBlock)));
   const pageSettings = usePageSettings();
 
   const focusBlock = (id: string) => queueMicrotask(() => refs.current[id]?.focus());
@@ -431,7 +429,7 @@ export function Canvas() {
           <ChangeCard key={change.id} change={change} />
         ))}
 
-        {!isEmpty && (
+        {rows.length > 0 && (
             <div className="blocks-container relative">
               {rows.map((row) => {
                 // Inserts are rows of their own, already sitting where the

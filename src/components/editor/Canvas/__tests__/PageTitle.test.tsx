@@ -63,6 +63,17 @@ describe('PageTitle', () => {
     expect(title.rename).toHaveBeenCalledWith('Dense routing');
   });
 
+  it('shows a suggested title accepted while an untouched title field has focus', () => {
+    const view = render(<PageTitle onContinue={vi.fn()} />);
+    const field = screen.getByRole('textbox', { name: 'Page title' });
+    field.focus();
+    title.draftTitle = 'New report title';
+    view.rerender(<PageTitle onContinue={vi.fn()} />);
+    expect(field.textContent).toBe('New report title');
+    field.blur();
+    expect(title.rename).not.toHaveBeenCalled();
+  });
+
   it('commits once and continues into the page on Enter', () => {
     const onContinue = vi.fn();
     render(<PageTitle onContinue={onContinue} />);

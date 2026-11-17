@@ -9,7 +9,7 @@ import type { Block, ToolOperation } from '@/editor/types';
  * suggestions arrive, and nothing for the author's own decisions.
  */
 
-const editorState = { blocks: [] as Block[] };
+const editorState = { blocks: [] as Block[], get doc() { return { blocks: this.blocks }; } };
 const reviewState = {
   sets: [] as ChangeSet[],
   pendingCount: 0,
@@ -83,6 +83,29 @@ describe('group controls', () => {
     expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ confirmLabel: 'Accept wording changes' }));
     expect(reviewState.acceptWording).toHaveBeenCalledOnce();
     expect(reviewState.acceptAll).not.toHaveBeenCalled();
+  });
+
+  it('names how many suggestions can be accepted and leaves a way to find flagged ones', async () => {
+    const set = batch(2, 'draft');
+    const flagged = itemAt(set.changes, 1);
+    flagged.op.newInformation = true;
+    show([set]);
+    const view = render(<ReviewPill />);
+    fireEvent.click(screen.getByRole('button', { name: /2 suggestions/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review flagged' }));
+    expect(reviewState.focusChange).toHaveBeenCalledWith(flagged.id);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Accept eligible (1)' })));
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Accept 1 eligible change?',
+      description: expect.stringContaining('1 with new information will still need individual review.'),
+    }));
+    expect(reviewState.acceptAll).toHaveBeenCalledOnce();
+
+    show(markChanges([set], new Set([itemAt(set.changes, 0).id]), 'accepted'));
+    view.rerender(<ReviewPill />);
+    fireEvent.click(screen.getByRole('button', { name: /1 suggestion/ }));
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Accept eligible' }).disabled).toBe(true);
+    expect(screen.getByText('1 with new information needs individual review.')).toBeTruthy();
   });
 
   it('routes a group decision by set identity and the stored kind', async () => {

@@ -272,7 +272,7 @@ function EditorCore({ children }: { children: ReactNode }) {
       return { blocks: base.blocks, doc: base, desynced: ops, touched: [], stale: true };
     }
 
-    // The blocks, then the page's name, citation style and library.
+    // Apply block edits and library/metadata changes in the same order as the plan.
     const outcome = applyOperations(base, ops);
 
     if (options?.persist) editDoc(() => outcome.doc);
