@@ -8,7 +8,7 @@ import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { ReviewPill } from '@/components/editor/Review/ReviewPill';
 import { ChangeCard } from '@/components/editor/Review/ChangeCard';
 import { http, problem, recordRequests, server } from '@/__tests__/server';
-import { FIXTURE_DOCUMENT_ID, changeSetsOf, liveDocument, storeProposedEdits } from '@/dev/msw/fixtures';
+import { FIXTURE_DOCUMENT_ID, changeSetsOf, liveDocument, storePlanSection, storeProposedEdits } from '@/dev/msw/fixtures';
 import type { Doc } from '../types';
 import { useProposals, type ProposalsContextValue } from '../proposalsContextState';
 
@@ -151,10 +151,10 @@ describe('a change set with every operation kind, against the mock', () => {
     const posts = () => sent.filter((request) => request.method === 'POST' && request.url.endsWith(`/change-sets/${id}/decisions`));
     let view = mount(true);
     fireEvent.click(await screen.findByRole('button', { name: '9 suggestions, review' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Accept eligible (7)' }));
-    const confirmation = screen.getByRole('alertdialog', { name: 'Accept 7 eligible changes?' });
-    expect(within(confirmation).getByText(/2 with new information will still need individual review/)).toBeTruthy();
-    fireEvent.click(within(confirmation).getByRole('button', { name: 'Accept eligible' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Accept without new information (7)' }));
+    const confirmation = screen.getByRole('alertdialog', { name: 'Accept 7 suggestions?' });
+    expect(within(confirmation).getByText(/2 will stay pending, including suggestions with new information/)).toBeTruthy();
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Accept without new information' }));
     await screen.findByRole('button', { name: '2 suggestions, review' });
     expect(review().pending.map((change) => change.opIndex)).toEqual([6, 8]);
     expect(editor().doc.name).toBe('Sparse Routing for Long-Context Pretraining at Scale');
@@ -179,8 +179,12 @@ describe('a change set with every operation kind, against the mock', () => {
     await screen.findByRole('button', { name: '2 suggestions, review' });
     expect(review().pending.map((change) => change.opIndex)).toEqual([6, 8]);
     expect(editor().doc.name).toBe('Sparse Routing for Long-Context Pretraining at Scale');
-    fireEvent.click(screen.getByRole('button', { name: /^Accept: Add a source/ }));
-    fireEvent.click(screen.getByRole('button', { name: /^Accept: Add paragraph/ }));
+    fireEvent.click(screen.getByRole('button', { name: '2 suggestions, review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Accept all (2)' }));
+    const flagged = screen.getByRole('alertdialog', { name: 'Accept 2 suggestions?' });
+    expect(within(flagged).getByText(/Includes 2 with new information/)).toBeTruthy();
+    fireEvent.click(within(flagged).getByRole('button', { name: 'Accept all' }));
+    await waitFor(() => expect(review().pending).toHaveLength(0));
     expect(screen.queryAllByRole('group')).toHaveLength(0);
     await act(async () => { expect(await editor().flushPendingSave()).toBe(true); });
     await waitFor(() => expect(record().status).toBe('superseded'));
@@ -191,6 +195,50 @@ describe('a change set with every operation kind, against the mock', () => {
     mount(true);
     await waitFor(() => expect(editor().loadingDocumentId).toBeNull());
     expect(editor().doc.blocks.some((block) => block.id === 'p-6')).toBe(true);
+    expect(screen.queryByRole('button', { name: /suggestions?, review/ })).toBeNull();
+  }, 20_000);
+
+  it('accepts 53 flagged suggestions with one confirmation and saves the result', async () => {
+    const count = 53;
+    const page = () => liveDocument(FIXTURE_DOCUMENT_ID)!;
+    const before = page().blocks.length;
+    const titles = Array.from({ length: count }, (_, index) => `Draft section ${index + 1}`);
+    const proposedAt = Date.now();
+    for (const [index, title] of titles.entries()) {
+      const set = storePlanSection(FIXTURE_DOCUMENT_ID, {
+        id: title, title, goal: `Evidence summary for ${title}.`, sources: [], state: 'pending', change_set_ids: [],
+      }, { apply_policy: 'review', auto_blocked_reason: null }, 'review-integration', title);
+      set.proposed_at = new Date(proposedAt + index).toISOString();
+    }
+    const sets = () => changeSetsOf(FIXTURE_DOCUMENT_ID).filter((set) => set.run_uuid === 'review-integration');
+    const sent = recordRequests();
+    const view = mount(true);
+    fireEvent.click(await screen.findByRole('button', { name: '53 suggestions, review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Accept all (53)' }));
+    const confirm = () => screen.getByRole('alertdialog', { name: 'Accept 53 suggestions?' });
+    expect(within(confirm()).getByText(/Includes 53 with new information/)).toBeTruthy();
+    fireEvent.click(within(confirm()).getByRole('button', { name: 'Cancel' }));
+    expect(review().pending).toHaveLength(count);
+    expect(editor().doc.blocks).toHaveLength(before);
+
+    fireEvent.click(screen.getByRole('button', { name: '53 suggestions, review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Accept all (53)' }));
+    fireEvent.click(within(confirm()).getByRole('button', { name: 'Accept all' }));
+    await waitFor(() => expect(review().pending).toHaveLength(0));
+    expect(editor().doc.blocks).toHaveLength(before + 2 * count);
+    expect(page().blocks).toHaveLength(before);
+    expect(sets().every((set) => set.status === 'pending')).toBe(true);
+
+    await act(async () => { expect(await editor().flushPendingSave()).toBe(true); });
+    await waitFor(() => expect(sets().filter((set) => set.status === 'superseded')).toHaveLength(count));
+    expect(sets().every((set) => set.decisions[0]?.origin === 'manual')).toBe(true);
+    expect(sent.filter((request) => request.method === 'PUT' && new URL(request.url).pathname.endsWith(`/documents/${FIXTURE_DOCUMENT_ID}`))).toHaveLength(1);
+    expect(page().blocks.slice(before).flatMap((block) => block.type === 'heading' ? [block.html] : [])).toEqual(titles);
+
+    view.unmount();
+    mount(true);
+    await waitFor(() => expect(editor().doc.blocks).toHaveLength(before + 2 * count));
+    await waitFor(() => expect(sent.filter((request) => request.method === 'GET' && new URL(request.url).pathname.endsWith('/change-sets'))).toHaveLength(3));
     expect(screen.queryByRole('button', { name: /suggestions?, review/ })).toBeNull();
   }, 20_000);
 });

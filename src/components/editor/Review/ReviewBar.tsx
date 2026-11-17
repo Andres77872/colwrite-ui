@@ -102,7 +102,7 @@ export function ReviewBar() {
           <span className="min-w-0 flex-1 pr-1">
             {waiting.length} {waiting.length === 1 ? 'change' : 'changes'} from an Auto turn{' '}
             {waiting.length === 1 ? 'is' : 'are'} waiting
-            {waiting.some((change) => change.op.newInformation) && ' · New information needs individual review'}
+            {waiting.some((change) => change.op.newInformation) && ' · New information stays in Suggestions for review'}
           </span>
           {!readOnly && eligible > 0 && (
             <Button size="xs" className="h-7 px-2 text-sm" onClick={applyWaiting}>

@@ -23,11 +23,12 @@ import {
 } from '@/data/documentHistory';
 import { isRetryableProblem } from '@/api/retry';
 import {
+  acceptBlocker,
   buildChangeSet,
   groupChanges,
   caretHeldBlock,
-  isReady,
   isStale,
+  linkAcrossSets,
   linkPrecedence,
   markChanges,
   markOutdated,
@@ -42,6 +43,8 @@ import {
   resolveAcceptPlan,
   resumeReview,
   wordingChanges,
+  type AcceptBlocker,
+  type BulkAcceptOptions,
   type ChangeSet,
   type DocumentInvite,
   type OperationTarget,
@@ -744,13 +747,14 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       // Nothing left to decide: the decisions `resumeDurableSet` sent retire it.
       if (!first) return;
       if (auto !== null && auto !== 'wait' && !readOnlyRef.current) {
-        applyAutoSet(resumed, auto.stillOn, false);
+        applyAutoSet(linkAcrossSets(resumed, setsRef.current), auto.stillOn, false);
         return;
       }
       const set = auto === 'wait' ? { ...resumed, autoWaiting: true } : resumed;
       updateForDocument((current) => ({
         ...current,
-        sets: [...current.sets, set],
+        // A batch of a run can build on a block an earlier batch adds.
+        sets: [...current.sets, linkAcrossSets(set, current.sets)],
         // A batch that just arrived is the one the author is waiting for; one
         // found on opening the document is not singled out.
         focusedChangeId: restaged ? current.focusedChangeId : current.focusedChangeId ?? first.id,
@@ -839,13 +843,14 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
    */
   useEffect(() => {
     if (!ownerDocumentId || loadingDocumentId) return;
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     const epochAtStart = restoreEpochRef.current;
     void (async () => {
       try {
         const listedAt = Date.now();
-        const pending = await listPendingChangeSets(workspaceId, ownerDocumentId);
-        if (cancelled || activeDocumentIdRef.current !== ownerDocumentId) return;
+        const pending = await listPendingChangeSets(workspaceId, ownerDocumentId, { signal });
+        if (signal.aborted || activeDocumentIdRef.current !== ownerDocumentId) return;
         if (restoreEpochRef.current !== epochAtStart) return;
         pruneReviews(
           workspaceId,
@@ -862,7 +867,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
           let earlier = NO_STAGES;
           if (changeSet.unmappableOperations.length === 0 && needsAncestors(changeSet)) {
             earlier = await ancestorStages(workspaceId, ownerDocumentId, changeSet, knownChangeSetsRef.current);
-            if (cancelled || activeDocumentIdRef.current !== ownerDocumentId) return;
+            if (signal.aborted || activeDocumentIdRef.current !== ownerDocumentId) return;
             if (restoreEpochRef.current !== epochAtStart) return;
             // The stream may have staged it while the chain was being read.
             if (seenBatchesRef.current.has(signature)) continue;
@@ -897,9 +902,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         // without v2 history simply has nothing pending.
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [loadingDocumentId, ownerDocumentId, relistTick, stageDurableSet, updateForDocument, workspaceId]);
 
   // A restore moved the document onto another version of its tree. Every
@@ -1134,7 +1137,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
    * Accept these pending changes in one patch, except the ones written
    * against text the author has changed since. `open` is in authoring order.
    */
-  const acceptOpen = useCallback((open: ProposedChange[]) => {
+  const acceptOpen = useCallback((open: ProposedChange[], options?: BulkAcceptOptions) => {
     const ids = new Set(open.map((change) => change.id));
     const sets = setsRef.current;
     // Keep which suggestions the author saw before confirming, but use their
@@ -1144,7 +1147,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     if (selected.length === 0) return;
 
     let page = docRef.current;
-    let plan = planBulkAccept(selected, sets, page);
+    let plan = planBulkAccept(selected, sets, page, options);
     let applyDesynced = 0;
     let appliedIds = new Set<string>();
     let landed: { before: Block[]; after: Block[]; touched: string[] } | null = null;
@@ -1156,7 +1159,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
         // render and click, so the plan's positions no longer match it.
         page = outcome.doc;
         base = page.blocks;
-        plan = planBulkAccept(selected, sets, page);
+        plan = planBulkAccept(selected, sets, page, options);
         outcome = plan.ops.length > 0
           ? applyPatch(plan.ops, { persist: true, base })
           : { blocks: base, doc: page, desynced: [], touched: [] };
@@ -1215,11 +1218,12 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     workspaceId,
   ]);
 
-  const acceptAll = useCallback<ProposalsContextValue['acceptAll']>((eligibleIds) => {
+  const acceptAll = useCallback<ProposalsContextValue['acceptAll']>((eligibleIds, options) => {
     if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
     // The planner restores authoring order across batches, even though the
     // menu shows the suggestions in reading order.
-    batch(() => acceptOpen(pendingChanges(state.sets).filter((change) => eligibleIds?.has(change.id) ?? true)));
+    const selected = pendingChanges(state.sets).filter((change) => eligibleIds?.has(change.id) ?? true);
+    batch(() => acceptOpen(selected, eligibleIds ? options : undefined));
   }, [acceptOpen, batch, ownerDocumentId, state.sets]);
 
   const acceptWording = useCallback(() => {
@@ -1227,10 +1231,12 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     batch(() => acceptOpen(wordingChanges(state.sets)));
   }, [acceptOpen, batch, ownerDocumentId, state.sets]);
 
-  const acceptGroup = useCallback<ProposalsContextValue['acceptGroup']>((setId, kind) => {
+  const acceptGroup = useCallback<ProposalsContextValue['acceptGroup']>((setId, kind, eligibleIds, options) => {
     if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
     const set = state.sets.find((candidate) => candidate.id === setId);
-    if (set) batch(() => acceptOpen(groupChanges(set, kind)));
+    if (!set) return;
+    const selected = groupChanges(set, kind).filter((change) => eligibleIds?.has(change.id) ?? true);
+    batch(() => acceptOpen(selected, eligibleIds ? options : undefined));
   }, [acceptOpen, batch, ownerDocumentId, state.sets]);
 
   /**
@@ -1399,11 +1405,17 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
   // Rebuilt with the batches, not per change: the relation is global, and a
   // card asks for it on every render.
   const precedence = useMemo(() => linkPrecedence(state.sets), [state.sets]);
-  const ready = useCallback(
-    (change: ProposedChange) => isReady(change, state.sets, blocks, precedence)
-      && (change.kind !== 'sources' || applyOperations(doc, [change.op]).desynced.length === 0),
+  const blocker = useCallback(
+    (change: ProposedChange): AcceptBlocker | null => {
+      const found = acceptBlocker(change, state.sets, blocks, precedence);
+      if (found) return found;
+      return change.kind === 'sources' && applyOperations(doc, [change.op]).desynced.length > 0
+        ? { reason: 'sources' }
+        : null;
+    },
     [blocks, doc, precedence, state.sets],
   );
+  const ready = useCallback((change: ProposedChange) => blocker(change) === null, [blocker]);
   const dismissInvite = useCallback((inviteId: string) => {
     updateForDocument((current) => ({
       ...current,
@@ -1455,6 +1467,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       rejectGroup,
       rejectAll,
       ready,
+      blocker,
       focusChange,
       focusedChangeId: state.focusedChangeId,
       dismissInvite,
@@ -1479,6 +1492,7 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
       focusChange,
       pending,
       ready,
+      blocker,
       receive,
       reject,
       rejectAll,

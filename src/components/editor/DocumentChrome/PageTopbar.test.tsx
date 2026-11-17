@@ -119,7 +119,7 @@ vi.mock('@/editor/proposals', () => ({
     { id: 'change-2', kind: 'insert', op: { newInformation: false } },
   ],
   describeChange: (change: { id: string }) => `Describe ${change.id}`,
-  planBulkAccept: () => ({ applied: [{}, {}], landedIds: new Set(), desynced: [] }),
+  planBulkAccept: (changes: unknown[]) => ({ applied: changes, landedIds: new Set(), desynced: [] }),
   groupChanges: () => [],
   wordingChanges: () => [],
 }));
@@ -455,7 +455,7 @@ describe('PageTopbar', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 suggestions/ }));
     const menu = screen.getByRole('dialog', { name: 'Suggested changes' });
     expect(within(menu).getByText('– of 2')).toBeTruthy();
-    expect(within(menu).getByRole('button', { name: 'Accept eligible (2)' })).toBeTruthy();
+    expect(within(menu).getByRole('button', { name: 'Accept all (2)' })).toBeTruthy();
     expect(within(menu).getByRole('button', { name: 'Reject all' })).toBeTruthy();
 
     fireEvent.click(within(menu).getByRole('button', { name: 'Next change' }));

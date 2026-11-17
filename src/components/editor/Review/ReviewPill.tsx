@@ -39,6 +39,30 @@ const KIND_ICON: Record<ProposedChange['kind'], typeof Plus> = {
   sources: BookMarked,
 };
 
+const INCLUDE_FLAGGED = { includeFlagged: true } as const;
+
+function bulkSummary(plan: ReturnType<typeof planBulkAccept> | null, changes: ProposedChange[]) {
+  const ids = new Set([...(plan?.landedIds ?? []), ...(plan?.applied.map((change) => change.id) ?? [])]);
+  return {
+    ids,
+    count: ids.size,
+    flagged: changes.filter((change) => ids.has(change.id) && change.op.newInformation).length,
+    remaining: changes.length - ids.size,
+  };
+}
+
+function bulkDescription({ count, flagged, remaining }: ReturnType<typeof bulkSummary>, excludingFlagged = false) {
+  return [
+    count === 1 ? '1 suggestion will be accepted.' : `${count} suggestions will be accepted together.`,
+    flagged > 0
+      ? `Includes ${flagged} with new information. Accepting does not verify claims or sources.`
+      : null,
+    remaining > 0
+      ? `${remaining} will stay pending${excludingFlagged ? ', including suggestions with new information' : ' and won’t be applied'}.`
+      : null,
+  ].filter(Boolean).join(' ');
+}
+
 /** How long an arrival announcement stays in the live region. */
 const ANNOUNCEMENT_MS = 6000;
 
@@ -102,7 +126,7 @@ function useArrivalAnnouncement(sets: readonly ChangeSet[]): string {
  * announced, and the one place its batch controls live.
  *
  * The pill opens a small review menu — step through the changes (‹ 1 of 3 ›),
- * jump to any of them from the list, accept eligible changes, or reject
+ * jump to any of them from the list, confirm a bulk acceptance, or reject
  * the lot. It replaced a floating bar that pinned the same controls over
  * the first lines of the page, where it covered the text being reviewed and
  * repeated the count the topbar already showed.
@@ -134,9 +158,13 @@ export function ReviewPill() {
   const plural = `${pendingCount} change${pendingCount === 1 ? '' : 's'}`;
   const label = `${pendingCount} suggestion${pendingCount === 1 ? '' : 's'}`;
   const flagged = pending.filter((change) => change.op.newInformation);
-  const bulk = open && !readOnly ? planBulkAccept(pending, sets, doc) : null;
-  const eligible = bulk ? bulk.applied.length + bulk.landedIds.size : 0;
-  const blocked = bulk?.desynced.length ?? 0;
+  const canAccept = open && !readOnly;
+  const bulk = bulkSummary(canAccept ? planBulkAccept(pending, sets, doc, INCLUDE_FLAGGED) : null, pending);
+  const unflagged = canAccept && bulk.flagged > 0
+    ? bulkSummary(planBulkAccept(pending, sets, doc), pending)
+    : null;
+  const blocked = canAccept ? bulk.remaining : 0;
+  const bulkLabel = blocked > 0 ? 'Accept available' : 'Accept all';
   const nextIndividual = flagged.length > 0
     ? flagged[(flagged.findIndex((change) => change.id === focusedChangeId) + 1) % flagged.length]
     : undefined;
@@ -152,20 +180,16 @@ export function ReviewPill() {
     if (change) focusChange(change.id);
   };
 
-  const onAcceptAll = async () => {
-    if (!bulk || eligible === 0) return;
+  const onAcceptAll = async (includeFlagged: boolean) => {
+    const selection = includeFlagged ? bulk : unflagged;
+    if (!selection?.count) return;
     setOpen(false);
-    const description = [
-      `${eligible} eligible ${eligible === 1 ? 'suggestion' : 'suggestions'} can be accepted together.`,
-      flagged.length > 0 ? `${flagged.length} with new information will still need individual review.` : null,
-      blocked > 0 ? `${blocked} that can’t be applied yet will also stay pending.` : null,
-    ].filter(Boolean).join(' ');
     const ok = await confirm({
-      title: `Accept ${eligible} eligible ${eligible === 1 ? 'change' : 'changes'}?`,
-      description,
-      confirmLabel: 'Accept eligible',
+      title: `Accept ${selection.count} ${selection.count === 1 ? 'suggestion' : 'suggestions'}?`,
+      description: bulkDescription(selection, !includeFlagged),
+      confirmLabel: includeFlagged ? bulkLabel : 'Accept without new information',
     });
-    if (ok) acceptAll(new Set([...bulk.landedIds, ...bulk.applied.map((change) => change.id)]));
+    if (ok) acceptAll(selection.ids, includeFlagged ? INCLUDE_FLAGGED : undefined);
   };
 
   const onAcceptWording = async () => {
@@ -177,18 +201,24 @@ export function ReviewPill() {
     })) acceptWording();
   };
 
-  const onGroup = async (set: ChangeSet, group: ChangeSet['groups'][number], decision: 'accept' | 'reject') => {
+  const onAcceptGroup = async (set: ChangeSet, group: ChangeSet['groups'][number], selection: ReturnType<typeof bulkSummary>) => {
+    if (selection.count === 0) return;
     setOpen(false);
     if (await confirm({
-      title: `${decision === 'accept' ? 'Accept' : 'Reject'} ${group.label.toLowerCase()} changes?`,
-      description: decision === 'accept'
-        ? 'New information stays for individual review. Changed or locked targets and changes waiting on another decision also stay pending.'
-        : 'This decides every pending operation in this group. Suggestions that depend on a rejected insertion may also be rejected.',
-      confirmLabel: decision === 'accept' ? 'Accept group' : 'Reject group',
-    })) {
-      if (decision === 'accept') acceptGroup(set.id, group.kind);
-      else rejectGroup(set.id, group.kind);
-    }
+      title: `Accept ${group.label.toLowerCase()} group?`,
+      description: bulkDescription(selection),
+      confirmLabel: 'Accept group',
+    })) acceptGroup(set.id, group.kind, selection.ids, INCLUDE_FLAGGED);
+  };
+
+  const onRejectGroup = async (set: ChangeSet, group: ChangeSet['groups'][number]) => {
+    setOpen(false);
+    if (await confirm({
+      title: `Reject ${group.label.toLowerCase()} changes?`,
+      description: 'This decides every pending operation in this group. Suggestions that depend on a rejected insertion may also be rejected.',
+      confirmLabel: 'Reject group',
+      destructive: true,
+    })) rejectGroup(set.id, group.kind);
   };
 
   const onRejectAll = async () => {
@@ -255,7 +285,7 @@ export function ReviewPill() {
           {nextIndividual && (
             <div className="flex items-center gap-2 px-2 py-1">
               <p className="flex-1 text-xs text-muted-foreground">
-                {flagged.length} with new information {flagged.length === 1 ? 'needs' : 'need'} individual review.
+                {flagged.length} {flagged.length === 1 ? 'suggestion adds' : 'suggestions add'} new information.
               </p>
               <Button size="sm" variant="ghost" onClick={() => focusChange(nextIndividual.id)}>
                 Review flagged
@@ -271,13 +301,14 @@ export function ReviewPill() {
                   {set.groups.map((group) => {
                     const changes = groupChanges(set, group.kind);
                     if (!changes.length) return null;
+                    const selection = bulkSummary(canAccept ? planBulkAccept(changes, sets, doc, INCLUDE_FLAGGED) : null, changes);
                     return <div key={group.kind} className="flex items-center gap-1">
                       <span className="min-w-0 flex-1 text-xs">{group.label} ({changes.length})</span>
                       <Button size="sm" variant="ghost" aria-label={`Accept ${group.label.toLowerCase()} group`}
-                        disabled={readOnly || changes.every((change) => change.op.newInformation)}
-                        onClick={() => void onGroup(set, group, 'accept')}>Accept</Button>
+                        disabled={selection.count === 0}
+                        onClick={() => void onAcceptGroup(set, group, selection)}>Accept</Button>
                       <Button size="sm" variant="ghost" aria-label={`Reject ${group.label.toLowerCase()} group`}
-                        disabled={readOnly} onClick={() => void onGroup(set, group, 'reject')}>Reject</Button>
+                        disabled={readOnly} onClick={() => void onRejectGroup(set, group)}>Reject</Button>
                     </div>;
                   })}
                 </div>
@@ -320,16 +351,22 @@ export function ReviewPill() {
               <Check />Accept wording changes
             </Button>
           )}
+          {unflagged && unflagged.count > 0 && (
+            <Button size="sm" variant="ghost" className="w-full justify-start"
+              onClick={() => void onAcceptAll(false)}>
+              <Check />Accept without new information ({unflagged.count})
+            </Button>
+          )}
           <div className="flex items-center gap-1">
             <Button
               size="sm"
               variant="ghost"
               className="flex-1 text-diff-add-fg hover:bg-diff-add hover:text-diff-add-fg"
-              disabled={readOnly || eligible === 0}
-              onClick={() => void onAcceptAll()}
+              disabled={bulk.count === 0}
+              onClick={() => void onAcceptAll(true)}
             >
               <Check />
-              Accept eligible{eligible > 0 ? ` (${eligible})` : ''}
+              {bulkLabel}{bulk.count > 0 ? ` (${bulk.count})` : ''}
             </Button>
             <Button
               size="sm"

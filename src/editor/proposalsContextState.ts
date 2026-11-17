@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { ToolAction } from './types';
-import type { ChangeSet, DocumentInvite, ProposedChange } from './proposals';
+import type { AcceptBlocker, BulkAcceptOptions, ChangeSet, DocumentInvite, ProposedChange } from './proposals';
 
 /** How a turn hands over its `tool_action`s. */
 export type ReceiveOptions = {
@@ -53,12 +53,20 @@ export type ProposalsContextValue = {
   receive: (action: ToolAction, options?: ReceiveOptions) => void;
   accept: (changeId: string) => void;
   reject: (changeId: string) => void;
-  acceptAll: (eligibleIds?: ReadonlySet<string>) => void;
+  /** Including flagged changes requires the exact IDs the author confirmed. */
+  acceptAll: (eligibleIds?: ReadonlySet<string>, options?: BulkAcceptOptions) => void;
   acceptWording: () => void;
-  acceptGroup: (setId: string, kind: ChangeSet['groups'][number]['kind']) => void;
+  acceptGroup: (
+    setId: string,
+    kind: ChangeSet['groups'][number]['kind'],
+    eligibleIds?: ReadonlySet<string>,
+    options?: BulkAcceptOptions,
+  ) => void;
   rejectGroup: (setId: string, kind: ChangeSet['groups'][number]['kind']) => void;
   rejectAll: () => void;
   ready: (change: ProposedChange) => boolean;
+  /** What stops a change from being accepted now, naming the change it waits on; `null` when it is ready. */
+  blocker: (change: ProposedChange) => AcceptBlocker | null;
   focusChange: (changeId: string) => void;
   focusedChangeId: string | null;
   dismissInvite: (inviteId: string) => void;

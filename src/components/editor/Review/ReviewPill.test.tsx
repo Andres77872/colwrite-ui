@@ -10,6 +10,7 @@ import type { Block, ToolOperation } from '@/editor/types';
  */
 
 const editorState = { blocks: [] as Block[], get doc() { return { blocks: this.blocks }; } };
+let readOnly = false;
 const reviewState = {
   sets: [] as ChangeSet[],
   pendingCount: 0,
@@ -25,6 +26,7 @@ const reviewState = {
 vi.mock('@/editor', async () => ({
   ...(await vi.importActual<Record<string, unknown>>('@/editor')),
   useEditorDoc: () => editorState,
+  usePageReadOnly: () => readOnly,
 }));
 vi.mock('@/editor/proposalsContextState', () => ({ useProposals: () => reviewState }));
 const confirm = vi.fn(async () => true);
@@ -61,11 +63,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   editorState.blocks = [para('A')];
+  readOnly = false;
   show([]);
 });
 
 describe('group controls', () => {
-  it('offers only stored groups and keeps new information out of bulk acceptance', async () => {
+  it('offers stored groups and keeps new information out of Accept wording', async () => {
     const set = batch(3, 'grouped');
     set.groups = [
       { kind: 'wording', label: 'Wording', operations: [0, 1] },
@@ -78,34 +81,57 @@ describe('group controls', () => {
     fireEvent.click(screen.getByRole('button', { name: /suggestions/ }));
     expect(screen.getByText('Wording (2)')).toBeTruthy();
     expect(screen.getByText('New content (1)')).toBeTruthy();
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Accept new content group' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Accept new content group' }).disabled).toBe(false);
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Accept wording changes' })));
     expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ confirmLabel: 'Accept wording changes' }));
     expect(reviewState.acceptWording).toHaveBeenCalledOnce();
     expect(reviewState.acceptAll).not.toHaveBeenCalled();
   });
 
-  it('names how many suggestions can be accepted and leaves a way to find flagged ones', async () => {
+  it('offers a separate bulk choice that leaves flagged suggestions out', async () => {
     const set = batch(2, 'draft');
     const flagged = itemAt(set.changes, 1);
     flagged.op.newInformation = true;
     show([set]);
-    const view = render(<ReviewPill />);
+    render(<ReviewPill />);
     fireEvent.click(screen.getByRole('button', { name: /2 suggestions/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Review flagged' }));
     expect(reviewState.focusChange).toHaveBeenCalledWith(flagged.id);
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Accept eligible (1)' })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Accept without new information (1)' })));
     expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'Accept 1 eligible change?',
-      description: expect.stringContaining('1 with new information will still need individual review.'),
+      title: 'Accept 1 suggestion?',
+      description: expect.stringContaining('1 will stay pending, including suggestions with new information.'),
     }));
-    expect(reviewState.acceptAll).toHaveBeenCalledOnce();
+    expect(reviewState.acceptAll).toHaveBeenCalledWith(new Set([itemAt(set.changes, 0).id]), undefined);
+  });
 
-    show(markChanges([set], new Set([itemAt(set.changes, 0).id]), 'accepted'));
-    view.rerender(<ReviewPill />);
-    fireEvent.click(screen.getByRole('button', { name: /1 suggestion/ }));
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Accept eligible' }).disabled).toBe(true);
-    expect(screen.getByText('1 with new information needs individual review.')).toBeTruthy();
+  it('warns and routes a flagged group through the confirmed manual path', async () => {
+    const set = batch(1, 'grouped');
+    set.groups = [{ kind: 'new_content', label: 'New content', operations: [0] }];
+    const flagged = itemAt(set.changes, 0);
+    flagged.op.newInformation = true;
+    show([set]);
+    render(<ReviewPill />);
+    fireEvent.click(screen.getByRole('button', { name: /suggestion/ }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Accept new content group' })));
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+      confirmLabel: 'Accept group',
+      description: expect.stringContaining('Includes 1 with new information. Accepting does not verify claims or sources.'),
+    }));
+    expect(reviewState.acceptGroup).toHaveBeenCalledWith(set.id, 'new_content', new Set([flagged.id]), { includeFlagged: true });
+  });
+
+  it('does not offer accepting flagged changes to viewers', () => {
+    const set = batch(1, 'grouped');
+    set.groups = [{ kind: 'new_content', label: 'New content', operations: [0] }];
+    itemAt(set.changes, 0).op.newInformation = true;
+    show([set]);
+    readOnly = true;
+    render(<ReviewPill />);
+    fireEvent.click(screen.getByRole('button', { name: /suggestion/ }));
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Accept all' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Accept new content group' }).disabled).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it('routes a group decision by set identity and the stored kind', async () => {

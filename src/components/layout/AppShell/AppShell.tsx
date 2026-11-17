@@ -144,7 +144,12 @@ export function AppShell({ main, left, aside }: AppShellProps) {
   };
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-background" style={shellStyle}>
+    // `overflow-clip`, not `overflow-hidden`: a hidden box is still a scroll
+    // container, so a `scrollIntoView` or a `focus()` deep inside (a chat row
+    // centred, a block revealed) scrolled the whole frame up whenever anything
+    // overflowed it, and left a blank strip under the app. A clipped box
+    // cannot be scrolled at all.
+    <div className="flex h-dvh overflow-clip bg-background" style={shellStyle}>
       <SkipToPage />
       {left && sidebarDocked && !leftHidden && (
         <nav

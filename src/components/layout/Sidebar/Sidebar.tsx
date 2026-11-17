@@ -75,7 +75,7 @@ export function Sidebar({
         {/* Collapsed to no width until wanted, so the workspace name gets
             the whole row at the default 240px. Still in the tab order: focus
             opens it like hover does. */}
-        <div className="flex w-0 items-center gap-0.5 overflow-hidden opacity-0 transition-opacity focus-within:w-auto focus-within:overflow-visible focus-within:opacity-100 group-hover/header:w-auto group-hover/header:overflow-visible group-hover/header:opacity-100 pointer-coarse:w-auto pointer-coarse:overflow-visible pointer-coarse:opacity-100">
+        <div className="flex w-0 items-center gap-0.5 overflow-clip opacity-0 transition-opacity focus-within:w-auto focus-within:overflow-visible focus-within:opacity-100 group-hover/header:w-auto group-hover/header:overflow-visible group-hover/header:opacity-100 pointer-coarse:w-auto pointer-coarse:overflow-visible pointer-coarse:opacity-100">
           {docked ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -147,7 +147,7 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div className="relative min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         <Recent onPageOpened={closeDrawer} />
         <PagesTree onPageOpened={closeDrawer} />
       </div>

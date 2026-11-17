@@ -29,7 +29,7 @@ vi.mock('../panelsContextState', async (actual) => ({
 const proposals: ProposalsContextValue = {
   sets: [], pending: [], pendingCount: 0, invites: [], receive: vi.fn(), accept: vi.fn(), reject: vi.fn(),
   acceptAll: vi.fn(), acceptWording: vi.fn(), acceptGroup: vi.fn(), rejectGroup: vi.fn(), rejectAll: vi.fn(),
-  ready: () => true, focusChange: vi.fn(), focusedChangeId: null, dismissInvite: vi.fn(), error: null, clearError: vi.fn(),
+  ready: () => true, blocker: () => null, focusChange: vi.fn(), focusedChangeId: null, dismissInvite: vi.fn(), error: null, clearError: vi.fn(),
   autoApplied: [], undoAutoApplied: vi.fn(() => false), revealAutoApplied: vi.fn(), waiting: [], applyWaiting: vi.fn(),
 };
 const clients: QueryClient[] = [];

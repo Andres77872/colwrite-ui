@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from 'react';
+import { useMemo, type KeyboardEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
@@ -13,6 +13,8 @@ import {
   mergedBlock,
   planRejection,
   proposedBlocks,
+  withPendingBlocks,
+  type AcceptBlocker,
   type ProposedChange,
 } from '@/editor/proposals';
 import type { Block } from '@/editor/types';
@@ -77,6 +79,10 @@ function shortText(text: string, max = 42): string {
 
 function ChangeBody({ change }: { change: ProposedChange }) {
   const { blocks, doc } = useEditorDoc();
+  const { sets } = useProposals();
+  // A change can be about a block another suggestion adds; it reads against
+  // that block as the suggestion would add it.
+  const known = useMemo(() => withPendingBlocks(blocks, sets), [blocks, sets]);
   const op = change.op;
 
   if (op.op === 'set_meta') {
@@ -145,7 +151,7 @@ function ChangeBody({ change }: { change: ProposedChange }) {
 
   if (op.op === 'move_block') {
     // Naming the neighbour survives other changes being accepted first.
-    const target = blocks.find((block) => block.id === op.targetBlockId);
+    const target = known.find((block) => block.id === op.targetBlockId);
     return (
       <p className="text-sm text-muted-foreground">
         {target
@@ -157,8 +163,9 @@ function ChangeBody({ change }: { change: ProposedChange }) {
 
   // A deletion's card sits on the first of its blocks still on the page.
   const current = change.kind === 'delete'
-    ? change.targetBlockIds.map((id) => blocks.find((block) => block.id === id)).find((block): block is Block => block !== undefined)
-    : blocks.find((block) => block.id === change.anchorBlockId);
+    ? change.targetBlockIds.map((id) => known.find((block) => block.id === id)).find((block): block is Block => block !== undefined)
+    : known.find((block) => block.id === change.anchorBlockId);
+  const onPage = current !== undefined && blocks.some((block) => block.id === current.id);
 
   if (!current && change.anchorBlockId && change.kind !== 'insert') {
     return (
@@ -203,7 +210,7 @@ function ChangeBody({ change }: { change: ProposedChange }) {
   }
 
   const merged = mergedBlock(change, current);
-  const bibliography = previewBibliography(blocks, [merged, ...added], { replace: current ? [current.id] : [] }, options);
+  const bibliography = previewBibliography(blocks, [merged, ...added], { replace: current && onPage ? [current.id] : [] }, options);
   return (
     <div>
       <ProposedRewriteView before={current ?? null} after={merged} block={merged} bibliography={bibliography} />
@@ -247,8 +254,8 @@ function EvidenceNote({ change }: { change: ProposedChange }) {
         <p className="flex items-start gap-1">
           <CircleAlert aria-hidden="true" className="mt-px h-3 w-3 shrink-0 text-warning" />
           <span>{added
-            ? 'Adds new sources. Review this suggestion individually.'
-            : 'Adds a number, claim, or citation the page doesn’t have yet. Review this suggestion individually.'}</span>
+            ? 'Adds new sources. Check them before accepting.'
+            : 'Adds a number, claim, or citation the page doesn’t have yet. Check it before accepting.'}</span>
         </p>
       )}
       {keys.length > 0 && (
@@ -311,47 +318,66 @@ function reviewKeys() {
   };
 }
 
+/** Why Accept is not offered, as the card says it, and the change to look at first. */
+function blockedWords(blocker: AcceptBlocker): { text: string; why?: string; waitsOn: ProposedChange | null } {
+  switch (blocker.reason) {
+    case 'needs':
+      // Rejecting it instead moves an addition that continues it onto its
+      // place, or takes a change to its block along, so either decision
+      // settles this one.
+      return {
+        text: 'Accept this first:',
+        why: 'This builds on a block another suggestion adds.',
+        waitsOn: blocker.change,
+      };
+    case 'after':
+      return {
+        text: 'Decide this first:',
+        why: 'Both suggestions touch the same block, and the page would come out differently in the other order.',
+        waitsOn: blocker.change,
+      };
+    case 'needs-rejected':
+      return { text: 'It builds on a suggestion that was rejected.', waitsOn: null };
+    case 'missing':
+      return { text: 'The block this was written for is no longer on the page.', waitsOn: null };
+    case 'unplaced':
+      return { text: 'The block it would go next to is no longer on the page.', waitsOn: null };
+    case 'stale':
+      return { text: 'The text changed after this was suggested.', waitsOn: null };
+    case 'locked':
+      return { text: 'This change would edit a locked block or one hidden from the assistant.', waitsOn: null };
+    case 'sources':
+      return { text: 'The sources or citations no longer match this suggestion.', waitsOn: null };
+  }
+}
+
 export function ChangeCard({ change }: { change: ProposedChange }) {
   const { blocks } = useEditorDoc();
-  const { accept, reject, ready, focusedChangeId, sets, pending } = useProposals();
+  const { accept, reject, blocker, focusChange, focusedChangeId, sets } = useProposals();
   const confirm = useConfirm();
   // A viewer sees the suggestion and decides nothing: deciding is an edit (D6).
   const readOnly = usePageReadOnly();
   const viewOnlyNote = 'Viewers can’t accept or reject changes';
 
   const style = KIND[change.kind];
-  const isReady = ready(change);
+  /**
+   * Why Accept is not offered, naming the suggestion to decide first when
+   * there is one. A lock with no explanation is worse than no lock: the
+   * author cannot tell whether the app is broken, whether they are meant to
+   * wait, or whether the change is dead, and "the change above" sent them
+   * looking in the wrong place when the one in the way was further down.
+   */
+  const blocked = blocker(change);
+  const isReady = blocked === null;
   const isFocused = focusedChangeId === change.id;
   const Icon = style.icon;
-  const summary = describeChange(change, blocks);
+  const known = useMemo(() => withPendingBlocks(blocks, sets), [blocks, sets]);
+  const summary = describeChange(change, known);
   const stale = isStale(change, blocks);
   const keys = reviewKeys();
-
-  /**
-   * Why Accept is not offered.
-   *
-   * A lock with no explanation is worse than no lock: the author cannot tell
-   * whether the app is broken, whether they are meant to wait, or whether the
-   * change is dead. Each of the reasons has a different answer.
-   */
-  const blockedReason = (() => {
-    if (change.dependsOn.some((id) => pending.some((candidate) => candidate.id === id))) {
-      // Rejecting that one moves this one onto its place, so either decision
-      // unlocks it.
-      return 'This continues the addition above. Accept or reject that one first.';
-    }
-    if (change.anchorBlockId && !blocks.some((block) => block.id === change.anchorBlockId)) {
-      return 'The block this was written for is no longer on the page.';
-    }
-    if (stale) return 'The text changed after this was suggested.';
-    if (change.targetBlockIds.some((id) => blocks.some((block) => block.id === id && (block.locked || block.aiHidden)))
-      || (change.kind === 'move' && blocks.some((block) => block.id === change.anchorBlockId && (block.locked || block.aiHidden)))) {
-      return 'This change would edit a locked block or one hidden from the assistant.';
-    }
-    if (change.kind === 'sources') return 'The sources or citations no longer match this suggestion.';
-    return 'Decide the change above it first — the two would not combine cleanly.';
-  })();
-  const BlockedIcon = stale && !isReady ? History : Lock;
+  const why = blocked ? blockedWords(blocked) : null;
+  const waitsOnName = why?.waitsOn ? describeChange(why.waitsOn, known) : null;
+  const BlockedIcon = blocked?.reason === 'stale' ? History : Lock;
 
   /**
    * Reject, saying first what goes with it.
@@ -430,11 +456,22 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
       <div className="flex min-h-6 min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
         <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
         <span className="shrink-0">{kindLabel(change)}</span>
-        {!isReady && !readOnly && (
-          <span className="flex min-w-0 items-center gap-1 truncate">
+        {why && !readOnly && (
+          <span className="flex min-w-0 items-center gap-1">
             <span aria-hidden="true">·</span>
             <BlockedIcon aria-hidden="true" className="h-3 w-3 shrink-0" />
-            <span className="truncate">{blockedReason}</span>
+            <span className={cn('truncate', why.waitsOn && 'shrink-0')} title={why.why}>{why.text}</span>
+            {why.waitsOn && waitsOnName && (
+              <button
+                type="button"
+                className="min-w-0 truncate rounded-sm text-foreground underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                onClick={() => focusChange(why.waitsOn!.id)}
+                aria-label={`Go to the suggestion to decide first: ${waitsOnName}`}
+                title={why.why ? `${why.why} Go to: ${waitsOnName}` : waitsOnName}
+              >
+                {waitsOnName}
+              </button>
+            )}
           </span>
         )}
 

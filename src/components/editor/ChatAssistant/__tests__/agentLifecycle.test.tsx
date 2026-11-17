@@ -40,7 +40,7 @@ const proposals: ProposalsContextValue = {
   receive: vi.fn(),
   accept: vi.fn(), reject: vi.fn(), acceptAll: vi.fn(), rejectAll: vi.fn(),
   acceptWording: vi.fn(), acceptGroup: vi.fn(), rejectGroup: vi.fn(),
-  ready: () => true, focusChange: vi.fn(), focusedChangeId: null,
+  ready: () => true, blocker: () => null, focusChange: vi.fn(), focusedChangeId: null,
   dismissInvite: vi.fn(), error: null, clearError: vi.fn(),
   autoApplied: [], undoAutoApplied: vi.fn(() => false), revealAutoApplied: vi.fn(),
   waiting: [], applyWaiting: vi.fn(),

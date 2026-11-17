@@ -19,6 +19,7 @@ const reviewState = {
   acceptAll: vi.fn(),
   rejectAll: vi.fn(),
   ready: () => true,
+  blocker: () => null,
   focusChange: vi.fn(),
   focusedChangeId: null,
   invites: [{ id: 'invite-1', documentId: 'created-doc', receivedAt: 1 }],

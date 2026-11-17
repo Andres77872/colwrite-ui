@@ -447,10 +447,29 @@ export function wordingChanges(sets: ChangeSet[]): ProposedChange[] {
 }
 
 /**
- * Whether this change can be accepted right now.
+ * Why a change cannot be accepted right now, and the change it waits on when
+ * there is one. Each reason has a different answer for the author, so the
+ * card says which (see `ChangeCard`):
  *
- * Three separate conditions, in increasing order of how recently they were
- * discovered to matter:
+ * - `needs`: it builds on a block another suggestion adds — accept that one
+ *   first. `needs-rejected`: that suggestion was rejected.
+ * - `after`: another suggestion touches the same block, and the two give a
+ *   different page in the other order — decide that one first.
+ * - `locked`: it would edit a block the author locked or hid from the AI.
+ * - `missing`: a block it names is no longer on the page.
+ * - `stale`: its block changed after it was written.
+ * - `unplaced`: the block it would go next to is gone.
+ */
+export type AcceptBlocker =
+  | { reason: 'needs' | 'needs-rejected' | 'after'; change: ProposedChange }
+  /** `sources`: the page's sources no longer match it (checked by the review, not here). */
+  | { reason: 'locked' | 'missing' | 'stale' | 'unplaced' | 'sources' };
+
+/**
+ * What stops this change from being accepted right now; `null` when nothing
+ * does.
+ *
+ * In order:
  *
  * 1. **Prerequisites.** `dependsOn` names changes that must have been
  *    *accepted*, because they create the block this one is addressed to. A
@@ -468,62 +487,87 @@ export function wordingChanges(sets: ChangeSet[]): ProposedChange[] {
  * 4. **Still current.** A rewrite or deletion of a block the author has
  *    edited since would throw that edit away (see `isStale`).
  *
- * Reject is never gated on any of this — see `ChangeCard`.
+ * Reject is never gated on any of this — see `ChangeCard`. Without `blocks`,
+ * only the first two are checked.
  */
+export function acceptBlocker(
+  change: ProposedChange,
+  sets: ChangeSet[],
+  blocks?: Block[],
+  after?: ReadonlyMap<string, string[]>,
+): AcceptBlocker | null {
+  const byId = new Map<string, ProposedChange>();
+  for (const set of sets) for (const c of set.changes) byId.set(c.id, c);
+
+  for (const id of change.dependsOn) {
+    const prerequisite = byId.get(id);
+    if (!prerequisite) return { reason: 'missing' };
+    if (prerequisite.status === 'pending') return { reason: 'needs', change: prerequisite };
+    if (prerequisite.status === 'rejected') return { reason: 'needs-rejected', change: prerequisite };
+  }
+
+  for (const id of after?.get(change.id) ?? []) {
+    const earlier = byId.get(id);
+    if (earlier?.status === 'pending') return { reason: 'after', change: earlier };
+  }
+
+  if (!blocks) return null;
+  const affected = change.kind === 'move' && change.anchorBlockId !== null ? [change.anchorBlockId] : change.targetBlockIds;
+  if (affected.some((id) => {
+    const target = blocks.find((block) => block.id === id);
+    return target?.locked === true || target?.aiHidden === true;
+  })) return { reason: 'locked' };
+  if (
+    change.placement === null
+    && change.references.some((id) => !blocks.some((block) => block.id === id))
+  ) {
+    return { reason: 'missing' };
+  }
+  if (isStale(change, blocks)) return { reason: 'stale' };
+  return resolveAcceptOp(change, sets, blocks) === null ? { reason: 'unplaced' } : null;
+}
+
+/** Whether this change can be accepted right now (see `acceptBlocker`). */
 export function isReady(
   change: ProposedChange,
   sets: ChangeSet[],
   blocks?: Block[],
   after?: ReadonlyMap<string, string[]>,
 ): boolean {
-  const byId = new Map<string, ProposedChange>();
-  for (const set of sets) for (const c of set.changes) byId.set(c.id, c);
-
-  if (!change.dependsOn.every((id) => byId.get(id)?.status === 'accepted')) return false;
-
-  for (const id of after?.get(change.id) ?? []) {
-    if (byId.get(id)?.status === 'pending') return false;
-  }
-
-  if (!blocks) return true;
-  const affected = change.kind === 'move' && change.anchorBlockId !== null ? [change.anchorBlockId] : change.targetBlockIds;
-  if (affected.some((id) => {
-    const target = blocks.find((block) => block.id === id);
-    return target?.locked === true || target?.aiHidden === true;
-  })) return false;
-  if (
-    change.placement === null
-    && change.references.some((id) => !blocks.some((block) => block.id === id))
-  ) {
-    return false;
-  }
-  if (isStale(change, blocks)) return false;
-  return resolveAcceptOp(change, sets, blocks) !== null;
+  return acceptBlocker(change, sets, blocks, after) === null;
 }
 
-/** Change kinds that move blocks around, and so cannot be freely reordered. */
-const POSITIONAL: ReadonlySet<ChangeKind> = new Set<ChangeKind>([
-  'insert',
-  'delete',
-  'move',
-]);
+/**
+ * Whether a change moves blocks around: an insert, a deletion, a move, or a
+ * rewrite written as several blocks (its extra blocks land after its block,
+ * wherever that block stands when it is accepted).
+ */
+function isPositional(change: ProposedChange): boolean {
+  return change.kind === 'insert' || change.kind === 'delete' || change.kind === 'move'
+    || (change.kind === 'replace' && change.producesBlockIds.length > 0);
+}
 
 /**
  * Which changes must be decided before which, over the global authoring order.
  *
  * `resolveAcceptOp` makes inserts commute by positioning each one against its
- * landed siblings. Two kinds of operation cannot be made to commute that way,
- * so they are serialised instead:
+ * landed siblings. Two kinds of operation cannot be made to commute that way
+ * when they name the same block, so those pairs are serialised instead:
  *
  * - **A move** puts a block next to another, which changes what is next to
- *   what for every insert addressed to either: `after(A, X)` then `move(B
- *   after A)` leaves `A, B, X`, the other order `A, X, B`. A move is
- *   therefore ordered against every positional sibling.
+ *   what for every positional change addressed to either: `after(A, X)` then
+ *   `move(B after A)` leaves `A, B, X`, the other order `A, X, B`.
  * - **A delete** removes the very blocks other changes are addressed to.
  *   Accepting `delete(B)` before `write_blocks(after B, X)` leaves the insert
  *   with no anchor, so the paragraph the author wanted to keep is the one
- *   that is lost. Changes naming a block a delete removes are ordered
- *   against it.
+ *   that is lost.
+ *
+ * Every operation is addressed by block id, so two that name no block in
+ * common give the same page in either order. A move used to be ordered
+ * against every positional change on the page, in every batch: one change
+ * the author could not accept yet (its text edited since, say) then held
+ * back a move elsewhere and every addition after it, and the review offered
+ * nothing but Reject.
  *
  * Edges always point from the later change to the earlier one, so the result
  * is acyclic by construction.
@@ -534,12 +578,10 @@ export function linkPrecedence(sets: ChangeSet[]): Map<string, string[]> {
 
   all.forEach((later, i) => {
     for (const earlier of all.slice(0, i)) {
-      const bothPositional = POSITIONAL.has(later.kind) && POSITIONAL.has(earlier.kind);
+      if (!later.references.some((id) => earlier.references.includes(id))) continue;
       const moveInvolved = later.kind === 'move' || earlier.kind === 'move';
       const deleteInvolved = later.kind === 'delete' || earlier.kind === 'delete';
-      const sharesBlock = later.references.some((id) => earlier.references.includes(id));
-
-      if ((moveInvolved && bothPositional) || (deleteInvolved && sharesBlock)) {
+      if ((moveInvolved && isPositional(later) && isPositional(earlier)) || deleteInvolved) {
         after.get(later.id)?.push(earlier.id);
       }
     }
@@ -712,7 +754,12 @@ export type DocumentRow =
       struck: ProposedChange[];
     }
   /** An addition, with every block it adds, where they would land. */
-  | { kind: 'insert'; change: ProposedChange };
+  | { kind: 'insert'; change: ProposedChange }
+  /**
+   * A rewrite, deletion or move of a block another pending change adds,
+   * shown right after that change: it can be decided once that one is.
+   */
+  | { kind: 'dependent'; change: ProposedChange };
 
 export type DocumentProjection = {
   rows: DocumentRow[];
@@ -744,13 +791,18 @@ export type DocumentProjection = {
  * accept itself lands exactly). A deletion of several blocks has its card on
  * the first one still on the page, and strikes the others where they are.
  *
- * A change is only an orphan when its anchor is in neither the document nor
- * the batch.
+ * A rewrite, deletion or move of a block that a pending change adds (in its
+ * own batch or an earlier one of the run) is shown right after that change.
+ * A change is only an orphan when its block is in neither the document nor
+ * a pending change.
  */
 export function projectDocument(blocks: Block[], sets: ChangeSet[]): DocumentProjection {
   const pending = pendingChanges(sets);
   const present = new Set(blocks.map((block) => block.id));
+  const adding = new Set(pending.flatMap((change) => change.producesBlockIds));
   const orphans: ProposedChange[] = [];
+  /** Changes to a block a pending change adds, with that block. */
+  const dependents: Array<{ change: ProposedChange; blockId: string }> = [];
 
   const onBlock = new Map<string, ProposedChange[]>();
   const struck = new Map<string, ProposedChange[]>();
@@ -769,7 +821,10 @@ export function projectDocument(blocks: Block[], sets: ChangeSet[]): DocumentPro
     const rows = change.kind === 'delete' ? change.targetBlockIds.filter((id) => present.has(id)) : [change.anchorBlockId];
     const [row, ...others] = rows;
     if (row === null || row === undefined || !present.has(row)) {
-      orphans.push(change);
+      const added = (change.kind === 'delete' ? change.targetBlockIds : [change.anchorBlockId])
+        .find((id): id is string => id !== null && adding.has(id));
+      if (added !== undefined) dependents.push({ change, blockId: added });
+      else orphans.push(change);
       continue;
     }
     add(onBlock, row, change);
@@ -785,7 +840,7 @@ export function projectDocument(blocks: Block[], sets: ChangeSet[]): DocumentPro
 
   /** The ids a row stands for, so a pending insert can anchor another pending insert. */
   const idsOf = (row: DocumentRow): string[] =>
-    row.kind === 'insert'
+    row.kind !== 'block'
       ? row.change.producesBlockIds
       : [row.block.id, ...row.changes.flatMap((change) => (change.kind === 'replace' ? change.producesBlockIds : []))];
 
@@ -805,6 +860,19 @@ export function projectDocument(blocks: Block[], sets: ChangeSet[]): DocumentPro
       continue;
     }
     rows.splice(change.placement === 'after' ? at + 1 : at, 0, row);
+  }
+
+  for (const { change, blockId } of dependents) {
+    const at = rows.findIndex((candidate) => idsOf(candidate).includes(blockId));
+    if (at === -1) {
+      orphans.push(change);
+      continue;
+    }
+    // After the row that adds the block, and after the changes to it already
+    // placed there, so they read in authoring order.
+    let end = at + 1;
+    while (rows[end]?.kind === 'dependent') end += 1;
+    rows.splice(end, 0, { kind: 'dependent', change });
   }
 
   return { rows, orphans };
@@ -927,6 +995,9 @@ function continuesFrom(change: ProposedChange, rejected: ProposedChange): boolea
  * Those inserts only need *a* place, and the rejected paragraph's own address
  * is the place it was going to take, so they move onto it instead. Only a
  * change to the rejected block itself has nowhere to go.
+ *
+ * That holds across batches too: a later batch of the same run can build on
+ * a block an earlier one adds (see `linkAcrossSets`).
  */
 export function planRejection(changeId: string, sets: ChangeSet[]): RejectionPlan {
   const set = sets.find((candidate) => candidate.changes.some((change) => change.id === changeId));
@@ -939,7 +1010,7 @@ export function planRejection(changeId: string, sets: ChangeSet[]): RejectionPla
   const seen = new Set([target.id]);
   while (queue.length) {
     const current = queue.shift()!;
-    for (const change of set.changes) {
+    for (const change of orderedChanges(sets)) {
       if (change.status !== 'pending' || seen.has(change.id)) continue;
       if (!change.dependsOn.includes(current.id)) continue;
       seen.add(change.id);
@@ -963,6 +1034,68 @@ function readdress(change: ProposedChange, rejected: ProposedChange): ToolOperat
   return rejected.placement === 'end' || rejected.anchorBlockId === null
     ? { ...op, position: 'append', blockId: null }
     : { ...op, position: rejected.placement === 'before' ? 'before' : 'after', blockId: rejected.anchorBlockId };
+}
+
+/** A continuation moved onto the place of the insert it continued, which was rejected. */
+function movedOnto(change: ProposedChange, rejected: ProposedChange): ProposedChange {
+  return {
+    ...change,
+    op: readdress(change, rejected),
+    anchorBlockId: rejected.anchorBlockId,
+    placement: rejected.placement,
+    references: rejected.references,
+    // Its anchor is now the rejected insert's anchor, which may itself be
+    // a pending insert.
+    dependsOn: [...rejected.dependsOn],
+  };
+}
+
+/** The change, in any of `sets`, that adds the block `blockId`. */
+export function producerOf(blockId: string, sets: readonly ChangeSet[]): ProposedChange | undefined {
+  for (const set of sets) {
+    const found = set.changes.find((change) => change.producesBlockIds.includes(blockId));
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * Tie a batch to the batches staged before it.
+ *
+ * A batch of a run is written on top of the run's earlier batches while they
+ * are still pending (`depends_on_change_set_id`), so it can name a block one
+ * of them adds: a rewrite of the paragraph the previous call wrote, or the
+ * next section after its last paragraph. `buildChangeSet` only sees its own
+ * batch, so such a change looked like one whose block had been deleted, and
+ * was offered for rejection only. Here it depends on the change that adds
+ * the block, as a change of the same batch would: it can be accepted once
+ * that one is, and rejecting that one takes it along (`planRejection`).
+ *
+ * A continuation of an addition that was already rejected takes that
+ * addition's place, as it would have when the rejection was made.
+ */
+export function linkAcrossSets(set: ChangeSet, earlier: readonly ChangeSet[]): ChangeSet {
+  const others = earlier.filter((candidate) => candidate.id !== set.id);
+  if (others.length === 0) return set;
+  let changed = false;
+  const changes = set.changes.map((original) => {
+    let change = original;
+    // A rejected addition may itself have continued another rejected one.
+    for (let hop = 0; hop < 32; hop += 1) {
+      const anchor = change.anchorBlockId;
+      const rejected = anchor === null ? undefined : producerOf(anchor, others);
+      if (!rejected || rejected.status !== 'rejected' || !continuesFrom(change, rejected)) break;
+      change = movedOnto(change, rejected);
+    }
+    const linked = change.references.flatMap((id) => {
+      const producer = producerOf(id, others);
+      return producer && !change.dependsOn.includes(producer.id) ? [producer.id] : [];
+    });
+    if (linked.length > 0) change = { ...change, dependsOn: [...change.dependsOn, ...new Set(linked)] };
+    if (change !== original) changed = true;
+    return change;
+  });
+  return changed ? { ...set, changes } : set;
 }
 
 /**
@@ -994,26 +1127,17 @@ export function rejectChange(
   const rejected = new Set([changeId, ...cascaded.map((change) => change.id)]);
 
   const moved = new Map<string, ProposedChange>(
-    reanchored.map((change) => [
-      change.id,
-      {
-        ...change,
-        op: readdress(change, target),
-        anchorBlockId: target.anchorBlockId,
-        placement: target.placement,
-        references: target.references,
-        // Its anchor is now the rejected insert's anchor, which may itself be
-        // a pending insert of this batch.
-        dependsOn: [...target.dependsOn],
-      },
-    ]),
+    reanchored.map((change) => [change.id, movedOnto(change, target)]),
   );
+  const own = new Set(set.changes.map((change) => change.id));
 
   // Document order of the continuations: before-X inserts keep their order,
-  // after-X inserts replay back-to-front.
+  // after-X inserts replay back-to-front. A continuation in a later batch
+  // keeps its place in that batch.
+  const local = reanchored.filter((change) => own.has(change.id));
   const shown = [
-    ...reanchored.filter((change) => change.placement === 'before').sort(byOrder),
-    ...reanchored.filter((change) => change.placement === 'after').sort(byOrder).reverse(),
+    ...local.filter((change) => change.placement === 'before').sort(byOrder),
+    ...local.filter((change) => change.placement === 'after').sort(byOrder).reverse(),
   ];
   const slotted = slotIsReversed(target.placement) ? [...shown].reverse() : shown;
 
@@ -1031,8 +1155,17 @@ export function rejectChange(
     status: rejected.has(change.id) ? ('rejected' as const) : change.status,
   }));
 
-  const next = [...sets];
-  next[setIndex] = { ...set, changes };
+  const next = sets.map((candidate, index) => {
+    if (index === setIndex) return { ...set, changes };
+    if (!candidate.changes.some((change) => moved.has(change.id) || rejected.has(change.id))) return candidate;
+    return {
+      ...candidate,
+      changes: candidate.changes.map((change) => {
+        const decided = moved.get(change.id) ?? change;
+        return rejected.has(change.id) ? { ...decided, status: 'rejected' as const } : decided;
+      }),
+    };
+  });
   return {
     sets: next,
     rejected: [changeId, ...cascaded.map((change) => change.id)],
@@ -1173,8 +1306,8 @@ export function pendingInDocumentOrder(blocks: Block[], sets: ChangeSet[]): Prop
   const { rows, orphans } = projectDocument(blocks, sets);
   const ordered: ProposedChange[] = [...documentChanges(sets)];
   for (const row of rows) {
-    if (row.kind === 'insert') ordered.push(row.change);
-    else ordered.push(...row.changes);
+    if (row.kind === 'block') ordered.push(...row.changes);
+    else ordered.push(row.change);
   }
   return [...ordered, ...orphans];
 }
@@ -1229,6 +1362,7 @@ export function resolveAcceptPlan(
   sets: ChangeSet[],
   doc: Doc,
 ): AcceptPlan {
+  if (changes.length === 0) return { ops: [], applied: [], desynced: [] };
   const rank = changeSequence(sets);
   const queue = [...changes].sort(
     (a, b) => (rank.get(a.id) ?? a.order) - (rank.get(b.id) ?? b.order),
@@ -1278,9 +1412,16 @@ export function resolveAcceptPlan(
   return { ops, applied, desynced };
 }
 
-/** The same eligibility check for the review menu and for applying a bulk decision. */
-export function planBulkAccept(changes: ProposedChange[], sets: ChangeSet[], doc: Doc) {
-  const candidates = changes.filter((change) => change.status === 'pending' && !change.op.newInformation);
+export type BulkAcceptOptions = { includeFlagged?: boolean };
+
+/** Only a confirmed manual review opts into flagged changes; all other checks still apply. */
+export function planBulkAccept(
+  changes: ProposedChange[],
+  sets: ChangeSet[],
+  doc: Doc,
+  { includeFlagged = false }: BulkAcceptOptions = {},
+) {
+  const candidates = changes.filter((change) => change.status === 'pending' && (includeFlagged || !change.op.newInformation));
   const landedIds = new Set<string>();
   for (const change of candidates) {
     if (change.kind === 'insert' && alreadyInDocument(change, doc.blocks)) landedIds.add(change.id);
@@ -1298,6 +1439,18 @@ export function planBulkAccept(changes: ProposedChange[], sets: ChangeSet[], doc
  * The blocks an insert would add, or a rewrite would add after its own,
  * validated the same way a patch is.
  */
+/**
+ * The page's blocks, followed by the blocks pending changes would add that
+ * are not on it yet: what a change to such a block is read against, to name
+ * it and show it.
+ */
+export function withPendingBlocks(blocks: Block[], sets: ChangeSet[]): Block[] {
+  const present = new Set(blocks.map((block) => block.id));
+  const added = pendingChanges(sets).flatMap((change) =>
+    proposedBlocks(change).filter((block) => !present.has(block.id)));
+  return added.length > 0 ? [...blocks, ...added] : blocks;
+}
+
 export function proposedBlocks(change: ProposedChange): Block[] {
   const op = change.op;
   if (op.op !== 'write_blocks') return [];

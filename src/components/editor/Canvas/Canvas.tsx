@@ -354,7 +354,7 @@ export function Canvas() {
 
   return (
     <div
-      className="canvas flex min-h-0 flex-1 flex-col overflow-y-auto outline-none"
+      className="canvas relative flex min-h-0 flex-1 flex-col overflow-y-auto outline-none"
       ref={containerRef}
       // Only a tab stop while empty, where the canvas itself accepts typing to
       // create the first block. A permanently focusable scroll container would
@@ -433,8 +433,9 @@ export function Canvas() {
             <div className="blocks-container relative">
               {rows.map((row) => {
                 // Inserts are rows of their own, already sitting where the
-                // block would land.
-                if (row.kind === 'insert') {
+                // block would land, and so are changes to a block one of
+                // them adds, right after it.
+                if (row.kind !== 'block') {
                   return <ChangeCard key={row.change.id} change={row.change} />;
                 }
 

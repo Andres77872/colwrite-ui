@@ -5,7 +5,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { FIXTURE_DOCUMENT_ID } from '@/dev/msw/fixtures';
 import { recordRequests } from '@/__tests__/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildChangeSet, type ChangeSet, type ProposedChange } from '@/editor/proposals';
+import { acceptBlocker, buildChangeSet, linkAcrossSets, linkPrecedence, type AcceptBlocker, type ChangeSet, type ProposedChange } from '@/editor/proposals';
 import type { Block, Doc, ToolOperation } from '@/editor/types';
 import { deleteBlocks, moveBlock, rewrite, setMeta, writeAfter } from '@/editor/__tests__/operations';
 import { reference } from '@/__tests__/agentSource';
@@ -31,7 +31,10 @@ const reviewState = {
   reject,
   acceptAll: vi.fn(),
   rejectAll: vi.fn(),
-  ready: (_change: ProposedChange) => true,
+  /** The review's own rule, over the staged sets and the page. */
+  blocker: (change: ProposedChange): AcceptBlocker | null =>
+    acceptBlocker(change, reviewState.sets, editorState.blocks, linkPrecedence(reviewState.sets)),
+  ready: (change: ProposedChange) => reviewState.blocker(change) === null,
   focusChange: vi.fn(),
   focusedChangeId: null,
   invites: [],
@@ -66,7 +69,9 @@ function stage(actions: ToolOperation[], blocks: Block[]): ChangeSet {
 beforeEach(() => {
   editorState.blocks = [para('p', 'Body text')];
   editorState.doc = { blocks: editorState.blocks };
-  reviewState.ready = () => true;
+  reviewState.blocker = (change) =>
+    acceptBlocker(change, reviewState.sets, editorState.blocks, linkPrecedence(reviewState.sets));
+  reviewState.focusChange.mockReset();
   accept.mockReset();
   reject.mockReset();
   confirm.mockReset();
@@ -105,7 +110,7 @@ describe('deciding from the keyboard', () => {
 
   it('does not accept from the keyboard when Accept is not offered', () => {
     const set = stage([rewrite('p', { type: 'paragraph', html: 'New text', children: [] })], editorState.blocks);
-    reviewState.ready = () => false;
+    reviewState.blocker = () => ({ reason: 'locked' });
     render(<ChangeCard change={itemAt(set.changes, 0)} />);
 
     fireEvent.keyDown(screen.getByRole('group'), { key: 'Enter', ctrlKey: true });
@@ -129,7 +134,6 @@ describe('when Accept is not offered', () => {
     const set = stage([rewrite('p', { type: 'paragraph', html: 'New text', children: [] })], editorState.blocks);
     // The author edits the paragraph after the suggestion arrived.
     editorState.blocks = [para('p', 'Body text, edited')];
-    reviewState.ready = () => false;
     render(<ChangeCard change={itemAt(set.changes, 0)} />);
 
     expect(screen.getByText('The text changed after this was suggested.')).toBeTruthy();
@@ -138,18 +142,63 @@ describe('when Accept is not offered', () => {
     expect(screen.getByRole('group').getAttribute('data-stale')).toBe('true');
   });
 
-  it('says either decision on the paragraph above unlocks a continuation', () => {
+  it('names the addition a continuation builds on, and goes to it', () => {
     const set = stage(
       [
-        writeAfter('p', para('x')),
-        writeAfter('x', para('y')),
+        writeAfter('p', para('x', 'First added')),
+        writeAfter('x', para('y', 'Second added')),
       ],
       editorState.blocks,
     );
-    reviewState.ready = () => false;
     render(<ChangeCard change={itemAt(set.changes, 1)} />);
 
-    expect(screen.getByText('This continues the addition above. Accept or reject that one first.')).toBeTruthy();
+    expect(screen.getByText('Accept this first:')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Go to the suggestion to decide first: Add paragraph “First added”' }));
+    expect(reviewState.focusChange).toHaveBeenCalledWith(itemAt(set.changes, 0).id);
+    expect(screen.queryByRole('button', { name: /^Accept:/ })).toBeNull();
+  });
+
+  it('names the suggestion a move waits on, wherever it is on the page', () => {
+    editorState.blocks = [para('a', 'Alpha'), para('b', 'Beta'), para('c', 'Gamma')];
+    const set = stage(
+      [
+        writeAfter('a', para('x', 'Added after alpha')),
+        moveBlock('c', 'after', 'a'),
+      ],
+      editorState.blocks,
+    );
+    render(<ChangeCard change={itemAt(set.changes, 1)} />);
+
+    expect(screen.getByText('Decide this first:')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Go to the suggestion to decide first: Add paragraph “Added after alpha”' })).toBeTruthy();
+  });
+
+  it('offers Accept on a move that shares no block with a change it cannot accept', () => {
+    editorState.blocks = [para('a', 'Alpha'), para('b', 'Beta'), para('c', 'Gamma'), para('d', 'Delta')];
+    const set = stage([deleteBlocks('b'), moveBlock('d', 'before', 'a')], editorState.blocks);
+    // The author edits the paragraph the deletion was written for.
+    editorState.blocks = [para('a', 'Alpha'), para('b', 'Beta, edited'), para('c', 'Gamma'), para('d', 'Delta')];
+    render(<ChangeCard change={itemAt(set.changes, 1)} />);
+
+    expect(screen.getByRole('button', { name: /^Accept:/ })).toBeTruthy();
+  });
+
+  it('shows a rewrite of a block an earlier batch of the run adds against that block', () => {
+    const first = buildChangeSet(
+      { toolCallId: 'call_1', documentId: 'doc-1', status: 'proposed', actions: [writeAfter('p', para('x', 'Drafted sentence'))], changeSetId: 'cs-1' },
+      editorState.blocks,
+    );
+    const second = linkAcrossSets(buildChangeSet(
+      { toolCallId: 'call_2', documentId: 'doc-1', status: 'proposed', actions: [rewrite('x', { type: 'paragraph', html: 'Drafted sentence, tightened', children: [] })], changeSetId: 'cs-2' },
+      editorState.blocks,
+    ), [first]);
+    reviewState.sets = [first, second];
+    reviewState.pending = [...first.changes, ...second.changes];
+    render(<ChangeCard change={itemAt(second.changes, 0)} />);
+
+    expect(screen.queryByText(/no longer on the page/)).toBeNull();
+    expect(screen.getByText('Accept this first:')).toBeTruthy();
+    expect(screen.getByRole('group').getAttribute('aria-label')).toBe('Rewrite paragraph “Drafted sentence”');
   });
 });
 
@@ -220,7 +269,7 @@ describe('what a change rests on', () => {
       newInformation: true,
     });
     expect(screen.getByText('Research & Writing')).toBeTruthy();
-    expect(screen.getByText('Adds new sources. Review this suggestion individually.')).toBeTruthy();
+    expect(screen.getByText('Adds new sources. Check them before accepting.')).toBeTruthy();
     expect(screen.queryByText(/Based on|Passage not recorded/)).toBeNull();
   });
 

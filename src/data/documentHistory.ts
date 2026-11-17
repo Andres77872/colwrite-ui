@@ -4,6 +4,7 @@ import { referenceRecordOf, toEditorDoc } from '@/api/content';
 import { isCitationStyle } from '@/editor/csl/styles';
 import { ApiError, problemBody, problemCode } from '@/api/errors';
 import type {
+  ChangeSetListResponse,
   ChangeSetOperationDecisionRequest,
   ChangeSetResponse,
   DocumentStateResponse,
@@ -579,15 +580,28 @@ export async function listPendingChangeSets(
   documentId: string,
   init?: { signal?: AbortSignal },
 ): Promise<AgentChangeSet[]> {
-  const payload = await unwrap(api.GET('/workspaces/{workspace_id}/documents/{document_id}/change-sets', {
-    params: { path: { workspace_id: workspaceId, document_id: documentId }, query: { status: 'pending' } },
-    signal: init?.signal,
-  }));
-  const changeSets = payload.change_sets.map(agentChangeSet);
+  const byId = new Map<string, AgentChangeSet>();
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const payload: ChangeSetListResponse = await unwrap(api.GET('/workspaces/{workspace_id}/documents/{document_id}/change-sets', {
+      params: { path: { workspace_id: workspaceId, document_id: documentId }, query: { status: 'pending', cursor } },
+      signal: init?.signal,
+    }));
+    for (const row of payload.change_sets) {
+      if (!byId.has(row.change_set_id)) byId.set(row.change_set_id, agentChangeSet(row));
+    }
+    cursor = payload.next_cursor ?? undefined;
+    if (cursor) {
+      if (cursors.has(cursor)) throw new Error('The change-set list returned a repeated cursor.');
+      cursors.add(cursor);
+    }
+  } while (cursor);
+
   // The API lists newest first. Batches are staged in the order they are
   // returned here, and a later batch of a run builds on the earlier ones.
   const proposed = (changeSet: AgentChangeSet) => Date.parse(changeSet.proposedAt);
-  return changeSets
+  return [...byId.values()]
     .map((changeSet, index) => ({ changeSet, index }))
     .sort((a, b) => proposed(a.changeSet) - proposed(b.changeSet) || b.index - a.index)
     .map(({ changeSet }) => changeSet);

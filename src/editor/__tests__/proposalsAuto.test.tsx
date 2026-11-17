@@ -433,7 +433,7 @@ describe('stored intent groups and manual bulk decisions', () => {
     expect(editor.live.doc.name).toBe('Page');
   });
 
-  it('never bulk-accepts new information in Apply waiting or Accept all', async () => {
+  it('keeps new information out of Apply waiting and bulk acceptance without explicit selection', async () => {
     const operations: ToolOperation[] = [
       { op: 'write_blocks', position: 'append', blockId: null, blocks: [para('N', 'new')], newInformation: true },
       { op: 'write_blocks', position: 'replace', blockId: 'A', blocks: [para('A', 'reworded')], newInformation: false },
@@ -447,8 +447,27 @@ describe('stored intent groups and manual bulk decisions', () => {
     expect(ids(editor)).toEqual(['A:reworded', 'B:B']);
     expect(review().pending.map((change) => change.opIndex)).toEqual([0]);
     expect(sent()).toEqual([[[{ opIndex: 1, decision: 'accepted' }], 'manual']]);
-    await act(async () => review().acceptAll());
+    await act(async () => review().acceptAll(undefined, { includeFlagged: true }));
     expect(sent()).toHaveLength(1);
+  });
+
+  it('applies selected flagged changes and their continuations, without overwriting stale or locked targets', async () => {
+    const operations: ToolOperation[] = [
+      { op: 'write_blocks', position: 'append', blockId: null, blocks: [para('N', 'New fact')], newInformation: true },
+      { op: 'write_blocks', position: 'after', blockId: 'N', blocks: [para('M', 'More facts')], newInformation: true },
+      { op: 'write_blocks', position: 'replace', blockId: 'A', blocks: [para('A', 'Outdated rewrite')], newInformation: true },
+      { op: 'write_blocks', position: 'replace', blockId: 'B', blocks: [para('B', 'Locked rewrite')], newInformation: true },
+    ];
+    getChangeSet.mockResolvedValue(stored({ operations, applyPolicy: 'review' }));
+    const editor = mountEditor([para('A'), { ...para('B'), locked: true }]);
+    act(() => review().receive(announced()));
+    await settle();
+    const idsAtConfirmation = new Set(review().pending.map((change) => change.id));
+    editor.type('A', 'Author’s newer text');
+    await act(async () => review().acceptAll(idsAtConfirmation, { includeFlagged: true }));
+    expect(ids(editor)).toEqual(['A:Author’s newer text', 'B:B', 'N:New fact', 'M:More facts']);
+    expect(review().pending.map((change) => change.opIndex)).toEqual([2, 3]);
+    expect(sent()).toEqual([[[{ opIndex: 0, decision: 'accepted' }, { opIndex: 1, decision: 'accepted' }], 'manual']]);
   });
 
   it('leaves flagged prerequisites, pending precedence, and locked or stale targets undecided', async () => {
