@@ -40,7 +40,7 @@ import {
   messageChain, newestMessage, storeCitations, storePlanSection, storeProposedEdits, workspaceDocument, workspacePolicyOf, type StoredChangeSet,
   type RunPolicy,
 } from './fixtures';
-import { REGISTRY, registryTool, resolveRunToolset, skillsForRun } from './assistantCatalog';
+import { REGISTRY, permitted, registryTool, resolveRunToolset, skillsForRun } from './assistantCatalog';
 import { standingInstructions, type StandingInstruction } from './instructions';
 import { beginReview, finishReview, scriptedReviewFindings } from './reviews';
 import { proposeGeneration } from './imageGenerations';
@@ -478,10 +478,10 @@ export function assistantSocket(options: AssistantSocketOptions = {}) {
       if (!preloads.has(key)) preloads.set(key, { id, resource, by });
     };
     const profile = run.request.profile ?? 'chat';
-    const eligible = skillsForRun(profile, tools);
+    const eligible = skillsForRun(profile, tools, fixtures.assistant);
     for (const tool of REGISTRY.tools) if (tools.has(tool.id) && tool.skill) addPreload(tool.skill, null, 'tools');
     const preset = REGISTRY.presets.find((item) => item.id === run.request.preset);
-    if (preset?.skill && (preset.skill_reference || eligible.has(preset.skill))) {
+    if (preset?.skill && permitted(fixtures.assistant, 'skills', preset.skill) && (preset.skill_reference || eligible.has(preset.skill))) {
       addPreload(preset.skill, preset.skill_reference ?? null, 'preset');
     }
     const page = fixtures.documents.get(run.request.document_id);
@@ -489,8 +489,10 @@ export function assistantSocket(options: AssistantSocketOptions = {}) {
     if (profile === 'review') {
       const skill = run.request.review === 'peer_review' ? 'peer-review'
         : run.request.review === 'structure' ? 'reporting-guidelines' : run.request.review === 'claims' || run.request.review === 'sources' ? 'evidence-review' : null;
-      if (skill && eligible.has(skill)) addPreload(skill, null, 'review');
-      if (skill === 'peer-review') addPreload(skill, 'references/filtering.md', 'review');
+      if (skill && eligible.has(skill)) {
+        addPreload(skill, null, 'review');
+        if (skill === 'peer-review') addPreload(skill, 'references/filtering.md', 'review');
+      }
     }
     for (const { id, resource, by } of preloads.values()) {
       const skill = REGISTRY.skills.find((entry) => entry.id === id);
@@ -513,12 +515,14 @@ export function assistantSocket(options: AssistantSocketOptions = {}) {
       const engine = run.request.engine ?? 'gateway';
       // The task list is part of every chat run; a worker needs the account's Workers switch.
       const plan = tools.has('todo_write');
-      const worker = profile !== 'review' && tools.has('delegate');
       const research = researchTool(tools);
+      const workerResearch = permitted(fixtures.assistant, 'workers', 'web_researcher') ? research : null;
+      const workerLibrary = tools.has('library_search') && permitted(fixtures.assistant, 'workers', 'library_reader');
+      const worker = profile !== 'review' && tools.has('delegate') && (workerResearch !== null || workerLibrary);
       const workerId = `preview-worker-${run.id}`;
       const workerBrief = {
         id: workerId, engine,
-        profile: research ? 'web_researcher' as const : 'library_reader' as const,
+        profile: workerResearch ? 'web_researcher' as const : 'library_reader' as const,
         title: 'Routing evidence',
         objective: 'Find evidence about router stability in the available sources.',
       };
@@ -534,8 +538,8 @@ export function assistantSocket(options: AssistantSocketOptions = {}) {
       // always ends, here `completed`.
       const workerCall = `${workerId}:call_1`;
       // Without an outside source the worker searches the page's PDFs, by their words.
-      const workerTool = research ?? 'library_search';
-      const workerArgs = { ...searchArguments('router z-loss stability', 6), ...(research ? {} : { mode: 'exact' }) };
+      const workerTool = workerResearch ?? 'library_search';
+      const workerArgs = { ...searchArguments('router z-loss stability', 6), ...(workerResearch ? {} : { mode: 'exact' }) };
       let workerState: 'queued' | 'running' | 'done' = 'queued';
       const startWorker = () => {
         if (!worker || workerState !== 'queued') return;

@@ -2016,6 +2016,149 @@
           }
         ]
       },
+      "AssistantDefaults": {
+        "additionalProperties": false,
+        "description": "Preferred in the client; omitted or null fields follow product defaults.",
+        "properties": {
+          "chat_effort": {
+            "anyOf": [
+              {
+                "enum": [
+                  "quick",
+                  "standard"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Effort"
+          },
+          "chat_engine": {
+            "anyOf": [
+              {
+                "enum": [
+                  "gateway",
+                  "claude",
+                  "codex"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Engine"
+          },
+          "claude_model": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:\\[\\]-]{0,99}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claude Model"
+          },
+          "codex_model": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:\\[\\]-]{0,99}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codex Model"
+          },
+          "gateway_lite": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Lite"
+          },
+          "gateway_main": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Main"
+          },
+          "inline_engine": {
+            "anyOf": [
+              {
+                "enum": [
+                  "chat",
+                  "gateway",
+                  "claude",
+                  "codex"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inline Engine"
+          },
+          "review_engine": {
+            "anyOf": [
+              {
+                "enum": [
+                  "chat",
+                  "gateway",
+                  "claude",
+                  "codex"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Engine"
+          },
+          "review_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "proofread",
+                  "claims",
+                  "sources",
+                  "structure",
+                  "peer_review"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Kind"
+          }
+        },
+        "title": "AssistantDefaults",
+        "type": "object"
+      },
       "AssistantEvent": {
         "discriminator": {
           "mapping": {
@@ -2226,6 +2369,35 @@
           "enabled"
         ],
         "title": "AssistantPaperSource",
+        "type": "object"
+      },
+      "AssistantPermissions": {
+        "additionalProperties": false,
+        "description": "An absent entry allows the capability subject to all existing gates.",
+        "properties": {
+          "skills": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Skills",
+            "type": "object"
+          },
+          "tools": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Tools",
+            "type": "object"
+          },
+          "workers": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Workers",
+            "type": "object"
+          }
+        },
+        "title": "AssistantPermissions",
         "type": "object"
       },
       "AssistantRun": {
@@ -2800,6 +2972,12 @@
         "additionalProperties": false,
         "description": "The account's switches. Not under a workspace: ``state`` is ``on``,\n``off`` or ``unavailable``, never ``blocked``.",
         "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/AssistantDefaults"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/AssistantPermissions"
+          },
           "switches": {
             "items": {
               "$ref": "#/components/schemas/AssistantSwitch"
@@ -2809,7 +2987,9 @@
           }
         },
         "required": [
-          "switches"
+          "switches",
+          "defaults",
+          "permissions"
         ],
         "title": "AssistantSettingsResponse",
         "type": "object"
@@ -3925,6 +4105,10 @@
         "additionalProperties": false,
         "description": "A skill, as its ``SKILL.md`` describes it (07 §1): ``on`` when a run\nhere can load it, else why not (a toolset it needs, or the role for the\nediting skill the tools that write blocks bring).",
         "properties": {
+          "configurable": {
+            "title": "Configurable",
+            "type": "boolean"
+          },
           "description": {
             "title": "Description",
             "type": "string"
@@ -4013,6 +4197,7 @@
           "version",
           "profiles",
           "needs",
+          "configurable",
           "guidelines",
           "read"
         ],
@@ -4023,6 +4208,10 @@
         "additionalProperties": false,
         "description": "How the feed shows a tool, and whether a run here has it.\n\n``detail_templates`` are one line about a call in order of preference:\nthe feed shows the first whose placeholders all have a value in the\ncall's ``arguments``, or none. They name only closed-set arguments\n(``{relation}``, ``{limit}``, ``{papers_count}``, ``{url_host}``; TD34).",
         "properties": {
+          "configurable": {
+            "title": "Configurable",
+            "type": "boolean"
+          },
           "detail_templates": {
             "items": {
               "type": "string"
@@ -4119,7 +4308,8 @@
           "detail_templates",
           "value_labels",
           "effects",
-          "profiles"
+          "profiles",
+          "configurable"
         ],
         "title": "CatalogTool",
         "type": "object"
@@ -4193,6 +4383,10 @@
         "additionalProperties": false,
         "description": "A worker profile ``delegate`` can start (08 §3): how the feed names\nits group, and whether a chat run here can start it (``delegate`` on,\nand a tool of its own: a web researcher needs Papers or Web).",
         "properties": {
+          "configurable": {
+            "title": "Configurable",
+            "type": "boolean"
+          },
           "description": {
             "title": "Description",
             "type": "string"
@@ -4245,7 +4439,8 @@
           "id",
           "label",
           "description",
-          "tools"
+          "tools",
+          "configurable"
         ],
         "title": "CatalogWorker",
         "type": "object"
@@ -19074,8 +19269,18 @@
       },
       "UpdateAssistantSettingsRequest": {
         "additionalProperties": false,
-        "description": "A partial change: the switches and sources named change, the others\nkeep their values.",
+        "description": "Change only the named fields. Null inside defaults clears a choice;\nallowing an individual capability removes its opt-out.",
         "properties": {
+          "defaults": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssistantDefaults"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "images": {
             "anyOf": [
               {
@@ -19097,6 +19302,16 @@
               }
             ],
             "title": "Papers"
+          },
+          "permissions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssistantPermissions"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sources": {
             "anyOf": [
@@ -21749,7 +21964,7 @@
     },
     "/users/me/assistant": {
       "get": {
-        "description": "The account's capability switches: Papers with its sources, Web,\nWorkers and Images, each with the account's choice and whether this\nserver can serve it. A workspace's own say is in its catalog.",
+        "description": "The account's capability switches, defaults and individual opt-outs.\nEffective availability in a workspace is in its catalog.",
         "operationId": "users-get_assistant_settings",
         "responses": {
           "200": {
@@ -21807,7 +22022,7 @@
         ]
       },
       "put": {
-        "description": "Change some switches or sources; the others keep their values.",
+        "description": "Change the named preferences of the authenticated account only.",
         "operationId": "users-update_assistant_settings",
         "requestBody": {
           "content": {

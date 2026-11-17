@@ -7,7 +7,7 @@ type ProfileEfforts = { efforts: CatalogEffort[]; defaultEffort: Effort } | unde
 type Choices = { scope: string; next: string | null; effort: Effort | null; web: boolean };
 
 /** The catalog supplies the tiers and default; the choice lives only in this conversation. */
-export function useRunChoices(scope: ConversationScope, profile: ProfileEfforts, webAvailable = false) {
+export function useRunChoices(scope: ConversationScope, profile: ProfileEfforts, webAvailable = false, preferredEffort?: Effort) {
   const key = conversationScopeKey(scope);
   const [stored, setStored] = useState<Choices>(() => ({ scope: key, next: null, effort: null, web: false }));
   let state = stored;
@@ -26,7 +26,8 @@ export function useRunChoices(scope: ConversationScope, profile: ProfileEfforts,
     state = { ...state, web: false };
     setStored(state);
   }
-  const effort = profile?.efforts.find((row) => row.id === (state.effort ?? profile.defaultEffort))?.id;
+  const requested = state.effort ?? preferredEffort;
+  const effort = profile?.efforts.find((row) => row.id === requested)?.id ?? profile?.defaultEffort;
   const setEffort = useCallback((id: Effort) => {
     if (!profile?.efforts.some((row) => row.id === id)) return;
     setStored((current) => current.scope === key ? { ...current, effort: id } : current);

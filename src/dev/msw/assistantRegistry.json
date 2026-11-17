@@ -100,7 +100,8 @@
       "core_toolsets": [
         "web",
         "papers"
-      ]
+      ],
+      "configurable": true
     },
     {
       "id": "library_reader",
@@ -120,7 +121,8 @@
         "library",
         "page",
         "pages"
-      ]
+      ],
+      "configurable": true
     },
     {
       "id": "reviewer",
@@ -131,7 +133,8 @@
       ],
       "core_toolsets": [
         "evidence"
-      ]
+      ],
+      "configurable": true
     }
   ],
   "toolsets": [
@@ -227,6 +230,7 @@
         "chat",
         "review"
       ],
+      "configurable": false,
       "needs": {},
       "labels": [
         "private"
@@ -246,6 +250,7 @@
       "profiles": [
         "review"
       ],
+      "configurable": false,
       "needs": {},
       "labels": [
         "private"
@@ -265,6 +270,7 @@
       "profiles": [
         "chat"
       ],
+      "configurable": false,
       "needs": {},
       "labels": [
         "private"
@@ -285,6 +291,7 @@
       "profiles": [
         "chat"
       ],
+      "configurable": true,
       "needs": {},
       "skill": "editor"
     },
@@ -302,6 +309,7 @@
       "profiles": [
         "chat"
       ],
+      "configurable": false,
       "needs": {
         "tools": [
           "doc_edit"
@@ -335,6 +343,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {},
       "labels": [
         "untrusted",
@@ -360,6 +369,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {},
       "labels": [
         "untrusted",
@@ -390,6 +400,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {},
       "labels": [
         "private"
@@ -417,6 +428,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {},
       "labels": [
         "untrusted",
@@ -439,6 +451,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {},
       "labels": [
         "untrusted",
@@ -469,6 +482,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {},
       "labels": [
         "untrusted",
@@ -503,6 +517,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {
         "switch": "papers",
         "sources": [
@@ -536,6 +551,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {
         "switch": "papers",
         "sources": [
@@ -577,6 +593,7 @@
         "inline",
         "review"
       ],
+      "configurable": true,
       "needs": {
         "switch": "papers",
         "sources": [
@@ -611,6 +628,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {
         "switch": "papers",
         "sources": [
@@ -648,6 +666,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {
         "switch": "web",
         "deployment": "web_search"
@@ -679,6 +698,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {
         "switch": "web",
         "tools": [
@@ -711,6 +731,7 @@
       "profiles": [
         "chat"
       ],
+      "configurable": true,
       "needs": {},
       "labels": [
         "private"
@@ -739,6 +760,7 @@
       "profiles": [
         "chat"
       ],
+      "configurable": true,
       "needs": {},
       "labels": [
         "private"
@@ -760,6 +782,7 @@
       "profiles": [
         "chat"
       ],
+      "configurable": false,
       "needs": {}
     },
     {
@@ -778,6 +801,7 @@
       "profiles": [
         "chat"
       ],
+      "configurable": false,
       "needs": {}
     },
     {
@@ -795,6 +819,7 @@
         "chat",
         "review"
       ],
+      "configurable": false,
       "needs": {}
     },
     {
@@ -821,6 +846,7 @@
         "chat",
         "review"
       ],
+      "configurable": false,
       "needs": {
         "switch": "workers",
         "workers": true
@@ -866,6 +892,7 @@
         "inline",
         "review"
       ],
+      "configurable": false,
       "needs": {
         "run": "skills"
       }
@@ -884,6 +911,7 @@
       "profiles": [
         "chat"
       ],
+      "configurable": false,
       "needs": {
         "switch": "images",
         "deployment": "image_generation",
@@ -1270,6 +1298,7 @@
         "chat",
         "inline"
       ],
+      "configurable": true,
       "needs": [],
       "guidelines": null,
       "read": null
@@ -1282,6 +1311,7 @@
       "profiles": [
         "chat"
       ],
+      "configurable": true,
       "needs": [
         "citations"
       ],
@@ -1297,6 +1327,7 @@
         "chat",
         "inline"
       ],
+      "configurable": false,
       "needs": [
         "page"
       ],
@@ -1313,6 +1344,7 @@
         "inline",
         "review"
       ],
+      "configurable": true,
       "needs": [
         "evidence"
       ],
@@ -1327,6 +1359,7 @@
       "profiles": [
         "chat"
       ],
+      "configurable": true,
       "needs": [
         "page"
       ],
@@ -1342,6 +1375,7 @@
         "chat",
         "inline"
       ],
+      "configurable": true,
       "needs": [
         "evidence"
       ],
@@ -1357,6 +1391,7 @@
         "chat",
         "inline"
       ],
+      "configurable": true,
       "needs": [
         "evidence"
       ],
@@ -1373,6 +1408,7 @@
         "inline",
         "review"
       ],
+      "configurable": true,
       "needs": [],
       "guidelines": null,
       "read": null
@@ -1387,6 +1423,7 @@
         "inline",
         "review"
       ],
+      "configurable": true,
       "needs": [],
       "guidelines": "CONSORT 2025; PRISMA 2020; STROBE 2007; TRIPOD+AI 2024; ARRIVE 2.0 2020; NeurIPS 2026 Main Track Handbook and Paper Checklist",
       "read": "2026-11-16"
@@ -1401,6 +1438,7 @@
         "inline",
         "review"
       ],
+      "configurable": true,
       "needs": [],
       "guidelines": null,
       "read": null
@@ -1415,6 +1453,7 @@
         "inline",
         "review"
       ],
+      "configurable": true,
       "needs": [],
       "guidelines": "SAMPL, Lang and Altman (2013 guidance; 2015 journal publication), EQUATOR record",
       "read": "2026-11-16"
@@ -1429,6 +1468,7 @@
         "inline",
         "review"
       ],
+      "configurable": true,
       "needs": [],
       "guidelines": "PRISMA 2020 statement (published 2021), EQUATOR record and PRISMA 2020 checklist",
       "read": "2026-11-16"
@@ -1443,6 +1483,7 @@
         "inline",
         "review"
       ],
+      "configurable": true,
       "needs": [],
       "guidelines": null,
       "read": null
@@ -1457,6 +1498,7 @@
         "inline",
         "review"
       ],
+      "configurable": true,
       "needs": [],
       "guidelines": null,
       "read": null

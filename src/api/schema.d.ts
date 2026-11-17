@@ -311,14 +311,13 @@ export interface paths {
         };
         /**
          * Get Assistant Settings
-         * @description The account's capability switches: Papers with its sources, Web,
-         *     Workers and Images, each with the account's choice and whether this
-         *     server can serve it. A workspace's own say is in its catalog.
+         * @description The account's capability switches, defaults and individual opt-outs.
+         *     Effective availability in a workspace is in its catalog.
          */
         get: operations["users-get_assistant_settings"];
         /**
          * Update Assistant Settings
-         * @description Change some switches or sources; the others keep their values.
+         * @description Change the named preferences of the authenticated account only.
          */
         put: operations["users-update_assistant_settings"];
         post?: never;
@@ -3262,6 +3261,30 @@ export interface components {
             workers: components["schemas"]["CatalogWorker"][];
         };
         AssistantClientMessage: components["schemas"]["PingCommand"] | components["schemas"]["SessionsCreateCommand"] | components["schemas"]["SessionsListCommand"] | components["schemas"]["SessionsGetCommand"] | components["schemas"]["SessionsDeleteCommand"] | components["schemas"]["SessionsSubscribeCommand"] | components["schemas"]["SessionsUnsubscribeCommand"] | components["schemas"]["RunsStartCommand"] | components["schemas"]["RunsCancelCommand"] | components["schemas"]["RunsResumeCommand"];
+        /**
+         * AssistantDefaults
+         * @description Preferred in the client; omitted or null fields follow product defaults.
+         */
+        AssistantDefaults: {
+            /** Chat Effort */
+            chat_effort?: ("quick" | "standard") | null;
+            /** Chat Engine */
+            chat_engine?: ("gateway" | "claude" | "codex") | null;
+            /** Claude Model */
+            claude_model?: string | null;
+            /** Codex Model */
+            codex_model?: string | null;
+            /** Gateway Lite */
+            gateway_lite?: string | null;
+            /** Gateway Main */
+            gateway_main?: string | null;
+            /** Inline Engine */
+            inline_engine?: ("chat" | "gateway" | "claude" | "codex") | null;
+            /** Review Engine */
+            review_engine?: ("chat" | "gateway" | "claude" | "codex") | null;
+            /** Review Kind */
+            review_kind?: ("proofread" | "claims" | "sources" | "structure" | "peer_review") | null;
+        };
         AssistantEvent: components["schemas"]["StatusEvent"] | components["schemas"]["ReasoningEvent"] | components["schemas"]["TokenEvent"] | components["schemas"]["ToolCallStartEvent"] | components["schemas"]["ToolCallProgressEvent"] | components["schemas"]["ToolCallArgsEvent"] | components["schemas"]["ToolCallEndEvent"] | components["schemas"]["ToolActionEvent"] | components["schemas"]["EvidenceEvent"] | components["schemas"]["ClaimEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["DoneEvent"] | components["schemas"]["TodoEvent"] | components["schemas"]["SubagentEvent"] | components["schemas"]["SessionChatEvent"] | components["schemas"]["RunStatusEvent"] | components["schemas"]["PlanEvent"] | components["schemas"]["QuestionEvent"] | components["schemas"]["ArtifactEvent"] | components["schemas"]["CommentEvent"] | components["schemas"]["BudgetEvent"] | components["schemas"]["SkillEvent"] | components["schemas"]["InstructionsEvent"];
         /**
          * AssistantOutput
@@ -3308,6 +3331,24 @@ export interface components {
              * @enum {string}
              */
             state: "on" | "off" | "blocked" | "unavailable";
+        };
+        /**
+         * AssistantPermissions
+         * @description An absent entry allows the capability subject to all existing gates.
+         */
+        AssistantPermissions: {
+            /** Skills */
+            skills?: {
+                [key: string]: boolean;
+            };
+            /** Tools */
+            tools?: {
+                [key: string]: boolean;
+            };
+            /** Workers */
+            workers?: {
+                [key: string]: boolean;
+            };
         };
         /** AssistantRun */
         AssistantRun: {
@@ -3437,6 +3478,8 @@ export interface components {
          *     ``off`` or ``unavailable``, never ``blocked``.
          */
         AssistantSettingsResponse: {
+            defaults: components["schemas"]["AssistantDefaults"];
+            permissions: components["schemas"]["AssistantPermissions"];
             /** Switches */
             switches: components["schemas"]["AssistantSwitch"][];
         };
@@ -3865,6 +3908,8 @@ export interface components {
          *     editing skill the tools that write blocks bring).
          */
         CatalogSkill: {
+            /** Configurable */
+            configurable: boolean;
             /** Description */
             description: string;
             /** Guidelines */
@@ -3899,6 +3944,8 @@ export interface components {
          *     (``{relation}``, ``{limit}``, ``{papers_count}``, ``{url_host}``; TD34).
          */
         CatalogTool: {
+            /** Configurable */
+            configurable: boolean;
             /** Detail Templates */
             detail_templates: string[];
             /** Effects */
@@ -3954,6 +4001,8 @@ export interface components {
          *     and a tool of its own: a web researcher needs Papers or Web).
          */
         CatalogWorker: {
+            /** Configurable */
+            configurable: boolean;
             /** Description */
             description: string;
             /**
@@ -9324,14 +9373,16 @@ export interface components {
         };
         /**
          * UpdateAssistantSettingsRequest
-         * @description A partial change: the switches and sources named change, the others
-         *     keep their values.
+         * @description Change only the named fields. Null inside defaults clears a choice;
+         *     allowing an individual capability removes its opt-out.
          */
         UpdateAssistantSettingsRequest: {
+            defaults?: components["schemas"]["AssistantDefaults"] | null;
             /** Images */
             images?: boolean | null;
             /** Papers */
             papers?: boolean | null;
+            permissions?: components["schemas"]["AssistantPermissions"] | null;
             /** Sources */
             sources?: {
                 [key: string]: boolean;
@@ -9857,10 +9908,12 @@ export type ArtifactEventMessage = components['schemas']['ArtifactEventMessage']
 export type AssetInfo = components['schemas']['AssetInfo'];
 export type AssistantCatalogResponse = components['schemas']['AssistantCatalogResponse'];
 export type AssistantClientMessage = components['schemas']['AssistantClientMessage'];
+export type AssistantDefaults = components['schemas']['AssistantDefaults'];
 export type AssistantEvent = components['schemas']['AssistantEvent'];
 export type AssistantOutputInput = components['schemas']['AssistantOutput-Input'];
 export type AssistantOutputOutput = components['schemas']['AssistantOutput-Output'];
 export type AssistantPaperSource = components['schemas']['AssistantPaperSource'];
+export type AssistantPermissions = components['schemas']['AssistantPermissions'];
 export type AssistantRun = components['schemas']['AssistantRun'];
 export type AssistantRunListResponse = components['schemas']['AssistantRunListResponse'];
 export type AssistantRunSummary = components['schemas']['AssistantRunSummary'];

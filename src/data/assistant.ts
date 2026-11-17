@@ -26,6 +26,8 @@ import type { AgentEngineId } from './agentEngines';
 export type AssistantCatalog = AssistantCatalogResponse;
 export type AssistantSettings = AssistantSettingsResponse;
 export type AssistantSettingsUpdate = UpdateAssistantSettingsRequest;
+export type AssistantDefaults = AssistantSettings['defaults'];
+export type PermissionGroup = keyof AssistantSettings['permissions'];
 export type CapabilitySwitch = AssistantSwitch;
 export type CapabilitySwitchId = AssistantSwitch['id'];
 export type PaperSource = AssistantPaperSource;
@@ -47,8 +49,8 @@ export async function getAssistantSettings(init?: { signal?: AbortSignal }): Pro
 }
 
 /** Change some switches or sources; the others keep their values. */
-export async function updateAssistantSettings(changes: AssistantSettingsUpdate): Promise<AssistantSettings> {
-  return unwrap(api.PUT('/users/me/assistant', { body: changes }));
+export async function updateAssistantSettings(changes: AssistantSettingsUpdate, signal?: AbortSignal): Promise<AssistantSettings> {
+  return unwrap(api.PUT('/users/me/assistant', { body: changes, signal }));
 }
 
 /** What the assistant can do for this account in the workspace, on `engine`. */
@@ -74,6 +76,7 @@ export function assistantSettingsQuery() {
   return queryOptions({
     queryKey: assistantKeys.settings,
     queryFn: ({ signal }) => getAssistantSettings({ signal }),
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -82,6 +85,7 @@ export function agentCatalogQuery(workspaceId: string, engine: AgentEngineId) {
   return queryOptions({
     queryKey: assistantKeys.catalog(workspaceId, engine),
     queryFn: ({ signal }) => getAssistantCatalog(workspaceId, engine, { signal }),
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -99,15 +103,55 @@ export function invalidateAssistantCatalogs(queryClient: QueryClient, workspaceI
  * it supersedes a read still on its way; every catalog is read again, since
  * what a run gets follows from the switches.
  */
+const SETTINGS_WRITE = 'assistant-settings';
+
 export function useUpdateAssistantSettings() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (changes: AssistantSettingsUpdate) => updateAssistantSettings(changes),
+    scope: { id: SETTINGS_WRITE },
+    mutationFn: (changes: AssistantSettingsUpdate) => {
+      const { signal } = settingsLifetime(queryClient);
+      signal.throwIfAborted();
+      return updateAssistantSettings(changes, signal);
+    },
     onMutate: () => queryClient.cancelQueries({ queryKey: assistantKeys.settings }),
     onSuccess: (settings) => {
       queryClient.setQueryData(assistantKeys.settings, settings);
       void invalidateAssistantCatalogs(queryClient);
     },
+  });
+}
+
+// The query client belongs to the signed-in account. Once it ends, a save
+// queued on it must never send with the next account's cookies.
+const settingsLifetimes = new WeakMap<QueryClient, AbortController>();
+function settingsLifetime(client: QueryClient): AbortController {
+  let lifetime = settingsLifetimes.get(client);
+  if (!lifetime) {
+    lifetime = new AbortController();
+    settingsLifetimes.set(client, lifetime);
+  }
+  return lifetime;
+}
+
+export function stopAssistantSettingsWrites(client: QueryClient) {
+  settingsLifetime(client).abort();
+}
+
+export function flushAssistantSettingsWrites(client: QueryClient): Promise<void> {
+  const mutations = client.getMutationCache();
+  const { signal } = settingsLifetime(client);
+  return new Promise((resolve) => {
+    const check = () => {
+      if (!signal.aborted && mutations.getAll().some((write) =>
+        write.options.scope?.id === SETTINGS_WRITE && write.state.status === 'pending')) return;
+      signal.removeEventListener('abort', check);
+      unsubscribe();
+      resolve();
+    };
+    const unsubscribe = mutations.subscribe(check);
+    signal.addEventListener('abort', check, { once: true });
+    check();
   });
 }
 

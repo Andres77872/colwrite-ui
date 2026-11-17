@@ -91,7 +91,16 @@ function noSource(sources: readonly string[]): string {
 }
 
 /** The account's switches, as `preferences.assistant` stores them: overrides of the defaults only. */
-export type AccountSwitches = { switches: Partial<Record<SwitchId, boolean>>; sources: Partial<Record<string, boolean>> };
+export type AccountSwitches = {
+  switches: Partial<Record<SwitchId, boolean>>;
+  sources: Partial<Record<string, boolean>>;
+  defaults?: AssistantSettingsResponse['defaults'];
+  permissions?: AssistantSettingsResponse['permissions'];
+};
+type PermissionGroup = keyof NonNullable<AccountSwitches['permissions']>;
+export const configurable = (group: PermissionGroup, id: string) => REGISTRY[group].some((row) => row.id === id && row.configurable);
+export const permitted = (account: AccountSwitches, group: PermissionGroup, id: string) =>
+  !configurable(group, id) || account.permissions?.[group]?.[id] !== false;
 
 const NOT_CONFIGURED = 'Not configured on this server.';
 const OFF_HERE = 'Switched off in this workspace.';
@@ -162,6 +171,9 @@ function toolCuts(tool: RegistryTool, profile: Profile, rules: Rules, effort: Ef
     const labels = usable.map((source) => sourceRecord(source).label);
     cuts.push({ tool: tool.id, reason: 'account', detail: `${listed(labels, 'and')} ${labels.length === 1 ? 'is' : 'are'} switched off in your settings.` });
   }
+  if (!permitted(rules.account, 'tools', tool.id)) {
+    cuts.push({ tool: tool.id, reason: 'account', detail: 'This tool is switched off in your settings.' });
+  }
   for (const destination of tool.destinations ?? []) {
     if (!destination.optional && !allows(rules.policy, destination.kind)) {
       cuts.push({ tool: tool.id, reason: 'workspace', detail: `${DESTINATION_NAMES[destination.kind]} is switched off in this workspace.` });
@@ -175,13 +187,14 @@ function toolCuts(tool: RegistryTool, profile: Profile, rules: Rules, effort: Ef
 }
 
 /** The skills a run of `profile` with these tools may load (`skills_for_run`). */
-export function skillsForRun(profile: Profile, tools: ReadonlySet<string>): Set<string> {
+export function skillsForRun(profile: Profile, tools: ReadonlySet<string>, account?: AccountSwitches): Set<string> {
   const brought = new Set(REGISTRY.tools.filter((tool) => tools.has(tool.id) && tool.skill).map((tool) => tool.skill as string));
   const served = new Set(REGISTRY.tools.flatMap((tool) => tool.skill ? [tool.skill] : []));
   const toolsets = new Set(REGISTRY.tools.filter((tool) => tools.has(tool.id)).map((tool) => tool.toolset));
   return new Set(
     REGISTRY.skills
       .filter((skill) => skill.profiles.includes(profile)
+        && (!account || permitted(account, 'skills', skill.id))
         && skill.needs.every((id) => toolsets.has(id))
         && (!served.has(skill.id) || brought.has(skill.id)))
       .map((skill) => skill.id),
@@ -201,9 +214,15 @@ export function resolveRunToolset(profile: Profile, rules: Rules, effort: Effort
   for (const tool of candidates) {
     const missing = (tool.needs.tools ?? []).filter((id) => !chosen.has(id));
     if (missing.length) cuts.set(tool.id, { tool: tool.id, reason: 'needs', detail: `Needs ${missing.join(', ')}.`, because: missing[0] });
-    else if (tool.needs.run === 'skills' && skillsForRun(profile, chosen).size === 0) {
+    else if (tool.needs.run === 'skills' && skillsForRun(profile, chosen, rules.account).size === 0) {
       cuts.set(tool.id, { tool: tool.id, reason: 'needs', detail: "No skill serves this run's tools." });
     } else chosen.add(tool.id);
+  }
+  if (chosen.has('delegate') && rules.account.permissions?.workers && !REGISTRY.workers.some((worker) =>
+    permitted(rules.account, 'workers', worker.id) && worker.tools.some((id) => chosen.has(id)
+      && REGISTRY.tools.some((tool) => tool.id === id && worker.core_toolsets.includes(tool.toolset))))) {
+    chosen.delete('delegate');
+    cuts.set('delegate', { tool: 'delegate', reason: 'account', detail: 'No eligible worker is allowed in your settings.' });
   }
   return { has: chosen, cuts };
 }
@@ -237,14 +256,15 @@ function resolution(rules: Rules) {
 }
 
 /** `on` in a profile whose final toolsets serve it, else the strongest missing requirement (`_skill_status`). */
-function skillStatus(skill: Registry['skills'][number], states: ReturnType<typeof resolution>): Status {
+function skillStatus(skill: Registry['skills'][number], states: ReturnType<typeof resolution>, account: AccountSwitches): Status {
+  if (!permitted(account, 'skills', skill.id)) return { state: 'off', reason: 'This skill is switched off in your settings.' };
   const served = REGISTRY.tools.filter((tool) => tool.skill === skill.id);
   if (served.length) return states.ofTools(served);
   const statuses: Status[] = [];
   for (const profile of skill.profiles) {
     const run = states.runs.get(profile);
     if (!run) continue;
-    if (skillsForRun(profile, run.has).has(skill.id)) return ON;
+    if (skillsForRun(profile, run.has, account).has(skill.id)) return ON;
     const have = new Set(REGISTRY.tools.filter((tool) => run.has.has(tool.id)).map((tool) => tool.toolset));
     const missing = skill.needs.filter((id) => !have.has(id));
     for (const id of missing) {
@@ -266,7 +286,7 @@ function skillStatus(skill: Registry['skills'][number], states: ReturnType<typeo
  * researcher Papers or Web); the reason is the strongest of what takes them
  * away.
  */
-function workerRows(states: ReturnType<typeof resolution>): CatalogWorker[] {
+function workerRows(states: ReturnType<typeof resolution>, account: AccountSwitches): CatalogWorker[] {
   const delegate = REGISTRY.tools.find((tool) => tool.needs.workers);
   const toolsetOf = new Map(REGISTRY.tools.map((tool) => [tool.id, tool.toolset]));
   return REGISTRY.workers.map(({ core_toolsets: core, ...worker }) => {
@@ -278,6 +298,9 @@ function workerRows(states: ReturnType<typeof resolution>): CatalogWorker[] {
         .map((tool) => states.inProfile(tool.id, 'chat'))
         .filter((item) => item.state !== 'on');
       status = cut.length ? strongest(cut) : { state: 'unavailable', reason: NOT_CONFIGURED };
+    }
+    if ((status.state === 'on' || status.state === 'off') && !permitted(account, 'workers', worker.id)) {
+      status = { state: 'off', reason: 'This worker is switched off in your settings.' };
     }
     return { ...worker, ...status };
   });
@@ -333,7 +356,11 @@ function switchesPayload(account: AccountSwitches, policy: WorkspacePolicyModel)
 
 /** `GET /users/me/assistant`: no workspace, so nothing is blocked. */
 export function assistantSettingsOf(account: AccountSwitches): AssistantSettingsResponse {
-  return { switches: switchesPayload(account, UNRESTRICTED) };
+  return {
+    switches: switchesPayload(account, UNRESTRICTED),
+    defaults: account.defaults ?? {},
+    permissions: { tools: {}, skills: {}, workers: {}, ...account.permissions },
+  };
 }
 
 /**
@@ -353,6 +380,17 @@ export function updateAccountSwitches(account: AccountSwitches, body: UpdateAssi
     if (typeof value !== 'boolean') continue;
     if (value === sourceRecord(id).default) delete next.sources[id];
     else next.sources[id] = value;
+  }
+  const defaults = { ...account.defaults, ...body.defaults };
+  for (const key of Object.keys(defaults) as Array<keyof typeof defaults>) if (defaults[key] == null) delete defaults[key];
+  if (Object.keys(defaults).length) next.defaults = defaults;
+  for (const group of ['tools', 'skills', 'workers'] as const) {
+    const overrides: Record<string, boolean> = { ...account.permissions?.[group] };
+    for (const [id, allowed] of Object.entries(body.permissions?.[group] ?? {})) {
+      if (allowed) delete overrides[id];
+      else overrides[id] = false;
+    }
+    if (Object.keys(overrides).length) (next.permissions ??= {})[group] = overrides;
   }
   return next;
 }
@@ -375,7 +413,7 @@ export function assistantCatalog(options: {
     const members = REGISTRY.tools.filter((tool) => tool.toolset === toolset.id);
     return members.length ? [{ ...toolset, ...states.ofTools(members) }] : [];
   });
-  const skills: CatalogSkill[] = REGISTRY.skills.map((skill) => ({ ...skill, ...skillStatus(skill, states) }));
+  const skills: CatalogSkill[] = REGISTRY.skills.map((skill) => ({ ...skill, ...skillStatus(skill, states, account) }));
   const presets: CatalogPreset[] = REGISTRY.presets.map(({ requires, ...preset }) => ({
     ...preset,
     ...(requires.map((tool) => states.inProfile(tool, preset.profile)).find((status) => status.state !== 'on') ?? ON),
@@ -391,7 +429,7 @@ export function assistantCatalog(options: {
       ...structuredClone(effort),
       resume: resumeOf(effort.id, engine, options.engines.find((gate) => gate.id === engine)?.label ?? engine),
     })),
-    workers: workerRows(states),
+    workers: workerRows(states, account),
     switches: switchesPayload(account, policy),
     toolsets,
     tools: REGISTRY.tools.map(({ needs: _needs, destinations: _destinations, skill: _skill, labels: _labels, ...tool }) => ({

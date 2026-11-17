@@ -33,7 +33,7 @@ const SHORT_NAMES: Record<AgentEngineId, string> = {
  * another one behind the author's back.
  */
 export function EngineSwitcher({ disabled = false }: { disabled?: boolean }) {
-  const { selectable, prefs, statusOf, setChatEngine, check, checking } = useAgentEngine();
+  const { selectable, prefs, statusOf, setChatEngine, check, checking, preferencesReady, savingPreferences, preferenceError } = useAgentEngine();
   const view = useContext(ViewContext);
   // As in the page menu: the tooltip must not sit over the open menu, nor
   // pop back up when focus returns to the trigger as the menu closes.
@@ -63,7 +63,7 @@ export function EngineSwitcher({ disabled = false }: { disabled?: boolean }) {
     <DropdownMenu open={menuOpen} onOpenChange={onMenuOpenChange}>
       <Tooltip open={tooltipOpen} onOpenChange={onTooltipOpenChange}>
         <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild disabled={disabled}>
+          <DropdownMenuTrigger asChild disabled={disabled || !preferencesReady || savingPreferences}>
             <button
               type="button"
               aria-label={`Assistant engine: ${engineName(current, status)}${ready ? '' : ' (not ready)'}`}
@@ -82,7 +82,7 @@ export function EngineSwitcher({ disabled = false }: { disabled?: boolean }) {
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent className="max-w-72">
-          {ready ? `Answered by ${engineName(current, status)}` : status?.message ?? 'Checking the engine…'}
+          {preferenceError ?? (ready ? `Answered by ${engineName(current, status)}` : status?.message ?? 'Checking the engine…')}
         </TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="start" className="w-64">

@@ -200,7 +200,7 @@ export function useAgentRun({ surface, document }: { surface: AgentRunSurface; d
       }
 
       // Chosen once per run: switching engines mid-reply applies to the next.
-      const prepared: PreparedRun = { documentId, engine: engineChoice.requestFor(surface === 'inline' ? 'inline' : 'chat') };
+      const prepared: PreparedRun = { documentId, engine: engineChoice.requestFor(surface) };
       spec.onPrepared?.(prepared);
       const own = typeof spec.handlers === 'function' ? spec.handlers(prepared) : spec.handlers ?? {};
 

@@ -21,6 +21,8 @@ export type AssistantCatalogValue = {
   catalog: AssistantCatalog | null;
   loading: boolean;
   error: string | null;
+  retry?: () => void;
+  workspaceName?: string;
   /** A tool's catalog row; `undefined` for one this catalog does not list. */
   tool: (id: string) => CatalogToolRow | undefined;
   toolset: (id: string) => CatalogToolsetRow | undefined;

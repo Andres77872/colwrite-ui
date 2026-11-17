@@ -35,8 +35,8 @@ function catalog(runtime: 'local' | 'deployed'): AgentEngineCatalog {
 
 const setView = vi.fn();
 
-function renderSwitcher(prefs?: object) {
-  if (prefs) window.localStorage.setItem('colwrite:device:agent-engine', JSON.stringify(prefs));
+function renderSwitcher(defaults?: AssistantDefaults) {
+  if (defaults) fixtures.assistant.defaults = defaults;
   return render(
     <ViewContext.Provider value={{ view: 'editor', setView }}>
       <TooltipProvider>
@@ -85,7 +85,7 @@ describe('EngineSwitcher', () => {
 
   it('switches the assistant engine from the composer', async () => {
     api.list.mockResolvedValue(catalog('local'));
-    renderSwitcher({ chat: 'claude', inline: 'chat', models: {} });
+    renderSwitcher({ chat_engine: 'claude' });
 
     const trigger = await screen.findByRole('button', { name: 'Assistant engine: Claude Code' });
     openMenu(trigger);
@@ -101,7 +101,7 @@ describe('EngineSwitcher', () => {
   it('flags an engine that cannot run and re-checks it on request', async () => {
     api.list.mockResolvedValue(catalog('local'));
     api.check.mockResolvedValue(status('codex', true));
-    renderSwitcher({ chat: 'codex', inline: 'chat', models: {} });
+    renderSwitcher({ chat_engine: 'codex' });
 
     const trigger = await screen.findByRole('button', { name: 'Assistant engine: Codex (not ready)' });
     openMenu(trigger);
@@ -123,10 +123,14 @@ describe('EngineSwitcher', () => {
     api.list.mockResolvedValue(catalog('local'));
     renderSwitcher();
 
-    openMenu(await screen.findByRole('button', { name: 'Assistant engine: ColWrite model gateway' }));
+    const trigger = await screen.findByRole('button', { name: 'Assistant engine: ColWrite model gateway' });
+    await waitFor(() => expect((trigger as HTMLButtonElement).disabled).toBe(false));
+    openMenu(trigger);
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Engine settings…' }));
 
     expect(setView).toHaveBeenCalledWith('settings');
     expect(takeRequestedSettingsPane()).toBe('ai');
   });
 });
+import { fixtures } from '@/dev/msw/fixtures';
+import type { AssistantDefaults } from '@/data/assistant';

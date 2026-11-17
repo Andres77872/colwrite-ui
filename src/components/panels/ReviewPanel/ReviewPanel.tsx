@@ -16,6 +16,7 @@ import { itemAt } from '@/lib/itemAt';
 import { usePanels } from '../panelsContextState';
 import { useReviewAdmission } from './reviewAdmission';
 import { uid } from '@/lib/uid';
+import { useAgentEngine } from '@/components/preferences/agentEngineContextState';
 
 export function ReviewPanel() {
   const documentId = useDocumentId();
@@ -45,7 +46,9 @@ function ReviewPage() {
     ...(driverRunning || admission ? { refetchInterval: 1_000 } : {}),
   });
   const runs = useMemo(() => query.data?.pages.flatMap((page) => page.items) ?? [], [query.data]);
-  const [kind, setKind] = useState<ReviewKind>('proofread');
+  const { prefs } = useAgentEngine();
+  const [chosenKind, setKind] = useState<ReviewKind | null>(null);
+  const kind = chosenKind ?? prefs.reviewKind ?? 'proofread';
   const [status, setStatus] = useState<ReviewComment['status']>('open');
   const [runFilter, setRunFilter] = useState('');
   const [error, setError] = useState<string | null>(null);

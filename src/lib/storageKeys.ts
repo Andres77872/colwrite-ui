@@ -5,7 +5,7 @@
  * A key is `colwrite:{scope}:<name>`:
  *
  * - `device`: how this browser is set up (theme, panel layout, page layout,
- *   engine choice). It outlives a sign-out.
+ *   and other device preferences). It outlives a sign-out.
  * - `user`: what belongs to the signed-in account (the cached profile, the
  *   last workspace).
  * - `ws:<workspace id>`: what belongs to one workspace (the last page, the
@@ -28,6 +28,7 @@ const WORKSPACE = 'colwrite:ws:';
 /** The theme; the pre-paint scripts in `index.html` and `dev-preview.html` read it too. */
 export const THEME_KEY = `${DEVICE}theme`;
 export const PAGE_SETTINGS_KEY = `${DEVICE}page-settings`;
+/** Legacy, no longer read: the engine and model choices are account settings. */
 export const AGENT_ENGINE_KEY = `${DEVICE}agent-engine`;
 /** One panel-layout setting (`activePanel`, `leftWidth`, …). */
 export const panelKey = (setting: string) => `${DEVICE}panels:${setting}`;

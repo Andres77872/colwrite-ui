@@ -1,4 +1,4 @@
-import { useContext, useRef, useState, type ReactNode } from 'react';
+import { useContext, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { RefreshCw, RotateCcw } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
@@ -20,6 +20,8 @@ import {
   type PaperSourceId,
 } from '@/data/assistant';
 import { AssistantCatalogContext } from './assistantCatalogContextState';
+import { AssistantDefaultsFields } from './AssistantDefaultsFields';
+import { ToolingCatalog } from './ToolingCatalog';
 
 /** A change on its way to the server: switches and paper sources by id. */
 type Changes = { switches: Partial<Record<CapabilitySwitchId, boolean>>; sources: Partial<Record<PaperSourceId, boolean>> };
@@ -101,14 +103,10 @@ function AssistantPreferencesForm({ settings, leading }: { settings: AssistantSe
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [inFlight, setInFlight] = useState(0);
-  // One save at a time, in order: two quick toggles never land out of order.
-  const queue = useRef<Promise<unknown>>(Promise.resolve());
-
   const apply = (changes: Changes): Promise<AssistantSettings> => {
     setPending((previous) => merge(previous, changes));
     setInFlight((count) => count + 1);
-    const run = queue.current.then(() => save(asUpdate(changes)));
-    queue.current = run.catch(() => undefined);
+    const run = save(asUpdate(changes));
     void run.catch(() => undefined).finally(() => {
       setPending((previous) => withoutSettled(previous, changes));
       setInFlight((count) => count - 1);
@@ -152,7 +150,7 @@ function AssistantPreferencesForm({ settings, leading }: { settings: AssistantSe
     setBulkError(null);
     apply(toDefaults).then(
       () => toast({
-        title: 'Assistant settings reset to defaults',
+        title: 'Assistant capability switches reset to defaults',
         description: 'New assistant runs and paper searches use the defaults.',
         variant: 'success',
         action: {
@@ -165,9 +163,6 @@ function AssistantPreferencesForm({ settings, leading }: { settings: AssistantSe
       (caught: unknown) => setBulkError(`Could not reset to defaults. ${notSavedReason(caught)}`),
     );
   };
-
-  // What has no switch: the catalog's toolsets that are part of the product.
-  const alwaysOn = (catalog?.toolsets ?? []).filter((toolset) => toolset.switch === null).map((toolset) => toolset.label);
 
   return (
     <section aria-labelledby="agent-preferences-title" className="flex flex-col gap-8">
@@ -182,6 +177,7 @@ function AssistantPreferencesForm({ settings, leading }: { settings: AssistantSe
       </div>
 
       {leading}
+      <AssistantDefaultsFields />
 
       <section aria-labelledby="assistant-switches">
         <h2 id="assistant-switches" className="text-sm font-semibold text-foreground">
@@ -227,12 +223,9 @@ function AssistantPreferencesForm({ settings, leading }: { settings: AssistantSe
             );
           })}
         </div>
-        {alwaysOn.length > 0 && (
-          <p className="mt-2 max-w-2xl text-xs text-muted-foreground">
-            Always on: {alwaysOn.length === 1 ? alwaysOn[0] : `${alwaysOn.slice(0, -1).join(', ')} and ${alwaysOn.at(-1)}`}.
-          </p>
-        )}
       </section>
+
+      <ToolingCatalog permissions={settings.permissions} />
 
       {bulkError && <Alert variant="destructive">{bulkError}</Alert>}
 
@@ -241,7 +234,7 @@ function AssistantPreferencesForm({ settings, leading }: { settings: AssistantSe
       <div className="sticky bottom-0 -mx-5 -mb-8 flex flex-wrap items-center justify-between gap-2 border-t border-border bg-card px-5 py-3 sm:-mx-10 sm:px-10">
         <Button type="button" variant="ghost" size="sm" onClick={reset} disabled={atDefaults}>
           <RotateCcw aria-hidden="true" />
-          Reset to defaults
+          Reset capability switches
         </Button>
         <span role="status" className="flex items-center gap-1.5 text-xs text-muted-foreground">
           {inFlight > 0 ? (

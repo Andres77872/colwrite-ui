@@ -36,6 +36,11 @@ export function AssistantCatalogProvider({ children }: { children: ReactNode }) 
   // every check fails closed.
   const catalog = read.isError ? null : (read.data ?? null);
   const error = read.isError ? errorMessage(read.error, 'Could not load what the assistant can use here') : null;
-  const value = useMemo(() => catalogValue(catalog, read.isPending, error), [catalog, error, read.isPending]);
+  const { refetch } = read;
+  const value = useMemo(() => ({
+    ...catalogValue(catalog, read.isPending, error),
+    workspaceName: workspace?.name,
+    retry: () => { void refetch(); },
+  }), [catalog, error, read.isPending, refetch, workspace?.name]);
   return <AssistantCatalogContext.Provider value={value}>{children}</AssistantCatalogContext.Provider>;
 }

@@ -5,6 +5,7 @@ import { http, jsonOf, problem, recordRequests, server } from '@/__tests__/serve
 import { TestWorkspace } from '@/__tests__/workspace';
 import { ToastProvider } from '@/components/ui/toast';
 import { LAB_WORKSPACE_ID, fixtures, workspaceSummary } from '@/dev/msw/fixtures';
+import { AgentEngineProvider } from './AgentEngineContext';
 import { AssistantCatalogProvider } from './AssistantCatalogContext';
 import { AssistantPreferences } from './AssistantPreferences';
 
@@ -18,9 +19,11 @@ afterEach(cleanup);
 
 function renderPane(workspaceId?: string) {
   const pane = (
-    <AssistantCatalogProvider>
-      <AssistantPreferences />
-    </AssistantCatalogProvider>
+    <AgentEngineProvider>
+      <AssistantCatalogProvider>
+        <AssistantPreferences />
+      </AssistantCatalogProvider>
+    </AgentEngineProvider>
   );
   const workspace = workspaceId ? fixtures.workspaces.get(workspaceId) : undefined;
   return render(
@@ -34,10 +37,11 @@ const row = (name: string) => screen.getByRole('switch', { name: new RegExp(`^${
 const rowText = (name: string) => row(name).closest('div')?.textContent ?? '';
 
 describe('Settings → AI & tools', () => {
-  it('shows the four switches, Papers with its sources, and what is always on', async () => {
+  it('shows group switches and the opt-in-only individual controls', async () => {
     renderPane();
     await screen.findByRole('switch', { name: /^Papers/ });
-    expect(screen.getAllByRole('switch').map((control) => control.getAttribute('id'))).toEqual([
+    const groups = screen.getByRole('region', { name: 'What the assistant can use' });
+    expect(within(groups).getAllByRole('switch').map((control) => control.getAttribute('id'))).toEqual([
       'assistant-switch-papers', 'paper-source-openalex', 'paper-source-arxiv_index', 'paper-source-semantic_scholar',
       'assistant-switch-web', 'assistant-switch-workers', 'assistant-switch-images',
     ]);
@@ -51,8 +55,8 @@ describe('Settings → AI & tools', () => {
     expect(arxiv.closest('div')?.textContent).toContain('Not configured on this server.');
     expect(row('Papers').getAttribute('aria-checked')).toBe('true');
     expect(row('Web').getAttribute('aria-checked')).toBe('false');
-    // From the catalog's toolsets that have no switch.
-    expect(await screen.findByText(/^Always on: Document tools, Citations, Evidence, PDF library tools, Workspace pages, Planning and Skills\.$/)).toBeTruthy();
+    expect(await screen.findByRole('switch', { name: 'Allow doc_create in my account' })).toBeTruthy();
+    expect(screen.queryByRole('switch', { name: 'Allow doc_read in my account' })).toBeNull();
   });
 
   it('shows an unavailable row with the server’s reason, and does not let it be switched', async () => {
@@ -109,11 +113,52 @@ describe('Settings → AI & tools', () => {
     fixtures.assistant = { switches: { web: true }, sources: { openalex: false } };
     const sent = recordRequests();
     renderPane();
-    const reset = await screen.findByRole('button', { name: 'Reset to defaults' });
+    const reset = await screen.findByRole('button', { name: 'Reset capability switches' });
     await waitFor(() => expect(reset.hasAttribute('disabled')).toBe(false));
     fireEvent.click(reset);
     await waitFor(() => expect(sent.some((request) => request.method === 'PUT')).toBe(true));
     expect(await jsonOf(sent.find((request) => request.method === 'PUT'))).toEqual({ web: false, sources: { openalex: true } });
-    await screen.findByText('Assistant settings reset to defaults');
+    await screen.findByText('Assistant capability switches reset to defaults');
+  });
+
+  it('persists an opt-out, refreshes the effective status, and can clear it after reopening', async () => {
+    const first = renderPane();
+    const tool = await screen.findByRole('switch', { name: 'Allow paper_graph in my account' });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search catalog' }), { target: { value: 'paper_graph' } });
+    expect(screen.queryByText('doc_read')).toBeNull();
+    fireEvent.click(tool);
+    expect(await screen.findByText('This tool is switched off in your settings.')).toBeTruthy();
+    expect(fixtures.assistant.permissions?.tools).toEqual({ paper_graph: false });
+
+    first.unmount();
+    renderPane();
+    const persisted = await screen.findByRole('switch', { name: 'Allow paper_graph in my account' });
+    expect(persisted.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(persisted);
+    await waitFor(() => expect(persisted.getAttribute('aria-checked')).toBe('true'));
+    await waitFor(() => expect(screen.queryByText('This tool is switched off in your settings.')).toBeNull());
+  });
+
+  it('shows a skill turned off and leaves a protected skill without a switch', async () => {
+    fixtures.assistant.permissions = { skills: { 'peer-review': false } };
+    renderPane();
+    fireEvent.click(await screen.findByRole('button', { name: 'Skills' }));
+    expect(screen.getByRole('switch', { name: 'Allow peer-review in my account' }).getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByText('This skill is switched off in your settings.')).toBeTruthy();
+    expect(screen.queryByRole('switch', { name: 'Allow editor in my account' })).toBeNull();
+  });
+
+  it('preserves independent chat and review defaults across remounts', async () => {
+    const first = renderPane();
+    const effort = await screen.findByRole('combobox', { name: 'Starting chat effort' }) as HTMLSelectElement;
+    fireEvent.change(effort, { target: { value: 'quick' } });
+    await waitFor(() => expect(effort.value).toBe('quick'));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Starting review type' }), { target: { value: 'structure' } });
+    await waitFor(() => expect(fixtures.assistant.defaults).toEqual({ chat_effort: 'quick', review_kind: 'structure' }));
+    first.unmount();
+    renderPane();
+    const review = await screen.findByRole('combobox', { name: 'Starting review type' }) as HTMLSelectElement;
+    expect(review.value).toBe('structure');
+    expect((screen.getByRole('combobox', { name: 'Starting chat effort' }) as HTMLSelectElement).value).toBe('quick');
   });
 });

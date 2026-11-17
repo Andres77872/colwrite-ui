@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createAppQueryClient } from './api/query'
+import { flushAssistantSettingsWrites, stopAssistantSettingsWrites } from './data/assistant'
+import { registerPendingSave } from './lib/pendingSaves'
 import { EditorProvider, useDocumentActions, useDocumentSession, useDocumentStatus } from './editor'
 import { ProposalsProvider } from './editor/ProposalsContext'
 import { ReferenceHealthProvider } from './components/editor/References/ReferenceHealthProvider'
@@ -55,7 +57,7 @@ function App() {
   // The account's server data sits at the top, in one query cache per signed-in
   // account, where every workspace's queries name their workspace. Navigation
   // (the URL) sits above the workspace, so Back and Forward survive a switch;
-  // the engine choice and the panel layout belong to this device. Everything
+  // the panel layout belongs to this device. Everything
   // inside `WorkspaceScope` belongs to one workspace and remounts when it
   // changes (`docs/workspace_collection/08` §5.1).
   return (
@@ -98,6 +100,10 @@ function App() {
  */
 function AccountQueries({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(createAppQueryClient);
+  useEffect(() => registerPendingSave({
+    flush: () => flushAssistantSettingsWrites(queryClient),
+    end: () => stopAssistantSettingsWrites(queryClient),
+  }), [queryClient]);
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 

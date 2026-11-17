@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AGENT_ENGINE_KEY } from '@/lib/storageKeys';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { assistantSettingsQuery, useUpdateAssistantSettings, type AssistantDefaults } from '@/data/assistant';
 import {
   agentEnginesQuery,
   engineModelProblem,
@@ -14,14 +13,11 @@ import {
 import { errorMessage } from '@/api/errors';
 import {
   AgentEngineContext,
-  DEFAULT_ENGINE_PREFS,
-  isAgentEnginePrefs,
+  preferencesOf,
   resolveEngineRequest,
   type AgentEngineContextValue,
   type AgentEngineSurface,
 } from './agentEngineContextState';
-
-const PREFS_KEY = AGENT_ENGINE_KEY;
 
 /**
  * The agent engines this server offers, and which one each surface uses.
@@ -32,7 +28,15 @@ const PREFS_KEY = AGENT_ENGINE_KEY;
  * command to run in a terminal and re-checks when asked.
  */
 export function AgentEngineProvider({ children }: { children: ReactNode }) {
-  const [prefs, setPrefs] = usePersistentState(PREFS_KEY, DEFAULT_ENGINE_PREFS, isAgentEnginePrefs);
+  const settings = useQuery(assistantSettingsQuery());
+  const preferencesReady = settings.data !== undefined;
+  const defaults = settings.data?.defaults;
+  const prefs = useMemo(() => preferencesOf(defaults), [defaults]);
+  const { mutate: update, isPending: savingPreferences, error: saveError } = useUpdateAssistantSettings();
+  const preferenceError = saveError ? errorMessage(saveError, 'Could not save your assistant preferences.') : null;
+  const saveDefaults = useCallback((changes: AssistantDefaults) => {
+    if (preferencesReady) update({ defaults: changes });
+  }, [preferencesReady, update]);
   const engines = useQuery(agentEnginesQuery());
   const catalog = engines.data ?? null;
   const loading = engines.isFetching;
@@ -63,12 +67,14 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
   }, [checkEngine]);
 
   const setChatEngine = useCallback(
-    (engine: AgentEngineId) => setPrefs((previous) => ({ ...previous, chat: engine })),
-    [setPrefs],
+    (engine: AgentEngineId) => saveDefaults({ chat_engine: engine === 'gateway' ? null : engine }),
+    [saveDefaults],
   );
-  const setInlineEngine = useCallback(
-    (engine: AgentEngineId | 'chat') => setPrefs((previous) => ({ ...previous, inline: engine })),
-    [setPrefs],
+  const setSurfaceEngine = useCallback(
+    (surface: 'inline' | 'review', engine: AgentEngineId | 'chat') => saveDefaults({
+      [surface === 'inline' ? 'inline_engine' : 'review_engine']: engine === 'chat' ? null : engine,
+    }),
+    [saveDefaults],
   );
   const setGatewayModel = useCallback(
     (tier: GatewayModelTier, model: string): string | null => {
@@ -76,21 +82,10 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
       if (trimmed && !gatewayModelsFor(catalog, tier).includes(trimmed)) {
         return 'Choose one of the models configured on this server.';
       }
-      setPrefs((previous) => {
-        if (tier === 'lite') {
-          const next = { ...previous };
-          if (trimmed) next.liteModel = trimmed;
-          else delete next.liteModel;
-          return next;
-        }
-        const models = { ...previous.models };
-        if (trimmed) models.gateway = trimmed;
-        else delete models.gateway;
-        return { ...previous, models };
-      });
+      saveDefaults({ [tier === 'lite' ? 'gateway_lite' : 'gateway_main']: trimmed || null });
       return null;
     },
-    [catalog, setPrefs],
+    [catalog, saveDefaults],
   );
   const setModel = useCallback(
     (engine: AgentEngineId, model: string): string | null => {
@@ -98,15 +93,10 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
       const trimmed = model.trim();
       const problem = engineModelProblem(engine, trimmed);
       if (problem) return problem;
-      setPrefs((previous) => {
-        const models = { ...previous.models };
-        if (trimmed) models[engine] = trimmed;
-        else delete models[engine];
-        return { ...previous, models };
-      });
+      saveDefaults({ [engine === 'claude' ? 'claude_model' : 'codex_model']: trimmed || null });
       return null;
     },
-    [setGatewayModel, setPrefs],
+    [setGatewayModel, saveDefaults],
   );
 
   const noteRunError = useCallback(
@@ -123,11 +113,15 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       prefs,
+      preferencesReady,
+      savingPreferences,
+      preferenceError,
       selectable: catalog?.runtime === 'local',
       statusOf: (engine) => statuses.get(engine) ?? null,
       requestFor: (surface: AgentEngineSurface) => resolveEngineRequest(prefs, catalog, surface),
       setChatEngine,
-      setInlineEngine,
+      setSurfaceEngine,
+      saveDefaults,
       setModel,
       setGatewayModel,
       checking,
@@ -145,9 +139,13 @@ export function AgentEngineProvider({ children }: { children: ReactNode }) {
     loading,
     noteRunError,
     prefs,
+    preferencesReady,
+    savingPreferences,
+    preferenceError,
     refresh,
     setChatEngine,
-    setInlineEngine,
+    setSurfaceEngine,
+    saveDefaults,
     setModel,
     setGatewayModel,
   ]);

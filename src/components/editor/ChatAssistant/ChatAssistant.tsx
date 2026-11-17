@@ -17,6 +17,7 @@ import { useAutoMode } from './useAutoMode';
 import { useRunChoices } from './useRunChoices';
 import { questionAnswerText } from '@/lib/questionAnswers';
 import { AssistantCatalogContext } from '@/components/preferences/assistantCatalogContextState';
+import { useAgentEngine } from '@/components/preferences/agentEngineContextState';
 import { useConversationLoader } from './useConversationLoader';
 import { currentFocus, useEditorFocus, type EditorFocus } from '@/components/editor/References';
 import { MessageRow } from './MessageRow';
@@ -172,10 +173,12 @@ function DocumentChatAssistant({ target, onTargetConsumed, runs, unreadChats, ma
   const catalogContext = useContext(AssistantCatalogContext);
   const catalog = catalogContext?.catalog ?? null;
   const webAvailable = catalogContext?.toolset('web')?.state === 'on';
+  const { prefs } = useAgentEngine();
   const choices = useRunChoices(
     { workspace: workspaceId, page: documentSessionId, chat: selectedChatId, chatEpoch },
     catalogContext?.profileEfforts('chat'),
     webAvailable,
+    prefs.chatEffort,
   );
   const policy = catalog?.policy ?? null;
   // The server's chat presets, offered on an empty conversation.

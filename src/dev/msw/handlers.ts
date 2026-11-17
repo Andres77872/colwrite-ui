@@ -135,7 +135,7 @@ import {
 } from './fixtures';
 import { mockAnchorText } from './reviews';
 import { assistantSocket, previewRuns, resetAssistantSockets } from './socket';
-import { assistantSettingsOf, updateAccountSwitches, MOCK_DEPLOYMENT, REGISTRY as ASSISTANT_REGISTRY } from './assistantCatalog';
+import { assistantSettingsOf, configurable, updateAccountSwitches, MOCK_DEPLOYMENT, REGISTRY as ASSISTANT_REGISTRY } from './assistantCatalog';
 import { FEDUS, LEPIKHIN, OKAFOR, SHAZEER, VASWANI } from '../fixtureReferences';
 import { MOCK_VENUES, claimCheckResult, renderStatement } from './references';
 import { MockPlanRefusal, planEtag, planOf, updatePlan } from './plans';
@@ -1560,6 +1560,18 @@ const accountHandlers = [
  * does: a field it does not have, a switch that is not a boolean, an unknown
  * paper source (422).
  */
+const ASSISTANT_DEFAULT_VALIDATORS: Record<string, RegExp> = {
+  chat_engine: /^(gateway|claude|codex)$/,
+  inline_engine: /^(chat|gateway|claude|codex)$/,
+  review_engine: /^(chat|gateway|claude|codex)$/,
+  gateway_main: /^\S{1,200}$/,
+  gateway_lite: /^\S{1,200}$/,
+  claude_model: /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,99}$/,
+  codex_model: /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,99}$/,
+  chat_effort: /^(quick|standard)$/,
+  review_kind: /^(proofread|claims|sources|structure|peer_review)$/,
+};
+
 function assistantUpdateRefusal(body: unknown): { loc: string[]; msg: string } | null {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return { loc: ['body'], msg: 'Input should be a valid dictionary' };
   const switches = new Set<string>(ASSISTANT_REGISTRY.switches.map((item) => item.id));
@@ -1571,6 +1583,22 @@ function assistantUpdateRefusal(body: unknown): { loc: string[]; msg: string } |
       for (const [source, chosen] of Object.entries(value as Json)) {
         if (!sources.has(source)) return { loc: ['body', 'sources', source], msg: "Input should be 'semantic_scholar'" };
         if (typeof chosen !== 'boolean') return { loc: ['body', 'sources', source], msg: 'Input should be a valid boolean' };
+      }
+    } else if (field === 'defaults' || field === 'permissions') {
+      if (value === null) continue;
+      if (typeof value !== 'object' || Array.isArray(value)) return { loc: ['body', field], msg: 'Input should be a valid dictionary' };
+      for (const [key, setting] of Object.entries(value)) {
+        if (field === 'defaults') {
+          const valid = Object.hasOwn(ASSISTANT_DEFAULT_VALIDATORS, key) && (setting === null
+            || (typeof setting === 'string' && ASSISTANT_DEFAULT_VALIDATORS[key]!.test(setting)));
+          if (!valid) return { loc: ['body', field, key], msg: 'Invalid assistant default' };
+        } else {
+          if (key !== 'tools' && key !== 'skills' && key !== 'workers') return { loc: ['body', field, key], msg: 'Extra inputs are not permitted' };
+          if (typeof setting !== 'object' || setting === null || Array.isArray(setting)) return { loc: ['body', field, key], msg: 'Input should be a valid dictionary' };
+          for (const [id, selected] of Object.entries(setting)) {
+            if (!configurable(key, id) || typeof selected !== 'boolean') return { loc: ['body', field, key, id], msg: 'Invalid capability override' };
+          }
+        }
       }
     } else if (!switches.has(field)) {
       return { loc: ['body', field], msg: 'Extra inputs are not permitted' };

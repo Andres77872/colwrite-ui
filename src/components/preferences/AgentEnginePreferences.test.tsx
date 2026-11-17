@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockAgentEngines } from '@/data/__tests__/agentEngineFixtures';
 import { ToastProvider } from '@/components/ui/toast';
 import type { AgentEngineCatalog, AgentEngineStatus } from '@/data/agentEngines';
+import { fixtures } from '@/dev/msw/fixtures';
 
 /** The server's engine routes. */
 const api = { list: vi.fn(), check: vi.fn() };
@@ -96,7 +97,7 @@ describe('AgentEnginePreferences', () => {
     const radios = within(group).getAllByRole('radio');
     expect(radios).toHaveLength(3);
     expect(radio(screen.getByRole('radio', { name: /ColWrite model gateway/ })).checked).toBe(true);
-    expect(radio(screen.getByRole('radio', { name: /Claude Code/ })).disabled).toBe(false);
+    await waitFor(() => expect(radio(screen.getByRole('radio', { name: /Claude Code/ })).disabled).toBe(false));
     // A CLI that is not signed in is shown, with its reason, but not offered.
     expect(radio(screen.getByRole('radio', { name: /Codex/ })).disabled).toBe(true);
     expect(screen.getByText('Sign-in needed')).toBeTruthy();
@@ -108,13 +109,11 @@ describe('AgentEnginePreferences', () => {
     api.list.mockResolvedValue(catalog('local', [LEGACY, CLAUDE, CODEX_SIGNED_OUT]));
     renderPreferences();
 
-    fireEvent.click(await screen.findByRole('radio', { name: /Claude Code/ }));
-    expect(radio(screen.getByRole('radio', { name: /Claude Code/ })).checked).toBe(true);
-    await waitFor(() =>
-      expect(JSON.parse(window.localStorage.getItem('colwrite:device:agent-engine') ?? '{}').chat).toBe(
-        'claude',
-      ),
-    );
+    const claude = radio(await screen.findByRole('radio', { name: /Claude Code/ }));
+    await waitFor(() => expect(claude.disabled).toBe(false));
+    fireEvent.click(claude);
+    await waitFor(() => expect(claude.checked).toBe(true));
+    expect(fixtures.assistant.defaults?.chat_engine).toBe('claude');
 
     // Claude Code offers its aliases, and any other id it accepts.
     const models = screen.getAllByRole('combobox', { name: 'Model' });
@@ -122,34 +121,25 @@ describe('AgentEnginePreferences', () => {
       within(select).queryByRole('option', { name: 'Claude Code default' }),
     )!;
     fireEvent.change(claudeModel, { target: { value: 'opus' } });
-    await waitFor(() =>
-      expect(
-        JSON.parse(window.localStorage.getItem('colwrite:device:agent-engine') ?? '{}').models,
-      ).toEqual({ claude: 'opus' }),
-    );
+    await waitFor(() => expect(fixtures.assistant.defaults?.claude_model).toBe('opus'));
   });
 
   it('refuses a gateway id for a CLI and keeps the saved model', async () => {
-    window.localStorage.setItem(
-      'colwrite:device:agent-engine',
-      JSON.stringify({ chat: 'claude', inline: 'chat', models: { claude: 'sonnet' } }),
-    );
+    fixtures.assistant.defaults = { chat_engine: 'claude', claude_model: 'sonnet' };
     api.list.mockResolvedValue(catalog('local', [LEGACY, CLAUDE, CODEX_SIGNED_OUT]));
     renderPreferences();
 
-    const claudeModel = (await screen.findAllByRole('combobox', { name: 'Model' })).find((select) =>
-      within(select).queryByRole('option', { name: 'Claude Code default' }),
-    )!;
-    fireEvent.change(claudeModel, { target: { value: '__other__' } });
+    const model = () => screen.getAllByRole('combobox', { name: 'Model' }).find((select) =>
+      within(select).queryByRole('option', { name: 'Claude Code default' })) as HTMLSelectElement;
+    await waitFor(() => expect(model()?.value).toBe('sonnet'));
+    fireEvent.change(model(), { target: { value: '__other__' } });
     const input = screen.getByRole('textbox', { name: 'Claude Code model id' });
     fireEvent.change(input, { target: { value: '~anthropic/claude-haiku-latest' } });
     fireEvent.blur(input);
 
     expect(await screen.findByText(/not a gateway id\. Still using sonnet\./)).toBeTruthy();
     expect(input.getAttribute('aria-invalid')).toBe('true');
-    expect(
-      JSON.parse(window.localStorage.getItem('colwrite:device:agent-engine') ?? '{}').models,
-    ).toEqual({ claude: 'sonnet' });
+    expect(fixtures.assistant.defaults?.claude_model).toBe('sonnet');
   });
 
   it('checks again after the author signs in, without signing in itself', async () => {
@@ -173,10 +163,7 @@ describe('AgentEnginePreferences', () => {
   });
 
   it('warns when the chosen engine can no longer run', async () => {
-    window.localStorage.setItem(
-      'colwrite:device:agent-engine',
-      JSON.stringify({ chat: 'codex', inline: 'chat', models: {} }),
-    );
+    fixtures.assistant.defaults = { chat_engine: 'codex' };
     api.list.mockResolvedValue(catalog('local', [LEGACY, CLAUDE, CODEX_SIGNED_OUT]));
     renderPreferences();
 
@@ -195,12 +182,9 @@ describe('AgentEnginePreferences', () => {
       'ColWrite model gateway',
       'Claude Code',
     ]);
+    await waitFor(() => expect((inline as HTMLSelectElement).disabled).toBe(false));
     fireEvent.change(inline, { target: { value: 'gateway' } });
-    await waitFor(() =>
-      expect(JSON.parse(window.localStorage.getItem('colwrite:device:agent-engine') ?? '{}').inline).toBe(
-        'gateway',
-      ),
-    );
+    await waitFor(() => expect(fixtures.assistant.defaults?.inline_engine).toBe('gateway'));
   });
 
   it('offers exactly the configured models for each tier, with no gateway text input', async () => {
@@ -219,35 +203,35 @@ describe('AgentEnginePreferences', () => {
   it('saves independent general/lite choices, restores them, and resets one without changing the other', async () => {
     api.list.mockResolvedValue(catalog('deployed', [LEGACY]));
     const first = renderPreferences();
-    fireEvent.change(await screen.findByRole('combobox', { name: 'General model' }), {
+    const main = await screen.findByRole('combobox', { name: 'General model' }) as HTMLSelectElement;
+    const lite = screen.getByRole('combobox', { name: 'Lite model' }) as HTMLSelectElement;
+    await waitFor(() => expect(main.disabled).toBe(false));
+    fireEvent.change(main, {
       target: { value: 'anthropic/claude-sonnet-5.5' },
     });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Lite model' }), {
+    await waitFor(() => expect(main.value).toBe('anthropic/claude-sonnet-5.5'));
+    fireEvent.change(lite, {
       target: { value: 'google/gemini-4-hydrogen' },
     });
-    await waitFor(() => expect(JSON.parse(localStorage.getItem('colwrite:device:agent-engine') ?? '{}'))
-      .toMatchObject({ models: { gateway: 'anthropic/claude-sonnet-5.5' }, liteModel: 'google/gemini-4-hydrogen' }));
+    await waitFor(() => expect(lite.value).toBe('google/gemini-4-hydrogen'));
 
     first.unmount();
     renderPreferences();
     const general = await screen.findByRole('combobox', { name: 'General model' }) as HTMLSelectElement;
-    expect(general.value).toBe('anthropic/claude-sonnet-5.5');
+    await waitFor(() => expect(general.value).toBe('anthropic/claude-sonnet-5.5'));
     expect((screen.getByRole('combobox', { name: 'Lite model' }) as HTMLSelectElement).value).toBe('google/gemini-4-hydrogen');
     fireEvent.change(general, { target: { value: '' } });
-    await waitFor(() => expect(JSON.parse(localStorage.getItem('colwrite:device:agent-engine') ?? '{}'))
-      .toMatchObject({ models: {}, liteModel: 'google/gemini-4-hydrogen' }));
+    await waitFor(() => expect(fixtures.assistant.defaults).toEqual({ gateway_lite: 'google/gemini-4-hydrogen' }));
   });
 
   it('does not offer a stale model saved against a different server', async () => {
-    localStorage.setItem('colwrite:device:agent-engine', JSON.stringify({
-      chat: 'gateway', inline: 'chat', models: { gateway: 'old/general' }, liteModel: 'old/lite',
-    }));
+    fixtures.assistant.defaults = { gateway_main: 'old/general', gateway_lite: 'old/lite' };
     api.list.mockResolvedValue(catalog('deployed', [LEGACY]));
     renderPreferences();
     const general = await screen.findByRole('combobox', { name: 'General model' }) as HTMLSelectElement;
     expect(general.value).toBe('');
     expect((screen.getByRole('combobox', { name: 'Lite model' }) as HTMLSelectElement).value).toBe('');
-    expect(screen.getAllByText(/saved model is no longer configured/)).toHaveLength(2);
+    expect(await screen.findAllByText(/saved model is no longer configured/)).toHaveLength(2);
     expect(screen.queryByRole('option', { name: 'old/general' })).toBeNull();
     expect(screen.queryByRole('option', { name: 'old/lite' })).toBeNull();
   });

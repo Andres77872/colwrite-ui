@@ -21,6 +21,16 @@ describe('conversation run choices', () => {
     expect(hook.result.current.effort).toBe('quick');
   });
 
+  it('starts with the account default but honors a choice in the current conversation', () => {
+    const hook = renderHook((value: ConversationScope) => useRunChoices(value, profile, true, 'quick'), { initialProps: scope() });
+    expect(hook.result.current.effort).toBe('quick');
+    act(() => hook.result.current.setEffort('standard'));
+    expect(hook.result.current.effort).toBe('standard');
+    hook.rerender(scope({ chat: 'another' }));
+    expect(hook.result.current.effort).toBe('quick');
+    expect(hook.result.current.web).toBe(false);
+  });
+
   it.each([
     scope({ workspace: 'w2' }), scope({ page: 'other-page' }),
     scope({ chat: 'c2' }), scope({ chatEpoch: 1 }),

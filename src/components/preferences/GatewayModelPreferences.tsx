@@ -21,7 +21,7 @@ export function GatewayModelPreferences() {
       <h2 id={titleId} className="text-sm font-semibold text-foreground">Gateway models</h2>
       <p className="mt-0.5 max-w-2xl text-xs text-muted-foreground">
         Choose the first model for general and lite work. Only this server’s configured models are
-        offered; the others remain as fallbacks. Applies to new requests on this device.
+         offered; the others remain as fallbacks. Saved to your account for new requests.
         Local CLI engines keep their own model choices.
       </p>
       {loading && !catalog ? (
@@ -76,7 +76,7 @@ function GatewayModelField({ tier, label, children }: {
   label: string;
   children: string;
 }) {
-  const { catalog, prefs, setGatewayModel } = useAgentEngine();
+  const { catalog, prefs, setGatewayModel, preferencesReady, savingPreferences } = useAgentEngine();
   const id = useId();
   const [problem, setProblem] = useState<string | null>(null);
   const models = gatewayModelsFor(catalog, tier);
@@ -99,6 +99,7 @@ function GatewayModelField({ tier, label, children }: {
         id={id}
         className="w-full shrink-0 sm:w-80"
         value={stale ? '' : saved}
+        disabled={!preferencesReady || savingPreferences}
         aria-describedby={`${id}-hint${problem ? ` ${id}-error` : ''}`}
         aria-invalid={problem ? true : undefined}
         onChange={(event) => setProblem(setGatewayModel(tier, event.target.value))}

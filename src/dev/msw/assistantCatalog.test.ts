@@ -907,7 +907,9 @@ describe('the mock’s assistant catalog, as the API computes it', () => {
 
   it('lists each profile’s toolsets and effort tiers, and the tiers with what each may spend', () => {
     const { catalog } = observed('personal');
-    expect({ profiles: catalog.profiles, efforts: catalog.efforts, workers: catalog.workers }).toEqual(SHAPE);
+    expect({ profiles: catalog.profiles, efforts: catalog.efforts, workers: catalog.workers }).toEqual({
+      ...SHAPE, workers: SHAPE.workers.map((worker) => ({ ...worker, configurable: true })),
+    });
     // Only the gateway checkpoints a deep run, so only it can resume one.
     expect(Object.fromEntries(catalog.engines.map((row) => [row.id, row.capabilities.checkpoints]))).toEqual({"gateway": true, "claude": false, "codex": false});
   });
