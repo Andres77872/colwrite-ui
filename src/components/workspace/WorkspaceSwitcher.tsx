@@ -27,6 +27,7 @@ import { WorkspaceIcon } from './WorkspaceIcon';
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog';
 import { accessOf, workspaceBadge } from './workspaceAccess';
 import { InviteDialog } from '@/components/profile/InviteDialog';
+import { DOCS_HOME } from '@/docs/catalog';
 
 const APP_VERSION = 'v0.1 · alpha';
 
@@ -167,9 +168,9 @@ export function WorkspaceSwitcher({ onShowShortcuts }: { onShowShortcuts: () => 
             </DropdownMenuSub>
           )}
           <DropdownMenuItem asChild>
-            <a href="/wiki/" target="_blank" rel="noopener noreferrer">
+            <a href={DOCS_HOME} target="_blank" rel="noopener noreferrer">
               <BookOpen aria-hidden="true" />
-              User wiki<span className="sr-only"> (opens in a new tab)</span>
+              Docs<span className="sr-only"> (opens in a new tab)</span>
             </a>
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={onShowShortcuts}>

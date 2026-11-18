@@ -1,12 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { takeItems } from '@/lib/itemAt';
+import { describe, it, expect, afterEach } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { AuthProvider } from '@/components/auth/AuthContext';
 import { LandingPage } from '../LandingPage';
-import { samplePaper, topics } from '../tour';
-import { examples, exampleUrl } from '@/examples/catalog';
 
-function renderLanding(url = '/') {
-  window.history.replaceState(null, '', url);
+function renderLanding() {
   return render(
     <AuthProvider>
       <LandingPage />
@@ -14,68 +12,97 @@ function renderLanding(url = '/') {
   );
 }
 
-beforeEach(() => {
-  vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
-});
 afterEach(() => {
   cleanup();
   window.history.replaceState(null, '', '/');
-  vi.restoreAllMocks();
 });
 
 describe('LandingPage', () => {
-  it('offers every task from the overview and links to the actual paper and public wiki', () => {
+  it('renders the hero, sections and calls to action', () => {
     renderLanding();
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('sources in view');
-    const directory = within(screen.getByRole('navigation', { name: 'Explore the workspace' }));
-    for (const topic of topics) {
-      expect(directory.getByRole('link', { name: new RegExp(topic.label) }).getAttribute('href')).toBe(
-        `#${topic.id}`,
-      );
+
+    const hero = screen.getByRole('heading', { level: 1 });
+    expect(hero.textContent).toContain('Write your research paper');
+    expect(document.querySelector('iframe')).toBeNull();
+
+    // The header's "Features" and every section the footer links to.
+    for (const id of ['features', 'editor', 'ai-actions', 'review', 'research', 'control', 'docs']) {
+      expect(document.getElementById(id)).not.toBeNull();
     }
-    expect(screen.getByRole('link', { name: 'Read the sample paper' }).getAttribute('href')).toBe(
-      samplePaper,
-    );
+
+    // More than one path to sign in (header, hero, closing CTA).
+    expect(screen.getAllByRole('button', { name: /sign in/i }).length).toBeGreaterThan(2);
+  });
+
+  it('wears the same header and footer as the docs', () => {
+    renderLanding();
+
+    const site = screen.getByRole('navigation', { name: 'Site' });
+    expect(within(site).getByRole('link', { name: 'Docs' }).getAttribute('href')).toBe('/docs/');
+    expect(within(site).getByRole('link', { name: 'Features' }).getAttribute('href')).toBe('/#features');
+    expect(within(site).getByRole('link', { name: 'Sample paper' }).getAttribute('href')).toBe('/examples/?view=paper');
+    expect(screen.getByRole('navigation', { name: 'Docs links' })).not.toBeNull();
+  });
+
+  it('leads each feature on to the docs page that covers it', () => {
+    renderLanding();
+    const link = (name: string) => screen.getByRole('link', { name }).getAttribute('href');
+    expect(link('Read the editor docs')).toBe('/docs/editor.html');
+    expect(link('Read the Ask AI docs')).toBe('/docs/ask-ai.html');
+    expect(link('Read the suggestions docs')).toBe('/docs/suggestions.html');
+    expect(link('Read the paper search docs')).toBe('/docs/paper-search.html');
+    expect(link('Read the roles and policy docs')).toBe('/docs/members.html#workspace-policy');
+
+    const docs = document.getElementById('docs')!;
+    for (const title of ['Quick start', 'Editor and blocks', 'Citations and references', 'Export and AI use']) {
+      expect(within(docs).getByRole('link', { name: new RegExp(title) })).not.toBeNull();
+    }
+  });
+
+  it('pictures Ask AI on a selection, in its groups', () => {
+    renderLanding();
+    for (const label of ['Edit or review', 'Improve writing', 'Change tone', 'Check the claims']) {
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('surfaces the real tool panels, each with its contents', () => {
+    renderLanding();
+    for (const label of ['Paper search', 'Library', 'Sources', 'Document JSON']) {
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+    }
+    expect(screen.getByText('Retracted')).not.toBeNull();
+  });
+
+  it('uses the landing artwork behind the product', () => {
+    renderLanding();
+    const images = Array.from(document.querySelectorAll('img'), (image) => image.getAttribute('src'));
+    expect(images).toContain('/images/colwrite-hero-manuscript.webp');
     expect(
-      within(screen.getByRole('navigation', { name: 'Site navigation' }))
-        .getByRole('link', { name: 'User wiki' })
-        .getAttribute('href'),
-    ).toBe('/wiki/');
-    expect(screen.getByText('Invite-only alpha')).toBeDefined();
+      screen.getByRole('img', { name: /research papers and data streams/i }).getAttribute('src'),
+    ).toBe('/images/colwrite-research-flow.webp');
+    expect(screen.getByText('Write with the evidence in view')).not.toBeNull();
   });
 
-  it.each(topics)('opens the $label view directly with its live component example and guide', (topic) => {
-    renderLanding(`/#${topic.id}`);
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(topic.title);
-    expect(screen.getByTitle(examples[topic.id].title).getAttribute('src')).toBe(exampleUrl(topic.id));
-    expect(screen.getByRole('link', { name: /Read the wiki guide/ }).getAttribute('href')).toBe(
-      `/wiki/${topic.id}.html`,
-    );
-    const current = within(screen.getByRole('navigation', { name: 'Tour views' })).getByRole('link', {
-      name: topic.label,
-    });
-    expect(current.getAttribute('aria-current')).toBe('page');
+  it('states the alpha terms honestly', () => {
+    renderLanding();
+    expect(screen.getAllByText(/invite-only/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/data formats may change/i).length).toBeGreaterThan(0);
   });
 
-  it('switches views and handles browser Back while preserving the app link in the query', async () => {
-    renderLanding('/?doc=linked-page#editor');
-    fireEvent.click(screen.getByRole('link', { name: 'Papers and citations' }));
-    await screen.findByRole('heading', { name: 'Trace a claim to its source.' });
-    expect(document.activeElement).toBe(screen.getByRole('main'));
-    expect(location.search).toBe('?doc=linked-page');
-    window.history.back();
-    await screen.findByRole('heading', { name: 'Put the results in the manuscript.' });
+  it('opens the auth dialog from the call to action', async () => {
+    renderLanding();
+    const [cta] = takeItems(screen.getAllByRole('button', { name: 'Sign in to continue' }), 1);
+    fireEvent.click(cta);
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('Welcome to ColWrite');
   });
 
-  it('keeps previously shared Control links useful', () => {
-    renderLanding('/#control');
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('See what changed between saves.');
-  });
-
-  it('keeps sign-in available on deep links', async () => {
-    renderLanding('/?ws=linked-workspace#research');
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
-    expect((await screen.findByRole('dialog')).textContent).toContain('Welcome to ColWrite');
-    expect(location.search).toBe('?ws=linked-workspace');
+  it('opens the auth dialog when the docs link here to sign in', async () => {
+    window.history.replaceState(null, '', '/#sign-in');
+    renderLanding();
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('Welcome to ColWrite');
+    expect(window.location.hash).toBe('');
   });
 });

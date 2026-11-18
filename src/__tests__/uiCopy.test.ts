@@ -62,8 +62,11 @@ const UI_NAMES = new Set([
   'running',
 ]);
 
-/** The only copy allowed to say "document": the developer view's name. */
-const ALLOWED = new Set(['Document JSON']);
+/**
+ * The only copy allowed to say "document": the developer view's name, and its
+ * own button as the user guides quote it.
+ */
+const ALLOWED = new Set(['Document JSON', 'Apply to document']);
 
 /** "document" as a word, not part of an identifier, a path or a class name. */
 const WORD = /(?<![\w.\-/#])documents?(?![\w\-/])/i;

@@ -8,18 +8,25 @@ import '@/styles/globals.css';
 import './styles.css';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ToastProvider } from '@/components/ui/toast';
-import { initTheme } from '@/lib/theme';
+import { initTheme, type ResolvedTheme } from '@/lib/theme';
 import { examples, isExampleId } from './catalog';
 import { ExamplePage } from './ExamplePage';
+import { SamplePaperPage } from './SamplePaperPage';
 
 initTheme();
-const view = new URLSearchParams(window.location.search).get('view') ?? 'overview';
-const id = view === 'paper' || isExampleId(view) ? view : 'overview';
-document.title = `${id === 'paper' ? 'Sparse Routing for Long-Context Pretraining' : examples[id].title} · ColWrite`;
+const params = new URLSearchParams(window.location.search);
+const view = params.get('view') ?? 'paper';
+// The guides embed examples with `&theme=dark`, the site's own
+// appearance, whatever this device's theme is.
+const themeParam = params.get('theme');
+const pinnedTheme: ResolvedTheme | undefined = themeParam === 'dark' || themeParam === 'light' ? themeParam : undefined;
+
+const id = isExampleId(view) ? view : 'paper';
+document.title = id === 'paper' ? 'Sample paper · ColWrite' : `${examples[id].title} · ColWrite`;
 createRoot(document.getElementById('root')!).render(
   <TooltipProvider>
     <ToastProvider>
-      <ExamplePage id={id} />
+      {id === 'paper' ? <SamplePaperPage /> : <ExamplePage id={id} theme={pinnedTheme} />}
     </ToastProvider>
   </TooltipProvider>,
 );

@@ -1,4 +1,6 @@
-import { cn } from '@/lib/utils';
+// A relative import, not `@/`: the user guides render this lockup inside the
+// Vite config process (vite.wiki.ts), which does not resolve the app's aliases.
+import { cn } from '../../../lib/utils';
 
 export const APP_NAME = 'ColWrite';
 export const APP_TAGLINE = 'Assistant writer for arXiv papers';

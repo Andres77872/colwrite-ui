@@ -1,54 +1,38 @@
-/** The same working specimens are embedded in the product tour and the wiki. */
+/**
+ * What a page can hold, each drawn by the editor's own block, for the docs
+ * to embed beside the feature it shows. Only document content belongs here:
+ * the app's panels and dialogs are described in the docs, not imitated.
+ */
 export const examples = {
-  overview: {
-    title: 'Figure 1 · Sparse Routing for Long-Context Pretraining',
-    action: 'Inspect the routing diagram or download its SVG.',
-    height: 440,
+  equation: {
+    title: 'Equations',
+    action: 'Select an equation to edit its LaTeX, switch it between inline and display, or number it.',
+    height: 300,
   },
-  editor: {
-    title: 'Tables, equations, and charts',
-    action: 'Change a cell, edit the LaTeX, or insert a chart. Download the paper with your edits.',
-    height: 400,
+  table: {
+    title: 'Table',
+    action: 'Select the table to edit its cells, add or remove rows and columns, or change its caption.',
+    height: 300,
   },
-  figures: {
-    title: 'The manuscript’s figures',
-    action: 'Select a node to edit its label, or switch drawings and edit their source.',
+  chart: {
+    title: 'Chart',
+    action: 'Select the chart to change its type, values, labels and axis titles.',
+    height: 380,
+  },
+  diagram: {
+    title: 'Mermaid diagram',
+    action: 'Open “Edit the source” and change the diagram: the drawing follows as you type.',
+    height: 420,
+  },
+  figure: {
+    title: 'Structured figure',
+    action: 'Select a box or an arrow to edit it, or open “Edit the source” to change the figure’s spec.',
     height: 500,
   },
-  research: {
-    title: 'Papers and citation styles',
-    action: 'Explore the sample results or change the style of a reference.',
-    height: 430,
-  },
-  library: {
-    title: 'PDFs in the sample workspace',
-    action: 'Filter the readings by name and open a PDF’s extracted text.',
-    height: 385,
-  },
-  'ai-actions': {
-    title: 'A recorded reply about related work',
-    action: 'Follow a citation in the reply or expand its tasks and run details.',
-    height: 445,
-  },
-  review: {
-    title: 'A proposed rewrite of the abstract',
-    action: 'Compare the original wording and the proposal from Camera-ready edits.',
-    height: 265,
-  },
-  history: {
-    title: 'Three saved revisions',
-    action: 'Select a revision to inspect its changes.',
-    height: 395,
-  },
-  workspaces: {
-    title: 'Collections and workspace activity',
-    action: 'Expand Thesis to browse its chapters, or inspect workspace activity as a chart or table.',
-    height: 400,
-  },
-  export: {
-    title: 'Export the sample paper',
-    action: 'Choose a format and generate a file from the manuscript.',
-    height: 330,
+  citations: {
+    title: 'Citations and the reference list',
+    action: 'Pick another citation style: the citations in the text and the reference list are set again.',
+    height: 480,
   },
 } as const;
 
