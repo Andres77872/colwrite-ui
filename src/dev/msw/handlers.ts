@@ -2375,7 +2375,10 @@ const imageGenerationHandlers = [
     const key = request.headers.get('Idempotency-Key')?.trim();
     if (!key) return problem('invalid_idempotency_key', 'An action key is required.');
     if (Object.keys(body).some((name) => !['document_id', 'engine', 'purpose', 'description', 'style', 'exact_text', 'aspect_ratio', 'prompt'].includes(name))
-      || !body.description?.trim() || body.description.length > 2000) return invalidRequest(['body'], 'Describe one illustration.');
+      || typeof body.description !== 'string' || !body.description.trim() || body.description.length > 2000) return invalidRequest(['body'], 'Describe one illustration.');
+    if (!['illustration', 'graphical_abstract', 'cover', 'schematic', 'other'].includes(body.purpose)) {
+      return invalidRequest(['body', 'purpose'], 'Choose an image purpose.');
+    }
     if (body.prompt != null && (typeof body.prompt !== 'string' || !body.prompt.trim() || body.prompt.length > 4000)) {
       return invalidRequest(['body', 'prompt'], 'Provide a nonblank final prompt of at most 4000 characters.');
     }
@@ -2389,7 +2392,8 @@ const imageGenerationHandlers = [
     }
     const quota = generationQuota(workspace);
     if (!quota.available) return problem('image_quota_exceeded', quota.reason!, { scope: quota.scope, resets_at: quota.resets_at });
-    const prompt = body.prompt ?? [body.description.trim(), body.style,
+    const purpose = body.purpose.replaceAll('_', ' ');
+    const prompt = body.prompt ?? [purpose.charAt(0).toUpperCase() + purpose.slice(1), body.description.trim(), body.style,
       body.exact_text ? `Render this exact lettering:\n${body.exact_text}` : 'No visible text.'].filter(Boolean).join('\n');
     const info = proposeGeneration(workspace, body.document_id, {
       purpose: body.purpose, description: body.description, style: body.style ?? '',
