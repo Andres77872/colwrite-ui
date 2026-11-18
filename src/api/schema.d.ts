@@ -2393,10 +2393,10 @@ export interface components {
          *         run, for an editor or above, under a workspace policy that allows it;
          *         each set then carries
          *         ``apply_policy: "auto"``, otherwise ``"review"`` with an
-         *         ``auto_blocked_reason``. Auto also ends at the run's first result of a
-         *         tool that returns untrusted content (``untrusted_content``). The
-         *         run's ``status`` events report the policy in effect when each is
-         *         sent. ``auto`` is refused for an ``inline`` run.
+         *         ``auto_blocked_reason``. What the run reads does not end it: a turn
+         *         that searched the web or read a PDF keeps ``auto``. The run's
+         *         ``status`` events report the policy in effect when each is sent.
+         *         ``auto`` is refused for an ``inline`` run.
          *     web : bool
          *         Off by default for each turn. Only narrows Web permissions granted
          *         by the account, workspace, deployment and engine. Requested but
@@ -2561,10 +2561,10 @@ export interface components {
          *         run, for an editor or above, under a workspace policy that allows it;
          *         each set then carries
          *         ``apply_policy: "auto"``, otherwise ``"review"`` with an
-         *         ``auto_blocked_reason``. Auto also ends at the run's first result of a
-         *         tool that returns untrusted content (``untrusted_content``). The
-         *         run's ``status`` events report the policy in effect when each is
-         *         sent. ``auto`` is refused for an ``inline`` run.
+         *         ``auto_blocked_reason``. What the run reads does not end it: a turn
+         *         that searched the web or read a PDF keeps ``auto``. The run's
+         *         ``status`` events report the policy in effect when each is sent.
+         *         ``auto`` is refused for an ``inline`` run.
          *     web : bool
          *         Off by default for each turn. Only narrows Web permissions granted
          *         by the account, workspace, deployment and engine. Requested but
@@ -2748,10 +2748,10 @@ export interface components {
          *         run, for an editor or above, under a workspace policy that allows it;
          *         each set then carries
          *         ``apply_policy: "auto"``, otherwise ``"review"`` with an
-         *         ``auto_blocked_reason``. Auto also ends at the run's first result of a
-         *         tool that returns untrusted content (``untrusted_content``). The
-         *         run's ``status`` events report the policy in effect when each is
-         *         sent. ``auto`` is refused for an ``inline`` run.
+         *         ``auto_blocked_reason``. What the run reads does not end it: a turn
+         *         that searched the web or read a PDF keeps ``auto``. The run's
+         *         ``status`` events report the policy in effect when each is sent.
+         *         ``auto`` is refused for an ``inline`` run.
          *     web : bool
          *         Off by default for each turn. Only narrows Web permissions granted
          *         by the account, workspace, deployment and engine. Requested but

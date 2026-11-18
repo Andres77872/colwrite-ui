@@ -198,6 +198,47 @@ describe('an Auto set that arrives while Auto is on', () => {
     expect(itemAt(review().autoApplied, 0)).toMatchObject({ undone: false, canUndo: true });
   });
 
+  it('applies a researched section and the citations a later set puts on it, new information included', async () => {
+    // A research turn: a section (new information), then `cite_sources` over
+    // it. The second set was written on the first, whose addition the saved
+    // page does not hold yet (`headFingerprint: null`).
+    getChangeSet
+      .mockResolvedValueOnce(stored({
+        operations: [
+          { op: 'write_blocks', position: 'append', blockId: null, blocks: [para('S', 'A claim.')], newInformation: true },
+        ],
+      }))
+      .mockResolvedValueOnce(stored({
+        changeSetId: 'cs-2',
+        toolCallId: 'call_2',
+        dependsOnChangeSetId: 'cs-1',
+        operations: [
+          { op: 'write_blocks', position: 'replace', blockId: 'S', blocks: [para('S', 'A claim [1].')], newInformation: true },
+        ],
+        operationTargets: [[{ blockId: 'S', fingerprint: 'as-added', headFingerprint: null }]],
+      }));
+    const editor = mountEditor([para('A')]);
+
+    act(() => void review().receive(announced({ proposalOperationCount: 1 }), { autoApply: () => true }));
+    await settle();
+    editor.rerender();
+    expect(ids(editor)).toEqual(['A:A', 'S:A claim.']);
+
+    act(() => void review().receive(
+      announced({ toolCallId: 'call_2', changeSetId: 'cs-2', proposalOperationCount: 1 }),
+      { autoApply: () => true },
+    ));
+    await settle();
+    editor.rerender();
+
+    expect(ids(editor)).toEqual(['A:A', 'S:A claim [1].']);
+    expect(review().pendingCount).toBe(0);
+    expect(sent()).toEqual([
+      [[{ opIndex: 0, decision: 'accepted' }], 'auto'],
+      [[{ opIndex: 0, decision: 'accepted' }], 'auto'],
+    ]);
+  });
+
   it('leaves a stale operation, the block with the caret and a locked block for review', async () => {
     getChangeSet.mockResolvedValue(stored({
       operations: [
@@ -433,7 +474,7 @@ describe('stored intent groups and manual bulk decisions', () => {
     expect(editor.live.doc.name).toBe('Page');
   });
 
-  it('keeps new information out of Apply waiting and bulk acceptance without explicit selection', async () => {
+  it('applies an Auto turn\u2019s waiting changes, new information included, and keeps it out of an unselected bulk accept', async () => {
     const operations: ToolOperation[] = [
       { op: 'write_blocks', position: 'append', blockId: null, blocks: [para('N', 'new')], newInformation: true },
       { op: 'write_blocks', position: 'replace', blockId: 'A', blocks: [para('A', 'reworded')], newInformation: false },
@@ -442,13 +483,18 @@ describe('stored intent groups and manual bulk decisions', () => {
     const editor = mountEditor([para('A'), para('B')]);
     await settle();
     editor.rerender();
-    await act(async () => review().applyWaiting());
+    // A bulk accept with nothing selected leaves new information alone.
+    await act(async () => review().acceptAll(undefined, { includeFlagged: true }));
     editor.rerender();
     expect(ids(editor)).toEqual(['A:reworded', 'B:B']);
     expect(review().pending.map((change) => change.opIndex)).toEqual([0]);
     expect(sent()).toEqual([[[{ opIndex: 1, decision: 'accepted' }], 'manual']]);
-    await act(async () => review().acceptAll(undefined, { includeFlagged: true }));
-    expect(sent()).toHaveLength(1);
+    // "Apply all" of what an Auto turn left is what Auto would have done.
+    await act(async () => review().applyWaiting());
+    editor.rerender();
+    expect(ids(editor)).toEqual(['A:reworded', 'B:B', 'N:new']);
+    expect(review().pending).toEqual([]);
+    expect(sent()).toHaveLength(2);
   });
 
   it('applies selected flagged changes and their continuations, without overwriting stale or locked targets', async () => {

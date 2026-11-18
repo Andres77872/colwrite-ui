@@ -2,6 +2,7 @@ import { itemAt, takeItems } from '@/lib/itemAt';
 import { describe, it, expect } from 'vitest';
 import type { Block, ToolAction, ToolOperation } from '../types';
 import {
+  acceptBlocker,
   alreadyInDocument,
   blockFingerprint,
   blockText,
@@ -11,15 +12,19 @@ import {
   projectDocument,
   isReady,
   isStale,
+  linkAcrossSets,
   markChanges,
   markOutdated,
   mergedBlock,
+  pendingChanges,
   pendingCount,
+  planBulkAccept,
   proposedBlocks,
   rebaseAfterAccept,
   resolveAcceptPlan,
   resumeReview,
 } from '../proposals';
+import { applyOperations } from '../docOps';
 import { append, deleteBlocks, moveBlock, paragraph, replaceText, rewrite, setMeta, writeAfter, writeBefore } from './operations';
 import { reference } from '@/__tests__/agentSource';
 
@@ -422,9 +427,56 @@ describe('a target the server says changed since the proposal', () => {
     expect(isStale(itemAt(marked.changes, 0), edited)).toBe(true);
   });
 
-  it('is stale when the block is gone from the saved document but still on screen', () => {
-    const marked = markOutdated(batch(rewriteP('Assistant text')), [[target('as-proposed', null)]]);
-    expect(isStale(itemAt(marked.changes, 0), blocks)).toBe(true);
+  it('does not call a block the saved document lacks changed: it is not there yet, or no longer', () => {
+    const set = batch(rewriteP('Assistant text'));
+    const marked = markOutdated(set, [[target('as-proposed', null)]]);
+    expect(marked).toBe(set);
+    expect(isStale(itemAt(marked.changes, 0), blocks)).toBe(false);
+    // An edit made after staging is still noticed, from the staging base.
+    const typed: Block[] = [itemAt(blocks, 0), { ...blocks[1], html: 'Typed just now' } as Block];
+    expect(isStale(itemAt(marked.changes, 0), typed)).toBe(true);
+  });
+
+  it('accepts a run\u2019s citations on the section it has just proposed, in one bulk plan', () => {
+    // A section, then `cite_sources` over two of its paragraphs: the second
+    // set's targets exist only in the first one's addition, so the saved
+    // document holds neither (`headFingerprint: null`).
+    const added = (id: string, html: string) => ({ id, type: 'paragraph', html });
+    const section = buildChangeSet(action({
+      changeSetId: 'cs-section',
+      actions: [{ op: 'write_blocks', position: 'append', blockId: null, blocks: [added('s1', 'First claim.'), added('s2', 'Second claim.')] }],
+    }), blocks);
+    const rewrite = (id: string, html: string): ToolOperation =>
+      ({ op: 'write_blocks', position: 'replace', blockId: id, blocks: [added(id, html)] });
+    const built = buildChangeSet(action({
+      changeSetId: 'cs-cite',
+      actions: [rewrite('s1', 'First claim [1].'), rewrite('s2', 'Second claim [2].')],
+    }), blocks);
+    const cited = linkAcrossSets(
+      markOutdated(built, [[target('s1-added', null, 's1')], [target('s2-added', null, 's2')]]),
+      [section],
+    );
+    const sets = [section, cited];
+
+    expect(cited.changes.map((change) => change.outdated ?? false)).toEqual([false, false]);
+    // Each waits for the addition, and for nothing else.
+    expect(cited.changes.map((change) => acceptBlocker(change, sets, blocks)?.reason)).toEqual(['needs', 'needs']);
+
+    const plan = planBulkAccept(pendingChanges(sets), sets, { blocks });
+    expect(plan.desynced).toEqual([]);
+    expect(plan.applied).toHaveLength(3);
+
+    // The addition accepted on its own: the citations are ready on the page
+    // it leaves, and an edit the author then makes to one is noticed.
+    const landed = applyOperations({ blocks }, [itemAt(section.changes, 0).op]);
+    const after = rebaseAfterAccept(
+      markChanges(sets, new Set([itemAt(section.changes, 0).id]), 'accepted'),
+      blocks, landed.doc.blocks, landed.touched,
+    );
+    const [first, second] = takeItems(itemAt(after, 1).changes, 2);
+    expect(isReady(first, after, landed.doc.blocks)).toBe(true);
+    const typed = landed.doc.blocks.map((block) => (block.id === 's2' ? { ...block, html: 'Rewritten by the author.' } as Block : block));
+    expect(acceptBlocker(second, after, typed)?.reason).toBe('stale');
   });
 
   it('reads a later rewrite of the same block as current while the earlier one is undecided', () => {

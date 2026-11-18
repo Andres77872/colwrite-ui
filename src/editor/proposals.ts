@@ -273,6 +273,16 @@ export function isStale(change: ProposedChange, blocks: readonly Block[]): boole
  * suggestion was not written for. An operation is current when every one of
  * its targets is.
  *
+ * A target the saved document does not hold (`headFingerprint: null`) has
+ * not changed there: it is a block a pending addition brings (the citations
+ * a run puts on the section it has just proposed), or one the author
+ * deleted. Neither is text the suggestion was not written for. The first
+ * waits for its addition (`dependsOn`) and takes its base when that lands
+ * (`rebaseAfterAccept`), so an edit the author makes to it afterwards is
+ * still noticed; the second has nowhere to land (`acceptBlocker`). Reading
+ * it as changed left every such rewrite refused as out of date the moment
+ * its addition was accepted.
+ *
  * `targets` holds one list per operation index; an empty list is an
  * operation with no target, which keeps relying on `bases` alone.
  */
@@ -283,7 +293,7 @@ export function markOutdated(
 ): ChangeSet {
   const stageCurrent = (target: OperationTarget, opIndex: number): boolean => {
     if (target.headFingerprint === target.fingerprint) return true;
-    if (target.headFingerprint === null) return false;
+    if (target.headFingerprint === null) return true;
     const head = target.headFingerprint;
     return earlier?.get(target.blockId)?.has(head) === true
       || targets.slice(0, opIndex).some((before) => before.some(
@@ -595,9 +605,12 @@ export function linkPrecedence(sets: ChangeSet[]): Map<string, string[]> {
  * block the author is typing in, or a block they locked or hid from the AI.
  * An insert next to such a block leaves the block itself alone, and so does
  * a move of another block next to it.
+ *
+ * What a change says is no reason to hold it: Auto applies new sections,
+ * citations and sources (`newInformation`) like any other edit. Asking about
+ * those is what a turn with Auto off is for.
  */
 function needsAuthor(change: ProposedChange, blocks: readonly Block[], caretBlockId: string | null): boolean {
-  if (change.op.newInformation) return true;
   if (isStale(change, blocks)) return true;
   const affected = change.kind === 'move' && change.anchorBlockId !== null ? [change.anchorBlockId] : change.targetBlockIds;
   return affected.some((id) => {

@@ -42,9 +42,10 @@ export function AutoModeDialog({
           <DialogHeader>
             <DialogTitle>Turn on Auto?</DialogTitle>
             <DialogDescription>
-              Auto applies the assistant's edits to this page without asking you first. You can undo
-              each change, and every change is kept in the chat's review record. Auto turns off when
-              you leave this page or chat.
+              Auto applies the assistant's edits to this page without asking you first. That includes
+              new sections, citations and sources, and what it writes after reading web pages, papers
+              or PDFs. You can undo each change, and every change is kept in the chat's review record.
+              Auto turns off when you leave this page or chat.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="mt-5">

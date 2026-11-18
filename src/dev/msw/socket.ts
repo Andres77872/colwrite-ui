@@ -126,29 +126,18 @@ const terminal = new Set<RunStatus>(['completed', 'failed', 'cancelled', 'interr
  * `effective_apply_policy`): `auto` when a chat run asked for it with
  * `apply_mode: "auto"`, the account's role allows it (an editor or above)
  * and the workspace's policy allows Auto; `review` otherwise. The tools a run
- * has are no reason to refuse it: its first untrusted result ends it.
+ * has are no reason to refuse it, and what it reads is no reason to end it:
+ * a turn that searches papers or the web, or has a PDF attached, keeps Auto.
  */
 export function applyPolicyFor(request: Pick<AgentChatRequest, 'apply_mode' | 'profile' | 'attachments'>, workspaceId: string): 'auto' | 'review' {
   return autoRequested(request) && autoBlockedFor(request, workspaceId) === null ? 'auto' : 'review';
 }
 
-/**
- * The tools whose results are third-party text: those the registry labels
- * `untrusted` (a PDF, a paper record or abstract, a web page, a worker's
- * report). The first result of one ends Auto for the rest of the run
- * (`untrusted_content`). A research worker's calls count too, since it reads
- * through the run's tools.
- */
-const UNTRUSTED_RESULT_TOOLS: ReadonlySet<string> = new Set(
-  REGISTRY.tools.filter((tool) => tool.labels?.includes('untrusted')).map((tool) => tool.id),
-);
-
 /** Why a turn that asked for Auto got `review` at its start: the role first, then the workspace. */
 export function autoBlockedFor(request: Pick<AgentChatRequest, 'apply_mode' | 'profile' | 'attachments'>, workspaceId: string): RunPolicy['auto_blocked_reason'] {
   if (!autoRequested(request)) return null;
   if (roleOf(workspaceId) === 'viewer') return 'role';
-  if (!workspacePolicyOf(workspaceId).auto) return 'policy';
-  return request.attachments?.some((item) => item.kind === 'resource') ? 'untrusted_content' : null;
+  return workspacePolicyOf(workspaceId).auto ? null : 'policy';
 }
 
 const autoRequested = (request: Pick<AgentChatRequest, 'apply_mode' | 'profile'>) =>
@@ -450,7 +439,7 @@ export function assistantSocket(options: AssistantSocketOptions = {}) {
     append(stored, run, { event: 'run.status', data: { run_id: run.id, status: 'running', message: null } });
     // The run's review policy, as the server keeps it (D18): Auto when it was
     // asked for and allowed, until the workspace switches Auto off (checked
-    // before every tool call) or the run reads untrusted content. A run
+    // before every tool call). What the run reads does not end it. A run
     // already under review keeps the reason it has. Every status carries
     // the policy of when it is sent; a run opens with `starting`, so the
     // composer knows the policy first.
@@ -463,10 +452,6 @@ export function assistantSocket(options: AssistantSocketOptions = {}) {
       if (policy.apply_policy === 'review') return;
       policy.apply_policy = 'review';
       policy.auto_blocked_reason = reason;
-    };
-    /** A call that returned read what it returned; a refused one read nothing. */
-    const noteResult = (data: { tool: string; is_error?: boolean | null }) => {
-      if (UNTRUSTED_RESULT_TOOLS.has(data.tool) && !data.is_error) downgrade('untrusted_content');
     };
     const status = (data: Pick<StatusData, 'status' | 'detail'>): AssistantEvent =>
       ({ event: 'status', data: { ...data, apply_policy: policy.apply_policy, auto_blocked_reason: policy.auto_blocked_reason } });
@@ -556,7 +541,6 @@ export function assistantSocket(options: AssistantSocketOptions = {}) {
           ms: 1840, chars: 2100, result: { result_count: 6 },
         });
         append(stored, run, end);
-        noteResult(end.data);
         append(stored, run, { event: 'subagent', data: { ...workerBrief, status: 'completed' } });
       };
       if (worker) append(stored, run, { event: 'subagent', data: { ...workerBrief, status: 'queued' } });
@@ -597,7 +581,6 @@ export function assistantSocket(options: AssistantSocketOptions = {}) {
           finishWorker();
           if (plan) append(stored, run, { event: 'todo', data: { items: [{ ...items[0], status: 'completed' }, { ...items[1], status: 'in_progress' }] } });
         }
-        if (item.event === 'tool_call_end') noteResult(item.data);
         if (item.event === 'done') {
           if (typeof item.data.chat_id === 'string') {
             stored.session.chat_id = item.data.chat_id;
@@ -1236,10 +1219,9 @@ async function* withAttachments(evidence: TurnEvidence, events: AsyncGenerator<A
  * an earlier reply's record names.
  *
  * Asked to improve the page, the turn edits it first and then checks the
- * literature, so an Auto turn's set is stored `auto` and applied. Asked to
- * improve it from the literature ("…with sources", "cite", "research"), it
- * searches first: the paper search is untrusted content, which ends Auto for
- * the run, and the set after it is stored for review (`untrusted_content`).
+ * literature; asked to improve it from the literature ("…with sources",
+ * "cite", "research"), it searches first. Either way an Auto turn's sets are
+ * stored `auto` and applied: what a run reads does not end Auto.
  * Before an edit it reads the section (`doc_read` with its `view`). Asked to
  * check a claim, it runs `claim_check` over what it found and sends its
  * `claim` (abstracts only: "cannot assess"). Asked about the outline, it

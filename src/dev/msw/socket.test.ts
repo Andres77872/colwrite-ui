@@ -226,9 +226,10 @@ function toolCall(tool: string, id: string): AssistantEvent[] {
   ];
 }
 
-it('ends Auto at the run’s first untrusted result: the next status says so and later sets wait for review', async () => {
+it('keeps Auto after the run reads outside material: every status says so and later sets are stored as auto', async () => {
   // An edit, a paper search (third-party text), then another edit. Each set
-  // is stored with the run's policy of when it was made.
+  // is stored with the run's policy of when it was made, which a read does
+  // not change.
   async function* editSearchEdit(_request: unknown, { policy }: AssistantTurnContext): AsyncGenerator<AssistantEvent> {
     yield* toolCall('doc_edit', 'call_a');
     yield { event: 'tool_action', data: proposedAction(DOC, policy()) };
@@ -253,12 +254,12 @@ it('ends Auto at the run’s first untrusted result: the next status says so and
     ['starting', 'auto', null],
     ['executing_tool', 'auto', null],
     ['executing_tool', 'auto', null],
-    ['executing_tool', 'review', 'untrusted_content'],
+    ['executing_tool', 'auto', null],
   ]);
   const actions = events.filter((event) => event.event === 'tool_action').map((event) => [event.data.apply_policy, event.data.auto_blocked_reason]);
-  expect(actions).toEqual([['auto', null], ['review', 'untrusted_content']]);
+  expect(actions).toEqual([['auto', null], ['auto', null]]);
   const storedSets = (fixtures.changeSets.get(DOC) ?? []).slice(before);
-  expect(storedSets.map((set) => [set.apply_policy, set.auto_blocked_reason])).toEqual([['auto', null], ['review', 'untrusted_content']]);
+  expect(storedSets.map((set) => [set.apply_policy, set.auto_blocked_reason])).toEqual([['auto', null], ['auto', null]]);
 });
 
 it('ends Auto when the workspace switches it off during the run, at its next tool call (M5 policy)', async () => {

@@ -138,12 +138,12 @@ describe('the mock’s revision-bound Deep plan', () => {
 });
 
 describe('the mock’s questions, answers and explicit skip', () => {
-  it('keeps an attached PDF’s evidence even when asking a question, with Auto paused from the start', async () => {
+  it('keeps an attached PDF’s evidence even when asking a question, and Auto stays on', async () => {
     const pdf = fixtures.pdfs.find((item) => item.workspace_id === WS)!;
     const context = await conversation();
     const run = await context.start({ message: 'Ask me about the scope', apply_mode: 'auto', attachments: [{ kind: 'resource', resource_id: pdf.id }] });
     const events = await settled(context, run.id);
-    expect(events.find((event) => event.event === 'status')?.data).toMatchObject({ apply_policy: 'review', auto_blocked_reason: 'untrusted_content' });
+    expect(events.find((event) => event.event === 'status')?.data).toMatchObject({ apply_policy: 'auto', auto_blocked_reason: null });
     expect(events.findIndex((event) => event.event === 'evidence')).toBeLessThan(events.findIndex((event) => event.event === 'tool_call_start'));
     const evidence = events.find((event) => event.event === 'evidence')?.data.sources;
     expect(evidence).toMatchObject([{ handle: 'S1', key: `resource:${pdf.id}` }]);

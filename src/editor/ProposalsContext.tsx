@@ -1248,7 +1248,9 @@ export function ProposalsProvider({ children }: { children: ReactNode }) {
     if (activeDocumentIdRef.current !== ownerDocumentId || readOnlyRef.current) return;
     const waiting = new Set(state.sets.filter((set) => set.autoWaiting).map((set) => set.id));
     if (waiting.size === 0) return;
-    batch(() => acceptOpen(pendingChanges(state.sets.filter((set) => waiting.has(set.id)))));
+    // An Auto turn's changes, new information included: Auto would have
+    // applied those too had the page been open.
+    batch(() => acceptOpen(pendingChanges(state.sets.filter((set) => waiting.has(set.id))), { includeFlagged: true }));
     updateForDocument((current) => ({
       ...current,
       sets: current.sets.map((set) => (waiting.has(set.id) ? { ...set, autoWaiting: false } : set)),
