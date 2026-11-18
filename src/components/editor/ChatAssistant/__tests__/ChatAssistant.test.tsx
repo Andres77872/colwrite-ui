@@ -1994,7 +1994,7 @@ describe('the composer’s Web choice', () => {
     expect(runAgentTurn.mock.calls[0]?.[0]).toMatchObject({ web: false });
   });
 
-  it('adopts its first chat, repeats the original choice on Retry, and resets on New chat', async () => {
+  it('uses the visible Web switch for each new reply, including Retry, and resets on New chat', async () => {
     fixtures.assistant = { switches: { web: true }, sources: {} };
     await mount();
     expect(screen.getByRole('switch', { name: 'Web search' }).getAttribute('aria-checked')).toBe('false');
@@ -2007,14 +2007,16 @@ describe('the composer’s Web choice', () => {
     expect(screen.getByRole('switch', { name: 'Web search' }).getAttribute('aria-checked')).toBe('true');
     await act(async () => fireEvent.click(screen.getByRole('switch', { name: 'Web search' })));
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
-    expect(runAgentTurn.mock.calls[1]?.[0]).toMatchObject({ web: true });
+    expect(runAgentTurn.mock.calls[1]?.[0]).toMatchObject({ web: false });
     expect(screen.getByRole('switch', { name: 'Web search' }).getAttribute('aria-checked')).toBe('false');
     await act(async () => fireEvent.click(screen.getByRole('switch', { name: 'Web search' })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
+    expect(runAgentTurn.mock.calls[2]?.[0]).toMatchObject({ web: true });
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Start a new chat' })));
     expect(screen.getByRole('switch', { name: 'Web search' }).getAttribute('aria-checked')).toBe('false');
   });
 
-  it('repeats a stored turn’s choice after reload, without enabling the current catalog', async () => {
+  it('retries a saved prompt with Web off when the switch is unavailable', async () => {
     listChats.mockResolvedValue({ items: [chatSummary({ id: 'saved', title: 'Saved conversation', last_message_id: 2 })], next_cursor: null });
     listMessages.mockResolvedValue(branch([
       stored('user', 'Find routing sources', { record: { kind: 'request', preset: null, effort: 'quick', web: true, plan_id: null } }),
@@ -2027,8 +2029,51 @@ describe('the composer’s Web choice', () => {
     expect(screen.queryByRole('switch', { name: 'Web search' })).toBeNull();
     answerText('A new answer.');
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
-    expect(runAgentTurn.mock.calls[0]?.[0]).toMatchObject({ effort: 'quick', web: true });
+    expect(runAgentTurn.mock.calls[0]?.[0]).toMatchObject({ effort: 'quick', web: false });
     expect(screen.queryByRole('switch', { name: 'Web search' })).toBeNull();
+  });
+
+  it('uses the current switch when Try again starts a fresh run after a failure', async () => {
+    fixtures.assistant = { switches: { web: true }, sources: {} };
+    await mount();
+    const web = screen.getByRole('switch', { name: 'Web search' });
+    await act(async () => fireEvent.click(web));
+    runAgentTurn.mockImplementationOnce(async (_params, handlers: AgentEventHandlers) => {
+      handlers.onError?.('MODEL_GATEWAY_TRANSIENT', 'The model is unavailable.');
+      return { done: null, terminal: 'error' };
+    });
+    await compose('Search the public web');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send message' })));
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    await act(async () => fireEvent.click(web));
+    answerText('A new answer.');
+    await act(async () => fireEvent.click(retry));
+    expect(runAgentTurn.mock.calls.map(([request]) => request.web)).toEqual([true, false]);
+    expect(runAgentTurn.mock.calls[1]?.[2].resume).toBeUndefined();
+  });
+
+  it('shows the saved Web choice while following a running reply, then restores the composer choice', async () => {
+    fixtures.assistant = { switches: { web: true }, sources: {} };
+    await mount();
+    vi.spyOn(agentSessions, 'findActiveAgentRun').mockResolvedValue(assistantSnapshot({
+      session: { id: 'session-1', document_id: DOC_ID, chat_id: 'saved', active_run_id: 'run-1' },
+      run: { id: 'run-1', session_id: 'session-1', status: 'running', request: {
+        document_id: DOC_ID, chat_id: 'saved', message: 'Search the public web', web: true,
+      } },
+    }));
+    let finish!: () => void;
+    runAgentTurn.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = () => resolve({ done: null, terminal: 'done' });
+    }));
+    await act(async () => harness.chats.setSelectedChatId('saved'));
+    const web = screen.getByRole('switch', { name: 'Web search' }) as HTMLButtonElement;
+    await waitFor(() => expect(web.disabled).toBe(true));
+    expect(web.getAttribute('aria-checked')).toBe('true');
+    expect(web.textContent).toBe('Web on');
+    await act(async () => finish());
+    expect(web.disabled).toBe(false);
+    expect(web.getAttribute('aria-checked')).toBe('false');
+    expect(web.textContent).toBe('Web off');
   });
 });
 

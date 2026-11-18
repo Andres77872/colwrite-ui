@@ -13,7 +13,7 @@
    `@theme` holds the LIGHT values. The `[data-theme="dark"]` block after it
    re-declares every colour for dark, on <html> (set by src/lib/theme.ts and
    the pre-paint script in index.html) or on any element that wants to be a
-   dark island (the landing page). This must stay plain `@theme`, never
+   dark island. This must stay plain `@theme`, never
    `@theme inline`: utilities have to compile to `var(--color-*)` so one
    attribute switches them at runtime.
 
@@ -1349,10 +1349,7 @@
       inset: -12px -6px;
     }
 
-    /* A suggestion's Accept and Reject were 24px tall and 2px apart, with
-       their words shown only on hover. Selected by their names, since the
-       review card's markup is its own. The word is shown; the keyboard hint
-       beside it (`aria-hidden`) stays hidden, as there is rarely a keyboard. */
+    /* Keep the two review decisions comfortably separated on touch screens. */
     .review-change button:is([aria-label^="Accept:"], [aria-label^="Reject:"]) {
       min-height: 44px;
       min-width: 44px;
@@ -1361,10 +1358,6 @@
 
     .review-change button[aria-label^="Accept:"] + button[aria-label^="Reject:"] {
       margin-inline-start: 8px;
-    }
-
-    .review-change button:is([aria-label^="Accept:"], [aria-label^="Reject:"]) > span.hidden:not([aria-hidden="true"]) {
-      display: inline;
     }
 
     /* Every text field, including the hand-rolled ones and the assistant's

@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Check, Copy, Download, Maximize2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/lib/theme';
+import { copyToClipboard } from '@/lib/clipboard';
 import {
   cachedMermaid,
   mermaidSvgFile,
@@ -145,13 +146,9 @@ export const MermaidDiagram = memo(function MermaidDiagram({
   const name = label?.trim() || 'Diagram';
 
   const copySource = async () => {
-    try {
-      await navigator.clipboard.writeText(source);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable: the unchanged icon is the answer */
-    }
+    if (!(await copyToClipboard({ plain: source }))) return;
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
   };
 
   return (

@@ -1,4 +1,4 @@
-import type { AgentChatRequestInput, AgentContext, EngineCatalogResponse, EngineStatusResponse } from '@/api/schema';
+import type { AgentChatRequestInput, AgentChatRequestOutput, AgentContext, EngineCatalogResponse, EngineStatusResponse } from '@/api/schema';
 import { streamAgentSession, type CheckpointResume, type ResumeAgentRun } from './agentSessionChat';
 import type { ChatAttachment } from './chatAttachments';
 import type { AgentDone, AgentEventHandlers } from './streamParser';
@@ -60,7 +60,7 @@ export type AgentChatParams = {
   preset?: string;
   /** The run's catalog-backed budget tier; Deep without a plan scopes one first. */
   effort?: NonNullable<AgentChatRequestInput['effort']>;
-  /** Default off. Only narrows account/workspace permissions, never grants them. */
+  /** Opt this turn into public web search and page reading when the catalog permits them. Defaults to false. */
   web?: boolean;
   plan_id?: string;
   plan?: NonNullable<AgentChatRequestInput['plan']>;
@@ -101,7 +101,8 @@ export type AgentChatOptions = {
   resume?: ResumeAgentRun;
   /** New generation from an interrupted run's checkpoint, not event replay. */
   checkpoint?: CheckpointResume;
-  onRunStarted?: (run: ResumeAgentRun) => void;
+  /** Supplies the stored request when an uncertain start finds an existing run. */
+  onRunStarted?: (run: ResumeAgentRun, admittedRequest?: AgentChatRequestOutput) => void;
   /**
    * WebSocket reconnect policy. The saved event cursor and idempotent start
    * key prevent duplicate generation. `{maxAttempts: 1}` disables retry.

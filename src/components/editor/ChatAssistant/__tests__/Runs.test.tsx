@@ -58,6 +58,15 @@ afterEach(async () => {
 });
 
 describe('workspace Runs', () => {
+  it('names Web on the Resume button for a checkpoint that can browse', async () => {
+    const run = assistantRun();
+    server.use(http.get('/workspaces/{workspace_id}/assistant/runs', ({ response }) => response(200).json({
+      items: [{ ...run, request: { ...run.request!, web: true } }], next_cursor: null,
+    })));
+    await mount();
+    expect(await within(await openRuns()).findByRole('button', { name: 'Resume with Web on' })).toBeTruthy();
+  });
+
   it('opens an older run’s exact chat branch without starting or resuming generation', async () => {
     seedPreviewRuns();
     const rpc = vi.spyOn(AgentSocket.prototype, 'request');

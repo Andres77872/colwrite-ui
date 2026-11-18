@@ -3112,8 +3112,7 @@ export interface components {
         };
         /**
          * ArtifactData
-         * @description An image proposal from the run. ``kind: image`` is reserved; jobs do
-         *     not reopen terminal run streams (see docs/assets.md).
+         * @description A generated image's progress or result, or a previously proposed request.
          */
         ArtifactData: {
             /**
@@ -6317,6 +6316,11 @@ export interface components {
              * @default
              */
             exact_text: string;
+            /**
+             * Prompt
+             * @description Exact prompt to submit on confirmation. Older forms can supply the visual fields alone.
+             */
+            prompt?: string | null;
             /**
              * Purpose
              * @enum {string}

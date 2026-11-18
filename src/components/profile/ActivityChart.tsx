@@ -52,9 +52,9 @@ function isoDay(date: Date): string {
  * The server omits days with no activity — an absent day and a zero day are
  * the same fact, and the client owns the window it renders against.
  */
-function densify(activity: ActivityDay[], days: number): DenseDay[] {
+function densify(activity: ActivityDay[], days: number, throughDay?: string): DenseDay[] {
   const byDay = new Map(activity.map((entry) => [entry.day.slice(0, 10), entry]));
-  const today = new Date();
+  const today = throughDay ? new Date(throughDay + 'T12:00:00') : new Date();
   today.setHours(0, 0, 0, 0);
 
   return Array.from({ length: days }, (_, offset) => {
@@ -92,14 +92,17 @@ function shortDate(date: Date): string {
 export function ActivityChart({
   activity,
   days = 30,
+  throughDay,
 }: {
   activity: ActivityDay[];
   days?: number;
+  /** Last local calendar day for a historical report; live usage ends today. */
+  throughDay?: string;
 }) {
   const [hovered, setHovered] = useState<number | null>(null);
   const [asTable, setAsTable] = useState(false);
 
-  const series = useMemo(() => densify(activity, days), [activity, days]);
+  const series = useMemo(() => densify(activity, days, throughDay), [activity, days, throughDay]);
   const firstDay = series[0];
   const lastDay = series.at(-1);
   const hoveredDay = hovered === null ? undefined : series[hovered];
@@ -125,7 +128,7 @@ export function ActivityChart({
         {/* An h2, like every sibling section on this page. It was an h3 under
             the same h1, which skips a level for no structural reason. */}
         <h2 className="text-md font-semibold">Activity</h2>
-        <p className="text-xs text-muted-foreground">Last {days} days</p>
+        <p className="text-xs text-muted-foreground">{throughDay ? `${days} days through ${throughDay}` : `Last ${days} days`}</p>
       </div>
       <Button
         variant="outline"

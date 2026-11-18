@@ -4,7 +4,8 @@ import { uid } from '@/lib/uid';
 import { fixtures, PREVIEW_USER_ID, startJob, jobResult } from './fixtures';
 import { MOCK_DEPLOYMENT } from './assistantCatalog';
 import { mockSha256 } from './assetBytes';
-import { storeAsset } from './assets';
+import { linkChatAssets, storeAsset } from './assets';
+import previewIllustration from './preview-illustration.png?inline';
 
 export function enableImageFixture() {
   fixtures.imageGenerationEnabled = true;
@@ -32,7 +33,8 @@ export function generationQuote(info: Pick<ImageGenerationInfo, 'generation_id' 
   return { estimated_cost, confirmation_token: mockSha256(new TextEncoder().encode(JSON.stringify([info.generation_id, info.prompt, info.aspect_ratio, info.provider, info.model, info.quality, info.output_format, estimated_cost]))) };
 }
 
-export function proposeGeneration(workspaceId: string, documentId: string, args: ImageArguments, engine: 'gateway' | 'codex', runId = uid()): ImageGenerationInfo {
+export function proposeGeneration(workspaceId: string, documentId: string, args: ImageArguments, prompt: string,
+  engine: 'gateway' | 'codex', runId = uid()): ImageGenerationInfo {
   const info: ImageGenerationInfo = {
     generation_id: `gen-${uid()}`, workspace_id: workspaceId, document_id: documentId, chat_id: null,
     run_id: runId, tool_call_id: 'author-request', created_by: PREVIEW_USER_ID, can_decide: true, status: 'proposed',
@@ -42,7 +44,7 @@ export function proposeGeneration(workspaceId: string, documentId: string, args:
     quality: engine === 'gateway' ? 'medium' : null, aspect_ratio: args.aspect_ratio ?? '3:2',
     output_format: engine === 'gateway' ? 'png' : null,
     arguments: { ...args, style: args.style ?? '', exact_text: args.exact_text ?? '', aspect_ratio: args.aspect_ratio ?? '3:2' },
-    prompt: `Create one conceptual ${args.purpose.replaceAll('_', ' ')}.\nThis is an illustration, not primary research evidence or a plot of measured data.\nSubject: ${args.description}\nVisual style: ${args.style || 'clean, clear illustration'}\n${args.exact_text ? `Only this exact text may appear: ${args.exact_text}` : 'No text in the image.'}`,
+    prompt,
     estimated_cost: null, confirmation_token: '', usage: null, cost_usd: null, asset_id: null,
     error_code: null, codex_version: null, thread_id: null, job_id: null,
     created_at: new Date().toISOString(), confirmed_at: null, completed_at: null,
@@ -60,25 +62,36 @@ export function confirmGeneration(info: ImageGenerationInfo) {
   return job;
 }
 
+export function discardGeneration(info: ImageGenerationInfo) {
+  if (info.status === 'running') {
+    info.status = 'unknown';
+    info.error_code = 'image_generation_unknown';
+  } else {
+    info.status = 'discarded';
+  }
+  info.completed_at = new Date().toISOString();
+}
+
 export async function generationState(info: ImageGenerationInfo): Promise<ImageGenerationInfo> {
   if (info.job_id === null || !['confirmed', 'running'].includes(info.status)) return info;
   const job = fixtures.jobs.get(info.job_id);
   if (!job) return info;
   if (Date.now() - job.started < job.duration) { info.status = 'running'; return info; }
-  // One tiny, fixed preview raster. Not evidence of a live generator.
-  const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII='), (char) => char.charCodeAt(0));
+  const bytes = Uint8Array.from(atob(previewIllustration.slice(previewIllustration.indexOf(',') + 1)), (char) => char.charCodeAt(0));
   const stored = await storeAsset(info.workspace_id, info.generation_id, new Blob([bytes], { type: 'image/png' }), 'generated-preview.png');
+  const usage = info.engine === 'gateway' ? { prompt_tokens: 40, completion_tokens: 280, total_tokens: 320, cost: 0.01 } : null;
   Object.assign(stored.asset, { kind: 'generated', generation_id: info.generation_id, generation: {
     generation_id: info.generation_id, provider: info.provider, model: info.model, model_slug: info.model_slug,
     quality: info.quality, aspect_ratio: info.engine === 'codex' ? null : info.aspect_ratio, output_format: info.output_format,
     prompt: info.prompt, arguments: info.arguments, created_at: info.created_at, completed_at: new Date().toISOString(),
-    usage: info.engine === 'gateway' ? { cost: 0.01 } : null, cost_usd: info.engine === 'gateway' ? 0.01 : null,
+    usage, cost_usd: usage?.cost ?? null,
     codex_version: null, thread_id: null,
   } });
   info.asset_id = stored.asset.asset_id;
   info.status = 'succeeded';
   info.completed_at = new Date().toISOString();
-  info.usage = info.engine === 'gateway' ? { cost: 0.01 } : null;
-  info.cost_usd = info.engine === 'gateway' ? 0.01 : null;
+  info.usage = usage;
+  info.cost_usd = usage?.cost ?? null;
+  if (info.chat_id) linkChatAssets(info.workspace_id, info.document_id, info.chat_id, [info.asset_id]);
   return info;
 }

@@ -74,8 +74,8 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-type HarnessProps = { chat?: string | null; thread?: number | null; loading?: string | null; restore?: number };
-function useHarness({ chat = null, thread = null, loading = null, restore = 0 }: HarnessProps = {}) {
+type HarnessProps = { chat?: string | null; thread?: number | null; loading?: string | null; restore?: number; web?: boolean };
+function useHarness({ chat = null, thread = null, loading = null, restore = 0, web = false }: HarnessProps = {}) {
   const [selectedChatId, setSelectedChatId] = useState(chat);
   const [selectedLeafId, setSelectedLeafId] = useState(thread);
   const [, setInput] = useState('');
@@ -83,7 +83,7 @@ function useHarness({ chat = null, thread = null, loading = null, restore = 0 }:
   const pinnedToBottom = useRef(true);
   const refPickerRef = useRef(null);
   const loadedConversationRef = useRef<string | null>(null);
-  const turn = useAgentTurn({ documentId: 'doc-1', loadingDocumentId: loading, restoreEpoch: restore,
+  const turn = useAgentTurn({ documentId: 'doc-1', loadingDocumentId: loading, restoreEpoch: restore, webEnabled: web,
     ensureRemoteDocument, hasPendingEdits, saveRemote, selectedChatId, selectedLeafId,
     setSelectedChatId, setSelectedLeafId, proposals, setInput, setAtBottom,
     pinnedToBottomRef: pinnedToBottom, refPickerRef, loadedConversationRef, onChatCreated });
@@ -363,19 +363,20 @@ describe('durable assistant hook lifecycle', () => {
     expect(saveRemote.mock.invocationCallOrder[0]).toBeLessThan(itemAt(stream.mock.invocationCallOrder, 0));
   });
 
-  it('retries an uncertain start with its saved locator and one user row', async () => {
+  it('retries an uncertain start with its saved key and the current Web choice if it needs to start', async () => {
     stream.mockImplementationOnce(async (_params, _handlers, options) => {
       options?.onRunStarted?.({ sessionId: 'session-1', requestId: 'request-1' });
       throw new Error('Acknowledgement lost');
     });
     const retry = deferred<AgentChatResult>();
     stream.mockReturnValueOnce(retry.promise);
-    const hook = renderHook(() => useHarness(), { wrapper: Workspace });
+    const hook = renderHook((web: boolean) => useHarness({ web }), { wrapper: Workspace, initialProps: true });
     act(() => { hook.result.current.turn.setMessages([emptyMessage('assistant', 'Earlier conversation')]); });
-    await act(async () => { await hook.result.current.turn.send('Explain this', { effort: 'quick', web: true }); });
+    await act(async () => { await hook.result.current.turn.send('Explain this', { effort: 'quick' }); });
+    hook.rerender(false);
     act(() => { hook.result.current.turn.onRetry(); });
     expect(stream.mock.calls.map(([request]) => request.effort)).toEqual(['quick', 'quick']);
-    expect(stream.mock.calls.map(([request]) => request.web)).toEqual([true, true]);
+    expect(stream.mock.calls.map(([request]) => request.web)).toEqual([true, false]);
     expect(hook.result.current.turn.messages.find((message) => message.role === 'user')?.effort).toBe('quick');
     expect(stream.mock.calls[1]?.[2]?.resume).toEqual({ sessionId: 'session-1', requestId: 'request-1' });
     expect(hook.result.current.turn.messages.map((message) => [message.role, message.content])).toEqual([

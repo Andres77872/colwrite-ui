@@ -43,8 +43,8 @@ vi.mock('@/components/landing', () => ({ LandingPage: () => null }));
 
 const { default: App } = await import('@/App');
 
-function renderApp() {
-  return render(
+async function renderApp() {
+  render(
     <ToastProvider>
       <ConfirmProvider>
         <TooltipProvider>
@@ -53,6 +53,7 @@ function renderApp() {
       </ConfirmProvider>
     </ToastProvider>,
   );
+  await act(() => vi.dynamicImportSettled());
 }
 
 const tree = () => screen.getByRole('tree', { name: /Pages/ });
@@ -89,7 +90,7 @@ afterEach(() => {
 
 describe('switching workspaces in the app', () => {
   it('shows nothing of the workspace left in the tree, Recent or the palette, and Back returns', async () => {
-    renderApp();
+    await renderApp();
     await waitFor(() => expect(within(tree()).getByText('Thesis')).toBeTruthy());
     expect(switcher().textContent).toContain('Personal');
 

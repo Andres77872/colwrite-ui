@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ChevronsUpDown, Keyboard, LogOut, Monitor, Moon, Plus, Settings, Sun, UserPlus, Users } from 'lucide-react';
+import { BookOpen, ChevronsUpDown, Keyboard, LogOut, Monitor, Moon, Plus, Settings, Sun, UserPlus, Users } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -166,6 +166,12 @@ export function WorkspaceSwitcher({ onShowShortcuts }: { onShowShortcuts: () => 
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           )}
+          <DropdownMenuItem asChild>
+            <a href="/wiki/" target="_blank" rel="noopener noreferrer">
+              <BookOpen aria-hidden="true" />
+              User wiki<span className="sr-only"> (opens in a new tab)</span>
+            </a>
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={onShowShortcuts}>
             <Keyboard aria-hidden="true" />
             Keyboard shortcuts

@@ -113,7 +113,7 @@ export function isStaleHead(error: unknown): boolean {
   return problemCode(error) === 'stale_head';
 }
 
-function revisionSummary(value: RevisionMetadataResponse): RevisionSummary {
+export function revisionSummary(value: RevisionMetadataResponse): RevisionSummary {
   return {
     revisionId: value.revision_id,
     revisionNo: value.revision_no,
@@ -143,7 +143,7 @@ function documentHead(payload: DocumentStateResponse, etag: string | null): Docu
   };
 }
 
-function revisionChange(value: SemanticDiffEntry): RevisionChange {
+export function revisionChange(value: SemanticDiffEntry): RevisionChange {
   return {
     entity: value.entity,
     change: value.change,

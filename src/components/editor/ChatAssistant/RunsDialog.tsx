@@ -54,7 +54,11 @@ export function RunsDialog({ open, onOpenChange, query, runs, onOpen, error, ope
                 </div>
                 <div className="flex shrink-0 gap-1">
                   <Button variant="ghost" size="sm" disabled={opening} onClick={() => onOpen(run, false)}>{run.chat_id ? 'Open chat' : 'Open page'}</Button>
-                  {run.resumable && run.session_id && run.request && <Button size="sm" disabled={opening} onClick={() => onOpen(run, true)}>Resume</Button>}
+                  {run.resumable && run.session_id && run.request && (
+                    <Button size="sm" disabled={opening} onClick={() => onOpen(run, true)}>
+                      {run.request.web ? 'Resume with Web on' : 'Resume'}
+                    </Button>
+                  )}
                 </div>
               </li>
             ))}

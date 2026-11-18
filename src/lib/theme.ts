@@ -10,7 +10,7 @@ import { THEME_KEY, readItem, writeItem } from './storageKeys';
  * attribute. `index.html` runs the same resolution inline before the first
  * paint, so a dark-mode reader never sees a white flash while the app loads.
  *
- * A surface with its own art direction (the landing page) can pin a theme
+ * A surface with its own art direction can pin a theme
  * while it is mounted with `useForcedTheme`. That has to happen on <html>,
  * not only on the surface's wrapper: its dialogs and tooltips portal into
  * <body> and would otherwise escape into the author's theme.

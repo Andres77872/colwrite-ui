@@ -1,0 +1,87 @@
+.example-host {
+  width: 100%;
+  max-width: 51rem;
+  margin-inline: auto;
+  background: var(--color-background);
+  color: var(--color-foreground);
+}
+.example-header {
+  display: flex;
+  min-height: 44px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.45rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-sidebar);
+}
+.example-header h1 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.example-body {
+  min-width: 0;
+  padding: clamp(0.85rem, 3vw, 1.65rem);
+}
+.example-body [role='tabpanel'] {
+  padding-top: 0.8rem;
+}
+.example-body textarea {
+  max-width: 100%;
+}
+.example-label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.81rem;
+  font-weight: 550;
+}
+.example-disclosure {
+  margin-top: 1rem;
+  color: var(--color-muted-foreground);
+  font-size: 0.85rem;
+}
+.example-disclosure summary {
+  cursor: pointer;
+  padding-block: 0.4rem;
+}
+.example-disclosure textarea {
+  min-height: 12rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.sample-paper {
+  width: 100%;
+  height: 100dvh;
+  border: none;
+}
+@media (min-width: 58rem) {
+  body:has(.example-host) {
+    background: var(--color-sidebar);
+    padding: 2rem;
+  }
+  .example-host {
+    border: 1px solid var(--color-border);
+    border-radius: 0.6rem;
+  }
+}
+
+/* Floating editor menus also open inside narrow, embedded examples. */
+body:has(.example-host) [data-radix-popper-content-wrapper] > [role='dialog'],
+body:has(.example-host) [data-radix-popper-content-wrapper] > [role='menu'] {
+  max-width: calc(100vw - 1rem);
+  max-height: min(calc(100dvh - 1rem), var(--radix-popper-available-height, 100dvh));
+  overflow: auto;
+}
+.example-body [role='tablist'] {
+  max-width: 100%;
+  height: auto;
+  min-height: 2.25rem;
+  flex-wrap: wrap;
+}
+.example-body [role='tabpanel'] {
+  min-width: 0;
+}
+.example-body:has([aria-label='Manuscript excerpt']) {
+  padding-inline: 1.65rem;
+}

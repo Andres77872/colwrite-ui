@@ -101,8 +101,8 @@ function listResult() {
 /** The page reads `getDocument(workspace, id, { signal })` makes. */
 const opened = (id: string) => [TEST_WORKSPACE_ID, id, { signal: expect.any(AbortSignal) }];
 
-function renderApp() {
-  return render(
+async function renderApp() {
+  render(
     <ToastProvider>
       <ConfirmProvider>
         <TooltipProvider>
@@ -111,6 +111,7 @@ function renderApp() {
       </ConfirmProvider>
     </ToastProvider>,
   );
+  await act(() => vi.dynamicImportSettled());
 }
 
 beforeEach(() => {
@@ -150,7 +151,7 @@ describe('document selection integration', () => {
     const hydration = deferred<ReturnType<typeof documentFor>>();
     mocks.getDocument.mockReturnValue(hydration.promise);
 
-    renderApp();
+    await renderApp();
 
     // The workspace is chosen first; then the page shows its skeleton at once.
     expect(await screen.findByTestId('document-skeleton')).toBeTruthy();
@@ -165,7 +166,7 @@ describe('document selection integration', () => {
   });
 
   it('loads the selected document once without remounting or refetching the sidebar', async () => {
-    renderApp();
+    await renderApp();
 
     await waitFor(() => expect(mocks.getDocument).toHaveBeenCalledWith(...opened('doc-a')));
     const documents = await screen.findByRole('region', { name: 'Pages' });
@@ -205,7 +206,7 @@ describe('document selection integration', () => {
   });
 
   it('keeps the committed URL until the requested document succeeds', async () => {
-    renderApp();
+    await renderApp();
     await waitFor(() => expect(mocks.getDocument).toHaveBeenCalledWith(...opened('doc-a')));
     await waitFor(() => expect(screen.queryByTestId('document-skeleton')).toBeNull());
 
@@ -228,7 +229,7 @@ describe('document selection integration', () => {
   });
 
   it('restores the committed URL and shows one contextual notice after failed history navigation', async () => {
-    renderApp();
+    await renderApp();
     await waitFor(() => expect(mocks.getDocument).toHaveBeenCalledWith(...opened('doc-a')));
     await waitFor(() => expect(screen.queryByTestId('document-skeleton')).toBeNull());
 

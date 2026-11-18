@@ -54,6 +54,7 @@ import { assistantRunKeys } from '@/data/assistantRuns';
 import type { AutoMode } from './useAutoMode';
 
 type AgentTurnOptions = {
+  webEnabled: boolean;
   documentId: DocumentSessionValue['documentId'];
   loadingDocumentId: DocumentSessionValue['loadingDocumentId'];
   restoreEpoch: DocumentSessionValue['restoreEpoch'];
@@ -114,6 +115,7 @@ export type AgentTurn = {
  * (`turnRecovery`). Its updates of the reply are `transcript`'s.
  */
 export function useAgentTurn({
+  webEnabled,
   documentId,
   loadingDocumentId,
   restoreEpoch,
@@ -311,8 +313,11 @@ export function useAgentTurn({
    * instruction, and the message carries no words of the author's.
    */
   const send = async (text: string, options: ChatTurnOptions = {}) => {
-    const { context, attachments, resume, checkpoint, preset, effort, web = false, plan_id, plan, answers, displayText } = options;
+    const { context, attachments, resume, checkpoint, preset, effort, plan_id, plan, answers, displayText } = options;
     if ((!text && !attachments?.length && !preset && !plan_id && !answers && !checkpoint) || run.isRunning() || loadingDocumentId) return;
+    // Every new runs.start takes the composer's current choice. Observing an
+    // admitted run or continuing its checkpoint keeps that run's permissions.
+    const web = resume?.runId || checkpoint ? options.web === true : webEnabled;
 
     setError(null);
     setInput('');
@@ -486,10 +491,14 @@ export function useAgentTurn({
         const engine = { name: engineName(chosenEngine, engines.statusOf(chosenEngine)), ...(model ? { model } : {}) };
         patchActive((message) => ({ ...message, engine }));
       },
-      onRunStarted: (started) => {
-        setLastExchange((exchange) => exchange ? { ...exchange, run: started } : exchange);
-        if (started.runId) setMessages((rows) => rows.map((message) =>
-          message.id === userMessage.id || message.id === assistantMessage.id ? { ...message, runId: started.runId } : message));
+      onRunStarted: (started, admittedRequest) => {
+        const runWeb = admittedRequest ? admittedRequest.web === true : web;
+        setLastExchange((exchange) => exchange ? { ...exchange, run: started, web: runWeb } : exchange);
+        if (started.runId) setMessages((rows) => rows.map((message) => {
+          if (message.id === userMessage.id) return { ...message, runId: started.runId, web: runWeb };
+          if (message.id === assistantMessage.id) return { ...message, runId: started.runId };
+          return message;
+        }));
         void queryClient.invalidateQueries({ queryKey: assistantRunKeys(workspaceId) });
       },
       // The recovered pass already carries its own 401 replay; stacking a

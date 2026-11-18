@@ -37,13 +37,13 @@ import type {
 } from '@/api/schema';
 import {
   FIXTURE_DOCUMENT_ID, PERSONAL_WORKSPACE_ID, PREVIEW_PAPERS, PREVIEW_WEB_PAGES, chatEvidence, chatsOf, contentOf, fixtures, liveWorkspace, recordAnswer, recordQuestion, roleOf,
-  messageChain, newestMessage, storeCitations, storePlanSection, storeProposedEdits, workspaceDocument, workspacePolicyOf, type StoredChangeSet,
+  messageChain, newestMessage, storeBlockAddition, storeCitations, storePlanSection, storeProposedEdits, wireBlock, workspaceDocument, workspacePolicyOf, type StoredChangeSet,
   type RunPolicy,
 } from './fixtures';
 import { REGISTRY, permitted, registryTool, resolveRunToolset, skillsForRun } from './assistantCatalog';
 import { standingInstructions, type StandingInstruction } from './instructions';
 import { beginReview, finishReview, scriptedReviewFindings } from './reviews';
-import { proposeGeneration } from './imageGenerations';
+import { confirmGeneration, discardGeneration, generationQuota, generationState, proposeGeneration } from './imageGenerations';
 import { RunLedger, type LimitReached } from './runLedger';
 import { RunEvidence, emptyEvidence, type Work } from './evidence';
 import { beginPlan, editPlan, endPlan, MockPlanRefusal, planEvent, planOf, proposePlan, writtenSection } from './plans';
@@ -224,8 +224,10 @@ function runToolset(workspaceId: string, request: AgentChatRequest) {
   }, tier, request.web ?? false);
 }
 
-/** The research call a scripted turn makes: a paper search where the run has it, else the web, else none. */
-function researchTool(tools: ReadonlySet<string>): string | null {
+/** An explicit web request uses public search when the run has it. Other turns prefer papers. */
+function researchTool(tools: ReadonlySet<string>, message = ''): string | null {
+  const asksForWeb = /^(?:please\s+)?(?:search|browse|what does) (?:the )?(?:public )?web\b/i.test(message.trimStart());
+  if (asksForWeb && tools.has('web_search')) return 'web_search';
   return ['paper_search', 'web_search'].find((tool) => tools.has(tool)) ?? null;
 }
 
@@ -500,7 +502,7 @@ export function assistantSocket(options: AssistantSocketOptions = {}) {
       const engine = run.request.engine ?? 'gateway';
       // The task list is part of every chat run; a worker needs the account's Workers switch.
       const plan = tools.has('todo_write');
-      const research = researchTool(tools);
+      const research = researchTool(tools, run.request.message);
       const workerResearch = permitted(fixtures.assistant, 'workers', 'web_researcher') ? research : null;
       const workerLibrary = tools.has('library_search') && permitted(fixtures.assistant, 'workers', 'library_reader');
       const worker = profile !== 'review' && tools.has('delegate') && (workerResearch !== null || workerLibrary);
@@ -1075,8 +1077,8 @@ function servedModels(engine: NonNullable<AgentChatRequest['engine']>, inline: b
 }
 
 /** One end shape for every scripted flow; the socket fills its ledger. */
-function turnDone(turn: { chatId: string; answerId: number } | null, engine: NonNullable<AgentChatRequest['engine']>, inline = false): Extract<AssistantEvent, { event: 'done' }> {
-  const models = servedModels(engine, inline);
+function turnDone(turn: { chatId: string; answerId: number } | null, engine: NonNullable<AgentChatRequest['engine']>, inline = false, additionalModels: DoneData['models'] = []): Extract<AssistantEvent, { event: 'done' }> {
+  const models = [...servedModels(engine, inline), ...additionalModels];
   const sum = (field: 'prompt_tokens' | 'completion_tokens') => models.reduce((total, model) => total + model[field], 0);
   const costs = models.flatMap((model) => model.cost === null ? [] : [model.cost]);
   return {
@@ -1115,23 +1117,62 @@ async function* questionTurn(turn: ReturnType<typeof recordQuestion>, engine: No
   yield turnDone(turn, engine);
 }
 
-async function* imageRequestTurn(request: AgentChatRequest, context: AssistantTurnContext, turn: ReturnType<typeof recordQuestion>): AsyncGenerator<AssistantEvent> {
+async function* imageTurn(request: AgentChatRequest, context: AssistantTurnContext, turn: ReturnType<typeof recordQuestion>): AsyncGenerator<AssistantEvent> {
   const engine = request.engine === 'codex' ? 'codex' : 'gateway';
+  yield { event: 'session.chat', data: { chat_id: turn.chatId } };
   yield callStart('image_generate', 'call_image_request');
   yield callArgs('image_generate', 'call_image_request', { purpose: 'illustration', aspect_ratio: '3:2' });
+  const quota = generationQuota(context.workspaceId);
+  if (!quota.available) {
+    const reason = quota.reason ?? 'Image quota reached.';
+    yield callEnd('image_generate', 'call_image_request', {}, { ms: 20, code: 'image_quota_exceeded', error: reason });
+    yield { event: 'token', data: { content: reason } };
+    yield turnDone(turn, engine);
+    return;
+  }
+  const message = request.message ?? '';
+  const prompt = 'Compose a flat editorial landscape. Lead the eye along a pale blue river from the foreground toward layered mountain ridges. Use muted teal shapes and a warm sun against a cream sky. No visible text.';
   const info = proposeGeneration(context.workspaceId, request.document_id, {
-    purpose: 'illustration', description: 'A conceptual blue river between geometric mountains',
-    style: 'Clean flat illustration', aspect_ratio: '3:2', exact_text: '',
-  }, engine, context.runId);
+    purpose: 'illustration', description: 'A blue river winding between layers of mountains.',
+    aspect_ratio: '3:2', exact_text: '', style: '',
+  }, prompt, engine, context.runId);
   info.chat_id = turn.chatId;
   info.tool_call_id = 'call_image_request';
-  yield callEnd('image_generate', 'call_image_request', {}, { ms: 200, chars: 100, result: { status: 'awaiting_confirmation', generation_id: info.generation_id } });
-  yield { event: 'artifact', data: {
-    kind: 'image_request', generation_id: info.generation_id, status: 'proposed', asset_id: null,
+  confirmGeneration(info);
+  context.onSettled(({ status }) => {
+    if (status === 'stopped' && (info.status === 'confirmed' || info.status === 'running')) discardGeneration(info);
+  });
+  const artifact = (): Extract<AssistantEvent, { event: 'artifact' }> => ({ event: 'artifact', data: {
+    kind: 'image', generation_id: info.generation_id, status: info.status, asset_id: info.asset_id,
     prompt: info.prompt, aspect_ratio: info.aspect_ratio, estimated_cost: info.estimated_cost, generator: info.provider,
-  } };
-  yield { event: 'token', data: { content: 'Review the exact image request and your venue’s rules, then choose Generate. Auto does not confirm an image.' } };
-  yield turnDone(turn, engine);
+  } });
+  yield artifact();
+  await pause(fixtures.jobDurationMs);
+  await generationState(info);
+  yield artifact();
+  if (!info.asset_id || info.status !== 'succeeded') {
+    yield callEnd('image_generate', info.tool_call_id, {}, { ms: fixtures.jobDurationMs, code: info.status === 'unknown' ? 'image_generation_unknown' : 'image_generation_failed', error: 'The image was not completed.' });
+    yield { event: 'token', data: { content: 'The image was not completed.' } };
+    yield turnDone(turn, engine);
+    return;
+  }
+  yield callEnd('image_generate', info.tool_call_id, {}, { ms: fixtures.jobDurationMs, chars: 160, result: { status: info.status, generation_id: info.generation_id, asset_id: info.asset_id } });
+  const insert = context.tools.has('doc_edit') && /\b(?:insert|place|add|inserta|añade|agrega)\b|#this\//i.test(message);
+  if (insert) {
+    const callId = 'call_place_image';
+    const args = { content_redacted: true, operation_count: 1, operation_names: ['write_blocks'], block_count: 1 };
+    yield callStart('doc_edit', callId);
+    yield callArgs('doc_edit', callId, args);
+    const block = wireBlock({ id: uid(), type: 'image', assetId: info.asset_id, alt: info.arguments.description,
+      caption: 'AI-generated conceptual illustration.', width: 1, origin: { kind: 'generated', generationId: info.generation_id } });
+    const stored = storeBlockAddition(request.document_id, [block], 'Add the generated illustration.', context.policy(),
+      context.runId, callId, message.match(/#this\/([\w-]+)/)?.[1]);
+    yield callEnd('doc_edit', callId, args, { ms: 200, chars: 200, result: { change_set_id: stored.change_set_id, status: 'proposed', operation_names: ['write_blocks'] } });
+    yield { event: 'tool_action', data: changeSetAction(request.document_id, stored) };
+  }
+  yield { event: 'token', data: { content: insert ? 'I generated the illustration and prepared the page edit.' : 'Here is the illustration.' } };
+  yield turnDone(turn, engine, false, info.model && info.usage ? [{ model: info.model, tier: 'image', calls: 1, fallback: false,
+    prompt_tokens: info.usage.prompt_tokens ?? 0, completion_tokens: info.usage.completion_tokens ?? 0, cost: info.cost_usd }] : []);
 }
 
 /** Deep planning ends before any page write. Following a plan rereads its
@@ -1258,7 +1299,7 @@ async function* scriptedTurn(
       ? 'The author wants this passage tightened. Keep the claim and the citation, drop the hedging, and keep the terminology the paper already uses.'
       : 'The author is asking about sparse expert routing. I should check what the literature says about long contexts before answering, then ground each claim in a source.',
   ));
-  const research = researchTool(tools);
+  const research = researchTool(tools, message);
   // A message with a PDF attached: the assistant reads it first.
   const [attached] = pdfs;
   if (!rewrite && attached && tools.has('library_read')) {
@@ -1570,14 +1611,14 @@ export function assistantTurn(request: AgentChatRequest, context: AssistantTurnC
       recordAnswer(request.document_id, { ...turn, runId: context.runId }, record.text, record.snapshot(status, ledger.recorded()), record.hasActivity);
     });
     if (approved) return withAttachments(evidence, planTurn(request, context, turn, approved));
-    if (context.tools.has('image_generate') && /\b(image|illustration|cover picture)\b/i.test(message)) {
-      return withAttachments(evidence, imageRequestTurn(request, context, turn));
-    }
     if (request.answers || (context.tools.has('author_ask') && /\bask me\b|\bclarif(?:y|ication)\b/i.test(message))) {
       return withAttachments(evidence, questionTurn(turn, request.engine ?? 'gateway', Boolean(request.answers), !request.answers?.items?.length));
     }
     if (approved || (request.effort === 'deep' && context.tools.has('plan_propose'))) {
       return withAttachments(evidence, planTurn(request, context, turn, approved));
+    }
+    if (context.tools.has('image_generate') && /\b(image|illustration|cover picture|imagen|ilustración)\b/i.test(message)) {
+      return withAttachments(evidence, imageTurn(request, context, turn));
     }
   }
   return withAttachments(evidence, scriptedTurn(

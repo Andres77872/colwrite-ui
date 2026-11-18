@@ -16,7 +16,7 @@ import { isEditableEmpty, restoreCaretOffset } from '../../common/Editable/caret
 import type { SlashContext, SlashItem } from './types';
 import { Dot, ImagePlus } from 'lucide-react';
 import { AssistantCatalogContext } from '@/components/preferences/assistantCatalogContextState';
-import { openImageGeneration } from '../ImageGeneration/imageGenerationEvents';
+import { PanelsContext } from '@/components/panels/panelsContextState';
 import { SLASH_MENU_EVENT, emitSlashMenuVisibility } from './slashMenuEvents';
 
 /** Notion's width; narrower screens get the viewport less its margins. */
@@ -104,7 +104,7 @@ function rectOfTrigger(trigger: Trigger): DOMRect | null {
  * removes the `/query` and runs the command in its place.
  */
 export function SlashMenu() {
-  const { documentId, loadingDocumentId } = useDocumentSession();
+  const { documentId, documentSessionId, loadingDocumentId } = useDocumentSession();
   const {
     refs,
     updateHtml,
@@ -127,14 +127,19 @@ export function SlashMenu() {
   const listboxId = useId();
   const ownerDocumentId = useRef(documentId);
   const catalog = useContext(AssistantCatalogContext);
+  const panels = useContext(PanelsContext);
   const images = catalog?.tool('image_generate');
   const items = useMemo<readonly SlashItem[]>(() => [...ITEMS, {
     id: 'generate-image', label: 'Generate image…', icon: ImagePlus, group: 'ai', ai: true,
     keywords: ['illustration', 'cover', 'raster', 'picture'],
-    desc: images?.state === 'on' ? 'Prepare an image request for your confirmation' : images?.reason ?? 'Reading image availability…',
+    desc: images?.state === 'on' ? 'Describe an image in page chat' : images?.reason ?? 'Reading image availability…',
     disabledReason: images?.state === 'on' ? undefined : images?.reason ?? 'Reading image availability…',
-    onSelect: (ctx: SlashContext) => openImageGeneration(ctx.blockId),
-  } satisfies SlashItem], [images]);
+    onSelect: (ctx: SlashContext) => {
+      const editable = ctx.refs.current[ctx.blockId];
+      if (editable) updateHtml(ctx.blockId, serializeEditableHtml(editable));
+      panels?.openSidebar('assistant', { tab: 'assistant', documentSessionId, imageBlockId: ctx.blockId });
+    },
+  } satisfies SlashItem], [images, panels, documentSessionId, updateHtml]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();

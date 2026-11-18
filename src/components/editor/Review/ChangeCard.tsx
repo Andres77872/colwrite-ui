@@ -1,7 +1,6 @@
 import { useMemo, type KeyboardEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Kbd } from '@/components/ui/kbd';
 import { useConfirm } from '@/components/ui/confirmContext';
 import { modifierLabel } from '@/components/layout/Shortcuts/shortcuts';
 import { useEditorDoc, usePageReadOnly } from '@/editor';
@@ -31,9 +30,8 @@ import { ArrowDownUp, BookMarked, Check, CircleAlert, Eye, History, Lock, Pencil
  *
  * The row lines up with `.block-row`: same gutter, same measure, same prose
  * size, so the proposed paragraph sits in the column of text it is joining.
- * The chrome is deliberately small — a 2px rail in the change's colour, one
- * quiet line naming the change, and two icon buttons whose labels appear on
- * hover or focus. The diff colours on the text are what carry the change.
+ * A rail marks the change and the two decision buttons keep their positions
+ * as the pointer enters or the card takes keyboard focus.
  */
 
 const KIND: Record<
@@ -274,30 +272,6 @@ function EvidenceNote({ change }: { change: ProposedChange }) {
 }
 
 /**
- * A button's word, shown on hover or focus: icons at rest keep the row quiet
- * while reading, and the label says what the button does once it is reached.
- */
-function HoverLabel({ children }: { children: string }) {
-  return <span className="hidden group-hover/change:inline group-focus-within/change:inline">{children}</span>;
-}
-
-/**
- * The card's own shortcut, shown while the card holds focus — the only time
- * it works. Hidden on narrow screens, where there is rarely a keyboard and
- * never the room. `aria-keyshortcuts` on the button carries it for screen
- * readers, so this copy is not read twice.
- */
-function KeyHint({ keys }: { keys: readonly string[] }) {
-  return (
-    <span aria-hidden="true" className="hidden items-center gap-0.5 sm:group-focus-within/change:inline-flex">
-      {keys.map((key) => (
-        <Kbd key={key}>{key}</Kbd>
-      ))}
-    </span>
-  );
-}
-
-/**
  * Accept and reject from the keyboard while a card has focus.
  *
  * Both carry the platform modifier, like every app shortcut, and neither is
@@ -309,10 +283,9 @@ function reviewKeys() {
   const shown = modifierLabel();
   const aria = shown === '⌘' ? 'Meta' : 'Control';
   return {
-    accept: { aria: `${aria}+Enter`, keys: [shown, 'Enter'], hint: `${shown}+Enter` },
+    accept: { aria: `${aria}+Enter`, hint: `${shown}+Enter` },
     reject: {
       aria: `${aria}+Backspace ${aria}+Delete`,
-      keys: [shown, 'Backspace'],
       hint: `${shown}+Backspace`,
     },
   };
@@ -438,7 +411,7 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
       // Deliberately not `.block-row`: the canvas measures those to place the
       // drag indicator, and a proposal is not a drop target.
       className={cn(
-        'review-change group/change relative my-0.5 rounded-md py-1 pr-2 outline-none transition-colors',
+        'review-change relative my-0.5 rounded-md py-1 pr-2 outline-none transition-colors',
         style.tint,
         isFocused && !style.tint && 'bg-hover',
         'focus-visible:ring-2 focus-visible:ring-ring/40',
@@ -496,8 +469,7 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
               title={readOnly ? viewOnlyNote : `Accept (${keys.accept.hint})`}
             >
               <Check />
-              <HoverLabel>Accept</HoverLabel>
-              <KeyHint keys={keys.accept.keys} />
+              Accept
             </Button>
           )}
           {/* Always available. A blocked change previously offered neither
@@ -514,8 +486,7 @@ export function ChangeCard({ change }: { change: ProposedChange }) {
             title={readOnly ? viewOnlyNote : `Reject (${keys.reject.hint})`}
           >
             <X />
-            <HoverLabel>Reject</HoverLabel>
-            <KeyHint keys={keys.reject.keys} />
+            Reject
           </Button>
         </span>
       </div>

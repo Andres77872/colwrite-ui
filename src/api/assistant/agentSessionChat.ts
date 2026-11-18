@@ -228,7 +228,7 @@ export async function streamAgentSession(
         if (snapshot.run?.request_id === runRequestId) {
           runId = snapshot.run.id;
           cursor = snapshot.run.after_seq;
-          opts.onRunStarted?.({ sessionId, runId, requestId: runRequestId, afterSeq: cursor });
+          opts.onRunStarted?.({ sessionId, runId, requestId: runRequestId, afterSeq: cursor }, snapshot.run.request);
         }
       }
       if (opts.checkpoint && !runId) {

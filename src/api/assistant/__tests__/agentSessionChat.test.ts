@@ -112,22 +112,23 @@ describe('durable agent sessions', () => {
     expect(starts[1]?.params.request_id).toBe(starts[0]?.params.request_id);
   });
 
-  it('resolves an uncertain action from its session before sending changed engine or model fields', async () => {
+  it('recovers the admitted request after an uncertain start even when Web and the engine have changed', async () => {
+    const admitted = { ...request, web: true };
     onGet = (socket, command) => socket.reply(command, {
       session: { id: 's1', last_seq: 12 },
-      run: { id: 'r1', request_id: 'original-action', after_seq: 9 },
+      run: { id: 'r1', request_id: 'original-action', after_seq: 9, request: admitted },
     });
     onStart = () => { throw new Error('An already admitted action must only be observed'); };
     onSubscribe = (socket) => { socket.event(10, 'token', { content: 'Saved review' }); socket.finish(11); };
     const onRunStarted = vi.fn();
     const onToken = vi.fn();
-    const result = await streamAgentSession({ ...params, engine: 'codex', model: 'changed-on-this-device' }, { onToken }, {
+    const result = await streamAgentSession({ ...params, web: false, engine: 'codex', model: 'changed-on-this-device' }, { onToken }, {
       resume: { sessionId: 's1', requestId: 'original-action' }, onRunStarted,
     });
     expect(result.terminal).toBe('done');
     expect(runStarts).toBe(0);
     expect(onToken).toHaveBeenCalledExactlyOnceWith('Saved review');
-    expect(onRunStarted).toHaveBeenCalledExactlyOnceWith({ sessionId: 's1', runId: 'r1', requestId: 'original-action', afterSeq: 9 });
+    expect(onRunStarted).toHaveBeenCalledExactlyOnceWith({ sessionId: 's1', runId: 'r1', requestId: 'original-action', afterSeq: 9 }, admitted);
     expect(commands.find((command) => command.method === 'sessions.subscribe')?.params.after_seq).toBe(9);
   });
 

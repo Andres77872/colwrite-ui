@@ -22,10 +22,10 @@ export function WebSwitch({ web, disabled }: { web: ComposerWeb; disabled: boole
           )}
         >
           <Globe aria-hidden="true" className="h-3 w-3" />
-          Web{web.on && <span aria-hidden="true">on</span>}
+          Web <span aria-hidden="true">{web.on ? 'on' : 'off'}</span>
         </button>
       </TooltipTrigger>
-      <TooltipContent>{web.on ? 'Turn off Web for this conversation' : 'Allow Web for this conversation'}</TooltipContent>
+      <TooltipContent>Allow the assistant to search and read public web pages. Paper search has its own setting.</TooltipContent>
     </Tooltip>
   );
 }

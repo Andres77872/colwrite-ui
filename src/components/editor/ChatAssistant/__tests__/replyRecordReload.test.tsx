@@ -108,16 +108,21 @@ function shown(message: ChatMessage): {
 }
 
 describe('a reply, reloaded', () => {
-  it('keeps an image proposal’s durable card without confirming or generating on reload', async () => {
+  it('generates an image in chat and uses the same asset in the page edit and reloaded reply', async () => {
     enableImageFixture();
-    const { live, reloaded } = await runAndReload({ message: 'Propose an illustration of a blue river' });
+    fixtures.jobDurationMs = 0;
+    const { live, reloaded, chatId } = await runAndReload({ message: 'Generate an illustration of a blue river and add it to the page.' });
     expect(live.artifacts).toHaveLength(1);
     expect(reloaded.artifacts).toEqual(live.artifacts);
-    expect(reloaded.artifacts?.[0]).toMatchObject({ kind: 'image_request', status: 'proposed' });
-    const id = reloaded.artifacts?.[0]?.generation_id;
-    expect(id && fixtures.imageGenerations.get(id)?.status).toBe('proposed');
-    expect(fixtures.jobs.size).toBe(0);
-    expect(fixtures.assets.size).toBe(0);
+    const image = reloaded.artifacts![0]!;
+    expect(image).toMatchObject({ kind: 'image', status: 'succeeded', asset_id: expect.stringMatching(/^ast-/) });
+    expect(fixtures.imageGenerations.get(image.generation_id)?.asset_id).toBe(image.asset_id);
+    expect(fixtures.assets.get(image.asset_id!)?.references).toContainEqual(expect.objectContaining({ kind: 'chat', referenceId: chatId }));
+    expect(fixtures.changeSets.get(DOC)?.at(-1)?.operations).toMatchObject([
+      { op: 'write_blocks', blocks: [{ type: 'image', assetId: image.asset_id }] },
+    ]);
+    expect(fixtures.jobs.size).toBe(1);
+    expect(fixtures.assets.size).toBe(1);
   });
 
   it('shows the same activity, sources, tasks, workers, change sets, models, usage and cost against its limit', async () => {

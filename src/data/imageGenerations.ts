@@ -39,7 +39,7 @@ export function imageGenerationListQuery(workspaceId: string, documentId: string
   });
 }
 
-/** This only proposes. Nothing calls confirm except the explicit Generate button. */
+/** Manual proposals remain available for existing image requests in the page history. */
 export function proposeImage(workspaceId: string, body: ImageGenerationRequest, actionKey: string) {
   return unwrap(api.POST('/workspaces/{workspace_id}/image-generations', {
     params: { path: { workspace_id: workspaceId }, header: { 'Idempotency-Key': actionKey } }, body,
@@ -65,11 +65,9 @@ export function discardImageRequest(workspaceId: string, generationId: string) {
   }));
 }
 
-export async function proposeImageAgain(workspaceId: string, previous: ImageGenerationInfo) {
-  const next = await proposeImage(workspaceId, {
+export function proposeImageAgain(workspaceId: string, previous: ImageGenerationInfo) {
+  return proposeImage(workspaceId, {
     ...previous.arguments, document_id: previous.document_id, engine: previous.engine, aspect_ratio: previous.aspect_ratio,
+    prompt: previous.prompt,
   }, uid());
-  return next.prompt === previous.prompt ? next : editImageRequest(workspaceId, next.generation_id, {
-    prompt: previous.prompt, aspect_ratio: previous.aspect_ratio, confirmation_token: next.confirmation_token,
-  });
 }

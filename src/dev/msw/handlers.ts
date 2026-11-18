@@ -1,3 +1,4 @@
+import { samplePdfText } from '../samplePdfText';
 /**
  * The mock ColWrite-api: MSW handlers typed by the contract through
  * `openapi-msw`, so a handler for a path the API does not have, a wrong
@@ -21,7 +22,7 @@ import { API_BASE } from '@/api/url';
 import { uid } from '@/lib/uid';
 import { MockAssetError, detachChatAssets, linkPageAssets, prepareImageBlocks, readableAsset, storeAsset, validAssetId } from './assets';
 import { storedZip } from '@/export/zip';
-import { confirmGeneration, generationQuota, generationQuote, generationState, proposeGeneration } from './imageGenerations';
+import { confirmGeneration, discardGeneration, generationQuota, generationQuote, generationState, proposeGeneration } from './imageGenerations';
 import type {
   AuthSessionResponse,
   ChangeSetDecisionsRequest,
@@ -1993,7 +1994,7 @@ const resourceHandlers = [
   http.get('/workspaces/{workspace_id}/resources/{resource_id}/markdown', ({ params, query, response }) => {
     const pdf = pdfOr(params.workspace_id, params.resource_id);
     if (isProblem(pdf)) return pdf;
-    const all = `# ${pdf.title ?? 'Document'}\n\nMixture-of-experts layers route each token to a few experts. The auxiliary load balancing loss term keeps experts evenly used.`;
+    const all = samplePdfText(pdf.title);
     const offset = bounded(query.get('offset'), 'offset', 0, 0);
     const limit = bounded(query.get('limit'), 'limit', 20_000, 1, 120_000);
     if (typeof offset !== 'number') return offset;
@@ -2373,10 +2374,13 @@ const imageGenerationHandlers = [
     if (body.engine === 'claude') return problem('image_generation_unavailable', "Images aren't available with Claude Code.");
     const key = request.headers.get('Idempotency-Key')?.trim();
     if (!key) return problem('invalid_idempotency_key', 'An action key is required.');
-    if (Object.keys(body).some((name) => !['document_id', 'engine', 'purpose', 'description', 'style', 'exact_text', 'aspect_ratio'].includes(name))
+    if (Object.keys(body).some((name) => !['document_id', 'engine', 'purpose', 'description', 'style', 'exact_text', 'aspect_ratio', 'prompt'].includes(name))
       || !body.description?.trim() || body.description.length > 2000) return invalidRequest(['body'], 'Describe one illustration.');
+    if (body.prompt != null && (typeof body.prompt !== 'string' || !body.prompt.trim() || body.prompt.length > 4000)) {
+      return invalidRequest(['body', 'prompt'], 'Provide a nonblank final prompt of at most 4000 characters.');
+    }
     const action = `${workspace}:${key}`;
-    const hash = JSON.stringify(body);
+    const hash = JSON.stringify({ ...body, prompt: body.prompt ?? undefined });
     const replay = fixtures.imageGenerationActions.get(action);
     if (replay) {
       if (replay.hash !== hash) return problem('idempotency_key_reused', 'This key named a different request.');
@@ -2385,10 +2389,12 @@ const imageGenerationHandlers = [
     }
     const quota = generationQuota(workspace);
     if (!quota.available) return problem('image_quota_exceeded', quota.reason!, { scope: quota.scope, resets_at: quota.resets_at });
+    const prompt = body.prompt ?? [body.description.trim(), body.style,
+      body.exact_text ? `Render this exact lettering:\n${body.exact_text}` : 'No visible text.'].filter(Boolean).join('\n');
     const info = proposeGeneration(workspace, body.document_id, {
       purpose: body.purpose, description: body.description, style: body.style ?? '',
       exact_text: body.exact_text ?? '', aspect_ratio: body.aspect_ratio ?? '3:2',
-    }, body.engine ?? 'gateway');
+    }, prompt, body.engine ?? 'gateway');
     fixtures.imageGenerationActions.set(action, { hash, generationId: info.generation_id });
     return response(201).json(publicGeneration(info));
   }),
@@ -2472,9 +2478,7 @@ const imageGenerationHandlers = [
     const info = imageGenerationOr(workspace, params.generation_id);
     if (isProblem(info)) return info;
     if (info.created_by !== PREVIEW_USER_ID || !['proposed', 'confirmed', 'running', 'succeeded'].includes(info.status)) return problem('generation_not_pending', 'This request was already decided.');
-    if (info.status === 'running') { info.status = 'unknown'; info.error_code = 'image_generation_unknown'; }
-    else info.status = 'discarded';
-    info.completed_at = new Date().toISOString();
+    discardGeneration(info);
     return response(200).json(publicGeneration(info));
   }),
 ];

@@ -32,7 +32,6 @@ import { DiagramBlock } from '../blocks/DiagramBlock';
 import { FigureBlock } from '../blocks/FigureBlock';
 import { ImageBlock } from '../blocks/ImageBlock/ImageBlock';
 import { ImageUploadHost } from '../blocks/ImageBlock/ImageUploadHost';
-import { ImageGenerationHost } from '../ImageGeneration/ImageGenerationHost';
 import { figureMeta } from '@/lib/figure/compile';
 import { useBlockSelection } from './useBlockSelection';
 import { useBlockDrag } from './useBlockDrag';
@@ -421,7 +420,6 @@ export function Canvas() {
         </p>
         <PageTitle onContinue={continueFromTitle} pageKey={documentId} blank={isBlank} />
         <ImageUploadHost />
-        <ImageGenerationHost />
         {isBlank && !readOnly && <BlankPageActions blankId={blocks[0]?.id ?? null} />}
         {isBlank && readOnly && <p className="mb-2 text-sm text-muted-foreground">Nothing is written on this page yet.</p>}
 

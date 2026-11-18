@@ -1,6 +1,12 @@
 import { ChartColumn } from 'lucide-react';
 import type { SlashItem } from '../types';
+import type { GraphChild } from '@/editor/types';
 import { insertInlineChild } from './insertChild';
+
+/** The starter inserted by /Chart. */
+export function newGraphChild(id: string): GraphChild {
+  return { id, type: 'graph', kind: 'bar', data: { values: [3, 5, 2], labels: ['A', 'B', 'C'] } };
+}
 
 export const graphItem: SlashItem = {
   id: 'graph',
@@ -11,13 +17,5 @@ export const graphItem: SlashItem = {
   icon: ChartColumn,
   keywords: ['graph', 'chart', 'plot', 'bar', 'line', 'pie', 'data', 'image', 'figure'],
   group: 'insert',
-  onSelect: (ctx) =>
-    void insertInlineChild(ctx, (id) => ({
-      id,
-      type: 'graph',
-      kind: 'bar',
-      // Placeholder data rather than an empty chart: a blank axis says nothing
-      // about what to do next, whereas three labelled bars do.
-      data: { values: [3, 5, 2], labels: ['A', 'B', 'C'] },
-    })),
+  onSelect: (ctx) => void insertInlineChild(ctx, newGraphChild),
 };

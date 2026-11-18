@@ -20,6 +20,7 @@ export type PanelId = SidebarTab | ResearchSourceId;
 
 /** Context for opening the sidebar on a specific thing, not just a tab. */
 export type SidebarIntent =
+  | { tab: 'assistant'; documentSessionId: string; imageBlockId: string }
   | { tab: 'research'; query: string }
   /** Check a claim (the Research panel's claim check), with the works to judge it against. */
   | { tab: 'research'; claim: string; sources?: string[] }
@@ -46,6 +47,7 @@ export type PanelsContextValue = {
   openSidebar: (tab: SidebarTab, intent?: SidebarIntent) => void;
   /** The last intent, for the tab it names to consume. `id` changes per call. */
   intent: (SidebarIntent & { id: number }) | null;
+  consumeIntent: (id: number) => void;
   isOpen: boolean;
   open: () => void;
   close: () => void;

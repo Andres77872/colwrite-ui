@@ -201,7 +201,7 @@
     {
       "id": "images",
       "label": "Images",
-      "description": "Propose illustrations for explicit author confirmation.",
+      "description": "Generate illustrations in the conversation.",
       "switch": "images"
     }
   ],
@@ -900,13 +900,14 @@
     {
       "id": "image_generate",
       "toolset": "images",
-      "label": "Proposed an image",
-      "running_label": "Preparing an image request",
+      "label": "Generated an image",
+      "running_label": "Generating an image",
       "icon": "image",
       "detail_templates": [],
       "value_labels": {},
       "effects": [
-        "propose"
+        "create",
+        "spend"
       ],
       "profiles": [
         "chat"
@@ -1355,7 +1356,7 @@
       "id": "figures-and-images",
       "label": "Figures and images",
       "description": "Chooses how to show something visually in a ColWrite page, a chart, a table, a Mermaid diagram, a structured figure or an image, and writes its caption and alt text within what venues allow for AI-made images. Use when the author asks for a figure, a chart, a diagram, an illustration, a graphical abstract or an image, asks how to show a result, or asks for a caption or alt text. Not for the block syntax of a widget once chosen (the editor skill has it), and never for an image of results or data.",
-      "version": "1",
+      "version": "4",
       "profiles": [
         "chat"
       ],
@@ -1532,7 +1533,7 @@
     {
       "id": "images",
       "label": "Images",
-      "description": "Generate illustrations. Each image is confirmed first.",
+      "description": "Let the assistant generate images in chat using your image allowance.",
       "default": false,
       "destination": null,
       "deployment": "image_generation"

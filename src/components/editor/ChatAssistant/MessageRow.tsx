@@ -151,7 +151,8 @@ export function MessageRow({
       {message.content && <ChatMarkdown text={message.content} sources={previewMarkers} />}
       {planCard}
       {message.question && <QuestionCard question={message.question} onAnswer={onAnswerQuestion} />}
-      {message.artifacts?.map((artifact) => <ImageGenerationCard key={artifact.generation_id} generationId={artifact.generation_id} />)}
+      {message.artifacts?.map((artifact) => <ImageGenerationCard key={artifact.generation_id}
+        generationId={artifact.generation_id} allowInsert={artifact.kind === 'image_request'} />)}
 
       {/* How a reply that did not complete ended, as its record keeps it: a
           stopped one used to look finished, and one stopped before its

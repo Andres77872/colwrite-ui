@@ -221,7 +221,7 @@ export function ResourceList({
   );
 }
 
-export function ResourceRow({ resource, onOpen }: { resource: ResourceItem; onOpen: () => void }) {
+export function ResourceRow({ resource, onOpen, draggable = true }: { resource: ResourceItem; onOpen: () => void; draggable?: boolean }) {
   const context = [
     formatBytes(resource.byte_size),
     resource.extraction.pages ? `${resource.extraction.pages}p` : null,
@@ -253,11 +253,11 @@ export function ResourceRow({ resource, onOpen }: { resource: ResourceItem; onOp
           </span>
         </span>
       </button>
-      <DragHandle
+      {draggable && <DragHandle
         label={resource.filename}
         payload={{ kind: 'resource', id: resource.id }}
         className="h-8 w-6"
-      />
+      />}
     </div>
   );
 }

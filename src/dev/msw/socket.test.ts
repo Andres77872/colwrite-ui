@@ -440,15 +440,19 @@ describe('the preview’s scripted turns', () => {
   }, 20_000);
 
   it('keeps each handle for the conversation: a later turn names the works it finds again by their handles, and new ones by the next', async () => {
+    fixtures.assistant = { switches: { web: true }, sources: {} };
     // The seeded chat found S1 and S2 (two papers) and S3 (a page).
-    const papers = await runScripted({ message: 'What does the literature say?', chat_id: 'chat-related' });
+    const request = { message: 'Search the public web for expert routing', chat_id: 'chat-related' };
+    const papers = await runScripted({ ...request, web: false });
+    expect(papers.some((event) => event.event === 'tool_call_start' && event.data.tool === 'web_search')).toBe(false);
     // Found again in this run: sent again, under the same handles, with no passages (a paper search stores none yet).
     expect(evidenceOf(papers).sources.map((source) => [source.handle, source.key])).toEqual([['S1', 'arxiv:2101.03961'], ['S2', 'arxiv:2202.08906']]);
     expect(evidenceOf(papers).passages).toEqual([]);
     expect(answer(papers)).toContain('grows [S1]. Router z-loss stabilises training at scale [S2].');
 
-    fixtures.assistant = { switches: { papers: false, web: true }, sources: { semantic_scholar: false } };
-    const pages = await runScripted({ message: 'What does the web say?', chat_id: 'chat-related', web: true });
+    // The same request with Web on finds pages in the public web search.
+    const pages = await runScripted({ ...request, web: true });
+    expect(pages.some((event) => event.event === 'tool_call_start' && event.data.tool === 'web_search')).toBe(true);
     const sent = evidenceOf(pages);
     // The page an earlier turn found keeps S3; the new one is S4. Each search result stores its snippet.
     expect(sent.sources.map((source) => [source.handle, source.kind, source.provider])).toEqual([['S3', 'web', 'web'], ['S4', 'web', 'web']]);

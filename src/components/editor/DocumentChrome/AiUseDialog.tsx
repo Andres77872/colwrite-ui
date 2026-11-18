@@ -17,6 +17,7 @@ import { useWorkspaceId } from '@/components/workspace/workspaceContextState';
 import { shortDateTime } from '@/components/layout/editedLabel';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useDocumentId } from '@/editor';
+import { ImageHistory } from '../ImageGeneration/ImageHistory';
 import {
   VENUES,
   aiUseLogQuery,
@@ -124,6 +125,7 @@ function AiUseBody() {
           </Button>
         )}
       </section>
+      <ImageHistory documentId={documentId} />
       <Statement workspaceId={workspaceId} documentId={documentId} />
     </div>
   );

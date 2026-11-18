@@ -16,7 +16,6 @@ import { CollectionPdfOffer } from './CollectionPdfOffer';
 import { AutoModeDialog } from './AutoModeDialog';
 import { EffortSwitcher, type ComposerEffort } from './EffortSwitcher';
 import { WebSwitch, type ComposerWeb } from './WebSwitch';
-import { ImageGenerationButton } from '../ImageGeneration/ImageGenerationHost';
 
 /** File data is protected during dragover; browsers still expose the Files type. */
 function hasDraggedFiles(data: DataTransfer) {
@@ -244,7 +243,6 @@ export function ChatComposer({
         </Tooltip>
 
         <ChatAttachmentPicker draft={files} disabled={isStreaming} canUpload={canUpload} />
-        <ImageGenerationButton disabled={isStreaming || !canUpload} />
         {effort && <EffortSwitcher effort={effort} disabled={isStreaming} />}
         {web && <WebSwitch web={web} disabled={isStreaming} />}
 

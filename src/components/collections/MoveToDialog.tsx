@@ -376,7 +376,7 @@ export function DestinationTree({
   ariaLabel,
   onSelect,
 }: {
-  tree: WorkspaceTree;
+  tree: Pick<WorkspaceTree, 'branch' | 'findCollection' | 'isExpanded' | 'setExpanded' | 'loadMore'>;
   selected: number | null;
   disabledIds: ReadonlySet<number>;
   home: string | null;

@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { rawKatexCssPlugin } from './vite.raw-katex'
 import { mswWorkerPlugin } from './vite.msw-worker'
+import { wikiPlugin } from './vite.wiki'
 
 // Resolved from `import.meta.url` rather than `__dirname` so the config
 // typechecks without pulling in @types/node.
@@ -44,7 +45,10 @@ export default defineConfig(({ mode }) => {
   const localApi = LOOPBACK_HOSTS.has(api.hostname) || api.hostname.endsWith('.localhost')
 
   return {
-    plugins: [rawKatexCssPlugin(), mswWorkerPlugin(), react(), tailwindcss()],
+    plugins: [rawKatexCssPlugin(), mswWorkerPlugin(), wikiPlugin(), react(), tailwindcss()],
+    // The development preview and figure gallery have their own imports.
+    optimizeDeps: { entries: ['*.html', 'examples/index.html'] },
+    build: { rolldownOptions: { input: [`${projectDir}index.html`, `${projectDir}examples/index.html`] } },
     resolve: {
       alias: {
         "@": new URL('./src', import.meta.url).pathname,

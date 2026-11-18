@@ -205,6 +205,24 @@ function DocumentChatAssistant({ target, onTargetConsumed, runs, unreadChats, ma
   const listRef = useRef<HTMLDivElement | null>(null);
   const panels = useContext(PanelsContext);
   const inputHostRef = useRef<ChatTaggedInputHandle | null>(null);
+  const imageIntent = panels?.intent?.tab === 'assistant' ? panels.intent : null;
+  const consumeIntent = panels?.consumeIntent;
+  const startImagePrompt = useEffectEvent((blockId: string) => {
+    const prompt = `Generate an image for #this/${blockId} showing `;
+    const draft = input.trim() ? `${input}\n${prompt}` : prompt;
+    const next = draft.length <= MAX_MESSAGE_LENGTH ? draft : input;
+    setInput(next);
+    inputHostRef.current?.focus();
+    inputHostRef.current?.setSelectionRange(next.length, next.length);
+  });
+  useEffect(() => {
+    if (!imageIntent || !consumeIntent) return;
+    const frame = requestAnimationFrame(() => {
+      consumeIntent(imageIntent.id);
+      if (imageIntent.documentSessionId === documentSessionId) startImagePrompt(imageIntent.imageBlockId);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [imageIntent, consumeIntent, documentSessionId]);
   const refPickerRef = useRef<ChatRefPickerHandle | null>(null);
   const pinnedToBottom = useRef(true);
   /**
@@ -236,6 +254,7 @@ function DocumentChatAssistant({ target, onTargetConsumed, runs, unreadChats, ma
     documentId,
     loadingDocumentId,
     restoreEpoch,
+    webEnabled: choices.web,
     ensureRemoteDocument,
     hasPendingEdits,
     saveRemote,
@@ -457,7 +476,7 @@ function DocumentChatAssistant({ target, onTargetConsumed, runs, unreadChats, ma
     if (turnFocus?.selection) setDismissedFocus(focus);
     const attachments = files.attachments;
     files.clear();
-    return send(text, { context: agentContext(text, turnFocus), attachments, effort: choices.effort, web: choices.web });
+    return send(text, { context: agentContext(text, turnFocus), attachments, effort: choices.effort });
   };
 
   const onSend = () => sendWithContext(input.trim());
@@ -471,7 +490,7 @@ function DocumentChatAssistant({ target, onTargetConsumed, runs, unreadChats, ma
   const onChatPreset = (preset: { id: string; label: string }) => {
     if (isStreaming || loadingDocumentId) return;
     focusComposer(inputHostRef.current);
-    void send(preset.label, { preset: preset.id, effort: choices.effort, web: choices.web });
+    void send(preset.label, { preset: preset.id, effort: choices.effort });
   };
 
   /** Ask the question behind an answer again, as it was asked. */
@@ -486,7 +505,7 @@ function DocumentChatAssistant({ target, onTargetConsumed, runs, unreadChats, ma
       lastExchange?.assistantMessageId === answerId ? lastExchange.context : undefined;
     const previous = lastExchange?.assistantMessageId === answerId ? lastExchange : undefined;
     void send(previous?.text ?? prompt.content, {
-      context, attachments: prompt.attachments, preset: prompt.preset, effort: prompt.effort, web: prompt.web,
+      context, attachments: prompt.attachments, preset: prompt.preset, effort: prompt.effort,
       plan_id: prompt.planId, plan: previous?.plan, answers: previous?.answers,
       displayText: previous?.displayText,
     });
@@ -658,7 +677,7 @@ function DocumentChatAssistant({ target, onTargetConsumed, runs, unreadChats, ma
                   message.question && message.id === visibleMessages.at(-1)?.id && !isStreaming && !error
                     ? (answers) => { void send('', {
                         answers, displayText: questionAnswerText(message.question, answers),
-                        effort: choices.effort, web: choices.web,
+                        effort: choices.effort,
                       }); }
                     : undefined
                 }
@@ -670,7 +689,7 @@ function DocumentChatAssistant({ target, onTargetConsumed, runs, unreadChats, ma
                     canEdit={!readOnly}
                     busy={isStreaming || Boolean(loadingDocumentId)}
                     onStart={(approved, edit) => { void send('', {
-                      effort: 'deep', plan_id: approved.plan_id, plan: edit, web: choices.web,
+                      effort: 'deep', plan_id: approved.plan_id, plan: edit,
                       displayText: 'Write the approved plan, section by section.',
                     }); }}
                   />
@@ -738,7 +757,10 @@ function DocumentChatAssistant({ target, onTargetConsumed, runs, unreadChats, ma
             switchedOff={policyOff}
             canUpload={!readOnly}
             effort={{ value: choices.effort, choices: choices.efforts, onChange: choices.setEffort }}
-            web={webAvailable ? { on: choices.web, onChange: choices.setWeb } : undefined}
+            web={webAvailable ? {
+              on: isStreaming ? lastExchange?.web ?? choices.web : choices.web,
+              onChange: choices.setWeb,
+            } : undefined}
           />
         </div>
       </div>

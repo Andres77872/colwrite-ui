@@ -12,7 +12,7 @@ import { DocumentSessionContext, type DocumentSessionValue } from '@/editor/docu
 import { createBlockActions } from '@/editor/blockActions';
 import type { Doc } from '@/editor/types';
 import { ImageGenerationCard } from './ImageGenerationCard';
-import { confirmImage, editImageRequest, proposeImage } from '@/data/imageGenerations';
+import { confirmImage, editImageRequest, proposeImage, proposeImageAgain } from '@/data/imageGenerations';
 import { uid } from '@/lib/uid';
 
 afterEach(async () => {
@@ -25,7 +25,7 @@ function proposal() {
   enableImageFixture();
   return proposeGeneration(TEST_WORKSPACE_ID, FIXTURE_DOCUMENT_ID, {
     purpose: 'illustration', description: 'A conceptual blue river', style: '', exact_text: '', aspect_ratio: '3:2',
-  }, 'gateway');
+  }, 'Illustrate a blue river winding through the mountains. No lettering.', 'gateway');
 }
 
 function mount(generationId: string, readOnly = false) {
@@ -113,6 +113,19 @@ it('the shared mock binds confirmation to the edited exact request and replays o
   ]);
   expect(first.job.id).toBe(replay.job.id);
   expect(fixtures.jobs.size).toBe(1);
+});
+
+it('reuses the recorded prompt verbatim even when the original description is in another language', async () => {
+  const previous = proposal();
+  previous.arguments.description = 'Un río azul entre montañas.';
+  previous.arguments.exact_text = 'Río de otoño';
+  previous.prompt = 'Draw an editorial river landscape.\nLabel the river “Río de otoño”.';
+  const requests = recordRequests();
+  const next = await proposeImageAgain(TEST_WORKSPACE_ID, previous);
+  expect(next.arguments.description).toBe(previous.arguments.description);
+  expect(next.prompt).toBe(previous.prompt);
+  expect(await jsonOf(requests.find((request) => request.method === 'POST'))).toMatchObject({ prompt: previous.prompt });
+  expect(requests.some((request) => request.method === 'PATCH')).toBe(false);
 });
 
 it('the mock refuses model/quality injection instead of forwarding author-controlled provider settings', async () => {

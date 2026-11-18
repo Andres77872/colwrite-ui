@@ -14,7 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { restoreCaretOffset } from '@/components/common/Editable/caret';
 import { StructuredFigure } from '@/components/common/StructuredFigure';
 import { figureMeta } from '@/lib/figure/compile';
-import { formatFigureSource, setItemProperty } from '@/lib/figure/edit';
+import { formatFigureSource, setItemProperties } from '@/lib/figure/edit';
 import { FIGURE_TEMPLATES, type FigureTemplate } from '@/lib/figure/templates';
 import type { CompiledFigure, FigureDiagnostic } from '@/lib/figure/types';
 import { openAskAi } from '../../AskAi/askAiEvents';
@@ -144,12 +144,8 @@ export const FigureBlock = memo(function FigureBlock({
   };
 
   const edit = (id: string, changes: FigureEdit) => {
-    let next: string | null = block.text;
-    for (const [key, value] of changes) {
-      if (next === null) break;
-      next = setItemProperty(next, id, key, value) ?? next;
-    }
-    if (next !== null && next !== block.text) updateCodeText(block.id, next);
+    const next = setItemProperties(block.text, id, changes);
+    if (next !== block.text) updateCodeText(block.id, next);
   };
 
   const onBlur = (event: FocusEvent<HTMLDivElement>) => {

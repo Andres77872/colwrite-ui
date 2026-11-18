@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   runAgentTurn,
+  type AgentChatOptions,
   type AgentChatParams,
   type AgentChatResult,
   type AgentChatRetryOptions,
@@ -51,7 +52,7 @@ export type AgentRunSpec = {
   /** Observe a run that already exists: nothing is saved and nothing new starts. */
   resume?: ResumeAgentRun;
   checkpoint?: CheckpointResume;
-  onRunStarted?: (run: ResumeAgentRun) => void;
+  onRunStarted?: AgentChatOptions['onRunStarted'];
   /** Definitive rejection may settle after detach. Only clear matching scoped
    * recovery metadata here, never mutate the page or unmounted UI state. */
   onAdmissionRefused?: (run: ResumeAgentRun) => void;
@@ -308,8 +309,8 @@ export function useAgentRun({ surface, document }: { surface: AgentRunSurface; d
           abortBehavior: surface === 'inline' ? 'cancel' : 'detach',
           resume: spec.resume,
           checkpoint: spec.checkpoint,
-          onRunStarted: (run) => {
-            if (live()) spec.onRunStarted?.(run);
+          onRunStarted: (run, admittedRequest) => {
+            if (live()) spec.onRunStarted?.(run, admittedRequest);
           },
           retry: spec.retry,
         },

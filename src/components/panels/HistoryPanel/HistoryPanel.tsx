@@ -509,7 +509,7 @@ function InlineProblem({
   );
 }
 
-function RevisionRow({
+export function RevisionRow({
   revision,
   node,
   isCurrent,
@@ -891,7 +891,7 @@ function childChangeWording(change: RevisionChange, verb: string): string {
   return `${words.join(' and ')} changed.`;
 }
 
-function ChangeView({
+export function ChangeView({
   change,
   base,
   target,

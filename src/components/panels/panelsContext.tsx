@@ -128,6 +128,9 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
     },
     [setPanel],
   );
+  const consumeIntent = useCallback((id: number) => {
+    setIntent((current) => current?.id === id ? null : current);
+  }, []);
 
   const open = useCallback(() => setIsOpen(true), [setIsOpen]);
   const close = useCallback(() => setIsOpen(false), [setIsOpen]);
@@ -181,6 +184,7 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       researchSource,
       setResearchSource,
       openSidebar,
+      consumeIntent,
       intent,
       isOpen,
       open,
@@ -210,6 +214,7 @@ export function PanelsProvider({ children }: { children: React.ReactNode }) {
       researchSource,
       setResearchSource,
       openSidebar,
+      consumeIntent,
       intent,
       isOpen,
       open,

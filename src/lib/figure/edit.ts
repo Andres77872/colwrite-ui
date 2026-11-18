@@ -676,3 +676,10 @@ function encodeJsonString(value: string): string {
   }
   return `${out}"`;
 }
+
+/** Apply one inspector gesture, which can change a property and clear its aliases. */
+export function setItemProperties(source: string, id: string, changes: readonly [string, JsonValue | undefined][]): string {
+  let next = source;
+  for (const [key, value] of changes) next = setItemProperty(next, id, key, value) ?? next;
+  return next;
+}

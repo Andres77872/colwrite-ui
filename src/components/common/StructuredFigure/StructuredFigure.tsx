@@ -2,6 +2,7 @@ import { memo, useEffect, useId, useRef, useState, type CSSProperties } from 're
 import { AlertTriangle, Check, Copy, Download, FileCode2, Maximize2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/lib/theme';
+import { copyToClipboard } from '@/lib/clipboard';
 import { describeFigure } from '@/lib/figure/compile';
 import { figurePalette } from '@/lib/figure/palette';
 import { figureToTikz } from '@/lib/figure/tikz';
@@ -120,12 +121,7 @@ export const StructuredFigure = memo(function StructuredFigure({
   };
 
   const copyText = async (text: string, what: 'source' | 'tikz') => {
-    try {
-      await navigator.clipboard.writeText(text);
-      flash(what);
-    } catch {
-      /* clipboard unavailable: the unchanged icon is the answer */
-    }
+    if (await copyToClipboard({ plain: text })) flash(what);
   };
 
   const download = async () => {

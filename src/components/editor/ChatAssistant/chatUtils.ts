@@ -31,7 +31,7 @@ export type ChatMessage = {
   preset?: string;
   /** A question's requested effort, also Deep for a planning turn budgeted within Standard. */
   effort?: 'quick' | 'standard' | 'deep';
-  /** The author's Web choice, so Retry repeats it without granting permissions. */
+  /** The Web setting recorded for this request. */
   web?: boolean;
   /** A question that ran from a plan: the plan's id. Kept; P3 shows it. */
   planId?: string;
@@ -140,7 +140,9 @@ export type ChatError = {
   retryable?: boolean;
 };
 
-export type ChatTurnOptions = Pick<AgentChatParams, 'context' | 'attachments' | 'preset' | 'effort' | 'web' | 'plan_id' | 'plan' | 'answers'> & {
+export type ChatTurnOptions = Pick<AgentChatParams, 'context' | 'attachments' | 'preset' | 'effort' | 'plan_id' | 'plan' | 'answers'> & {
+  /** Original Web choice when following an admitted run or continuing its checkpoint. */
+  web?: boolean;
   /** Readable local text for an answers-only or plan-start request. Never serialized. */
   displayText?: string;
   /** Observe an admitted run, or replay an uncertain start with its original key. */

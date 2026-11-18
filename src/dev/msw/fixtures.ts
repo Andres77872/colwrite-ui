@@ -61,6 +61,7 @@ import type {
   AccountUsageResponse,
 } from '@/api/schema';
 import { FIXTURE_DOCUMENT_ID, fixtureDocument } from '../fixtureDocument';
+import { wireBlock, type WireBlock } from '../wireBlock';
 import {
   DU,
   FEDUS,
@@ -77,7 +78,7 @@ import { MOCK_BUILD, auditPage, purposesOf, verificationOf } from './references'
 
 export { FIXTURE_DOCUMENT_ID };
 
-export type WireBlock = NonNullable<DocumentContentOutput['blocks']>[number];
+export { wireBlock, type WireBlock } from '../wireBlock';
 type Json = Record<string, unknown>;
 
 /* ----------------------------------------
@@ -428,36 +429,6 @@ export type PageTrashRoot = { kind: 'document' | 'collection'; id: string };
 const NOW = '2026-09-20T14:32:00Z';
 const SERIALIZER = 'canonical-json-v1';
 
-type WireChild = NonNullable<Extract<WireBlock, { type: 'paragraph' }>['children']>[number];
-
-/** A child with the fields its model defaults filled in, as the API serializes it. */
-function wireChild(value: Json): WireChild {
-  switch (value.type) {
-    case 'citation': return { style: 'nlm-citation-sequence-brackets', sources: [], ...value } as unknown as WireChild;
-    case 'equation': return { display: false, numbered: false, ...value } as WireChild;
-    case 'table': return { header: false, ...value } as WireChild;
-    case 'aiBeat': return { collapsed: false, message: '', prompt: '', output: null, ...value } as WireChild;
-    default: return value as WireChild;
-  }
-}
-
-/**
- * A block with the fields its model defaults filled in, as the API
- * serializes every page (`DocumentContent`): the view-state flags, the
- * paragraph's columns, an empty html or text.
- */
-export function wireBlock(value: Json): WireBlock {
-  const view = { aiHidden: false, collapsed: false, locked: false };
-  switch (value.type) {
-    case 'paragraph': {
-      const children = Array.isArray(value.children) ? (value.children as Json[]).map(wireChild) : [];
-      return { ...view, columns: 1, html: '', ...value, children } as WireBlock;
-    }
-    case 'heading': return { ...view, html: '', level: 2, ...value } as WireBlock;
-    case 'code': return { ...view, text: '', ...value } as WireBlock;
-    default: return { ...view, ...value } as WireBlock;
-  }
-}
 
 /* ----------------------------------------
    Pages
@@ -1610,20 +1581,25 @@ export function storePlanSection(
   runId: string,
   callId: string,
 ): StoredChangeSet {
-  const doc = liveDocument(documentId);
   const id = uid();
+  return storeBlockAddition(documentId, [
+    wireBlock({ id: `heading-${id}`, type: 'heading', level: 2, html: escapeHtml(section.title) }),
+    wireBlock({ id: `paragraph-${id}`, type: 'paragraph', html: escapeHtml(section.goal || 'State the question, assess the evidence and distinguish what remains uncertain.'), children: [] }),
+  ], `Draft: ${section.title}`, policy, runId, callId);
+}
+
+export function storeBlockAddition(documentId: string, blocks: WireBlock[], summary: string, policy: RunPolicy,
+  runId: string, callId: string, afterBlockId?: string): StoredChangeSet {
+  const doc = liveDocument(documentId);
+  const anchor = doc?.blocks.find((block) => block.id === afterBlockId);
   const changeSet = changeSetRow(documentId, {
     change_set_id: uid(),
     operations: [{
-      op: 'write_blocks', position: 'append',
-      blocks: [
-        wireBlock({ id: `heading-${id}`, type: 'heading', level: 2, html: escapeHtml(section.title) }),
-        wireBlock({ id: `paragraph-${id}`, type: 'paragraph', html: escapeHtml(section.goal || 'State the question, assess the evidence and distinguish what remains uncertain.'), children: [] }),
-      ],
+      op: 'write_blocks', ...(anchor ? { position: 'after', block_id: anchor.id } : { position: 'append' }), blocks,
       basis: ['author'], new_information: true,
     }],
-    groups: groupsFor(['new_content']), targets: [[]], decisions: [],
-    proposed_at: new Date().toISOString(), summary: `Draft: ${section.title}`,
+    groups: groupsFor(['new_content']), targets: [anchor ? [{ block_id: anchor.id, fingerprint: mockFingerprint(anchor) }] : []], decisions: [],
+    proposed_at: new Date().toISOString(), summary,
     ...policy,
   });
   if (doc) {
