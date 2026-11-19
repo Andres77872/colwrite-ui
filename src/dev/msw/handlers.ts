@@ -216,7 +216,7 @@ export function problem(
 ): HttpResponse<ProblemDetails> {
   const [status, retryable = false] = REGISTRY[code];
   const body: ProblemDetails = {
-    type: `https://colwrite.com/problems/${code}`, title: code, status, detail, instance: '', code, retryable,
+    type: `https://colwrite-api.novus.chat/problems/${code}`, title: code, status, detail, instance: '', code, retryable,
     errors: null, expected_head: null, current_head: null, change_set_id: null, change_set_status: null, conflict_reason: null,
     dependency_change_set_id: null, operation_index: null, retry_after: null, provider: null, operation: null, source: null,
     maximum_bytes: null, actual_bytes: null, required_role: null, limit: null, trash_root: null, purge_after: null,

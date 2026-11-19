@@ -8,7 +8,7 @@ import { fixtures } from '@/dev/msw/fixtures';
 import { FIXTURE_DOCUMENT_ID } from '@/dev/fixtureDocument';
 import { enableImageFixture, proposeGeneration } from '@/dev/msw/imageGenerations';
 import { EditorActionsContext, EditorActiveBlockContext, type EditorActionsContextValue } from '@/editor/editorContextState';
-import { DocumentSessionContext, type DocumentSessionValue } from '@/editor/documentSessionState';
+import { DocumentSessionContext, PageReadOnlyContext, type DocumentSessionValue } from '@/editor/documentSessionState';
 import { createBlockActions } from '@/editor/blockActions';
 import type { Doc } from '@/editor/types';
 import { ImageGenerationCard } from './ImageGenerationCard';
@@ -35,11 +35,13 @@ function mount(generationId: string, readOnly = false) {
   const actions = createBlockActions((update) => { edits.push(doc); doc = update(doc); }, () => doc);
   const view = renderInWorkspace(<QueryClientProvider client={client}>
     <DocumentSessionContext.Provider value={{ documentId: FIXTURE_DOCUMENT_ID, readOnly } as DocumentSessionValue}>
-      <EditorActiveBlockContext.Provider value={{ activeId: 'anchor', setActive: vi.fn() }}>
-        <EditorActionsContext.Provider value={actions as unknown as EditorActionsContextValue}>
-          <ImageGenerationCard generationId={generationId} />
-        </EditorActionsContext.Provider>
-      </EditorActiveBlockContext.Provider>
+      <PageReadOnlyContext.Provider value={readOnly}>
+        <EditorActiveBlockContext.Provider value={{ activeId: 'anchor', setActive: vi.fn() }}>
+          <EditorActionsContext.Provider value={actions as unknown as EditorActionsContextValue}>
+            <ImageGenerationCard generationId={generationId} />
+          </EditorActionsContext.Provider>
+        </EditorActiveBlockContext.Provider>
+      </PageReadOnlyContext.Provider>
     </DocumentSessionContext.Provider>
   </QueryClientProvider>);
   return { ...view, doc: () => doc, edits, client };

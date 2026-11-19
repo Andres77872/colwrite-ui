@@ -1,12 +1,13 @@
 import type { paths } from './schema';
 
-const PRODUCTION_API_BASE = 'https://colwrite-api.novus.chat';
+const SHARED_DEV_API_BASE = 'https://colwrite-api.novus.chat';
 
 /**
- * Where the API is. Production builds call it directly; the dev server and
- * the tests go through the Vite `/api` proxy, which strips that prefix.
+ * The browser-facing API base. Builds default to the shared development API
+ * at its origin root. Vite dev uses `/api` and strips it when forwarding auth
+ * requests. Tests use the same `/api` base with MSW.
  */
-export const API_BASE = (import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? '/api' : PRODUCTION_API_BASE)).replace(/\/$/, '');
+export const API_BASE = (import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? '/api' : SHARED_DEV_API_BASE)).replace(/\/$/, '');
 
 /**
  * The URL of a schema path. The API serves its agent routes at `/api/agent/*`

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { Block } from '@/editor/types';
 
 /**
@@ -375,5 +375,46 @@ describe('BlockControls on a read-only page (M6.UI-2)', () => {
       'Copy as Markdown',
     ]);
     expect(screen.queryByRole('menuitem', { name: /Delete|Duplicate|Turn into|Move up/ })).toBeNull();
+  });
+});
+
+describe('BlockControls on a long page', () => {
+  /** The browser's observer: nothing is near until the test says so. */
+  let comeNear: (el: Element) => void;
+
+  beforeEach(() => {
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(callback: IntersectionObserverCallback) {
+        comeNear = (el) => callback([{ target: el, isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('keeps its place and its marks, and mounts its buttons when the row comes near the screen', () => {
+    const view = renderControls('locked');
+    const host = view.container.querySelector('.block-controls');
+
+    // The gutter mark is what the author sees at rest: never held back.
+    expect(screen.getByRole('img', { name: /^Locked/ })).toBeTruthy();
+    expect(host?.childElementCount).toBe(0);
+    expect(screen.queryByRole('button')).toBeNull();
+
+    if (host) act(() => comeNear(host));
+
+    expect(screen.getByRole('button', { name: 'Add a block below' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Text block, locked: click for options' })).toBeTruthy();
+  });
+
+  it('has its controls at once when its menu is the open one, and keeps them when it closes', () => {
+    const view = renderControls('p1', { open: true });
+    expect(screen.getByRole('menuitem', { name: /Duplicate/ })).toBeTruthy();
+
+    view.rerender(<BlockControls block={blockFixture('p1')} isFirst={false} isLast={false} menuOpen={false} />);
+
+    expect(screen.getByRole('button', { name: 'Text block: drag to move, click for options' })).toBeTruthy();
   });
 });

@@ -477,5 +477,5 @@ describe('retryable problem backoff', () => {
 
 /** A problem body for a code, to build a response off the contract from. */
 function problemBody(code: ErrorCode): Record<string, unknown> {
-  return { type: `https://colwrite.com/problems/${code}`, title: code, status: 503, detail: code, instance: '/', code, retryable: false };
+  return { type: `https://colwrite-api.novus.chat/problems/${code}`, title: code, status: 503, detail: code, instance: '/', code, retryable: false };
 }

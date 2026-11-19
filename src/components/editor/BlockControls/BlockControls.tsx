@@ -35,6 +35,7 @@ import {
 import { blocksToMarkdown } from '@/editor/markdown';
 import { uid } from '@/lib/uid';
 import { useToast } from '@/components/ui/toastContext';
+import { useNearViewport } from '@/hooks/useNearViewport';
 import { openAskAi } from '../AskAi/askAiEvents';
 import { openSlashMenu } from '../SlashMenu/slashMenuEvents';
 import { blockLink } from './blockLink';
@@ -181,19 +182,49 @@ function BlockMarks({ block }: { block: Block }) {
  * trigger opens on pointerdown and preventDefaults it, which is exactly what
  * stops the browser from starting a native drag. The menu is therefore
  * controlled and anchored to an inert trigger beside the handle.
+ *
+ * The buttons, their tooltips and the closed menu are most of what a block
+ * mounts, and they are invisible until the row is hovered or focused. So they
+ * are mounted when the row comes near the visible part of the page, and stay:
+ * a long page opens with the controls of what is about to be seen only. Where
+ * the controls stand is always there, so the row lays out the same.
  */
-export const BlockControls = memo(function BlockControls({
-  block,
-  isFirst,
-  isLast,
-  menuOpen,
-}: {
+export const BlockControls = memo(function BlockControls(props: BlockControlsProps) {
+  const { block, menuOpen } = props;
+  const hostRef = useRef<HTMLDivElement>(null);
+  const near = useNearViewport(hostRef, '.canvas');
+  // A menu opened from the keyboard on a block far from the screen needs its
+  // controls at once, and keeps them: closing it hands focus to the handle.
+  const [opened, setOpened] = useState(menuOpen);
+  if (menuOpen && !opened) setOpened(true);
+
+  return (
+    <>
+      <BlockMarks block={block} />
+      <div
+        ref={hostRef}
+        // Positioned and revealed by globals.css: outside the text box, on
+        // the first line of the block, on row hover or keyboard focus. As
+        // tall as its buttons before they are mounted too.
+        className="block-controls flex min-h-6 items-center gap-px pr-1"
+        data-open={menuOpen || undefined}
+      >
+        {(near || opened) && <BlockControlsBody {...props} />}
+      </div>
+    </>
+  );
+});
+
+type BlockControlsProps = {
   block: Block;
   isFirst: boolean;
   isLast: boolean;
   /** Whether this block's menu is the open one (state lives in the editor). */
   menuOpen: boolean;
-}) {
+};
+
+/** The buttons and the menu, rendered straight into `.block-controls`. */
+function BlockControlsBody({ block, isFirst, isLast, menuOpen }: BlockControlsProps) {
   const {
     batch,
     duplicateBlock,
@@ -461,14 +492,7 @@ export const BlockControls = memo(function BlockControls({
 
   return (
     <>
-      <BlockMarks block={block} />
       <TooltipProvider delayDuration={300} skipDelayDuration={200}>
-      <div
-        // Positioned and revealed by globals.css: outside the text box, on
-        // the first line of the block, on row hover or keyboard focus.
-        className="block-controls flex items-center gap-px pr-1"
-        data-open={menuOpen || undefined}
-      >
         {!readOnly && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -748,13 +772,12 @@ export const BlockControls = memo(function BlockControls({
             <MenuFooter block={block} label={label} />
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
       </TooltipProvider>
       {block.type === 'heading' && <InstructionsDialog open={instructionsOpen} onOpenChange={setInstructionsOpen}
         blockId={id} returnFocus={() => handleRef.current} />}
     </>
   );
-});
+}
 
 type MenuAction = {
   id: string;

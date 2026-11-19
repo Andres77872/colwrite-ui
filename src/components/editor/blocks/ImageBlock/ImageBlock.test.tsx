@@ -5,7 +5,7 @@ import { HttpResponse, http, pathOf, recordRequests, server } from '@/__tests__/
 import { assetFixture, imageFile, TEST_ASSET_ID } from '@/__tests__/asset';
 import { TEST_WORKSPACE_ID } from '@/__tests__/workspace';
 import { EditorActionsContext, type EditorActionsContextValue } from '@/editor/editorContextState';
-import { DocumentSessionContext, type DocumentSessionValue } from '@/editor/documentSessionState';
+import { DocumentSessionContext, PageReadOnlyContext, type DocumentSessionValue } from '@/editor/documentSessionState';
 import { createBlockActions } from '@/editor/blockActions';
 import { figureNumbers } from '@/editor/blockKinds';
 import type { Doc, ImageBlock as ImageBlockModel } from '@/editor/types';
@@ -43,7 +43,9 @@ function mountImage(extra: Partial<ImageBlockModel> = {}, readOnly = false) {
   const view = renderInWorkspace(
     <EditorActionsContext.Provider value={{ updateImageDetails: update } as unknown as EditorActionsContextValue}>
       <DocumentSessionContext.Provider value={{ readOnly } as DocumentSessionValue}>
-        <ImageBlock block={{ ...block, ...extra }} number={2} />
+        <PageReadOnlyContext.Provider value={readOnly}>
+          <ImageBlock block={{ ...block, ...extra }} number={2} />
+        </PageReadOnlyContext.Provider>
       </DocumentSessionContext.Provider>
     </EditorActionsContext.Provider>,
   );

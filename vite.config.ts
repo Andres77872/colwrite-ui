@@ -9,7 +9,7 @@ import { docsPlugin } from './vite.docs'
 // typechecks without pulling in @types/node.
 const projectDir = new URL('.', import.meta.url).pathname
 
-// The deployed ColWrite API. COLWRITE_API_URL overrides it, for example with
+// The shared development API. COLWRITE_API_URL overrides it, for example with
 // http://127.0.0.1:5002 for a backend running on this machine.
 const DEFAULT_API_URL = 'https://colwrite-api.novus.chat'
 const SESSION_COOKIE = 'colwrite_session_token'
@@ -103,9 +103,9 @@ export default defineConfig(({ mode }) => {
           target,
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api/, ''),
-          // The browser calls the refresh route at /api/auth/refresh. An API
-          // deployed without AUTH_COOKIE_PATH_PREFIX=/api scopes its refresh
-          // cookie to /auth, where the browser would never send it back.
+          // The browser calls /api/auth/refresh through this dev/preview
+          // proxy, which forwards /auth/refresh upstream. Rewrite the API's
+          // cookie to match the browser path; an existing /api/auth stays put.
           cookiePathRewrite: { '/auth': '/api/auth' },
         },
       },

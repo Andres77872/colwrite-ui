@@ -10,8 +10,9 @@ import { resolveApiPath } from './url';
  * a Web Lock (HTTPS or localhost). A tab that waited for the lock adopts the
  * rotation another tab just finished instead of repeating it. No token is
  * readable or stored here: the credentials stay in HttpOnly cookies.
- * Production without Web Locks fails closed to sign-in; development keeps
- * one-tab refresh. See https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API.
+ * A production Vite build needs Web Locks to refresh, even when hosted for
+ * development. Without them it asks for sign-in; Vite dev falls back to one-tab
+ * refresh. See https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API.
  */
 
 const REFRESH_URL = resolveApiPath('/auth/refresh');

@@ -5,6 +5,7 @@ import {
   DocumentSessionContext,
   DocumentStatusContext,
   EditorDocContext,
+  PageReadOnlyContext,
   useDocumentActions,
   useDocumentSession,
   useDocumentStatus,
@@ -67,7 +68,8 @@ const EDITOR_CONTEXTS = [
 /**
  * Feed one fake into every editor context, in the test workspace, for tests
  * that render a consumer without the real provider. Only the fields the
- * consumer reads need to be there.
+ * consumer reads need to be there. `readOnly` also goes where the blocks read
+ * it, as the real provider gives it.
  */
 export function FakeEditorProviders({
   value,
@@ -85,7 +87,7 @@ export function FakeEditorProviders({
             ? { get doc() { return { blocks: value.blocks ?? [] }; }, get blocks() { return value.blocks ?? []; } }
             : value,
       }, inner),
-      children,
+      createElement(PageReadOnlyContext.Provider, { value: value.readOnly === true }, children),
     ),
   });
 }

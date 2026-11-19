@@ -75,22 +75,40 @@ The project uses Vite 8’s default Rolldown/Oxc toolchain, Lightning CSS proces
 `baseline-widely-available` browser target. No Babel, esbuild compatibility layer, React Compiler,
 or legacy browser target is configured.
 
-The development proxy keeps `/api/agent` unchanged and rewrites other `/api` requests by removing
-the `/api` prefix. It forwards them to `COLWRITE_API_URL`, which defaults to the production API
-`https://colwrite-api.novus.chat`; set `COLWRITE_API_URL=http://127.0.0.1:5002` in `.env` to use a
-backend on this machine. `npm run preview` uses the same proxy. A production deployment of the
-bundle still needs its own same-origin `/api` route with these rules, or an absolute
-`VITE_API_BASE` that the API allows through `CORS_ALLOWED_ORIGINS`.
+### API routing and session refresh
 
-Against a remote API the proxy sends the API's own host name, rewrites the refresh cookie's path to
-`/api/auth`, and forwards the assistant WebSocket from this dev page with the session cookie as a
-Bearer credential instead of the page's Origin, which the deployed API would refuse. Signing in from
-another device over plain HTTP needs the API's `DEV_MODE=true`; browsers
-only keep its `Secure` session cookies on HTTPS or `localhost`. Local agent engines (Claude Code,
-Codex) stay available only from this machine. Environment variables supplied by the OS take precedence, while `.env` provides
-local fallback values. Copy `.env.example` to `.env` when local overrides are needed; the supported
-variables, defaults, and browser-exposure notes are documented in
-[`.env.example`](./.env.example).
+`npm run dev` defaults to the `/api` proxy. It strips that prefix except on `/api/agent/*` and
+forwards to `COLWRITE_API_URL`, which defaults to the shared development API at
+`https://colwrite-api.novus.chat`. Set `COLWRITE_API_URL=http://127.0.0.1:5002` in `.env` to use a
+backend on this machine. For a remote API, Vite sends the API's host name and forwards the
+assistant WebSocket from its own page without Origin, using the session cookie as a Bearer
+credential. Local agent engines (Claude Code, Codex) are only available from this machine.
+
+`npm run build` defaults to calling the shared development API **directly**. A Vite production
+build can be deployed to development; the build mode does not identify the target environment.
+Set `VITE_API_BASE` **before building** to change the browser-facing API base. To use the local
+`npm run preview` proxy, build with `VITE_API_BASE=/api`. A deployed bundle built for `/api`
+needs its own same-origin proxy; the Vite proxy is not bundled.
+
+Match the refresh cookie's Path to the URL in the browser, **not** the upstream route:
+
+| Browser refresh request | API or proxy setting |
+| --- | --- |
+| `POST /auth/refresh` at the API origin | Leave `AUTH_COOKIE_PATH_PREFIX` blank. The cookie uses `Path=/auth`. |
+| `POST /api/auth/refresh` through a proxy | Set `AUTH_COOKIE_PATH_PREFIX=/api`, or have the proxy rewrite `Path=/auth` to `Path=/api/auth`. Vite already rewrites it. |
+
+The session cookie uses `Path=/` in both cases. A wrong refresh-cookie path can let login work
+but cause a `401 Missing refresh token` when the session expires. In DevTools, compare the
+refresh request URL with the cookie Path set by login.
+
+Use HTTPS for hosted development as well as production, with `DEV_MODE=false` on the API.
+For plain-HTTP LAN testing, `DEV_MODE=true` lets browsers accept the cookies, but a built UI
+still needs Web Locks (normally available on HTTPS or localhost) to refresh. For direct
+cross-origin requests, add the exact UI origin to `CORS_ALLOWED_ORIGINS`. Both cookies are
+`SameSite=Strict`, so for a UI on a different site, use a same-origin proxy instead.
+
+Copy [`.env.example`](./.env.example) to `.env` for local overrides. Environment variables supplied
+by the OS take precedence.
 
 ## TypeScript 7/6 bridge
 

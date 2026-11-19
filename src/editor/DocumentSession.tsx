@@ -32,6 +32,7 @@ import {
   DocumentSessionContext,
   DocumentStatusContext,
   EditorDocContext,
+  PageReadOnlyContext,
   type DocumentActionsValue,
   type DocumentBody,
   type DocumentSessionValue,
@@ -1275,9 +1276,11 @@ export function DocumentSessionProvider({
     <DocumentActionsContext.Provider value={actions}>
       <DocumentBodyContext.Provider value={body}>
         <DocumentSessionContext.Provider value={session}>
-          <DocumentStatusContext.Provider value={status}>
-            <EditorDocContext.Provider value={docValue}>{children}</EditorDocContext.Provider>
-          </DocumentStatusContext.Provider>
+          <PageReadOnlyContext.Provider value={readOnly}>
+            <DocumentStatusContext.Provider value={status}>
+              <EditorDocContext.Provider value={docValue}>{children}</EditorDocContext.Provider>
+            </DocumentStatusContext.Provider>
+          </PageReadOnlyContext.Provider>
         </DocumentSessionContext.Provider>
       </DocumentBodyContext.Provider>
     </DocumentActionsContext.Provider>

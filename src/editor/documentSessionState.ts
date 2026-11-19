@@ -229,6 +229,13 @@ export type DocumentBody = {
 
 export const EditorDocContext = createContext<EditorDocValue | null>(null);
 export const DocumentSessionContext = createContext<DocumentSessionValue | null>(null);
+/**
+ * Whether the open page is read-only, apart from the rest of the session.
+ * Every block and inline widget asks only this, and the session moves when a
+ * page switch starts (`loadingDocumentId`): read from the session, that
+ * rendered the whole page being left again before the next one was requested.
+ */
+export const PageReadOnlyContext = createContext<boolean>(false);
 export const DocumentStatusContext = createContext<DocumentStatusValue | null>(null);
 export const DocumentActionsContext = createContext<DocumentActionsValue | null>(null);
 export const DocumentBodyContext = createContext<DocumentBody | null>(null);
@@ -253,7 +260,7 @@ export function useDocumentId(): string | null {
  * editor (a block or a card rendered on its own) it is not.
  */
 export function usePageReadOnly(): boolean {
-  return useContext(DocumentSessionContext)?.readOnly ?? false;
+  return useContext(PageReadOnlyContext);
 }
 
 /** Which page is open, and whether a switch or a creation is under way. */

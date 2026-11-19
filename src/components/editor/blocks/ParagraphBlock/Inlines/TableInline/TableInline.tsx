@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, type ClipboardEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ClipboardEvent, type KeyboardEvent } from 'react';
 import { usePageReadOnly, type TableAlign, type TableChild } from '@/editor';
 import type { InlineWidgetProps } from '../types';
 import { cn } from '@/lib/utils';
+import { useNearViewport } from '@/hooks/useNearViewport';
 import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
@@ -56,6 +57,37 @@ function autoSize(el: HTMLTextAreaElement | null): void {
   if (!el) return;
   el.style.height = 'auto';
   el.style.height = `${el.scrollHeight}px`;
+}
+
+/** The cells waiting to be measured, from every table on the page. */
+const waitingCells = new Set<HTMLTextAreaElement>();
+
+/**
+ * Grow every waiting cell to fit its wrapped content, in one pass.
+ *
+ * Reading `scrollHeight` makes the browser lay the page out. Measured a cell
+ * at a time (reset, read, write), a page with 400 cells is laid out 400 times
+ * as it opens. Here every height is reset, then every height is read, which
+ * is one layout, then every height is written.
+ */
+function sizeWaitingCells(): void {
+  const cells = [...waitingCells].filter((el) => el.isConnected);
+  waitingCells.clear();
+  for (const el of cells) el.style.height = 'auto';
+  const heights = cells.map((el) => el.scrollHeight);
+  cells.forEach((el, index) => {
+    el.style.height = `${heights[index]}px`;
+  });
+}
+
+/**
+ * Size a cell together with every other cell asked for in this task: after
+ * the render that asked has been committed, before the browser paints it.
+ */
+function autoSizeSoon(el: HTMLTextAreaElement | null): void {
+  if (!el) return;
+  if (waitingCells.size === 0) queueMicrotask(sizeWaitingCells);
+  waitingCells.add(el);
 }
 
 /* ----------------------------------------
@@ -217,6 +249,20 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Cells wrap, so their height has to follow their content. `rows={1}` alone
+  // would leave a long cell scrolling inside a one-line box. After every
+  // render, since a column added or a value changed from outside moves the
+  // wrapping of cells nobody typed in; the cells of every table rendered in
+  // the same pass are measured together.
+  useLayoutEffect(() => {
+    for (const el of Object.values(cellRefs.current)) autoSizeSoon(el);
+  });
+
+  // A cell's options are a closed menu behind a button that shows on hover:
+  // most of what a table mounts, and nothing anyone sees until the table is
+  // on screen. They wait until it is near.
+  const menusMounted = useNearViewport(tableRef, '.canvas');
+
   const bodyRows = header ? grid.slice(1) : grid;
   const bodyOffset = header ? 1 : 0;
 
@@ -224,9 +270,6 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
     <textarea
       ref={(el) => {
         cellRefs.current[`${r}-${c}`] = el;
-        // Cells wrap, so their height has to follow their content. `rows={1}`
-        // alone would leave a long cell scrolling inside a one-line box.
-        autoSize(el);
       }}
       rows={1}
       readOnly={readOnly}
@@ -253,7 +296,7 @@ function TableInlineContent(props: InlineWidgetProps<TableChild>) {
   const cellWithMenu = (r: number, c: number, isHeader: boolean) => (
     <>
       {cell(r, c, isHeader)}
-      {!readOnly && <CellMenu
+      {!readOnly && menusMounted && <CellMenu
         label={isHeader ? `Column ${c + 1} heading options` : `Row ${r + 1}, column ${c + 1} options`}
         align={align[c] ?? 'left'}
         canDeleteRow={!(isHeader && header) && rows > (header ? 2 : 1)}

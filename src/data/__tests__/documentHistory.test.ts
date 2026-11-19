@@ -517,7 +517,7 @@ describe('agent change sets', () => {
 describe('problem+json helpers', () => {
   it('reads the machine code from an ApiError body', () => {
     const error = new ApiError('The document head changed', 412, {
-      type: 'https://colwrite.com/problems/stale_head',
+      type: 'https://colwrite-api.novus.chat/problems/stale_head',
       code: 'stale_head',
       retryable: false,
     });
